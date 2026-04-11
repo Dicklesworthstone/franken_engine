@@ -4425,6 +4425,19 @@ mod tests {
     }
 
     #[test]
+    fn candidate_paths_require_excludes_mjs_suffixes_in_node_compat_mode() {
+        let candidates =
+            candidate_paths("/app/lib", ImportStyle::Require, CompatibilityMode::NodeCompat);
+        assert!(candidates.contains(&"/app/lib".to_string()));
+        assert!(candidates.contains(&"/app/lib.cjs".to_string()));
+        assert!(candidates.contains(&"/app/lib.js".to_string()));
+        assert!(candidates.contains(&"/app/lib/index.cjs".to_string()));
+        assert!(candidates.contains(&"/app/lib/index.js".to_string()));
+        assert!(!candidates.contains(&"/app/lib.mjs".to_string()));
+        assert!(!candidates.contains(&"/app/lib/index.mjs".to_string()));
+    }
+
+    #[test]
     fn candidate_paths_require_includes_mjs_suffixes_in_bun_compat_mode() {
         let candidates = candidate_paths(
             "/app/lib",

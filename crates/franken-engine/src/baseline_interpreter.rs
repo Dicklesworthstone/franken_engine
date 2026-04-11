@@ -1876,11 +1876,9 @@ impl InterpreterCore {
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
                             let saved_chain = if captured_env.is_some() {
-                                Some(
-                                    self.snapshot_scope_chain_with_temporary_budget(
-                                        captured_env_bytes,
-                                    )?,
-                                )
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
                             } else {
                                 None
                             };
@@ -2022,9 +2020,7 @@ impl InterpreterCore {
                         .map(|env| Self::estimate_scope_chain_bytes(env))
                         .unwrap_or(0);
                     let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain_with_temporary_budget(
-                            captured_env_bytes,
-                        )?)
+                        Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
                     } else {
                         None
                     };
@@ -2495,11 +2491,9 @@ impl InterpreterCore {
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
                             let saved_chain = if captured_env.is_some() {
-                                Some(
-                                    self.snapshot_scope_chain_with_temporary_budget(
-                                        captured_env_bytes,
-                                    )?,
-                                )
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
                             } else {
                                 None
                             };

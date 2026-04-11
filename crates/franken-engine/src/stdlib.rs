@@ -984,7 +984,7 @@ pub fn exec_global_function(builtin: BuiltinId, args: &[JsValue]) -> Result<JsVa
                     }
                 }
                 Some(JsValue::Bool(_)) => Ok(JsValue::Bool(false)), // true->1, false->0
-                Some(JsValue::Null) => Ok(JsValue::Bool(false)), // null -> 0
+                Some(JsValue::Null) => Ok(JsValue::Bool(false)),    // null -> 0
                 _ => Ok(JsValue::Bool(true)), // objects/symbols -> NaN after ToNumber
             }
         }
@@ -1008,8 +1008,8 @@ pub fn exec_global_function(builtin: BuiltinId, args: &[JsValue]) -> Result<JsVa
                     }
                 }
                 Some(JsValue::Bool(_)) => Ok(JsValue::Bool(true)), // true->1, false->0
-                Some(JsValue::Null) => Ok(JsValue::Bool(true)), // null -> 0
-                _ => Ok(JsValue::Bool(false)), // objects/symbols -> NaN
+                Some(JsValue::Null) => Ok(JsValue::Bool(true)),    // null -> 0
+                _ => Ok(JsValue::Bool(false)),                     // objects/symbols -> NaN
             }
         }
         BuiltinId::GlobalParseInt => {
@@ -1127,16 +1127,16 @@ pub fn exec_number_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
             // Number.isFinite returns true only for finite numbers, no coercion
             Ok(JsValue::Bool(arg.is_finite()))
         }
-        BuiltinId::NumberIsInteger => {
-            match arg {
-                JsValue::Int(_) => Ok(JsValue::Bool(true)),
-                JsValue::Float(bits) => {
-                    let v = f64::from_bits(bits);
-                    Ok(JsValue::Bool(!v.is_nan() && !v.is_infinite() && v.fract() == 0.0))
-                }
-                _ => Ok(JsValue::Bool(false)),
+        BuiltinId::NumberIsInteger => match arg {
+            JsValue::Int(_) => Ok(JsValue::Bool(true)),
+            JsValue::Float(bits) => {
+                let v = f64::from_bits(bits);
+                Ok(JsValue::Bool(
+                    !v.is_nan() && !v.is_infinite() && v.fract() == 0.0,
+                ))
             }
-        }
+            _ => Ok(JsValue::Bool(false)),
+        },
         BuiltinId::NumberIsSafeInteger => {
             match arg {
                 JsValue::Int(n) => {

@@ -419,7 +419,8 @@ impl ReplayEngine {
     /// In Validate mode, returns the live f64.
     pub fn replay_fp_result(&mut self, live_value: f64) -> Result<f64, ReplayError> {
         let live_bytes = encode_fp_for_trace(live_value);
-        let traced_bytes = self.replay_next(NondeterminismSource::FloatingPointResult, &live_bytes)?;
+        let traced_bytes =
+            self.replay_next(NondeterminismSource::FloatingPointResult, &live_bytes)?;
         decode_fp_from_trace(&traced_bytes).ok_or(ReplayError::TraceNotFinalised)
     }
 }
@@ -462,7 +463,9 @@ fn classify_divergence(
                 }
 
                 // Relative tolerance check: 1 ULP difference is Warning
-                let ulp_diff = (exp_bits as i64).wrapping_sub(act_bits as i64).unsigned_abs();
+                let ulp_diff = (exp_bits as i64)
+                    .wrapping_sub(act_bits as i64)
+                    .unsigned_abs();
                 if ulp_diff <= 1 {
                     DivergenceSeverity::Warning
                 } else if ulp_diff <= 4 {
@@ -2926,12 +2929,23 @@ mod tests {
             trace.events[0].source,
             NondeterminismSource::FloatingPointResult
         );
-        assert_eq!(trace.events[0].value, value.to_bits().to_le_bytes().to_vec());
+        assert_eq!(
+            trace.events[0].value,
+            value.to_bits().to_le_bytes().to_vec()
+        );
     }
 
     #[test]
     fn encode_decode_fp_roundtrip() {
-        let values = [0.0, -0.0, 1.5, -1.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        let values = [
+            0.0,
+            -0.0,
+            1.5,
+            -1.5,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
         for &v in &values {
             let encoded = encode_fp_for_trace(v);
             let decoded = decode_fp_from_trace(&encoded).unwrap();
@@ -2962,11 +2976,8 @@ mod tests {
     fn fp_divergence_same_value_is_benign() {
         let value = 1.5_f64;
         let bytes = encode_fp_for_trace(value);
-        let severity = classify_divergence(
-            &NondeterminismSource::FloatingPointResult,
-            &bytes,
-            &bytes,
-        );
+        let severity =
+            classify_divergence(&NondeterminismSource::FloatingPointResult, &bytes, &bytes);
         // Same value: no divergence recorded (but if it were, would be benign)
         assert!(severity != DivergenceSeverity::Critical);
     }
@@ -3002,11 +3013,8 @@ mod tests {
     fn fp_divergence_nan_vs_nan_is_warning() {
         let nan1 = encode_fp_for_trace(f64::NAN);
         let nan2 = encode_fp_for_trace(f64::NAN);
-        let severity = classify_divergence(
-            &NondeterminismSource::FloatingPointResult,
-            &nan1,
-            &nan2,
-        );
+        let severity =
+            classify_divergence(&NondeterminismSource::FloatingPointResult, &nan1, &nan2);
         assert_eq!(severity, DivergenceSeverity::Warning);
     }
 
@@ -3014,22 +3022,14 @@ mod tests {
     fn fp_divergence_nan_vs_number_is_critical() {
         let nan = encode_fp_for_trace(f64::NAN);
         let num = encode_fp_for_trace(1.0);
-        let severity = classify_divergence(
-            &NondeterminismSource::FloatingPointResult,
-            &nan,
-            &num,
-        );
+        let severity = classify_divergence(&NondeterminismSource::FloatingPointResult, &nan, &num);
         assert_eq!(severity, DivergenceSeverity::Critical);
     }
 
     #[test]
     fn fp_divergence_same_infinity_is_benign() {
         let inf = encode_fp_for_trace(f64::INFINITY);
-        let severity = classify_divergence(
-            &NondeterminismSource::FloatingPointResult,
-            &inf,
-            &inf,
-        );
+        let severity = classify_divergence(&NondeterminismSource::FloatingPointResult, &inf, &inf);
         assert_eq!(severity, DivergenceSeverity::Benign);
     }
 
@@ -3071,9 +3071,11 @@ mod tests {
         );
         trace.finalise(200);
         // No FloatingPointResult events
-        assert!(trace
-            .events
-            .iter()
-            .all(|e| e.source != NondeterminismSource::FloatingPointResult));
+        assert!(
+            trace
+                .events
+                .iter()
+                .all(|e| e.source != NondeterminismSource::FloatingPointResult)
+        );
     }
 }

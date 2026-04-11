@@ -493,6 +493,9 @@ impl TokenBuilder {
         if self.capabilities.is_empty() {
             return Err(TokenError::EmptyCapabilities);
         }
+        if self.audience.is_empty() {
+            return Err(TokenError::EmptyAudience);
+        }
         if self.nbf.0 > self.expiry.0 {
             return Err(TokenError::InvertedTemporalWindow {
                 not_before: self.nbf.0,
@@ -588,8 +591,11 @@ pub fn verify_token(
         }
     })?;
 
-    // 2. Audience check.
-    if !token.audience.is_empty() && !token.audience.contains(presenter) {
+    // 2. Audience check — empty audience is a security violation.
+    if token.audience.is_empty() {
+        return Err(TokenError::EmptyAudience);
+    }
+    if !token.audience.contains(presenter) {
         return Err(TokenError::AudienceRejected {
             presenter: presenter.clone(),
             audience_size: token.audience.len(),
@@ -1200,6 +1206,7 @@ mod tests {
                 verifier_seq: 3,
             },
             TokenError::EmptyCapabilities,
+            TokenError::EmptyAudience,
         ];
         for err in &errors {
             let json = serde_json::to_string(err).unwrap();
@@ -1282,6 +1289,7 @@ mod tests {
                 expiry: 100,
             }),
             Box::new(TokenError::EmptyCapabilities),
+            Box::new(TokenError::EmptyAudience),
         ];
         let mut displays = std::collections::BTreeSet::new();
         for v in &variants {
@@ -1291,8 +1299,8 @@ mod tests {
         }
         assert_eq!(
             displays.len(),
-            11,
-            "all 11 variants produce distinct messages"
+            12,
+            "all 12 variants produce distinct messages"
         );
     }
 
@@ -1380,6 +1388,7 @@ mod tests {
                 expiry: 100,
             },
             TokenError::EmptyCapabilities,
+            TokenError::EmptyAudience,
         ];
         for err in &errors {
             let json = serde_json::to_string(err).unwrap();
@@ -1541,6 +1550,7 @@ mod tests {
                 detail: "bad sig".into(),
             },
             TokenError::EmptyCapabilities,
+            TokenError::EmptyAudience,
             TokenError::Expired {
                 current_tick: 200,
                 expiry: 100,
@@ -1770,6 +1780,7 @@ mod tests {
                 expiry: 100,
             },
             TokenError::EmptyCapabilities,
+            TokenError::EmptyAudience,
         ];
         let mut debugs = BTreeSet::new();
         for v in &variants {
@@ -1777,7 +1788,7 @@ mod tests {
             assert!(!d.is_empty());
             debugs.insert(d);
         }
-        assert_eq!(debugs.len(), 11, "all Debug outputs should be unique");
+        assert_eq!(debugs.len(), 12, "all Debug outputs should be unique");
     }
 
     #[test]
@@ -2514,5 +2525,98 @@ mod tests {
             verifier_revocation_seq: 0,
         };
         verify_token(&token, &make_principal(1), &ctx).unwrap();
+    }
+
+    // -- Empty audience security tests (bd-3pa1u.3) --
+
+    #[test]
+    fn empty_audience_rejected_in_build() {
+        let sk = make_sk(1);
+        let err = TokenBuilder::new(
+            sk,
+            DeterministicTimestamp(100),
+            DeterministicTimestamp(1000),
+            SecurityEpoch::GENESIS,
+            "zone-a",
+        )
+        // No .add_audience() call — audience is empty
+        .add_capability(RuntimeCapability::VmDispatch)
+        .build()
+        .unwrap_err();
+
+        assert!(matches!(err, TokenError::EmptyAudience));
+    }
+
+    #[test]
+    fn single_audience_accepted_in_build() {
+        let sk = make_sk(1);
+        let token = TokenBuilder::new(
+            sk,
+            DeterministicTimestamp(100),
+            DeterministicTimestamp(1000),
+            SecurityEpoch::GENESIS,
+            "zone-a",
+        )
+        .add_audience(make_principal(10))
+        .add_capability(RuntimeCapability::VmDispatch)
+        .build()
+        .unwrap();
+
+        assert_eq!(token.audience.len(), 1);
+        assert!(token.audience.contains(&make_principal(10)));
+    }
+
+    #[test]
+    fn multiple_audiences_all_retained_in_build() {
+        let sk = make_sk(1);
+        let token = TokenBuilder::new(
+            sk,
+            DeterministicTimestamp(100),
+            DeterministicTimestamp(1000),
+            SecurityEpoch::GENESIS,
+            "zone-a",
+        )
+        .add_audience(make_principal(10))
+        .add_audience(make_principal(20))
+        .add_audience(make_principal(30))
+        .add_capability(RuntimeCapability::VmDispatch)
+        .build()
+        .unwrap();
+
+        assert_eq!(token.audience.len(), 3);
+        assert!(token.audience.contains(&make_principal(10)));
+        assert!(token.audience.contains(&make_principal(20)));
+        assert!(token.audience.contains(&make_principal(30)));
+    }
+
+    #[test]
+    fn verify_token_correct_presenter_passes() {
+        let sk = make_sk(1);
+        let token = build_basic_token(&sk);
+        let ctx = basic_ctx();
+        // Presenter principal(10) is in audience
+        verify_token(&token, &make_principal(10), &ctx).unwrap();
+    }
+
+    #[test]
+    fn verify_token_wrong_presenter_fails_with_audience_mismatch() {
+        let sk = make_sk(1);
+        let token = build_basic_token(&sk);
+        let ctx = basic_ctx();
+        // Presenter principal(99) is NOT in audience (only principal(10) is)
+        let err = verify_token(&token, &make_principal(99), &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            TokenError::AudienceRejected {
+                audience_size: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn error_display_empty_audience_enrichment() {
+        let err = TokenError::EmptyAudience;
+        assert_eq!(err.to_string(), "empty audience");
     }
 }

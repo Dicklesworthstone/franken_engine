@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
+    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
     ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
@@ -646,6 +646,10 @@ impl ParserArena {
                 source,
                 span,
             } => Ok(Statement::Import(ImportDeclaration {
+                clause: match &binding {
+                    Some(name) => ImportClause::Default { local: name.clone() },
+                    None => ImportClause::SideEffect,
+                },
                 binding,
                 source,
                 span: self.span(span)?.clone(),
@@ -875,6 +879,9 @@ mod tests {
         SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "foo".to_string(),
+                },
                 binding: Some("foo".to_string()),
                 source: "./foo.js".to_string(),
                 span: test_span(),
@@ -1616,6 +1623,9 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::Default {
+                        local: "fs".to_string(),
+                    },
                     binding: Some("fs".to_string()),
                     source: "node:fs".to_string(),
                     span: test_span(),
@@ -1642,6 +1652,7 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                clause: ImportClause::SideEffect,
                 binding: None,
                 source: "./side-effects.js".to_string(),
                 span: test_span(),

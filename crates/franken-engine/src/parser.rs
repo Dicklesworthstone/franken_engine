@@ -3,7 +3,7 @@
 // The parser trait is generic over input source and emits canonical `IR0`
 // syntax artifacts from `crate::ast`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -16,11 +16,11 @@ use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-    FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
-    MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
-    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
-    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
-    WhileStatement,
+    FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
+    ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
+    ParseGoal, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator, WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -1896,6 +1896,12 @@ impl ParserInput for String {
     }
 }
 
+impl ParserInput for ParserSource {
+    fn into_source(self) -> ParseResult<ParserSource> {
+        Ok(self)
+    }
+}
+
 impl ParserInput for &Path {
     fn into_source(self) -> ParseResult<ParserSource> {
         let text = fs::read_to_string(self).map_err(|error| {
@@ -2756,6 +2762,7 @@ fn parse_import(
 
     if let Some(source) = parse_quoted_string(body) {
         return Ok(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source,
             span,
@@ -2771,7 +2778,7 @@ fn parse_import(
         )
     })?;
 
-    let binding = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
+    let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
     let source = parse_quoted_string(source_raw.trim()).ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -2782,7 +2789,8 @@ fn parse_import(
     })?;
 
     Ok(ImportDeclaration {
-        binding,
+        binding: clause.primary_binding().map(str::to_string),
+        clause,
         source,
         span,
     })
@@ -2792,7 +2800,7 @@ fn parse_import_binding_clause(
     binding_clause: &str,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<Option<String>> {
+) -> ParseResult<ImportClause> {
     if binding_clause.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -2803,17 +2811,20 @@ fn parse_import_binding_clause(
     }
 
     if is_module_binding_identifier(binding_clause) {
-        return Ok(Some(binding_clause.to_string()));
+        return Ok(ImportClause::Default {
+            local: binding_clause.to_string(),
+        });
     }
 
     if let Some(namespace_binding) = parse_namespace_import_binding(binding_clause) {
-        return Ok(Some(namespace_binding));
+        return Ok(ImportClause::Namespace {
+            local: namespace_binding,
+        });
     }
 
     if is_named_import_clause(binding_clause) {
-        // Canonical AST tracks one optional binding name. For named-only clauses we
-        // preserve module source and leave binding unset.
-        return Ok(None);
+        let specifiers = parse_named_import_specifiers(binding_clause, source_label, span)?;
+        return Ok(ImportClause::Named { specifiers });
     }
 
     if let Some((default_binding_raw, trailing_clause_raw)) = binding_clause.split_once(',') {
@@ -2829,10 +2840,19 @@ fn parse_import_binding_clause(
             ));
         }
 
-        if parse_namespace_import_binding(trailing_clause).is_some()
-            || is_named_import_clause(trailing_clause)
-        {
-            return Ok(Some(default_binding.to_string()));
+        if let Some(namespace_binding) = parse_namespace_import_binding(trailing_clause) {
+            return Ok(ImportClause::DefaultAndNamespace {
+                default: default_binding.to_string(),
+                namespace: namespace_binding,
+            });
+        }
+
+        if is_named_import_clause(trailing_clause) {
+            let specifiers = parse_named_import_specifiers(trailing_clause, source_label, span)?;
+            return Ok(ImportClause::DefaultAndNamed {
+                default: default_binding.to_string(),
+                specifiers,
+            });
         }
     }
 
@@ -2894,6 +2914,89 @@ fn is_named_import_clause(clause: &str) -> bool {
     }
 
     true
+}
+
+fn parse_named_import_specifiers(
+    clause: &str,
+    source_label: &str,
+    span: &SourceSpan,
+) -> ParseResult<Vec<ImportSpecifier>> {
+    let clause = clause.trim();
+    let Some(inner) = clause
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named import clause must be wrapped in `{}`",
+            source_label.to_string(),
+            Some(span.clone()),
+        ));
+    };
+
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut specifiers = Vec::new();
+    let mut seen_local = BTreeSet::new();
+
+    for specifier in inner.split(',') {
+        let specifier = specifier.trim();
+        if specifier.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "named import specifier list contains an empty entry",
+                source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+
+        let mut parts = specifier.split_whitespace();
+        let import_name = parts.next().unwrap();
+        let second = parts.next();
+        let third = parts.next();
+        let fourth = parts.next();
+
+        let (import_name, local_name) = match (second, third, fourth) {
+            (None, None, None) => (import_name, import_name),
+            (Some("as"), Some(local), None) => (import_name, local),
+            _ => {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unsupported named import specifier; expected `name` or `name as alias`",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ))
+            }
+        };
+
+        if !is_identifier(import_name) || !is_identifier(local_name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "named import specifier must use identifiers",
+                source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+
+        if !seen_local.insert(local_name.to_string()) {
+            return Err(ParseError::new(
+                ParseErrorCode::DuplicateImportBinding,
+                "import binding has already been declared",
+                source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+
+        specifiers.push(ImportSpecifier {
+            import_name: import_name.to_string(),
+            local_name: local_name.to_string(),
+        });
+    }
+
+    Ok(specifiers)
 }
 
 fn parse_export(
@@ -8676,7 +8779,10 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, Some("dep".to_string()));
+                assert!(matches!(
+                    &import.clause,
+                    ImportClause::Default { local } if local == "dep"
+                ));
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -8691,7 +8797,7 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, None);
+                assert!(matches!(&import.clause, ImportClause::SideEffect));
                 assert_eq!(import.source, "polyfill");
             }
             _ => panic!("expected import statement"),
@@ -8706,7 +8812,16 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, None);
+                match &import.clause {
+                    ImportClause::Named { specifiers } => {
+                        assert_eq!(specifiers.len(), 2);
+                        assert_eq!(specifiers[0].import_name, "run");
+                        assert_eq!(specifiers[0].local_name, "run");
+                        assert_eq!(specifiers[1].import_name, "stop");
+                        assert_eq!(specifiers[1].local_name, "halt");
+                    }
+                    other => panic!("expected named import clause, got {other:?}"),
+                }
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -8721,7 +8836,12 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, None);
+                match &import.clause {
+                    ImportClause::Named { specifiers } => {
+                        assert!(specifiers.is_empty());
+                    }
+                    other => panic!("expected named import clause, got {other:?}"),
+                }
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -8736,7 +8856,10 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, Some("ns".to_string()));
+                assert!(matches!(
+                    &import.clause,
+                    ImportClause::Namespace { local } if local == "ns"
+                ));
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -8751,7 +8874,15 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, Some("dep".to_string()));
+                match &import.clause {
+                    ImportClause::DefaultAndNamed { default, specifiers } => {
+                        assert_eq!(default, "dep");
+                        assert_eq!(specifiers.len(), 1);
+                        assert_eq!(specifiers[0].import_name, "run");
+                        assert_eq!(specifiers[0].local_name, "run");
+                    }
+                    other => panic!("expected default+named import clause, got {other:?}"),
+                }
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -8766,7 +8897,13 @@ mod tests {
             .expect("parse");
         match &tree.body[0] {
             Statement::Import(import) => {
-                assert_eq!(import.binding, Some("dep".to_string()));
+                match &import.clause {
+                    ImportClause::DefaultAndNamespace { default, namespace } => {
+                        assert_eq!(default, "dep");
+                        assert_eq!(namespace, "ns");
+                    }
+                    other => panic!("expected default+namespace import clause, got {other:?}"),
+                }
                 assert_eq!(import.source, "pkg");
             }
             _ => panic!("expected import statement"),
@@ -10821,6 +10958,7 @@ mod tests {
         let span = SourceSpan::new(0, 1, 1, 1, 1, 1);
         assert_eq!(
             statement_kind_label(&Statement::Import(ImportDeclaration {
+                clause: ImportClause::SideEffect,
                 binding: None,
                 source: "m".to_string(),
                 span: span.clone(),

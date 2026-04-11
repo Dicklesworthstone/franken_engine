@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::ir_contract::BindingKind;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
@@ -77,6 +77,12 @@ fn var_decl(
 
 fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
     Statement::Import(ImportDeclaration {
+        clause: match binding {
+            Some(name) => ImportClause::Default {
+                local: name.to_string(),
+            },
+            None => ImportClause::SideEffect,
+        },
         binding: binding.map(ToString::to_string),
         source: source.to_string(),
         span: span(line),

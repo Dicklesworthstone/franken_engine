@@ -96,6 +96,9 @@ fn enrichment_full_program_hash_deterministic_across_constructions() {
             ParseGoal::Module,
             vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::Default {
+                        local: "React".to_string(),
+                    },
                     binding: Some("React".to_string()),
                     source: "react".to_string(),
                     span: span(0, 30),
@@ -130,6 +133,9 @@ fn enrichment_different_import_sources_produce_different_hashes() {
         tree(
             ParseGoal::Module,
             vec![Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "x".to_string(),
+                },
                 binding: Some("x".to_string()),
                 source: src.to_string(),
                 span: s0(),
@@ -1041,12 +1047,18 @@ fn enrichment_realistic_module_round_trip() {
         vec![
             // import React from 'react';
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "React".to_string(),
+                },
                 binding: Some("React".to_string()),
                 source: "react".to_string(),
                 span: span(0, 28),
             }),
             // import { useState } from 'react';
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "useState".to_string(),
+                },
                 binding: Some("useState".to_string()),
                 source: "react".to_string(),
                 span: span(29, 60),
@@ -1102,6 +1114,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
     let target = span(42, 84);
     let stmts: Vec<Statement> = vec![
         Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "m".to_string(),
             span: target.clone(),

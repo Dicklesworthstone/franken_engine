@@ -17,8 +17,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::parser_arena::{
     ArenaBudget, ArenaBudgetKind, ArenaError, ExpressionHandle, HandleAuditEntry, HandleAuditKind,
@@ -216,6 +216,7 @@ fn enrichment_arena_from_import_tree() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::Default { local: "x".into() },
             binding: Some("x".into()),
             source: "./x.js".into(),
             span: test_span(),

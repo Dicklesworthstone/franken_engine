@@ -1810,8 +1810,9 @@ fn estimate_statement_allocation_count(statement: &Statement) -> u64 {
     match statement {
         Statement::Import(import) => {
             let mut total = 2_u64;
-            if import.binding.is_some() {
-                total = total.saturating_add(1);
+            let binding_count = import.clause.binding_names().len() as u64;
+            if binding_count > 0 {
+                total = total.saturating_add(binding_count);
             }
             total
         }

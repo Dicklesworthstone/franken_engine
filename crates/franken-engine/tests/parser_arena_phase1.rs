@@ -20,7 +20,8 @@ mod parser_arena;
 
 use ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
 use parser_arena::{
@@ -37,6 +38,9 @@ fn fixture_tree() -> SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "alpha".to_string(),
+                },
                 binding: Some("alpha".to_string()),
                 source: "./dep.mjs".to_string(),
                 span: span(0, 24, 1, 1),
@@ -646,6 +650,7 @@ fn arena_import_without_binding_roundtrip() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "./side-effect.js".to_string(),
             span: span(0, 30, 1, 1),

@@ -19,9 +19,9 @@
 use frankenengine_engine::ast::{
     AssignmentOperator, BindingPattern, BlockStatement, BreakStatement, ContinueStatement,
     ExportDeclaration, ExportKind, Expression, ExpressionStatement, ForInStatement,
-    FunctionDeclaration, FunctionParam, ImportDeclaration, ParseGoal, ReturnStatement, SourceSpan,
-    Statement, SyntaxTree, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    FunctionDeclaration, FunctionParam, ImportClause, ImportDeclaration, ParseGoal,
+    ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::ir_contract::{BindingKind, ScopeKind};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
@@ -74,6 +74,12 @@ fn var_decl(
 
 fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
     Statement::Import(ImportDeclaration {
+        clause: match binding {
+            Some(name) => ImportClause::Default {
+                local: name.to_string(),
+            },
+            None => ImportClause::SideEffect,
+        },
         binding: binding.map(ToString::to_string),
         source: source.to_string(),
         span: span(line),

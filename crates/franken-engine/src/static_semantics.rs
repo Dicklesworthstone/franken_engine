@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExportKind, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind,
+    ExportKind, Expression, ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement,
+    SyntaxTree, VariableDeclaration, VariableDeclarationKind,
 };
 use crate::deterministic_serde::CanonicalValue;
 use crate::ir_contract::{BindingId, BindingKind, ResolvedBinding, ScopeId, ScopeKind, ScopeNode};
@@ -1768,6 +1768,12 @@ mod tests {
 
     fn import_stmt(binding: Option<&str>, source: &str, line: u64) -> Statement {
         Statement::Import(ImportDeclaration {
+            clause: match binding {
+                Some(name) => ImportClause::Default {
+                    local: name.to_string(),
+                },
+                None => ImportClause::SideEffect,
+            },
             binding: binding.map(ToString::to_string),
             source: source.to_string(),
             span: span(line),

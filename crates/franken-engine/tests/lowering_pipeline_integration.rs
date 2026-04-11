@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
     BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
@@ -84,6 +84,12 @@ fn module_ir0_import(source: &str, binding: Option<&str>) -> Ir0Module {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: match binding {
+                Some(name) => ImportClause::Default {
+                    local: name.to_string(),
+                },
+                None => ImportClause::SideEffect,
+            },
             source: source.to_string(),
             binding: binding.map(|s| s.to_string()),
             span: span(),
@@ -1234,6 +1240,9 @@ fn full_pipeline_module_with_import_and_export() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "_".to_string(),
+                },
                 source: "lodash".to_string(),
                 binding: Some("_".to_string()),
                 span: span(),
@@ -1567,11 +1576,17 @@ fn import_then_export_then_expression_complex_module() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "React".to_string(),
+                },
                 source: "react".to_string(),
                 binding: Some("React".to_string()),
                 span: span(),
             }),
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "_".to_string(),
+                },
                 source: "lodash".to_string(),
                 binding: Some("_".to_string()),
                 span: span(),
@@ -1702,6 +1717,9 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "fs".to_string(),
+                },
                 source: "fs".to_string(),
                 binding: Some("fs".to_string()),
                 span: span(),

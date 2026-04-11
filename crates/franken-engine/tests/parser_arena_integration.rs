@@ -30,8 +30,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
-    ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportDeclaration, ParseGoal,
-    SourceSpan, Statement, SyntaxTree,
+    ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause, ImportDeclaration,
+    ParseGoal, SourceSpan, Statement, SyntaxTree,
 };
 use frankenengine_engine::parser_arena::{
     ArenaBudget, ArenaBudgetKind, ArenaError, ArenaExpression, ArenaNode, ExpressionHandle,
@@ -61,6 +61,9 @@ fn import_tree() -> SyntaxTree {
     SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "foo".to_string(),
+            },
             binding: Some("foo".to_string()),
             source: "./foo.js".to_string(),
             span: make_span(0, 20),
@@ -73,6 +76,7 @@ fn import_no_binding_tree() -> SyntaxTree {
     SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "./side-effects.js".to_string(),
             span: make_span(0, 30),
@@ -136,11 +140,15 @@ fn mixed_statement_tree() -> SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "fs".to_string(),
+                },
                 binding: Some("fs".to_string()),
                 source: "node:fs".to_string(),
                 span: make_span(0, 20),
             }),
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::SideEffect,
                 binding: None,
                 source: "./polyfill.js".to_string(),
                 span: make_span(21, 50),
@@ -1802,6 +1810,9 @@ fn cross_concern_import_binding_affects_bytes() {
     let with_binding = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "longBindingName".to_string(),
+            },
             binding: Some("longBindingName".to_string()),
             source: "./m.js".to_string(),
             span: make_span(0, 30),
@@ -1811,6 +1822,7 @@ fn cross_concern_import_binding_affects_bytes() {
     let without_binding = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "./m.js".to_string(),
             span: make_span(0, 30),

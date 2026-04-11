@@ -512,6 +512,9 @@ fn expression_boolean_true_and_false_not_equal() {
 #[test]
 fn import_declaration_with_binding() {
     let decl = ImportDeclaration {
+        clause: ImportClause::Default {
+            local: "foo".to_string(),
+        },
         binding: Some("foo".to_string()),
         source: "bar".to_string(),
         span: zero_span(),
@@ -523,6 +526,7 @@ fn import_declaration_with_binding() {
 #[test]
 fn import_declaration_without_binding() {
     let decl = ImportDeclaration {
+        clause: ImportClause::SideEffect,
         binding: None,
         source: "side-effect-only".to_string(),
         span: zero_span(),
@@ -533,6 +537,9 @@ fn import_declaration_without_binding() {
 #[test]
 fn import_declaration_canonical_value_with_binding_has_string() {
     let decl = ImportDeclaration {
+        clause: ImportClause::Default {
+            local: "dep".to_string(),
+        },
         binding: Some("dep".to_string()),
         source: "pkg".to_string(),
         span: zero_span(),
@@ -546,6 +553,7 @@ fn import_declaration_canonical_value_with_binding_has_string() {
 #[test]
 fn import_declaration_canonical_value_without_binding_has_null() {
     let decl = ImportDeclaration {
+        clause: ImportClause::SideEffect,
         binding: None,
         source: "side".to_string(),
         span: zero_span(),
@@ -558,6 +566,9 @@ fn import_declaration_canonical_value_without_binding_has_null() {
 #[test]
 fn import_declaration_serde_round_trip() {
     let decl = ImportDeclaration {
+        clause: ImportClause::Default {
+            local: "x".to_string(),
+        },
         binding: Some("x".to_string()),
         source: "mod".to_string(),
         span: span(0, 20),
@@ -570,6 +581,7 @@ fn import_declaration_serde_round_trip() {
 #[test]
 fn import_declaration_serde_round_trip_no_binding() {
     let decl = ImportDeclaration {
+        clause: ImportClause::SideEffect,
         binding: None,
         source: "mod".to_string(),
         span: span(0, 15),
@@ -986,6 +998,9 @@ fn determinism_hash_uniqueness_across_many_variants() {
 fn traverse_body_collecting_spans() {
     let tree = simple_module(vec![
         Statement::Import(ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "a".to_string(),
+            },
             binding: Some("a".to_string()),
             source: "pkg_a".to_string(),
             span: span(0, 20),

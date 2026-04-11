@@ -333,7 +333,155 @@ impl Statement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportSpecifier {
+    pub import_name: String,
+    pub local_name: String,
+}
+
+impl ImportSpecifier {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        map.insert(
+            "import_name".to_string(),
+            CanonicalValue::String(self.import_name.clone()),
+        );
+        map.insert(
+            "local_name".to_string(),
+            CanonicalValue::String(self.local_name.clone()),
+        );
+        CanonicalValue::Map(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImportClause {
+    SideEffect,
+    Default { local: String },
+    Namespace { local: String },
+    Named { specifiers: Vec<ImportSpecifier> },
+    DefaultAndNamed {
+        default: String,
+        specifiers: Vec<ImportSpecifier>,
+    },
+    DefaultAndNamespace {
+        default: String,
+        namespace: String,
+    },
+}
+
+impl ImportClause {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        match self {
+            Self::SideEffect => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("side_effect".to_string()),
+                );
+            }
+            Self::Default { local } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("default".to_string()),
+                );
+                map.insert("local".to_string(), CanonicalValue::String(local.clone()));
+            }
+            Self::Namespace { local } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("namespace".to_string()),
+                );
+                map.insert("local".to_string(), CanonicalValue::String(local.clone()));
+            }
+            Self::Named { specifiers } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("named".to_string()),
+                );
+                map.insert(
+                    "specifiers".to_string(),
+                    CanonicalValue::Array(
+                        specifiers
+                            .iter()
+                            .map(ImportSpecifier::canonical_value)
+                            .collect(),
+                    ),
+                );
+            }
+            Self::DefaultAndNamed {
+                default,
+                specifiers,
+            } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("default_named".to_string()),
+                );
+                map.insert(
+                    "default".to_string(),
+                    CanonicalValue::String(default.clone()),
+                );
+                map.insert(
+                    "specifiers".to_string(),
+                    CanonicalValue::Array(
+                        specifiers
+                            .iter()
+                            .map(ImportSpecifier::canonical_value)
+                            .collect(),
+                    ),
+                );
+            }
+            Self::DefaultAndNamespace { default, namespace } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("default_namespace".to_string()),
+                );
+                map.insert(
+                    "default".to_string(),
+                    CanonicalValue::String(default.clone()),
+                );
+                map.insert(
+                    "namespace".to_string(),
+                    CanonicalValue::String(namespace.clone()),
+                );
+            }
+        }
+        CanonicalValue::Map(map)
+    }
+
+    pub fn primary_binding(&self) -> Option<&str> {
+        match self {
+            Self::Default { local } => Some(local.as_str()),
+            Self::Namespace { local } => Some(local.as_str()),
+            Self::DefaultAndNamed { default, .. } => Some(default.as_str()),
+            Self::DefaultAndNamespace { default, .. } => Some(default.as_str()),
+            Self::Named { .. } | Self::SideEffect => None,
+        }
+    }
+
+    pub fn binding_names(&self) -> Vec<&str> {
+        match self {
+            Self::SideEffect => Vec::new(),
+            Self::Default { local } => vec![local.as_str()],
+            Self::Namespace { local } => vec![local.as_str()],
+            Self::Named { specifiers } => specifiers
+                .iter()
+                .map(|spec| spec.local_name.as_str())
+                .collect(),
+            Self::DefaultAndNamed { default, specifiers } => {
+                let mut names = vec![default.as_str()];
+                names.extend(specifiers.iter().map(|spec| spec.local_name.as_str()));
+                names
+            }
+            Self::DefaultAndNamespace { default, namespace } => {
+                vec![default.as_str(), namespace.as_str()]
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportDeclaration {
+    pub clause: ImportClause,
     pub binding: Option<String>,
     pub source: String,
     pub span: SourceSpan,
@@ -342,6 +490,7 @@ pub struct ImportDeclaration {
 impl ImportDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
+        map.insert("clause".to_string(), self.clause.canonical_value());
         map.insert(
             "binding".to_string(),
             match &self.binding {
@@ -2048,6 +2197,9 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::Default {
+                        local: "x".to_string(),
+                    },
                     binding: Some("x".to_string()),
                     source: "mod".to_string(),
                     span: make_span(),
@@ -2070,6 +2222,7 @@ mod tests {
         let span = SourceSpan::new(5, 15, 2, 6, 2, 16);
 
         let import = Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "x".to_string(),
             span: span.clone(),
@@ -2103,6 +2256,9 @@ mod tests {
     #[test]
     fn statement_canonical_value_import_has_kind_import() {
         let stmt = Statement::Import(ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "dep".to_string(),
+            },
             binding: Some("dep".to_string()),
             source: "pkg".to_string(),
             span: make_span(),
@@ -2181,6 +2337,9 @@ mod tests {
     #[test]
     fn import_declaration_with_binding_canonical_value() {
         let import = ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "foo".to_string(),
+            },
             binding: Some("foo".to_string()),
             source: "bar".to_string(),
             span: make_span(),
@@ -2203,6 +2362,7 @@ mod tests {
     #[test]
     fn import_declaration_without_binding_canonical_value_has_null() {
         let import = ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "side-effect".to_string(),
             span: make_span(),
@@ -2463,6 +2623,9 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::Default {
+                        local: "dep".to_string(),
+                    },
                     binding: Some("dep".to_string()),
                     source: "pkg".to_string(),
                     span: SourceSpan::new(0, 18, 1, 1, 1, 19),
@@ -2538,6 +2701,7 @@ mod tests {
     #[test]
     fn import_without_binding_serde_roundtrip() {
         let stmt = Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "side-effect-module".to_string(),
             span: make_span(),
@@ -2613,6 +2777,9 @@ mod tests {
     #[test]
     fn import_declaration_clone_equality() {
         let original = ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "myDep".to_string(),
+            },
             binding: Some("myDep".to_string()),
             source: "some-package".to_string(),
             span: make_span(),
@@ -2647,6 +2814,7 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::SideEffect,
                     binding: None,
                     source: "effects".to_string(),
                     span: make_span(),
@@ -2675,6 +2843,9 @@ mod tests {
     #[test]
     fn import_declaration_json_field_presence() {
         let import = ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "x".to_string(),
+            },
             binding: Some("x".to_string()),
             source: "mod".to_string(),
             span: make_span(),
@@ -3776,6 +3947,7 @@ mod tests {
         let span = make_span();
         let stmts: Vec<Statement> = vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::SideEffect,
                 binding: None,
                 source: "m".to_string(),
                 span: span.clone(),
@@ -4753,6 +4925,9 @@ mod tests {
     #[test]
     fn import_declaration_serde_roundtrip_with_binding() {
         let import = ImportDeclaration {
+            clause: ImportClause::Default {
+                local: "React".to_string(),
+            },
             binding: Some("React".to_string()),
             source: "react".to_string(),
             span: SourceSpan::new(0, 25, 1, 1, 1, 26),

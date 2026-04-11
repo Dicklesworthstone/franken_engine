@@ -963,6 +963,28 @@ fn hostcall_capability_denied() {
 }
 
 #[test]
+fn hostcall_module_require_denied_without_capability() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("module:require".into()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+        ],
+        vec!["./dep.js".to_string()],
+    );
+    let err = qjs_run(&m).unwrap_err();
+    match err {
+        InterpreterError::CapabilityDenied { capability } => {
+            assert_eq!(capability, "module:require");
+        }
+        other => panic!("expected CapabilityDenied, got {other:?}"),
+    }
+}
+
+#[test]
 fn hostcall_capability_granted_returns_undefined() {
     let m = test_module(vec![
         Ir3Instruction::HostCall {
@@ -979,6 +1001,135 @@ fn hostcall_capability_granted_returns_undefined() {
     assert_eq!(r.value, Value::Undefined);
     assert!(!r.hostcall_decisions.is_empty());
     assert!(r.hostcall_decisions[0].allowed);
+}
+
+#[test]
+fn hostcall_module_require_rejects_non_string_specifier() {
+    let m = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag("module:require".into()),
+            args: RegRange { start: 0, count: 1 },
+            dst: 1,
+        },
+    ]);
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = vec!["module:require".into()];
+    let lane = QuickJsLane::with_config(config);
+    let err = lane.execute(&m, "integ").unwrap_err();
+    assert!(matches!(
+        err,
+        InterpreterError::RequireSpecifierNotString { got }
+            if got == "number"
+    ));
+}
+
+#[test]
+fn hostcall_module_require_rejects_bare_specifier() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("module:require".into()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+        ],
+        vec!["dep".to_string()],
+    );
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = vec!["module:require".into()];
+    let lane = QuickJsLane::with_config(config);
+    let err = lane.execute(&m, "integ").unwrap_err();
+    match err {
+        InterpreterError::ModuleResolutionFailed { specifier, reason } => {
+            assert_eq!(specifier, "dep");
+            assert!(reason.contains("bare specifiers not supported"));
+        }
+        other => panic!("expected ModuleResolutionFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn hostcall_module_require_rejects_missing_file() {
+    let root = temp_module_dir("module_require_missing");
+    fs::create_dir_all(&root).expect("create module root");
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("module:require".into()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+        ],
+        vec!["./missing.cjs".to_string()],
+    );
+    let entry_path = root.join("main.mjs");
+    module.header.source_label = entry_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".into()];
+    let lane = QuickJsLane::with_config(config);
+    let err = lane.execute(&module, "integ").unwrap_err();
+    match err {
+        InterpreterError::ModuleResolutionFailed { specifier, reason } => {
+            assert!(specifier.ends_with("missing.cjs"));
+            assert!(reason.contains("module not found"));
+        }
+        other => panic!("expected ModuleResolutionFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn hostcall_module_require_resolves_extensionless_to_mjs() {
+    let root = temp_module_dir("module_require_extless_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.mjs");
+    fs::write(&dep_path, "const value = 21; export { value };").expect("write mjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("module:require".into()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./dep".to_string(), "value".to_string()],
+    );
+    let entry_path = root.join("main.cjs");
+    module.header.source_label = entry_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".into()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-extless-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(21));
 }
 
 // ============================================================================
@@ -1864,6 +2015,7 @@ fn import_module_executes_and_returns_export() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-trace")
@@ -1896,6 +2048,7 @@ fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-mjs-prefer-trace")
@@ -1929,6 +2082,7 @@ fn import_module_resolves_index_mjs_for_directory_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-index-mjs-trace")
@@ -1964,6 +2118,7 @@ fn import_module_cjs_default_export_bridges_module_exports() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-cjs-default-trace")
@@ -2005,8 +2160,7 @@ fn require_module_allows_cjs_to_read_esm_namespace() {
     let root = temp_module_dir("module_require_esm");
     fs::create_dir_all(&root).expect("create module root");
     let dep_path = root.join("dep.mjs");
-    fs::write(&dep_path, "const version = 42; export { version };")
-        .expect("write esm module");
+    fs::write(&dep_path, "const version = 42; export { version };").expect("write esm module");
     let util_path = root.join("util.cjs");
     fs::write(
         &util_path,
@@ -2016,12 +2170,32 @@ fn require_module_allows_cjs_to_read_esm_namespace() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
-            Ir3Instruction::LoadStr { dst: 4, pool_index: 2 },
-            Ir3Instruction::GetProperty { obj: 3, key: 4, dst: 5 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
             Ir3Instruction::Return { value: 5 },
         ],
         vec![
@@ -2058,10 +2232,23 @@ fn require_module_returns_cjs_module_exports_value() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
             Ir3Instruction::Return { value: 3 },
         ],
         vec!["./entry.cjs".to_string(), "default".to_string()],
@@ -2077,4 +2264,686 @@ fn require_module_returns_cjs_module_exports_value() {
         .execute(&module, "module-require-cjs-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn cjs_module_exposes_filename_binding() {
+    let root = temp_module_dir("cjs_filename_binding");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(&entry_path, "module.exports = { filename: __filename };")
+        .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "filename".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-filename-trace")
+        .expect("execute");
+    let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
+    assert_eq!(
+        result.value,
+        Value::Str(expected_file.display().to_string())
+    );
+}
+
+#[test]
+fn cjs_module_exposes_dirname_binding() {
+    let root = temp_module_dir("cjs_dirname_binding");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(&entry_path, "module.exports = { dirname: __dirname };")
+        .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "dirname".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-dirname-trace")
+        .expect("execute");
+    let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
+    let expected_dir = expected_file
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    assert_eq!(result.value, Value::Str(expected_dir));
+}
+
+#[test]
+fn cjs_module_exports_module_filename() {
+    let root = temp_module_dir("cjs_module_filename");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = { filename: module.filename };",
+    )
+    .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "filename".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-module-filename-trace")
+        .expect("execute");
+    let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
+    assert_eq!(
+        result.value,
+        Value::Str(expected_file.display().to_string())
+    );
+}
+
+#[test]
+fn cjs_module_exports_module_id() {
+    let root = temp_module_dir("cjs_module_id");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(&entry_path, "module.exports = { id: module.id };")
+        .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "id".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-module-id-trace")
+        .expect("execute");
+    let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
+    assert_eq!(
+        result.value,
+        Value::Str(expected_file.display().to_string())
+    );
+}
+
+#[test]
+fn cjs_module_exports_loaded_true_after_eval() {
+    let root = temp_module_dir("cjs_module_loaded");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(&entry_path, "module.exports = module;")
+        .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "loaded".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-module-loaded-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(true));
+}
+
+#[test]
+fn cjs_module_parent_tracks_require_chain() {
+    let root = temp_module_dir("cjs_module_parent_chain");
+    fs::create_dir_all(&root).expect("create module root");
+    let child_path = root.join("child.cjs");
+    fs::write(&child_path, "module.exports = module;")
+        .expect("write child module");
+    let parent_path = root.join("parent.cjs");
+    fs::write(
+        &parent_path,
+        "const child = require('./child.cjs');\nmodule.exports = { parentId: module.id, childParentId: child.parent.id, rootParent: module.parent };",
+    )
+    .expect("write parent module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./parent.cjs".to_string(),
+            "default".to_string(),
+            "childParentId".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-parent-chain-trace")
+        .expect("execute");
+    let expected_parent = parent_path.canonicalize().unwrap_or(parent_path);
+    assert_eq!(
+        result.value,
+        Value::Str(expected_parent.display().to_string())
+    );
+}
+
+#[test]
+fn cjs_entry_module_parent_is_null() {
+    let root = temp_module_dir("cjs_entry_parent_null");
+    fs::create_dir_all(&root).expect("create module root");
+    let child_path = root.join("child.cjs");
+    fs::write(&child_path, "module.exports = module;")
+        .expect("write child module");
+    let parent_path = root.join("parent.cjs");
+    fs::write(
+        &parent_path,
+        "const child = require('./child.cjs');\nmodule.exports = { rootParent: module.parent, childParentId: child.parent.id };",
+    )
+    .expect("write parent module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./parent.cjs".to_string(),
+            "default".to_string(),
+            "rootParent".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-parent-null-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Null);
+}
+
+#[test]
+fn cjs_module_exports_module_path() {
+    let root = temp_module_dir("cjs_module_path");
+    fs::create_dir_all(&root).expect("create module root");
+    let entry_path = root.join("entry.cjs");
+    fs::write(&entry_path, "module.exports = { path: module.path };")
+        .expect("write cjs module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "path".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-module-path-trace")
+        .expect("execute");
+    let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
+    let expected_dir = expected_file
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    assert_eq!(result.value, Value::Str(expected_dir));
+}
+
+#[test]
+fn require_module_cjs_cycle_reads_partial_exports() {
+    let root = temp_module_dir("module_require_cycle");
+    fs::create_dir_all(&root).expect("create module root");
+    let a_path = root.join("a.cjs");
+    fs::write(
+        &a_path,
+        "exports.loaded = false;\nconst b = require('./b.cjs');\nexports.seen_loaded = b.a_loaded;\nexports.loaded = true;\n",
+    )
+    .expect("write a.cjs");
+    let b_path = root.join("b.cjs");
+    fs::write(&b_path, "exports.a_loaded = require('./a.cjs').loaded;\n").expect("write b.cjs");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./a.cjs".to_string(),
+            "default".to_string(),
+            "seen_loaded".to_string(),
+        ],
+    );
+    let entry_path = root.join("main.mjs");
+    module.header.source_label = entry_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-cycle-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(false));
+}
+
+#[test]
+fn cjs_module_loaded_false_during_cycle() {
+    let root = temp_module_dir("module_cjs_loaded_cycle");
+    fs::create_dir_all(&root).expect("create module root");
+    let a_path = root.join("a.cjs");
+    fs::write(
+        &a_path,
+        "module.exports = module;\nconst b = require('./b.cjs');\nmodule.exports.child_loaded = b.loaded;\n",
+    )
+    .expect("write a.cjs");
+    let b_path = root.join("b.cjs");
+    fs::write(&b_path, "module.exports = require('./a.cjs');\n")
+        .expect("write b.cjs");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./a.cjs".to_string(),
+            "default".to_string(),
+            "child_loaded".to_string(),
+        ],
+    );
+    let entry_path = root.join("main.mjs");
+    module.header.source_label = entry_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-cjs-loaded-cycle-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(false));
+}
+
+#[test]
+fn cjs_require_returns_cached_exports() {
+    let root = temp_module_dir("module_require_cache");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = { count: 0 };")
+        .expect("write dep module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const a = require('./dep.cjs');\n\
+a.count += 1;\n\
+const b = require('./dep.cjs');\n\
+module.exports = { count: b.count };",
+    )
+    .expect("write entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+        vec![
+            "./entry.cjs".to_string(),
+            "default".to_string(),
+            "count".to_string(),
+        ],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-cache-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(1));
 }

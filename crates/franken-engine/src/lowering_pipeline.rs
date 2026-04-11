@@ -2554,6 +2554,12 @@ pub fn lower_ir2_to_ir3(
         if let Some(binding_id) = name_to_binding_id.get("exports") {
             cjs_binding_ids.insert(*binding_id);
         }
+        if let Some(binding_id) = name_to_binding_id.get("__filename") {
+            cjs_binding_ids.insert(*binding_id);
+        }
+        if let Some(binding_id) = name_to_binding_id.get("__dirname") {
+            cjs_binding_ids.insert(*binding_id);
+        }
     }
 
     for op in &ir2.ops {

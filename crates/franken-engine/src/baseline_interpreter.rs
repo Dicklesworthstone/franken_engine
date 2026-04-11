@@ -34,13 +34,13 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::ast::ParseGoal;
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
     WitnessEvent, WitnessEventKind,
 };
-use crate::lowering_pipeline::{lower_ir0_to_ir3, LoweringContext};
-use crate::ast::ParseGoal;
+use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
@@ -387,6 +387,7 @@ struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
     exports: BTreeMap<String, Value>,
+    cjs_module_object: Option<ObjectId>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -406,6 +407,7 @@ impl ModuleState {
 struct CjsModuleContext {
     module_object: ObjectId,
     exports_object: ObjectId,
+    module_specifier: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,13 +1387,20 @@ impl InterpreterCore {
         &mut self,
         module_object: ObjectId,
         exports_object: ObjectId,
+        module_specifier: Option<&str>,
     ) -> Result<(), InterpreterError> {
-        let mut replaced = Vec::with_capacity(2);
+        let (filename_value, dirname_value) = self.cjs_filename_dirname(
+            module_specifier.or_else(|| self.current_module_specifier.as_deref()),
+        );
+
+        let mut replaced = Vec::with_capacity(4);
         {
             let frame = self.scope_chain.current_mut();
             for (name, value) in [
                 ("exports", Value::Object(exports_object)),
                 ("module", Value::Object(module_object)),
+                ("__filename", filename_value),
+                ("__dirname", dirname_value),
             ] {
                 let name = name.to_string();
                 let replaced_binding = frame.declare(name.clone(), BindingKind::Var);
@@ -1417,11 +1426,35 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
-        let Some(context) = self.active_cjs_context.as_ref() else {
-            return Ok(());
+    fn cjs_filename_dirname(&self, module_specifier: Option<&str>) -> (Value, Value) {
+        let Some(specifier) = module_specifier else {
+            return (Value::Undefined, Value::Undefined);
         };
-        self.insert_cjs_bindings(context.module_object, context.exports_object)
+        let dirname = Path::new(specifier)
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(|path| path.display().to_string())
+            .or_else(|| self.config.module_root.clone())
+            .unwrap_or_default();
+        (Value::Str(specifier.to_string()), Value::Str(dirname))
+    }
+
+    fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
+        let (module_object, exports_object, module_specifier) = {
+            let Some(context) = self.active_cjs_context.as_ref() else {
+                return Ok(());
+            };
+            (
+                context.module_object,
+                context.exports_object,
+                context.module_specifier.clone(),
+            )
+        };
+        self.insert_cjs_bindings(
+            module_object,
+            exports_object,
+            Some(module_specifier.as_str()),
+        )
     }
 
     fn resolve_specifier_base(&self, specifier: &str) -> Result<PathBuf, InterpreterError> {
@@ -1450,35 +1483,37 @@ impl InterpreterCore {
 
     fn resolve_module_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
         let resolved = self.resolve_specifier_base(specifier)?;
-        let candidate = self
-            .resolve_module_candidate(&resolved)
-            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: format!("module not found at {}", resolved.display()),
-            })?;
-        let canonical = candidate.canonicalize().map_err(|error| {
+        let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
             InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
-                reason: format!("failed to canonicalize module path: {error}"),
+                reason: format!("module not found at {}", resolved.display()),
             }
         })?;
+        let canonical =
+            candidate
+                .canonicalize()
+                .map_err(|error| InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: format!("failed to canonicalize module path: {error}"),
+                })?;
         Ok(canonical.display().to_string())
     }
 
     fn resolve_require_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
         let resolved = self.resolve_specifier_base(specifier)?;
-        let candidate = self
-            .resolve_require_candidate(&resolved)
-            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: format!("module not found at {}", resolved.display()),
-            })?;
-        let canonical = candidate.canonicalize().map_err(|error| {
+        let candidate = self.resolve_require_candidate(&resolved).ok_or_else(|| {
             InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
-                reason: format!("failed to canonicalize module path: {error}"),
+                reason: format!("module not found at {}", resolved.display()),
             }
         })?;
+        let canonical =
+            candidate
+                .canonicalize()
+                .map_err(|error| InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: format!("failed to canonicalize module path: {error}"),
+                })?;
         Ok(canonical.display().to_string())
     }
 
@@ -1532,6 +1567,10 @@ impl InterpreterCore {
             if js_path.is_file() {
                 return Some(js_path);
             }
+            let mjs_path = candidate.with_extension("mjs");
+            if mjs_path.is_file() {
+                return Some(mjs_path);
+            }
         }
         if candidate.is_dir() {
             let index_cjs = candidate.join("index.cjs");
@@ -1542,6 +1581,10 @@ impl InterpreterCore {
             if index_js.is_file() {
                 return Some(index_js);
             }
+            let index_mjs = candidate.join("index.mjs");
+            if index_mjs.is_file() {
+                return Some(index_mjs);
+            }
         }
         if candidate.extension().is_none() {
             let index_cjs = candidate.join("index.cjs");
@@ -1551,6 +1594,10 @@ impl InterpreterCore {
             let index_js = candidate.join("index.js");
             if index_js.is_file() {
                 return Some(index_js);
+            }
+            let index_mjs = candidate.join("index.mjs");
+            if index_mjs.is_file() {
+                return Some(index_mjs);
             }
         }
         None
@@ -1572,6 +1619,7 @@ impl InterpreterCore {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
                 exports: BTreeMap::new(),
+                cjs_module_object: None,
             },
         );
         Ok(namespace_object)
@@ -1580,6 +1628,8 @@ impl InterpreterCore {
     fn init_cjs_environment(
         &mut self,
         module: &Ir3Module,
+        module_specifier: &str,
+        parent_module_object: Option<ObjectId>,
     ) -> Result<CjsModuleContext, InterpreterError> {
         self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
         let exports_object = self.alloc_object_with_prototype(None)?;
@@ -1590,18 +1640,50 @@ impl InterpreterCore {
             "exports".to_string(),
             Value::Object(exports_object),
         )?;
+        let (filename_value, dirname_value) =
+            self.cjs_filename_dirname(Some(module_specifier));
+        self.set_object_property(
+            module_object,
+            "id".to_string(),
+            filename_value.clone(),
+        )?;
+        self.set_object_property(
+            module_object,
+            "filename".to_string(),
+            filename_value.clone(),
+        )?;
+        self.set_object_property(
+            module_object,
+            "path".to_string(),
+            dirname_value.clone(),
+        )?;
+        let parent_value = parent_module_object
+            .map(Value::Object)
+            .unwrap_or(Value::Null);
+        self.set_object_property(
+            module_object,
+            "parent".to_string(),
+            parent_value,
+        )?;
+        self.set_object_property(
+            module_object,
+            "loaded".to_string(),
+            Value::Bool(false),
+        )?;
         let context = CjsModuleContext {
             module_object,
             exports_object,
+            module_specifier: module_specifier.to_string(),
         };
-        self.insert_cjs_bindings(context.module_object, context.exports_object)?;
+        self.insert_cjs_bindings(
+            context.module_object,
+            context.exports_object,
+            Some(module_specifier),
+        )?;
         Ok(context)
     }
 
-    fn finalize_cjs_exports(
-        &mut self,
-        context: &CjsModuleContext,
-    ) -> Result<(), InterpreterError> {
+    fn finalize_cjs_exports(&mut self, context: &CjsModuleContext) -> Result<(), InterpreterError> {
         let export_value = self.prototype_chain_get(context.module_object, "exports")?;
         self.register_module_export("default", export_value.clone())?;
         if let Value::Object(object_id) = export_value {
@@ -1632,21 +1714,22 @@ impl InterpreterCore {
                 ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => {
                     Ok(Value::Object(record.namespace_object))
                 }
-                ModuleRuntimeStatus::Failed(reason) => Err(InterpreterError::ModuleEvaluationFailed {
-                    specifier: resolved.to_string(),
-                    reason: reason.clone(),
-                }),
+                ModuleRuntimeStatus::Failed(reason) => {
+                    Err(InterpreterError::ModuleEvaluationFailed {
+                        specifier: resolved.to_string(),
+                        reason: reason.clone(),
+                    })
+                }
             };
         }
 
         let namespace_object = self.ensure_module_record(module, resolved)?;
 
-        let source = fs::read_to_string(resolved).map_err(|error| {
-            InterpreterError::ModuleReadFailed {
+        let source =
+            fs::read_to_string(resolved).map_err(|error| InterpreterError::ModuleReadFailed {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
-            }
-        })?;
+            })?;
         let parser_source = ParserSource {
             label: resolved.to_string(),
             text: source,
@@ -1663,11 +1746,8 @@ impl InterpreterCore {
                 error: error.to_string(),
             })?;
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
-        let lowering_ctx = LoweringContext::new(
-            &self.trace_id,
-            "module-import",
-            "baseline_interpreter",
-        );
+        let lowering_ctx =
+            LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter");
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
             InterpreterError::ModuleLoweringFailed {
                 specifier: resolved.to_string(),
@@ -1717,7 +1797,10 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_require_specifier(specifier)?;
-        let is_cjs = match Path::new(&resolved).extension().and_then(|ext| ext.to_str()) {
+        let is_cjs = match Path::new(&resolved)
+            .extension()
+            .and_then(|ext| ext.to_str())
+        {
             Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
             Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
             Some(ext) if ext.eq_ignore_ascii_case("js") => true,
@@ -1726,6 +1809,12 @@ impl InterpreterCore {
         let namespace = self.load_module_resolved(module, &resolved, is_cjs)?;
         if !is_cjs {
             return Ok(namespace);
+        }
+        if let Some(record) = self.module_state.modules.get(&resolved)
+            && let Some(module_object) = record.cjs_module_object
+        {
+            let export_value = self.prototype_chain_get(module_object, "exports")?;
+            return Ok(export_value);
         }
         let Value::Object(namespace_object) = namespace else {
             return Ok(namespace);
@@ -1764,12 +1853,19 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let snapshot = self.snapshot_module_execution();
         let previous_cjs_context = self.active_cjs_context.take();
+        let parent_module_object = previous_cjs_context
+            .as_ref()
+            .map(|context| context.module_object);
         if let Err(err) = self.prepare_module_execution(specifier) {
             self.active_cjs_context = previous_cjs_context;
             self.restore_module_execution(snapshot);
             return Err(err);
         }
-        let cjs_context = match self.init_cjs_environment(module) {
+        let cjs_context = match self.init_cjs_environment(
+            module,
+            specifier,
+            parent_module_object,
+        ) {
             Ok(context) => context,
             Err(err) => {
                 self.active_cjs_context = previous_cjs_context;
@@ -1777,6 +1873,9 @@ impl InterpreterCore {
                 return Err(err);
             }
         };
+        if let Some(record) = self.module_state.modules.get_mut(specifier) {
+            record.cjs_module_object = Some(cjs_context.module_object);
+        }
         self.active_cjs_context = Some(cjs_context.clone());
         let result = self.run_loop(module);
         self.drain_microtasks();
@@ -1790,9 +1889,20 @@ impl InterpreterCore {
         } else {
             Ok(())
         };
+        let loaded_outcome = if eval_outcome.is_ok() && finalize_outcome.is_ok() {
+            self.set_object_property(
+                cjs_context.module_object,
+                "loaded".to_string(),
+                Value::Bool(true),
+            )
+        } else {
+            Ok(())
+        };
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
-        eval_outcome.and_then(|_| finalize_outcome)
+        eval_outcome
+            .and_then(|_| finalize_outcome)
+            .and_then(|_| loaded_outcome)
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
@@ -3533,6 +3643,14 @@ impl InterpreterCore {
                             });
                         }
                         binding.value.clone()
+                    } else if let Some(context) = self.active_cjs_context.as_ref() {
+                        let (filename, dirname) =
+                            self.cjs_filename_dirname(Some(&context.module_specifier));
+                        match name.as_str() {
+                            "__filename" => filename,
+                            "__dirname" => dirname,
+                            _ => Value::Undefined,
+                        }
                     } else {
                         Value::Undefined
                     };

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
+    ImportClause, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
+    VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -481,27 +482,143 @@ pub fn lower_ir0_to_ir1(
     let declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
     let mut synthetic_export_index = 0u32;
+    let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
 
     for statement in &ir0.tree.body {
         match statement {
             Statement::Import(import) => {
-                ir1.ops.push(Ir1Op::ImportModule {
-                    specifier: import.source.clone(),
-                });
-                if let Some(binding_name) = &import.binding {
-                    let binding_id = alloc_binding(
+                let specifier = import.source.clone();
+                let mut alloc_import_binding = |name: &str| {
+                    alloc_binding(
                         &mut bindings,
                         &mut binding_lookup,
                         &mut binding_index,
                         root_scope_id,
-                        binding_name,
+                        name,
                         BindingKind::Import,
                     )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                    ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                    .map_err(LoweringPipelineError::SemanticViolation)
+                };
+
+                let make_temp_binding = || {
+                    let temp_name = make_internal_binding_name(
+                        "import_namespace",
+                        synthetic_import_index,
+                    );
+                    synthetic_import_index = synthetic_import_index.saturating_add(1);
+                    alloc_binding(
+                        &mut bindings,
+                        &mut binding_lookup,
+                        &mut binding_index,
+                        root_scope_id,
+                        &temp_name,
+                        BindingKind::Const,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)
+                };
+
+                match &import.clause {
+                    ImportClause::SideEffect => {
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::Pop);
+                    }
+                    ImportClause::Namespace { local } => {
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        let binding_id = alloc_import_binding(local)?;
+                        ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                        ir1.ops.push(Ir1Op::Pop);
+                    }
+                    ImportClause::Default { local } => {
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::GetProperty {
+                            key: Ir1PropertyKey::Static("default".to_string()),
+                        });
+                        let binding_id = alloc_import_binding(local)?;
+                        ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                        ir1.ops.push(Ir1Op::Pop);
+                    }
+                    ImportClause::Named { specifiers } => {
+                        let temp_binding_id = make_temp_binding()?;
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+                        for spec in specifiers {
+                            ir1.ops.push(Ir1Op::LoadBinding {
+                                binding_id: temp_binding_id,
+                            });
+                            ir1.ops.push(Ir1Op::GetProperty {
+                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                            });
+                            let binding_id = alloc_import_binding(&spec.local_name)?;
+                            ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                            ir1.ops.push(Ir1Op::Pop);
+                        }
+                    }
+                    ImportClause::DefaultAndNamed { default, specifiers } => {
+                        let temp_binding_id = make_temp_binding()?;
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+
+                        ir1.ops.push(Ir1Op::LoadBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::GetProperty {
+                            key: Ir1PropertyKey::Static("default".to_string()),
+                        });
+                        let default_binding_id = alloc_import_binding(default)?;
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: default_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+
+                        for spec in specifiers {
+                            ir1.ops.push(Ir1Op::LoadBinding {
+                                binding_id: temp_binding_id,
+                            });
+                            ir1.ops.push(Ir1Op::GetProperty {
+                                key: Ir1PropertyKey::Static(spec.import_name.clone()),
+                            });
+                            let binding_id = alloc_import_binding(&spec.local_name)?;
+                            ir1.ops.push(Ir1Op::StoreBinding { binding_id });
+                            ir1.ops.push(Ir1Op::Pop);
+                        }
+                    }
+                    ImportClause::DefaultAndNamespace { default, namespace } => {
+                        let temp_binding_id = make_temp_binding()?;
+                        ir1.ops.push(Ir1Op::ImportModule { specifier });
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+
+                        ir1.ops.push(Ir1Op::LoadBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::GetProperty {
+                            key: Ir1PropertyKey::Static("default".to_string()),
+                        });
+                        let default_binding_id = alloc_import_binding(default)?;
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: default_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+
+                        ir1.ops.push(Ir1Op::LoadBinding {
+                            binding_id: temp_binding_id,
+                        });
+                        let namespace_binding_id = alloc_import_binding(namespace)?;
+                        ir1.ops.push(Ir1Op::StoreBinding {
+                            binding_id: namespace_binding_id,
+                        });
+                        ir1.ops.push(Ir1Op::Pop);
+                    }
                 }
-                ir1.ops.push(Ir1Op::Pop);
             }
             Statement::Export(export) => match &export.kind {
                 ExportKind::Default(expression) => {
@@ -658,9 +775,9 @@ fn reserve_root_scope_bindings(
     for statement in statements {
         match statement {
             Statement::Import(import) => {
-                if let Some(binding_name) = &import.binding {
+                for binding_name in import.clause.binding_names() {
                     reserve_binding_id(binding_lookup, binding_index, binding_name);
-                    declared.insert(binding_name.clone());
+                    declared.insert(binding_name.to_string());
                 }
             }
             Statement::VariableDeclaration(variable_declaration) => {
@@ -780,9 +897,12 @@ fn lower_destructuring_to_ir1(
     pattern: &BindingPattern,
     source_bid: BindingId,
     ops: &mut Vec<Ir1Op>,
-    binding_lookup: &BTreeMap<String, BindingId>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
     label_counter: &mut u32,
-) {
+) -> Result<(), LoweringPipelineError> {
     match pattern {
         BindingPattern::Identifier(_) => {
             // Simple binding — already handled by StoreBinding above.
@@ -819,23 +939,40 @@ fn lower_destructuring_to_ir1(
                     key: Ir1PropertyKey::Static(key_str),
                 });
 
-                // Handle default value: if the extracted value is undefined
-                // and this is an AssignmentPattern, use the default.
-                if let BindingPattern::AssignmentPattern { .. } = &prop.value {
-                    // For now, store the property value; default value lowering
-                    // requires conditional branches (JumpIfNullish) which can
-                    // be added incrementally.
+                match &prop.value {
+                    BindingPattern::Identifier(_) => {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+                    _ => {
+                        let temp_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            "destructure_prop",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: temp_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        assign_pattern_from_source(
+                            &prop.value,
+                            temp_binding,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
                 }
 
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: target_bid,
-                });
-                ops.push(Ir1Op::Pop);
-
-                // Note: nested destructuring (`const { a: { b, c } } = obj`)
-                // requires temporary bindings to avoid source-overwrite bugs
-                // and is deferred to a follow-up pass. Flat destructuring
-                // (`const { a, b } = obj`) works correctly.
+                // Nested destructuring uses temp bindings to avoid
+                // source-overwrite bugs.
             }
         }
         BindingPattern::ArrayPattern(elements) => {
@@ -884,26 +1021,156 @@ fn lower_destructuring_to_ir1(
                 ops.push(Ir1Op::GetProperty {
                     key: Ir1PropertyKey::Static(index.to_string()),
                 });
+                match element {
+                    BindingPattern::Identifier(_) => {
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+                    _ => {
+                        let temp_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            "destructure_elem",
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: temp_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        assign_pattern_from_source(
+                            element,
+                            temp_binding,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
+                }
+
+                // Nested array destructuring uses temp bindings to avoid
+                // source-overwrite bugs.
+            }
+        }
+        BindingPattern::AssignmentPattern { left, right } => {
+            // The outer assignment pattern with default value. The value has
+            // already been stored to source_bid. Only `undefined` triggers
+            // the default (not null).
+            let default_label = alloc_label(label_counter);
+            let end_label = alloc_label(label_counter);
+
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            });
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+            ops.push(Ir1Op::BinaryOp {
+                operator: BinaryOperator::StrictEqual,
+            });
+            ops.push(Ir1Op::JumpIfTruthy {
+                label_id: default_label,
+            });
+
+            assign_pattern_from_source(
+                left,
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+
+            ops.push(Ir1Op::Label { id: default_label });
+            lower_expression_to_ir1(
+                right,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: source_bid,
+            });
+            ops.push(Ir1Op::Pop);
+            assign_pattern_from_source(
+                left,
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+
+            ops.push(Ir1Op::Label { id: end_label });
+        }
+        BindingPattern::Rest(inner) => {
+            // Rest at top level (unusual but valid). Recurse into inner.
+            lower_destructuring_to_ir1(
+                inner,
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn assign_pattern_from_source(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    match pattern {
+        BindingPattern::Identifier(name) => {
+            if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: source_bid,
+                });
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: target_bid,
                 });
                 ops.push(Ir1Op::Pop);
-
-                // Note: nested array destructuring deferred (same source-overwrite
-                // issue as object patterns).
             }
         }
-        BindingPattern::AssignmentPattern { left, .. } => {
-            // The outer assignment pattern with default value. The value has
-            // already been stored to source_bid. Recurse into the left-hand
-            // pattern for nested destructuring.
-            lower_destructuring_to_ir1(left, source_bid, ops, binding_lookup, label_counter);
-        }
-        BindingPattern::Rest(inner) => {
-            // Rest at top level (unusual but valid). Recurse into inner.
-            lower_destructuring_to_ir1(inner, source_bid, ops, binding_lookup, label_counter);
+        _ => {
+            lower_destructuring_to_ir1(
+                pattern,
+                source_bid,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
         }
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1012,9 +1279,12 @@ fn lower_statement_to_ir1_with_flow(
                         &d.pattern,
                         primary_bid,
                         ops,
+                        bindings,
                         binding_lookup,
+                        binding_index,
+                        scope_id,
                         label_counter,
-                    );
+                    )?;
                 }
             }
         }
@@ -1193,9 +1463,12 @@ fn lower_statement_to_ir1_with_flow(
                     &for_in_stmt.binding,
                     bid,
                     ops,
+                    bindings,
                     binding_lookup,
+                    binding_index,
+                    scope_id,
                     label_counter,
-                );
+                )?;
             }
 
             lower_statement_to_ir1_with_flow(
@@ -1271,9 +1544,12 @@ fn lower_statement_to_ir1_with_flow(
                     &for_of_stmt.binding,
                     bid,
                     ops,
+                    bindings,
                     binding_lookup,
+                    binding_index,
+                    scope_id,
                     label_counter,
-                );
+                )?;
             }
 
             lower_statement_to_ir1_with_flow(
@@ -2366,15 +2642,21 @@ pub fn lower_ir2_to_ir3(
                     dst: string_reg,
                     pool_index,
                 });
-                value_stack.push(string_reg);
-            }
-            Ir1Op::ExportBinding { .. } => {
-                let register = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Move {
-                    dst: register,
-                    src: register,
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::ImportModule {
+                    specifier: string_reg,
+                    dst,
                 });
-                value_stack.push(register);
+                value_stack.push(dst);
+            }
+            Ir1Op::ExportBinding { name, .. } => {
+                let src = value_stack.pop().unwrap_or(0);
+                let pool_index = push_constant(&mut ir3.constant_pool, name);
+                ir3.instructions.push(Ir3Instruction::ExportBinding {
+                    name_pool_index: pool_index,
+                    src,
+                });
+                value_stack.push(src);
             }
             Ir1Op::Await => {
                 let current = value_stack.pop().unwrap_or(0);
@@ -7300,6 +7582,9 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Module,
             body: vec![Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "_".to_string(),
+                },
                 source: "lodash".to_string(),
                 binding: Some("_".to_string()),
                 span: span(),
@@ -7704,6 +7989,9 @@ mod tests {
             goal: ParseGoal::Module,
             body: vec![
                 Statement::Import(ImportDeclaration {
+                    clause: ImportClause::Default {
+                        local: "_".to_string(),
+                    },
                     source: "lodash".to_string(),
                     binding: Some("_".to_string()),
                     span: span(),
@@ -10541,6 +10829,185 @@ mod tests {
         assert!(
             !get_props.contains(&"0".to_string()),
             "should NOT emit GetProperty for hole at index '0'"
+        );
+    }
+
+    #[test]
+    fn nested_object_destructuring_emits_nested_get_property() {
+        // const { a: { b } } = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::Identifier("a".into()),
+                    value: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                        key: Expression::Identifier("b".into()),
+                        value: BindingPattern::Identifier("b".into()),
+                        computed: false,
+                        shorthand: true,
+                    }]),
+                    computed: false,
+                    shorthand: false,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let get_props: Vec<_> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(k),
+                } = op
+                {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            get_props.contains(&"a".to_string()),
+            "should emit GetProperty for outer key 'a'"
+        );
+        assert!(
+            get_props.contains(&"b".to_string()),
+            "should emit GetProperty for nested key 'b'"
+        );
+    }
+
+    #[test]
+    fn nested_array_destructuring_emits_nested_get_property() {
+        // const [, [b]] = source — nested array destructuring
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ArrayPattern(vec![
+                    None,
+                    Some(BindingPattern::ArrayPattern(vec![Some(
+                        BindingPattern::Identifier("b".into()),
+                    )])),
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let mut index_zero = 0usize;
+        let mut index_one = 0usize;
+        for op in &result.module.ops {
+            if let Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(k),
+            } = op
+            {
+                if k == "0" {
+                    index_zero += 1;
+                } else if k == "1" {
+                    index_one += 1;
+                }
+            }
+        }
+        assert_eq!(index_one, 1, "should emit GetProperty for outer index '1'");
+        assert_eq!(index_zero, 1, "should emit GetProperty for nested index '0'");
+    }
+
+    #[test]
+    fn destructuring_assignment_pattern_emits_default_check() {
+        // const { a = 1 } = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::Identifier("a".into()),
+                    value: BindingPattern::AssignmentPattern {
+                        left: Box::new(BindingPattern::Identifier("a".into())),
+                        right: Expression::NumericLiteral(1),
+                    },
+                    computed: false,
+                    shorthand: true,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        assert!(
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::BinaryOp {
+                    operator: BinaryOperator::StrictEqual
+                }
+            )),
+            "should emit strict-equal check against undefined"
+        );
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::JumpIfTruthy { .. })),
+            "should emit JumpIfTruthy for default branch"
+        );
+        assert!(
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(1)
+                }
+            )),
+            "should load the default literal"
+        );
+    }
+
+    #[test]
+    fn array_destructuring_assignment_pattern_emits_default_check() {
+        // const [a = 2] = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ArrayPattern(vec![Some(
+                    BindingPattern::AssignmentPattern {
+                        left: Box::new(BindingPattern::Identifier("a".into())),
+                        right: Expression::NumericLiteral(2),
+                    },
+                )]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        assert!(
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::BinaryOp {
+                    operator: BinaryOperator::StrictEqual
+                }
+            )),
+            "should emit strict-equal check against undefined"
+        );
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::JumpIfTruthy { .. })),
+            "should emit JumpIfTruthy for default branch"
+        );
+        assert!(
+            result.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(2)
+                }
+            )),
+            "should load the default literal"
         );
     }
 

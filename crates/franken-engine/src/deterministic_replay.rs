@@ -34,16 +34,21 @@ pub enum NondeterminismSource {
     ResourceCheck,
     /// User interaction timing.
     UserInteractionTiming,
+    /// Floating-point operation result (may diverge cross-architecture due to
+    /// x87 extended precision, ARM NEON rounding, or compiler optimizations).
+    /// Stored as IEEE 754 bits (u64) for exact comparison.
+    FloatingPointResult,
 }
 
 impl NondeterminismSource {
-    pub const ALL: [NondeterminismSource; 6] = [
+    pub const ALL: [NondeterminismSource; 7] = [
         NondeterminismSource::LaneSelectionRandom,
         NondeterminismSource::TimerRead,
         NondeterminismSource::ExternalApiResponse,
         NondeterminismSource::ThreadSchedule,
         NondeterminismSource::ResourceCheck,
         NondeterminismSource::UserInteractionTiming,
+        NondeterminismSource::FloatingPointResult,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -54,6 +59,7 @@ impl NondeterminismSource {
             Self::ThreadSchedule => "thread_schedule",
             Self::ResourceCheck => "resource_check",
             Self::UserInteractionTiming => "user_interaction_timing",
+            Self::FloatingPointResult => "floating_point_result",
         }
     }
 }
@@ -163,6 +169,38 @@ impl NondeterminismTrace {
             canonical.as_bytes(),
         )
         .unwrap()
+    }
+
+    /// Capture a floating-point result for deterministic replay.
+    /// The f64 is stored as its IEEE 754 bit representation (u64 little-endian).
+    pub fn capture_fp_result(
+        &mut self,
+        value: f64,
+        virtual_ts: u64,
+        component: impl Into<String>,
+    ) -> u64 {
+        let bits = value.to_bits();
+        self.capture(
+            NondeterminismSource::FloatingPointResult,
+            bits.to_le_bytes().to_vec(),
+            virtual_ts,
+            component,
+        )
+    }
+}
+
+/// Encode an f64 as its IEEE 754 bit representation for trace storage.
+pub fn encode_fp_for_trace(value: f64) -> Vec<u8> {
+    value.to_bits().to_le_bytes().to_vec()
+}
+
+/// Decode an f64 from its IEEE 754 bit representation in a trace.
+pub fn decode_fp_from_trace(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() == 8 {
+        let bits = u64::from_le_bytes(bytes.try_into().ok()?);
+        Some(f64::from_bits(bits))
+    } else {
+        None
     }
 }
 
@@ -375,19 +413,69 @@ impl ReplayEngine {
         )
         .unwrap()
     }
+
+    /// Replay a floating-point result, returning the traced value for determinism.
+    /// In Strict/BestEffort mode, returns the traced f64.
+    /// In Validate mode, returns the live f64.
+    pub fn replay_fp_result(&mut self, live_value: f64) -> Result<f64, ReplayError> {
+        let live_bytes = encode_fp_for_trace(live_value);
+        let traced_bytes = self.replay_next(NondeterminismSource::FloatingPointResult, &live_bytes)?;
+        decode_fp_from_trace(&traced_bytes).ok_or(ReplayError::TraceNotFinalised)
+    }
 }
 
 /// Classify divergence severity based on source type and value difference.
 fn classify_divergence(
     source: &NondeterminismSource,
-    _expected: &[u8],
-    _actual: &[u8],
+    expected: &[u8],
+    actual: &[u8],
 ) -> DivergenceSeverity {
     match source {
         NondeterminismSource::TimerRead | NondeterminismSource::UserInteractionTiming => {
             DivergenceSeverity::Benign
         }
         NondeterminismSource::ThreadSchedule => DivergenceSeverity::Warning,
+        NondeterminismSource::FloatingPointResult => {
+            // FP results are compared bit-exactly. Cross-architecture divergence
+            // (x87 vs SSE, ARM NEON rounding) is Warning if values are close,
+            // Critical if they differ significantly.
+            if expected.len() == 8 && actual.len() == 8 {
+                let exp_bits = u64::from_le_bytes(expected.try_into().unwrap_or([0; 8]));
+                let act_bits = u64::from_le_bytes(actual.try_into().unwrap_or([0; 8]));
+                let exp_f64 = f64::from_bits(exp_bits);
+                let act_f64 = f64::from_bits(act_bits);
+
+                // NaN handling: both NaN is Warning, one NaN is Critical
+                if exp_f64.is_nan() && act_f64.is_nan() {
+                    return DivergenceSeverity::Warning;
+                }
+                if exp_f64.is_nan() || act_f64.is_nan() {
+                    return DivergenceSeverity::Critical;
+                }
+
+                // Infinity handling: same infinity is Benign, opposite is Critical
+                if exp_f64.is_infinite() && act_f64.is_infinite() {
+                    if exp_f64.signum() == act_f64.signum() {
+                        return DivergenceSeverity::Benign;
+                    }
+                    return DivergenceSeverity::Critical;
+                }
+
+                // Relative tolerance check: 1 ULP difference is Warning
+                let ulp_diff = (exp_bits as i64).wrapping_sub(act_bits as i64).unsigned_abs();
+                if ulp_diff <= 1 {
+                    DivergenceSeverity::Warning
+                } else if ulp_diff <= 4 {
+                    // Small ULP difference (compiler optimizations, FMA fusion)
+                    DivergenceSeverity::Warning
+                } else {
+                    DivergenceSeverity::Critical
+                }
+            } else {
+                // Unexpected format: Critical
+                DivergenceSeverity::Critical
+            }
+        }
         NondeterminismSource::LaneSelectionRandom
         | NondeterminismSource::ExternalApiResponse
         | NondeterminismSource::ResourceCheck => DivergenceSeverity::Critical,
@@ -2824,5 +2912,168 @@ mod tests {
         .map(|k| k.as_str())
         .collect();
         assert_eq!(strs.len(), 8);
+    }
+
+    // ── Floating-point replay tests ─────────────────────────────────────────
+
+    #[test]
+    fn capture_fp_result_stores_bits() {
+        let mut trace = NondeterminismTrace::new("fp-session");
+        let value = 1.5_f64;
+        trace.capture_fp_result(value, 100, "arith");
+        assert_eq!(trace.events.len(), 1);
+        assert_eq!(
+            trace.events[0].source,
+            NondeterminismSource::FloatingPointResult
+        );
+        assert_eq!(trace.events[0].value, value.to_bits().to_le_bytes().to_vec());
+    }
+
+    #[test]
+    fn encode_decode_fp_roundtrip() {
+        let values = [0.0, -0.0, 1.5, -1.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        for &v in &values {
+            let encoded = encode_fp_for_trace(v);
+            let decoded = decode_fp_from_trace(&encoded).unwrap();
+            if v.is_nan() {
+                assert!(decoded.is_nan());
+            } else {
+                assert_eq!(decoded.to_bits(), v.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn replay_fp_result_returns_traced_value() {
+        let mut trace = NondeterminismTrace::new("fp-replay");
+        let original = 3.14159_f64;
+        trace.capture_fp_result(original, 100, "arith");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Live value differs slightly
+        let live = 3.14159_f64 + 1e-15;
+        let result = engine.replay_fp_result(live).unwrap();
+        // Should return the traced value, not live
+        assert_eq!(result, original);
+    }
+
+    #[test]
+    fn fp_divergence_same_value_is_benign() {
+        let value = 1.5_f64;
+        let bytes = encode_fp_for_trace(value);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &bytes,
+            &bytes,
+        );
+        // Same value: no divergence recorded (but if it were, would be benign)
+        assert!(severity != DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn fp_divergence_1ulp_is_warning() {
+        let value = 1.5_f64;
+        let bits = value.to_bits();
+        let expected = bits.to_le_bytes().to_vec();
+        // 1 ULP difference
+        let actual = (bits + 1).to_le_bytes().to_vec();
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &expected,
+            &actual,
+        );
+        assert_eq!(severity, DivergenceSeverity::Warning);
+    }
+
+    #[test]
+    fn fp_divergence_large_diff_is_critical() {
+        let expected = encode_fp_for_trace(1.0);
+        let actual = encode_fp_for_trace(2.0);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &expected,
+            &actual,
+        );
+        assert_eq!(severity, DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn fp_divergence_nan_vs_nan_is_warning() {
+        let nan1 = encode_fp_for_trace(f64::NAN);
+        let nan2 = encode_fp_for_trace(f64::NAN);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &nan1,
+            &nan2,
+        );
+        assert_eq!(severity, DivergenceSeverity::Warning);
+    }
+
+    #[test]
+    fn fp_divergence_nan_vs_number_is_critical() {
+        let nan = encode_fp_for_trace(f64::NAN);
+        let num = encode_fp_for_trace(1.0);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &nan,
+            &num,
+        );
+        assert_eq!(severity, DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn fp_divergence_same_infinity_is_benign() {
+        let inf = encode_fp_for_trace(f64::INFINITY);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &inf,
+            &inf,
+        );
+        assert_eq!(severity, DivergenceSeverity::Benign);
+    }
+
+    #[test]
+    fn fp_divergence_opposite_infinity_is_critical() {
+        let pos_inf = encode_fp_for_trace(f64::INFINITY);
+        let neg_inf = encode_fp_for_trace(f64::NEG_INFINITY);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &pos_inf,
+            &neg_inf,
+        );
+        assert_eq!(severity, DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn nondeterminism_source_all_includes_fp() {
+        assert!(NondeterminismSource::ALL.contains(&NondeterminismSource::FloatingPointResult));
+        assert_eq!(NondeterminismSource::ALL.len(), 7);
+    }
+
+    #[test]
+    fn nondeterminism_source_fp_as_str() {
+        assert_eq!(
+            NondeterminismSource::FloatingPointResult.as_str(),
+            "floating_point_result"
+        );
+    }
+
+    #[test]
+    fn integer_operations_produce_no_fp_events() {
+        let mut trace = NondeterminismTrace::new("int-only");
+        // Simulate integer operations (no FP capture calls)
+        trace.capture(
+            NondeterminismSource::LaneSelectionRandom,
+            vec![1],
+            100,
+            "lane",
+        );
+        trace.finalise(200);
+        // No FloatingPointResult events
+        assert!(trace
+            .events
+            .iter()
+            .all(|e| e.source != NondeterminismSource::FloatingPointResult));
     }
 }

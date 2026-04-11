@@ -175,8 +175,16 @@ fn readme_documents_build_modes_and_gate_script() {
         "README should document the build-gate artifact root"
     );
     assert!(
+        readme.contains("docs/cross_repo_dependency_isolation_v1.json"),
+        "README should point at the machine-readable RC-6 dependency isolation contract"
+    );
+    assert!(
         readme.contains("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md"),
         "README should point at the canonical RC-6 dependency isolation doc"
+    );
+    assert!(
+        readme.contains("through `rch`"),
+        "README should state that heavy build-gate cargo lanes stay on rch"
     );
 }
 
@@ -208,6 +216,10 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
     assert_eq!(
         contract["verification_surfaces"]["standalone_build_gate"]["operator_command"].as_str(),
         Some("./scripts/test_standalone_build.sh ci")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["strict_mode"].as_str(),
+        Some("rch_only_no_local_fallback")
     );
     assert_eq!(
         contract["verification_surfaces"]["standalone_build_gate"]["manifest_schema_version"]
@@ -249,4 +261,21 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
             .as_str()
             .is_some_and(|command| command.contains("--all-features"))
     }));
+
+    let operator_verification = contract["operator_verification"]
+        .as_array()
+        .expect("operator_verification should be an array");
+    for command in [
+        "./scripts/test_standalone_build.sh ci",
+        "cat artifacts/standalone_build_gate/<timestamp>/manifest.json",
+        "cat artifacts/standalone_build_gate/<timestamp>/events.jsonl",
+        "cat artifacts/standalone_build_gate/<timestamp>/commands.txt",
+    ] {
+        assert!(
+            operator_verification
+                .iter()
+                .any(|entry| entry.as_str() == Some(command)),
+            "operator verification should include command {command}"
+        );
+    }
 }

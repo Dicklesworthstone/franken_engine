@@ -212,6 +212,10 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
         Some("./scripts/audit_external_deps.sh")
     );
     assert_eq!(
+        contract["verification_surfaces"]["dependency_audit"]["strict_mode"].as_str(),
+        Some("rch_only_no_local_fallback")
+    );
+    assert_eq!(
         contract["verification_surfaces"]["dependency_audit"]["artifact_root"].as_str(),
         Some("artifacts/dependency_audit")
     );
@@ -234,6 +238,26 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
         contract["verification_surfaces"]["standalone_build_gate"]["script"].as_str(),
         Some("./scripts/test_standalone_build.sh")
     );
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["strict_mode"].as_str(),
+        Some("rch_only_no_local_fallback")
+    );
+    let operator_verification = contract["operator_verification"]
+        .as_array()
+        .expect("operator_verification should be an array");
+    for command in [
+        "./scripts/audit_external_deps.sh",
+        "./scripts/test_standalone_build.sh ci",
+        "cat artifacts/dependency_audit/manifest.json",
+        "cat artifacts/dependency_audit/commands.txt",
+    ] {
+        assert!(
+            operator_verification
+                .iter()
+                .any(|entry| entry.as_str() == Some(command)),
+            "operator verification should include command {command}"
+        );
+    }
 }
 
 #[test]

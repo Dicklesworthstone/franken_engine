@@ -1171,6 +1171,7 @@ fn router_with_custom_configs() {
         max_string_size: 33_554_432,
         max_heap_objects: 100_000,
         max_total_memory_bytes: 64 * 1024 * 1024,
+        max_scope_depth: 512,
         granted_capabilities: Vec::new(),
     };
     let v8_cfg = InterpreterConfig {
@@ -1180,6 +1181,7 @@ fn router_with_custom_configs() {
         max_string_size: 33_554_432,
         max_heap_objects: 1_000_000,
         max_total_memory_bytes: 512 * 1024 * 1024,
+        max_scope_depth: 512,
         granted_capabilities: Vec::new(),
     };
     let router = LaneRouter::with_configs(qjs_cfg, v8_cfg);

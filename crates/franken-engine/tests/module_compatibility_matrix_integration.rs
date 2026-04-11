@@ -416,6 +416,158 @@ fn observe_external_require_chain_of_esm_behavior(mode: CompatibilityMode) -> St
     }
 }
 
+fn observe_external_extension_probe_package_root_require_behavior(
+    mode: CompatibilityMode,
+    bare_specifier: &str,
+    entry_specifier: &str,
+    sub_specifier: &str,
+) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            entry_specifier,
+            cjs_def("const sub = require('./sub'); module.exports = sub;")
+                .with_dependency(ModuleDependency::new("./sub", ImportStyle::Require)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(sub_specifier, cjs_def("module.exports = 1;"))
+        .unwrap();
+
+    let outcomes = resolver
+        .resolve_chain(
+            &ModuleRequest::new(bare_specifier, ImportStyle::Require).with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("external extension-probe package-root require chain should resolve");
+
+    let ids = outcomes
+        .iter()
+        .map(|outcome| outcome.module.record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            format!("external:{entry_specifier}"),
+            format!("external:{sub_specifier}")
+        ]
+    );
+    assert_eq!(outcomes[0].module.canonical_specifier, entry_specifier);
+    assert_eq!(
+        outcomes[0].module.probe_sequence,
+        vec![
+            bare_specifier.to_string(),
+            format!("{bare_specifier}.cjs"),
+            entry_specifier.to_string()
+        ]
+    );
+    assert_eq!(outcomes[1].module.canonical_specifier, sub_specifier);
+    assert_eq!(
+        outcomes[1].module.probe_sequence,
+        vec![
+            sub_specifier.trim_end_matches(".cjs").to_string(),
+            sub_specifier.to_string()
+        ]
+    );
+
+    "resolve_relative_require_from_package_root".to_string()
+}
+
+fn observe_esm_import_cjs_default_projection_behavior(mode: CompatibilityMode) -> String {
+    let inventory = run_interop_parity_corpus();
+    let specimen_ids = match mode {
+        CompatibilityMode::Native => ["esm_imports_cjs_default", "namespace_import_from_cjs"],
+        CompatibilityMode::NodeCompat => [
+            "esm_imports_cjs_default_node_compat",
+            "namespace_import_from_cjs_node_compat",
+        ],
+        CompatibilityMode::BunCompat => [
+            "esm_imports_cjs_default_bun_compat",
+            "namespace_import_from_cjs_bun_compat",
+        ],
+    };
+
+    for specimen_id in specimen_ids {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("default/namespace projection specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert_eq!(evidence.linked_count, 2);
+        assert!(evidence.error_detail.is_none());
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+    }
+
+    "namespace_default_projection".to_string()
+}
+
+fn observe_mixed_cycle_live_binding_behavior(mode: CompatibilityMode) -> String {
+    match mode {
+        CompatibilityMode::BunCompat => {
+            let evidence = run_interop_parity_corpus()
+                .evidence
+                .into_iter()
+                .find(|ev| ev.specimen_id == "cycle_mixed_esm_cjs")
+                .expect("mixed cycle specimen should exist");
+            assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
+            assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+            assert_eq!(evidence.verdict, InteropVerdict::Pass);
+            assert_eq!(
+                evidence.compatibility_disposition,
+                InteropCompatibilityDisposition::Supported
+            );
+            assert_eq!(evidence.linked_count, 2);
+            assert!(evidence.cycle_count > 0);
+            assert!(evidence.error_detail.is_none());
+            assert_eq!(evidence.binding_verdicts.len(), 2);
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+            "preserve_live_bindings_through_cycle".to_string()
+        }
+        CompatibilityMode::Native | CompatibilityMode::NodeCompat => {
+            let mut resolver = DeterministicModuleResolver::new("/repo");
+            resolver
+                .register_workspace_module(
+                    "/repo/a.mjs",
+                    esm_def("import { y } from './b.cjs'; export const x = 'x';")
+                        .with_dependency(ModuleDependency::new("./b.cjs", ImportStyle::Import)),
+                )
+                .unwrap();
+            resolver
+                .register_workspace_module(
+                    "/repo/b.cjs",
+                    cjs_def("const { x } = require('./a.mjs'); module.exports.y = 'y';")
+                        .with_dependency(ModuleDependency::new("./a.mjs", ImportStyle::Require)),
+                )
+                .unwrap();
+
+            let error = resolver
+                .resolve_chain(
+                    &ModuleRequest::new("/repo/a.mjs", ImportStyle::Import)
+                        .with_compatibility_mode(mode),
+                    &resolver_ctx(),
+                    &allow_all(),
+                )
+                .expect_err(
+                    "native/node_compat mixed ESM/CJS cycles must fail closed at the require() of ESM boundary",
+                );
+            assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            assert!(error.message.contains("ERR_REQUIRE_ESM"));
+            assert!(error.message.contains("/repo/a.mjs"));
+            "throw_err_require_esm".to_string()
+        }
+    }
+}
+
 fn observe_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
     let mut resolver = DeterministicModuleResolver::new("/repo");
     resolver
@@ -2839,7 +2991,22 @@ fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
         .expect("mixed cycle specimen should exist");
     assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
     assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+    assert_eq!(evidence.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        evidence.compatibility_disposition,
+        InteropCompatibilityDisposition::Supported
+    );
+    assert_eq!(evidence.linked_count, 2);
+    assert!(evidence.cycle_count > 0);
+    assert!(evidence.error_detail.is_none());
     assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+    assert_remediation_guidance(
+        "cycle_mixed_esm_cjs",
+        evidence.remediation_guidance.guidance_code.as_str(),
+        "no_remediation_required",
+        evidence.remediation_guidance.message.as_str(),
+        "no mitigation is required",
+    );
 
     let outcome = m
         .evaluate_observation(
@@ -2853,6 +3020,62 @@ fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
         )
         .expect("mixed-cycle interop evidence should match the matrix contract");
     assert!(outcome.matched);
+    assert_eq!(
+        outcome.divergence_category,
+        Some(DivergenceCategory::IntentionalImprovement)
+    );
+    assert_eq!(
+        outcome.actionable_guidance.as_deref(),
+        Some(
+            "document security/strictness intent and provide migration path or compat-mode fallback"
+        )
+    );
+}
+
+#[test]
+fn mixed_cycle_observer_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "throw_err_require_esm"),
+        (CompatibilityMode::NodeCompat, "throw_err_require_esm"),
+        (
+            CompatibilityMode::BunCompat,
+            "preserve_live_bindings_through_cycle",
+        ),
+    ] {
+        let observed_behavior = observe_mixed_cycle_live_binding_behavior(mode);
+        assert_eq!(observed_behavior, expected_behavior);
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "esm-cjs-cycle-live-binding",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "mixed ESM/CJS cycle observer should match the matrix contract in {mode:?}: {err}"
+                )
+            });
+        assert!(outcome.matched);
+        assert_eq!(
+            outcome.divergence_category,
+            Some(DivergenceCategory::IntentionalImprovement)
+        );
+        assert_eq!(
+            outcome.actionable_guidance.as_deref(),
+            Some(
+                "document security/strictness intent and provide migration path or compat-mode fallback"
+            )
+        );
+    }
 }
 
 #[test]
@@ -3055,6 +3278,95 @@ fn extensionless_relative_observer_variants_match_matrix_contract_across_modes()
                 });
             assert!(outcome.matched);
         }
+    }
+}
+
+#[test]
+fn external_package_root_require_observer_variants_match_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (variant_name, bare_specifier, entry_specifier, sub_specifier) in [
+        (
+            "unscoped external package root",
+            "pkg",
+            "pkg.js",
+            "pkg/sub.cjs",
+        ),
+        (
+            "scoped external package root",
+            "@scope/pkg",
+            "@scope/pkg.js",
+            "@scope/pkg/sub.cjs",
+        ),
+    ] {
+        for mode in [
+            CompatibilityMode::Native,
+            CompatibilityMode::NodeCompat,
+            CompatibilityMode::BunCompat,
+        ] {
+            let observed_behavior = observe_external_extension_probe_package_root_require_behavior(
+                mode,
+                bare_specifier,
+                entry_specifier,
+                sub_specifier,
+            );
+            assert_eq!(
+                observed_behavior,
+                "resolve_relative_require_from_package_root"
+            );
+
+            let outcome = m
+                .evaluate_observation(
+                    &CompatibilityObservation::new(
+                        "external-extension-probe-package-root-relative-require",
+                        CompatibilityRuntime::FrankenEngine,
+                        mode,
+                        observed_behavior,
+                    ),
+                    &ctx(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "external package-root require observer variant should match the matrix contract for {variant_name} in {mode:?}: {err}"
+                    )
+                });
+            assert!(outcome.matched);
+        }
+    }
+}
+
+#[test]
+fn esm_import_cjs_default_projection_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_esm_import_cjs_default_projection_behavior(mode);
+        assert_eq!(observed_behavior, "namespace_default_projection");
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "esm-import-cjs-default",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "esm-imports-cjs default projection behavior should match the matrix contract in {mode:?}: {err}"
+                )
+            });
+        assert!(outcome.matched);
     }
 }
 
@@ -3777,6 +4089,128 @@ fn bare_require_index_mjs_interop_evidence_matches_matrix_contract_across_modes(
         assert!(
             outcome.matched,
             "bare require() index.mjs evidence should match the matrix contract for {specimen_id}"
+        );
+    }
+}
+
+#[test]
+fn bare_require_index_mjs_package_root_relative_import_evidence_matches_matrix_contract_across_modes()
+ {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for (
+        specimen_id,
+        mode,
+        expected_outcome,
+        expected_behavior,
+        expected_disposition,
+        expected_guidance_code,
+        expected_message_fragment,
+    ) in [
+        (
+            "bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "resolve_relative_import_from_package_root_after_mjs_probe",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "resolve_relative_import_from_package_root_after_mjs_probe",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "bare require() index.mjs package-root relative import specimen should exist: {specimen_id}"
+                )
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, expected_outcome);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.compatibility_disposition, expected_disposition);
+        if expected_outcome == InteropActualOutcome::LinkFailure {
+            assert!(evidence.error_detail.is_some());
+        } else {
+            assert!(evidence.error_detail.is_none());
+            assert_eq!(evidence.linked_count, 3);
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        }
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            expected_guidance_code,
+            evidence.remediation_guidance.message.as_str(),
+            expected_message_fragment,
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "bare-require-package-index-mjs-relative-import-package-root",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "bare require() index.mjs package-root relative import evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "bare require() index.mjs package-root relative import evidence should match the matrix contract for {specimen_id}"
         );
     }
 }

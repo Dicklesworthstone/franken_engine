@@ -87,6 +87,7 @@
     "dependency_audit": {
       "script": "./scripts/audit_external_deps.sh",
       "operator_command": "./scripts/audit_external_deps.sh",
+      "strict_mode": "rch_only_no_local_fallback",
       "artifact_root": "artifacts/dependency_audit",
       "manifest_schema_version": "franken-engine.external-dependency-audit.v1",
       "artifacts": [
@@ -98,6 +99,7 @@
     "standalone_build_gate": {
       "script": "./scripts/test_standalone_build.sh",
       "operator_command": "./scripts/test_standalone_build.sh ci",
+      "strict_mode": "rch_only_no_local_fallback",
       "artifact_root": "artifacts/standalone_build_gate",
       "manifest_schema_version": "franken-engine.standalone-build-gate.v1",
       "artifacts": [

@@ -57,8 +57,11 @@ Two RC-6 operator surfaces are normative:
 The audit script enumerates `/dp` path dependencies, records boundary metadata,
 and optionally uses `rch` to verify each sibling crate. The build-gate script
 records the standalone and full-integration outcomes and fails closed on local
-fallbacks. These exact invocations are the canonical operator commands recorded
-in `docs/cross_repo_dependency_isolation_v1.json`.
+fallbacks. The machine-readable contract pins both surfaces to
+`strict_mode: "rch_only_no_local_fallback"` so remote-only verification is part
+of the evidence contract, not just a README note. These exact invocations are
+the canonical operator commands recorded in
+`docs/cross_repo_dependency_isolation_v1.json`.
 
 ## Artifacts
 

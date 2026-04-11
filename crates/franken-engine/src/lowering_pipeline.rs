@@ -2563,8 +2563,8 @@ pub fn lower_ir2_to_ir3(
                 .clone()
                 .unwrap_or_else(|| CapabilityTag("hostcall.invoke".to_string()));
 
-            // Reconstruct logic for HostCall intercept
-            // If it's a Call, we should pop args. If not, we just pop 1 as a fallback.
+            // Reconstruct logic for HostCall intercept.
+            // Calls pop the callee + args; hostcalls pop only the args.
             let (start_reg, arg_count) = match &op.inner {
                 Ir1Op::Call { arg_count } => {
                     let count = *arg_count;

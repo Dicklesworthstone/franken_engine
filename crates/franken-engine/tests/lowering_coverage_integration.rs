@@ -26,9 +26,10 @@ use frankenengine_engine::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
     CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
     ExpressionStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
-    ImportDeclaration, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement,
-    SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
+    ImportClause, ImportDeclaration, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
+    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    WhileStatement,
 };
 use frankenengine_engine::ir_contract::{
     BindingKind, Ir0Module, Ir1Op, Ir1PropertyKey, Ir3Instruction, IrLevel, ScopeKind,
@@ -75,7 +76,14 @@ fn make_var_decl(kind: VariableDeclarationKind, name: &str, init: Option<Express
 }
 
 fn make_import(source: &str, binding: Option<&str>) -> Statement {
+    let clause = match binding {
+        Some(local) => ImportClause::Default {
+            local: local.to_string(),
+        },
+        None => ImportClause::SideEffect,
+    };
     Statement::Import(ImportDeclaration {
+        clause,
         source: source.to_string(),
         binding: binding.map(|s| s.to_string()),
         span: span(),

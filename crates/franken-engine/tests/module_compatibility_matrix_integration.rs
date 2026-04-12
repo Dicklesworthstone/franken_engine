@@ -28,7 +28,7 @@ use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
     CompatibilityMatrixError, CompatibilityMatrixErrorCode, CompatibilityMode,
     CompatibilityObservation, CompatibilityRuntime, DEFAULT_MATRIX_JSON, DivergencePolicy,
-    ExplicitShim, ModuleCompatibilityMatrix, ModuleFeature, ReferenceRuntime,
+    DivergenceCategory, ExplicitShim, ModuleCompatibilityMatrix, ModuleFeature, ReferenceRuntime,
 };
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, DeterministicModuleResolver, ExternalPackageDefinition,

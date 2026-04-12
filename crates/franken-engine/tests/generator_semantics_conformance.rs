@@ -10,9 +10,7 @@
 
 #![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
 
-use frankenengine_engine::ast::{
-    Expression, FunctionDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
-};
+use frankenengine_engine::ast::Statement;
 use frankenengine_engine::baseline_interpreter::Value;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;

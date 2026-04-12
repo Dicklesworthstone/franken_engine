@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use frankenengine_engine::ast::{
     CANONICAL_AST_CONTRACT_VERSION, CANONICAL_AST_HASH_ALGORITHM, CANONICAL_AST_HASH_PREFIX,
     CANONICAL_AST_SCHEMA_VERSION, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
 };
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,14 @@ fn expr_stmt(expr: Expression) -> Statement {
 }
 
 fn import_stmt(binding: Option<&str>, source: &str) -> Statement {
+    let clause = match binding {
+        Some(local) => ImportClause::Default {
+            local: local.to_string(),
+        },
+        None => ImportClause::SideEffect,
+    };
     Statement::Import(ImportDeclaration {
+        clause,
         binding: binding.map(String::from),
         source: source.to_string(),
         span: zero_span(),
@@ -1111,6 +1118,9 @@ fn canonical_bytes_stable_after_serde_round_trip() {
 #[test]
 fn import_empty_source_string() {
     let decl = ImportDeclaration {
+        clause: ImportClause::Default {
+            local: String::new(),
+        },
         binding: Some(String::new()),
         source: String::new(),
         span: zero_span(),

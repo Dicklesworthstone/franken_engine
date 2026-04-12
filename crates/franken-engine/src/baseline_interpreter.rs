@@ -536,10 +536,8 @@ impl ScopeFrame {
     }
 
     fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
-        if kind == BindingKind::Var {
-            if let Some(existing) = self.bindings.get(&name) {
-                return Some(existing.clone());
-            }
+        if kind == BindingKind::Var && let Some(existing) = self.bindings.get(&name) {
+            return Some(existing.clone());
         }
         let initialized = kind.is_hoisted();
         self.bindings.insert(
@@ -1801,9 +1799,9 @@ impl InterpreterCore {
             .extension()
             .and_then(|ext| ext.to_str())
         {
-            Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
             Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
-            Some(ext) if ext.eq_ignore_ascii_case("js") => true,
+            Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
+            Some(ext) if ext.eq_ignore_ascii_case("js") => false,
             _ => true,
         };
         let namespace = self.load_module_resolved(module, &resolved, is_cjs)?;

@@ -2280,6 +2280,57 @@ fn require_module_allows_cjs_to_read_esm_default_export() {
 }
 
 #[test]
+fn require_module_caches_esm_namespace_object() {
+    let root = temp_module_dir("module_require_esm_cache");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.mjs");
+    fs::write(&dep_path, "export const value = 1;").expect("write esm module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const first = require('./dep.mjs');\n\
+const second = require('./dep.mjs');\n\
+module.exports = first === second;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-esm-cache-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(true));
+}
+
+#[test]
 fn require_module_returns_cjs_module_exports_value() {
     let root = temp_module_dir("module_require_cjs");
     fs::create_dir_all(&root).expect("create module root");
@@ -2329,6 +2380,5533 @@ fn require_module_returns_cjs_module_exports_value() {
 }
 
 #[test]
+fn require_module_resolves_relative_to_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_path = pkg_dir.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = 7;").expect("write nested dep");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = 99;").expect("write root dep");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./dep.cjs'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(8));
+}
+
+#[test]
+fn require_module_resolves_extensionless_relative_to_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_path = pkg_dir.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = 4;").expect("write nested dep");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = 99;").expect("write root dep");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./dep'); module.exports = value * 2;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-extensionless-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(8));
+}
+
+#[test]
+fn require_module_resolves_parent_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_parent_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_path = root.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = 41;").expect("write root dep");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../dep.cjs'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-parent-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(42));
+}
+
+#[test]
+fn require_module_resolves_directory_relative_to_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_dir_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let inner_index = inner_dir.join("index.cjs");
+    fs::write(&inner_index, "module.exports = 5;").expect("write inner index");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./inner'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-dir-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(6));
+}
+
+#[test]
+fn require_module_resolves_parent_directory_relative_to_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_parent_dir_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let inner_index = inner_dir.join("index.cjs");
+    fs::write(&inner_index, "module.exports = 12;").expect("write inner index");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../inner'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-parent-dir-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(13));
+}
+
+#[test]
+fn require_module_resolves_extensionless_parent_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_parent_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let dep_path = pkg_dir.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = 6;").expect("write parent dep");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = 99;").expect("write root dep");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../dep'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-parent-extensionless-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn require_module_prefers_cjs_extension_over_js_when_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_prefers_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_cjs = pkg_dir.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 3;").expect("write dep cjs");
+    let dep_js = pkg_dir.join("dep.js");
+    fs::write(&dep_js, "export const value = 9;").expect("write dep js");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-prefers-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(3));
+}
+
+#[test]
+fn require_module_prefers_cjs_extension_over_mjs_when_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_prefers_cjs_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_cjs = pkg_dir.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 5;").expect("write dep cjs");
+    let dep_mjs = pkg_dir.join("dep.mjs");
+    fs::write(&dep_mjs, "export const value = 11;").expect("write dep mjs");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-prefers-cjs-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(5));
+}
+
+#[test]
+fn require_module_prefers_index_js_over_index_mjs_when_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_index_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_js = inner_dir.join("index.js");
+    fs::write(&index_js, "export const value = 14;").expect("write index js");
+    let index_mjs = inner_dir.join("index.mjs");
+    fs::write(&index_mjs, "export const value = 33;").expect("write index mjs");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.js");
+    fs::write(&root_index, "export const value = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./inner');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-index-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(14));
+}
+
+#[test]
+fn require_module_prefers_index_js_over_index_mjs_for_parent_relative_directory() {
+    let root = temp_module_dir("module_require_parent_relative_index_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_js = inner_dir.join("index.js");
+    fs::write(&index_js, "export const value = 17;").expect("write index js");
+    let index_mjs = inner_dir.join("index.mjs");
+    fs::write(&index_mjs, "export const value = 31;").expect("write index mjs");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.js");
+    fs::write(&root_index, "export const value = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('../inner');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-parent-relative-index-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(17));
+}
+
+#[test]
+fn require_module_prefers_index_cjs_over_index_mjs_when_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_index_cjs_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 21;").expect("write index cjs");
+    let index_mjs = inner_dir.join("index.mjs");
+    fs::write(&index_mjs, "export const value = 33;").expect("write index mjs");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./inner'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-index-cjs-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(22));
+}
+
+#[test]
+fn require_module_prefers_index_cjs_over_index_js_for_parent_relative_directory() {
+    let root = temp_module_dir("module_require_parent_relative_index_cjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 20;").expect("write index cjs");
+    let index_js = inner_dir.join("index.js");
+    fs::write(&index_js, "export default 9;").expect("write index js");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../inner'); module.exports = value + 2;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-parent-relative-index-cjs-over-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(22));
+}
+
+#[test]
+fn require_module_prefers_index_cjs_over_index_mjs_for_parent_relative_directory() {
+    let root = temp_module_dir("module_require_parent_relative_index_cjs_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 24;").expect("write index cjs");
+    let index_mjs = inner_dir.join("index.mjs");
+    fs::write(&index_mjs, "export const value = 44;").expect("write index mjs");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../inner'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-parent-relative-index-cjs-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(25));
+}
+
+#[test]
+fn require_module_resolves_index_mjs_when_only_index_mjs_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_index_mjs_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_mjs = inner_dir.join("index.mjs");
+    fs::write(&index_mjs, "export const value = 8;").expect("write index mjs");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./inner'); module.exports = mod.value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-index-mjs-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(8));
+}
+
+#[test]
+fn require_module_resolves_index_js_when_only_index_js_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_index_js_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_js = inner_dir.join("index.js");
+    fs::write(&index_js, "export const value = 6;").expect("write index js");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./inner'); module.exports = mod.value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-index-js-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(6));
+}
+
+#[test]
+fn require_module_resolves_directory_with_trailing_slash_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_trailing_slash_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 9;").expect("write inner index");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./inner/'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-trailing-slash-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(10));
+}
+
+
+#[test]
+fn require_module_trailing_slash_prefers_directory_index_over_file_neighbor() {
+    let root = temp_module_dir("module_require_trailing_slash_prefers_index_over_file");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 9;").expect("write inner index");
+    let inner_file = pkg_dir.join("inner.cjs");
+    fs::write(&inner_file, "module.exports = 40;").expect("write inner file");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./inner/'); module.exports = value + 1;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-relative-trailing-slash-prefers-index-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(10));
+}
+
+#[test]
+fn require_module_resolves_parent_trailing_slash_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_parent_trailing_slash_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 4;").expect("write inner index");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../inner/'); module.exports = value + 2;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-parent-trailing-slash-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(6));
+}
+
+
+#[test]
+fn require_module_parent_trailing_slash_prefers_directory_index_over_file_neighbor() {
+    let root = temp_module_dir("module_require_parent_trailing_slash_prefers_index_over_file");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let child_dir = pkg_dir.join("child");
+    fs::create_dir_all(&child_dir).expect("create child dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 4;").expect("write inner index");
+    let inner_file = pkg_dir.join("inner.cjs");
+    fs::write(&inner_file, "module.exports = 80;").expect("write inner file");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = child_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('../inner/'); module.exports = value + 2;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/child/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-parent-trailing-slash-prefers-index-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(6));
+}
+
+#[test]
+fn require_module_prefers_index_cjs_for_extensionless_index_relative_from_cjs_entry() {
+    let root = temp_module_dir("module_require_relative_index_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let inner_dir = pkg_dir.join("inner");
+    fs::create_dir_all(&inner_dir).expect("create inner dir");
+    let index_cjs = inner_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 12;").expect("write index cjs");
+    let index_js = inner_dir.join("index.js");
+    fs::write(&index_js, "export const value = 9;").expect("write index js");
+    let root_inner = root.join("inner");
+    fs::create_dir_all(&root_inner).expect("create root inner dir");
+    let root_index = root_inner.join("index.cjs");
+    fs::write(&root_index, "module.exports = 99;").expect("write root index");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./inner/index'); module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-relative-index-extensionless-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(12));
+}
+
+#[test]
+fn require_module_prefers_explicit_js_over_extensionless_cjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_js_over_cjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 3;").expect("write dep cjs");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "export const value = 7;").expect("write dep js");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.js');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-js-over-cjs-neighbor-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn require_module_prefers_explicit_mjs_over_extensionless_cjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_mjs_over_cjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 3;").expect("write dep cjs");
+    let dep_mjs = root.join("dep.mjs");
+    fs::write(&dep_mjs, "export const value = 10;").expect("write dep mjs");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.mjs');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-mjs-over-cjs-neighbor-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(10));
+}
+
+#[test]
+fn require_module_falls_back_to_js_in_nested_directory_without_cjs() {
+    let root = temp_module_dir("module_require_nested_js_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let dep_js = pkg_dir.join("dep.js");
+    fs::write(&dep_js, "export const value = 9;").expect("write dep js");
+    let entry_path = pkg_dir.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./pkg/entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-js-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(9));
+}
+
+#[test]
+fn require_module_resolves_nested_require_relative_to_cjs_dependency() {
+    let root = temp_module_dir("module_require_nested_relative");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = { value: 100 };").expect("write root dep");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.cjs");
+    fs::write(&nested_dep, "module.exports = { value: 42 };").expect("write nested dep");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const dep = require('./dep'); module.exports = dep.value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-relative-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(42));
+}
+
+#[test]
+fn require_module_nested_cjs_dirname_binding_is_relative_to_inner_module() {
+    let root = temp_module_dir("module_require_nested_dirname");
+    fs::create_dir_all(&root).expect("create module root");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "module.exports = { dirname: __dirname };",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const inner = require('./nested/inner.cjs'); module.exports = inner.dirname;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-dirname-trace")
+        .expect("execute");
+    let expected_dir = inner_path
+        .canonicalize()
+        .unwrap_or(inner_path)
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    assert_eq!(result.value, Value::Str(expected_dir));
+}
+
+#[test]
+fn require_module_nested_cjs_filename_binding_is_inner_module() {
+    let root = temp_module_dir("module_require_nested_filename");
+    fs::create_dir_all(&root).expect("create module root");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "module.exports = { filename: __filename };",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const inner = require('./nested/inner.cjs'); module.exports = inner.filename;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-filename-trace")
+        .expect("execute");
+    let expected_file = inner_path.canonicalize().unwrap_or(inner_path);
+    assert_eq!(result.value, Value::Str(expected_file.display().to_string()));
+}
+
+#[test]
+fn require_module_nested_parent_relative_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_parent_relative");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = { value: 21 };").expect("write root dep");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.cjs");
+    fs::write(&nested_dep, "module.exports = { value: 7 };").expect("write nested dep");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const dep = require('../dep'); module.exports = dep.value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-relative-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(21));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_parent_dir");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.cjs");
+    fs::write(&root_index, "module.exports = { value: 88 };").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.cjs");
+    fs::write(&nested_index, "module.exports = { value: 5 };").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const dep = require('../pkg'); module.exports = dep.value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(88));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 77;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_js_over_mjs() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 77;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-slash-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_cjs_over_js() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_cjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 63;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 92;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(63));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_cjs_over_mjs() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_cjs_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 51;").expect("write root index cjs");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 84;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(51));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_cjs_over_mjs_with_js_neighbor() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_cjs_over_mjs_with_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 67;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 88;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 97;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-mjs-with-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(67));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_dir_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_parent_dir_mjs_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 58;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-mjs-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(58));
+}
+
+#[test]
+fn require_module_nested_parent_relative_extensionless_prefers_cjs_over_js_and_mjs() {
+    let root = temp_module_dir("module_require_nested_parent_extensionless_prefers_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_cjs = root.join("dep.cjs");
+    fs::write(&root_cjs, "module.exports = 31;").expect("write root cjs");
+    let root_js = root.join("dep.js");
+    fs::write(&root_js, "export default 44;").expect("write root js");
+    let root_mjs = root.join("dep.mjs");
+    fs::write(&root_mjs, "export default 55;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_cjs = nested_dir.join("dep.cjs");
+    fs::write(&nested_cjs, "module.exports = 77;").expect("write nested cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-extensionless-cjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(31));
+}
+
+#[test]
+fn require_module_nested_parent_relative_extensionless_prefers_js_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_parent_extensionless_prefers_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_js = root.join("dep.js");
+    fs::write(&root_js, "export default 41;").expect("write root js");
+    let root_mjs = root.join("dep.mjs");
+    fs::write(&root_mjs, "export default 90;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_js = nested_dir.join("dep.js");
+    fs::write(&nested_js, "export default 7;").expect("write nested js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-extensionless-js-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_extensionless_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_parent_extensionless_prefers_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_mjs = root.join("dep.mjs");
+    fs::write(&root_mjs, "export default 52;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_mjs = nested_dir.join("dep.mjs");
+    fs::write(&nested_mjs, "export default 7;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-extensionless-mjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(52));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_mjs_ignores_js_and_cjs_neighbors() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_mjs_over_neighbors");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep_mjs = root.join("dep.mjs");
+    fs::write(&root_dep_mjs, "export default 64;").expect("write root mjs");
+    let root_dep_js = root.join("dep.js");
+    fs::write(&root_dep_js, "export default 11;").expect("write root js");
+    let root_dep_cjs = root.join("dep.cjs");
+    fs::write(&root_dep_cjs, "module.exports = 7;").expect("write root cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep_mjs = nested_dir.join("dep.mjs");
+    fs::write(&nested_dep_mjs, "export default 103;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep.mjs');
+\
+module.exports = mod.default;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-mjs-over-neighbors-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(64));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_js_ignores_cjs_and_mjs_neighbors() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_js_over_neighbors");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep_js = root.join("dep.js");
+    fs::write(&root_dep_js, "export default 71;").expect("write root js");
+    let root_dep_cjs = root.join("dep.cjs");
+    fs::write(&root_dep_cjs, "module.exports = 9;").expect("write root cjs");
+    let root_dep_mjs = root.join("dep.mjs");
+    fs::write(&root_dep_mjs, "export default 17;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-js-over-neighbors-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(71));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_extensionless_prefers_js_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_extensionless_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 19;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 44;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 77;").expect("write nested index js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-extensionless-js-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(19));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_extensionless_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_extensionless_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 55;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 77;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-extensionless-mjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(55));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_extensionless_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_extensionless_ignores_nested_pkg_trailing_slash() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_slash_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-slash-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_js_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_js_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 41;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 99;").expect("write nested index js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-js-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_mjs_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_mjs_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 55;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 99;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index.mjs');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-mjs-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(55));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_cjs_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_cjs_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 32;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('../pkg/index.cjs');
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-cjs-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(32));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_index_extensionless_prefers_cjs() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_index_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 32;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 19;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 44;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-index-extensionless-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(32));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_mjs_resolves_from_parent() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.mjs");
+    fs::write(&root_dep, "export default 64;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.mjs");
+    fs::write(&nested_dep, "export default 103;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep.mjs');
+\
+module.exports = mod.default;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-explicit-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(64));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_js_resolves_from_parent() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.js");
+    fs::write(&root_dep, "export default 71;").expect("write root js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.js");
+    fs::write(&nested_dep, "export default 12;").expect("write nested js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-explicit-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(71));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_cjs_ignores_js_and_mjs_neighbors() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_cjs_over_neighbors");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep_cjs = root.join("dep.cjs");
+    fs::write(&root_dep_cjs, "module.exports = 82;").expect("write root cjs");
+    let root_dep_js = root.join("dep.js");
+    fs::write(&root_dep_js, "export default 12;").expect("write root js");
+    let root_dep_mjs = root.join("dep.mjs");
+    fs::write(&root_dep_mjs, "export default 19;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('../dep.cjs');
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-cjs-over-neighbors-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(82));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_cjs_resolves_from_parent() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.cjs");
+    fs::write(&root_dep, "module.exports = 82;").expect("write root cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.cjs");
+    fs::write(&nested_dep, "module.exports = 17;").expect("write nested cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('../dep.cjs');\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-explicit-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(82));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_parent_dir_slash_mjs_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 73;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-slash-mjs-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(73));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_prefers_js_over_mjs_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_parent_dir_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 44;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 91;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(44));
+}
+
+#[test]
+fn require_module_nested_parent_relative_directory_prefers_cjs_over_js_over_mjs() {
+    let root = temp_module_dir("module_require_nested_parent_dir_cjs_js_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 39;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 72;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 95;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-dir-cjs-js-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(39));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_js_over_mjs_neighbor() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep_js = root.join("dep.js");
+    fs::write(&root_dep_js, "export default 56;").expect("write root js");
+    let root_dep_mjs = root.join("dep.mjs");
+    fs::write(&root_dep_mjs, "export default 99;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep_js = nested_dir.join("dep.js");
+    fs::write(&nested_dep_js, "export default 12;").expect("write nested js");
+    let nested_dep_mjs = nested_dir.join("dep.mjs");
+    fs::write(&nested_dep_mjs, "export default 21;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('../dep.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-explicit-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(56));
+}
+
+#[test]
+fn require_module_nested_parent_relative_explicit_cjs_over_js_and_mjs_neighbors() {
+    let root = temp_module_dir("module_require_nested_parent_explicit_cjs_over_js_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep_cjs = root.join("dep.cjs");
+    fs::write(&root_dep_cjs, "module.exports = 68;").expect("write root cjs");
+    let root_dep_js = root.join("dep.js");
+    fs::write(&root_dep_js, "export default 81;").expect("write root js");
+    let root_dep_mjs = root.join("dep.mjs");
+    fs::write(&root_dep_mjs, "export default 97;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep_cjs = nested_dir.join("dep.cjs");
+    fs::write(&nested_dep_cjs, "module.exports = 12;").expect("write nested cjs");
+    let nested_dep_js = nested_dir.join("dep.js");
+    fs::write(&nested_dep_js, "export default 22;").expect("write nested js");
+    let nested_dep_mjs = nested_dir.join("dep.mjs");
+    fs::write(&nested_dep_mjs, "export default 33;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('../dep.cjs');\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-parent-explicit-cjs-over-js-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(68));
+}
+
+#[test]
+fn require_module_nested_explicit_mjs_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_explicit_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.mjs");
+    fs::write(&root_dep, "export default 3;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.mjs");
+    fs::write(&nested_dep, "export default 61;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./dep.mjs'); module.exports = mod.default;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(61));
+}
+
+#[test]
+fn require_module_nested_explicit_js_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_explicit_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_dep = root.join("dep.js");
+    fs::write(&root_dep, "export const value = 4;").expect("write root js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_dep = nested_dir.join("dep.js");
+    fs::write(&nested_dep, "export const value = 72;").expect("write nested js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./dep.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(72));
+}
+
+#[test]
+fn require_module_nested_directory_specifier_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_dir_specifier");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.cjs");
+    fs::write(&root_index, "module.exports = { value: 19 };").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.cjs");
+    fs::write(&nested_index, "module.exports = { value: 47 };").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const dep = require('./pkg/'); module.exports = dep.value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-dir-specifier-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(47));
+}
+
+#[test]
+fn require_module_nested_directory_without_trailing_slash_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_dir_no_slash");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.cjs");
+    fs::write(&root_index, "module.exports = { value: 13 };").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.cjs");
+    fs::write(&nested_index, "module.exports = { value: 91 };").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const dep = require('./pkg'); module.exports = dep.value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-dir-no-slash-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(91));
+}
+
+#[test]
+fn require_module_nested_directory_without_trailing_slash_prefers_js_over_mjs_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_dir_no_slash_prefers_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 71;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 88;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-dir-no-slash-prefers-js-over-mjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(71));
+}
+
+#[test]
+fn require_module_nested_directory_without_trailing_slash_prefers_cjs_over_js_and_mjs() {
+    let root = temp_module_dir("module_require_nested_dir_no_slash_prefers_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 96;").expect("write nested index cjs");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 18;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 27;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-dir-no-slash-prefers-cjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(96));
+}
+
+#[test]
+fn require_module_nested_directory_without_trailing_slash_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_dir_no_slash_prefers_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 82;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-dir-no-slash-prefers-mjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(82));
+}
+
+#[test]
+fn require_module_nested_extensionless_prefers_cjs_in_inner_module() {
+    let root = temp_module_dir("module_require_nested_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_cjs = root.join("dep.cjs");
+    fs::write(&root_cjs, "module.exports = 12;").expect("write root cjs");
+    let root_js = root.join("dep.js");
+    fs::write(&root_js, "export const value = 1;").expect("write root js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_cjs = nested_dir.join("dep.cjs");
+    fs::write(&nested_cjs, "module.exports = 44;").expect("write nested cjs");
+    let nested_js = nested_dir.join("dep.js");
+    fs::write(&nested_js, "export const value = 3;").expect("write nested js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('./dep'); module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-extensionless-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(44));
+}
+
+#[test]
+fn require_module_nested_extensionless_falls_back_to_js_in_inner_module() {
+    let root = temp_module_dir("module_require_nested_extensionless_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_js = root.join("dep.js");
+    fs::write(&root_js, "export const value = 2;").expect("write root js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_js = nested_dir.join("dep.js");
+    fs::write(&nested_js, "export const value = 58;").expect("write nested js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./dep');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-extensionless-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(58));
+}
+
+#[test]
+fn require_module_nested_extensionless_falls_back_to_mjs_in_inner_module() {
+    let root = temp_module_dir("module_require_nested_extensionless_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_mjs = root.join("dep.mjs");
+    fs::write(&root_mjs, "export default 6;").expect("write root mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_mjs = nested_dir.join("dep.mjs");
+    fs::write(&nested_mjs, "export default 77;").expect("write nested mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./dep');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-extensionless-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(77));
+}
+
+#[test]
+fn require_module_nested_explicit_index_cjs_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_explicit_index_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.cjs");
+    fs::write(&root_index, "module.exports = 8;").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.cjs");
+    fs::write(&nested_index, "module.exports = 34;").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('./pkg/index.cjs'); module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(34));
+}
+
+#[test]
+fn require_module_nested_explicit_index_js_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_explicit_index_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.js");
+    fs::write(&root_index, "export default 6;").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.js");
+    fs::write(&nested_index, "export default 25;").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(25));
+}
+
+#[test]
+fn require_module_nested_explicit_index_mjs_resolves_from_inner_module() {
+    let root = temp_module_dir("module_require_nested_explicit_index_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index = root_pkg.join("index.mjs");
+    fs::write(&root_index, "export default 5;").expect("write root index");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index = nested_pkg.join("index.mjs");
+    fs::write(&nested_index, "export default 29;").expect("write nested index");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.mjs');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(29));
+}
+
+#[test]
+fn require_module_nested_explicit_index_js_over_cjs_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_js_over_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 6;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 11;").expect("write nested index cjs");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 31;").expect("write nested index js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-js-over-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(31));
+}
+
+#[test]
+fn require_module_nested_explicit_index_mjs_over_cjs_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_mjs_over_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 6;").expect("write root index cjs");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 9;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 13;").expect("write nested index cjs");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 41;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.mjs');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-mjs-over-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(41));
+}
+
+#[test]
+fn require_module_nested_explicit_index_mjs_over_js_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_mjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 7;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 12;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 17;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 39;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.mjs');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-mjs-over-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(39));
+}
+
+#[test]
+fn require_module_nested_explicit_index_cjs_over_mjs_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_cjs_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 5;").expect("write root index cjs");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 8;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 27;").expect("write nested index cjs");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 33;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('./pkg/index.cjs'); module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-cjs-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(27));
+}
+
+#[test]
+fn require_module_nested_explicit_index_cjs_over_js_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_cjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 2;").expect("write root index cjs");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 5;").expect("write root index js");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 23;").expect("write nested index cjs");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 36;").expect("write nested index js");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('./pkg/index.cjs'); module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-cjs-over-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(23));
+}
+
+#[test]
+fn require_module_nested_explicit_index_js_over_mjs_neighbor() {
+    let root = temp_module_dir("module_require_nested_explicit_index_js_over_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_js = root_pkg.join("index.js");
+    fs::write(&root_index_js, "export default 4;").expect("write root index js");
+    let root_index_mjs = root_pkg.join("index.mjs");
+    fs::write(&root_index_mjs, "export default 9;").expect("write root index mjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 37;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 53;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index.js');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-explicit-index-js-over-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(37));
+}
+
+#[test]
+fn require_module_nested_explicit_index_extensionless_prefers_cjs() {
+    let root = temp_module_dir("module_require_nested_explicit_index_extensionless_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 93;").expect("write nested index cjs");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 18;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 27;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-extensionless-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(93));
+}
+
+#[test]
+fn require_module_nested_explicit_index_extensionless_prefers_js_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_explicit_index_extensionless_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 81;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 27;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-extensionless-js-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(81));
+}
+
+#[test]
+fn require_module_nested_explicit_index_extensionless_prefers_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_explicit_index_extensionless_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 66;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/index');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-extensionless-mjs-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(66));
+}
+
+#[test]
+fn require_module_nested_explicit_index_cjs_ignores_nested_pkg() {
+    let root = temp_module_dir("module_require_nested_explicit_index_cjs_ignores_nested_pkg");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 32;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 99;").expect("write nested index cjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const value = require('./pkg/index.cjs');
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-cjs-ignores-nested-pkg-trace",
+        )
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(32));
+}
+
+#[test]
+fn require_module_nested_directory_index_prefers_nested_cjs_when_present() {
+    let root = temp_module_dir("module_require_nested_directory_index_prefers_nested_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_cjs = nested_pkg.join("index.cjs");
+    fs::write(&nested_index_cjs, "module.exports = 95;").expect("write nested index cjs");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 18;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 27;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-directory-index-prefers-nested-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(95));
+}
+
+#[test]
+fn require_module_nested_directory_index_prefers_nested_js_when_no_cjs() {
+    let root = temp_module_dir("module_require_nested_directory_index_prefers_nested_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_js = nested_pkg.join("index.js");
+    fs::write(&nested_index_js, "export default 71;").expect("write nested index js");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 88;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-directory-index-prefers-nested-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(71));
+}
+
+#[test]
+fn require_module_nested_directory_index_prefers_nested_mjs_when_no_cjs_or_js() {
+    let root = temp_module_dir("module_require_nested_directory_index_prefers_nested_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let root_pkg = root.join("pkg");
+    fs::create_dir_all(&root_pkg).expect("create root package dir");
+    let root_index_cjs = root_pkg.join("index.cjs");
+    fs::write(&root_index_cjs, "module.exports = 4;").expect("write root index cjs");
+    let nested_dir = root.join("nested");
+    fs::create_dir_all(&nested_dir).expect("create nested dir");
+    let nested_pkg = nested_dir.join("pkg");
+    fs::create_dir_all(&nested_pkg).expect("create nested package dir");
+    let nested_index_mjs = nested_pkg.join("index.mjs");
+    fs::write(&nested_index_mjs, "export default 62;").expect("write nested index mjs");
+    let inner_path = nested_dir.join("inner.cjs");
+    fs::write(
+        &inner_path,
+        "const mod = require('./pkg/');
+\
+const value = typeof mod === 'object' && mod !== null ? mod.default : mod;
+\
+module.exports = value;",
+    )
+    .expect("write inner module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "module.exports = require('./nested/inner.cjs');",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-nested-directory-index-prefers-nested-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(62));
+}
+
+#[test]
+fn require_module_uses_explicit_cjs_specifier_even_with_js_neighbor() {
+    let root = temp_module_dir("module_require_explicit_cjs_with_js_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 13;").expect("write cjs module");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "const value = 5; export { value };").expect("write js module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./dep.cjs'); module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(13));
+}
+
+#[test]
+fn require_module_uses_explicit_cjs_specifier_even_with_mjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_cjs_with_mjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 15;").expect("write cjs module");
+    let dep_mjs = root.join("dep.mjs");
+    fs::write(&dep_mjs, "export default 3;").expect("write mjs module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./dep.cjs'); module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-cjs-mjs-neighbor-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(15));
+}
+
+#[test]
+fn require_module_uses_explicit_mjs_specifier_even_with_cjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_mjs_with_cjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 3;").expect("write cjs module");
+    let dep_mjs = root.join("dep.mjs");
+    fs::write(&dep_mjs, "export default 7;").expect("write mjs module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.mjs'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn require_module_uses_explicit_mjs_specifier_even_with_js_neighbor() {
+    let root = temp_module_dir("module_require_explicit_mjs_with_js_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "const value = 2; export { value };").expect("write js module");
+    let dep_mjs = root.join("dep.mjs");
+    fs::write(&dep_mjs, "export default 11;").expect("write mjs module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.mjs'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-mjs-js-neighbor-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(11));
+}
+
+#[test]
 fn require_module_prefers_cjs_over_mjs_for_extensionless_specifier() {
     let root = temp_module_dir("module_require_prefers_cjs");
     fs::create_dir_all(&root).expect("create module root");
@@ -2375,6 +7953,59 @@ fn require_module_prefers_cjs_over_mjs_for_extensionless_specifier() {
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-prefers-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(2));
+}
+
+#[test]
+fn require_module_prefers_cjs_over_js_for_extensionless_specifier() {
+    let root = temp_module_dir("module_require_prefers_cjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 2;").expect("write cjs module");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "export const value = 9;").expect("write js module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep');\n\
+const value = typeof mod === 'object' && mod !== null ? mod.value : mod;\n\
+module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-prefers-cjs-over-js-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(2));
 }
@@ -2430,6 +8061,375 @@ fn require_module_resolves_index_cjs_for_directory_specifier() {
         .execute(&module, "module-require-index-cjs-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(11));
+}
+
+#[test]
+fn require_module_prefers_index_cjs_over_index_js() {
+    let root = temp_module_dir("module_require_index_cjs_over_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_cjs = pkg_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 19;").expect("write index.cjs");
+    let index_js = pkg_dir.join("index.js");
+    fs::write(&index_js, "export default 7;").expect("write index.js");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./pkg'); module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-index-cjs-over-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(19));
+}
+
+#[test]
+fn require_module_resolves_index_js_when_only_index_js() {
+    let root = temp_module_dir("module_require_index_js_only");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_js = pkg_dir.join("index.js");
+    fs::write(&index_js, "export default 23;").expect("write index.js");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./pkg'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-index-js-only-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(23));
+}
+
+#[test]
+fn require_module_uses_explicit_index_mjs_even_with_index_cjs() {
+    let root = temp_module_dir("module_require_explicit_index_mjs_with_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_cjs = pkg_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 4;").expect("write index.cjs");
+    let index_mjs = pkg_dir.join("index.mjs");
+    fs::write(&index_mjs, "export default 12;").expect("write index.mjs");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./pkg/index.mjs'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-index-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(12));
+}
+
+#[test]
+fn require_module_uses_explicit_index_js_even_with_index_cjs() {
+    let root = temp_module_dir("module_require_explicit_index_js_with_cjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_cjs = pkg_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 2;").expect("write index.cjs");
+    let index_js = pkg_dir.join("index.js");
+    fs::write(&index_js, "export default 9;").expect("write index.js");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./pkg/index.js'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-index-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(9));
+}
+
+#[test]
+fn require_module_uses_explicit_index_mjs_even_with_index_js() {
+    let root = temp_module_dir("module_require_explicit_index_mjs_with_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_js = pkg_dir.join("index.js");
+    fs::write(&index_js, "export default 5;").expect("write index.js");
+    let index_mjs = pkg_dir.join("index.mjs");
+    fs::write(&index_mjs, "export default 18;").expect("write index.mjs");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./pkg/index.mjs'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-index-mjs-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(18));
+}
+
+#[test]
+fn require_module_uses_explicit_index_js_even_with_index_mjs() {
+    let root = temp_module_dir("module_require_explicit_index_js_with_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_js = pkg_dir.join("index.js");
+    fs::write(&index_js, "export default 17;").expect("write index.js");
+    let index_mjs = pkg_dir.join("index.mjs");
+    fs::write(&index_mjs, "export default 2;").expect("write index.mjs");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./pkg/index.js'); module.exports = mod.default;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-index-js-mjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(17));
+}
+
+#[test]
+fn require_module_uses_explicit_index_cjs_even_with_index_mjs() {
+    let root = temp_module_dir("module_require_explicit_index_cjs_with_mjs");
+    fs::create_dir_all(&root).expect("create module root");
+    let pkg_dir = root.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create package dir");
+    let index_cjs = pkg_dir.join("index.cjs");
+    fs::write(&index_cjs, "module.exports = 21;").expect("write index.cjs");
+    let index_mjs = pkg_dir.join("index.mjs");
+    fs::write(&index_mjs, "export default 3;").expect("write index.mjs");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const value = require('./pkg/index.cjs'); module.exports = value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-index-cjs-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(21));
 }
 
 #[test]
@@ -2584,6 +8584,157 @@ fn require_module_prefers_js_over_mjs_for_extensionless_specifier() {
 }
 
 #[test]
+fn require_module_falls_back_to_js_for_extensionless_specifier() {
+    let root = temp_module_dir("module_require_fallback_js");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "const value = 14; export { value };").expect("write js module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep'); module.exports = mod.value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-fallback-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(14));
+}
+
+#[test]
+fn require_module_uses_explicit_js_specifier_even_with_cjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_js_with_cjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_cjs = root.join("dep.cjs");
+    fs::write(&dep_cjs, "module.exports = 2;").expect("write cjs module");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "const value = 5; export { value };").expect("write js module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.js'); module.exports = mod.value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-js-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(5));
+}
+
+#[test]
+fn require_module_uses_explicit_js_specifier_even_with_mjs_neighbor() {
+    let root = temp_module_dir("module_require_explicit_js_with_mjs_neighbor");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "const value = 6; export { value };").expect("write js module");
+    let dep_mjs = root.join("dep.mjs");
+    fs::write(&dep_mjs, "const value = 99; export { value };").expect("write mjs module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const mod = require('./dep.js'); module.exports = mod.value;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-explicit-js-mjs-neighbor-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Int(6));
+}
+
+#[test]
 fn require_module_allows_cjs_to_read_js_default_export() {
     let root = temp_module_dir("module_require_js_extension");
     fs::create_dir_all(&root).expect("create module root");
@@ -2732,6 +8883,57 @@ fn require_module_exposes_js_default_and_named_exports() {
         .execute(&module, "module-require-js-default-named-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(55));
+}
+
+#[test]
+fn require_module_caches_js_namespace_object() {
+    let root = temp_module_dir("module_require_js_cache");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_js = root.join("dep.js");
+    fs::write(&dep_js, "export const value = 1;").expect("write js module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const first = require('./dep.js');\n\
+const second = require('./dep.js');\n\
+module.exports = first === second;",
+    )
+    .expect("write cjs entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let main_path = root.join("main.mjs");
+    module.header.source_label = main_path.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-js-cache-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(true));
 }
 
 #[test]
@@ -3467,6 +9669,57 @@ module.exports = { count: b.count };",
         .execute(&module, "module-require-cache-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(1));
+}
+
+#[test]
+fn cjs_require_returns_same_exports_object() {
+    let root = temp_module_dir("module_require_identity");
+    fs::create_dir_all(&root).expect("create module root");
+    let dep_path = root.join("dep.cjs");
+    fs::write(&dep_path, "module.exports = { count: 0 };").expect("write dep module");
+    let entry_path = root.join("entry.cjs");
+    fs::write(
+        &entry_path,
+        "const first = require('./dep.cjs');\n\
+const second = require('./dep.cjs');\n\
+module.exports = first === second;",
+    )
+    .expect("write entry module");
+
+    let mut module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+        vec!["./entry.cjs".to_string(), "default".to_string()],
+    );
+    let entry_label = root.join("main.mjs");
+    module.header.source_label = entry_label.display().to_string();
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.module_root = Some(root.display().to_string());
+    config.granted_capabilities = vec!["module:require".to_string()];
+    let lane = QuickJsLane::with_config(config);
+    let result = lane
+        .execute(&module, "module-require-identity-trace")
+        .expect("execute");
+    assert_eq!(result.value, Value::Bool(true));
 }
 
 #[test]

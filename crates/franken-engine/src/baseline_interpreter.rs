@@ -1499,12 +1499,15 @@ impl InterpreterCore {
 
     fn resolve_require_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
         let resolved = self.resolve_specifier_base(specifier)?;
-        let candidate = self.resolve_require_candidate(&resolved).ok_or_else(|| {
-            InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: format!("module not found at {}", resolved.display()),
-            }
-        })?;
+        let force_directory = specifier.ends_with('/');
+        let candidate = self
+            .resolve_require_candidate(&resolved, force_directory)
+            .ok_or_else(|| {
+                InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: format!("module not found at {}", resolved.display()),
+                }
+            })?;
         let canonical =
             candidate
                 .canonicalize()
@@ -1552,22 +1555,28 @@ impl InterpreterCore {
         None
     }
 
-    fn resolve_require_candidate(&self, candidate: &Path) -> Option<PathBuf> {
-        if candidate.is_file() {
-            return Some(candidate.to_path_buf());
-        }
-        if candidate.extension().is_none() {
-            let cjs_path = candidate.with_extension("cjs");
-            if cjs_path.is_file() {
-                return Some(cjs_path);
+    fn resolve_require_candidate(
+        &self,
+        candidate: &Path,
+        force_directory: bool,
+    ) -> Option<PathBuf> {
+        if !force_directory {
+            if candidate.is_file() {
+                return Some(candidate.to_path_buf());
             }
-            let js_path = candidate.with_extension("js");
-            if js_path.is_file() {
-                return Some(js_path);
-            }
-            let mjs_path = candidate.with_extension("mjs");
-            if mjs_path.is_file() {
-                return Some(mjs_path);
+            if candidate.extension().is_none() {
+                let cjs_path = candidate.with_extension("cjs");
+                if cjs_path.is_file() {
+                    return Some(cjs_path);
+                }
+                let js_path = candidate.with_extension("js");
+                if js_path.is_file() {
+                    return Some(js_path);
+                }
+                let mjs_path = candidate.with_extension("mjs");
+                if mjs_path.is_file() {
+                    return Some(mjs_path);
+                }
             }
         }
         if candidate.is_dir() {
@@ -1584,7 +1593,7 @@ impl InterpreterCore {
                 return Some(index_mjs);
             }
         }
-        if candidate.extension().is_none() {
+        if !force_directory && candidate.extension().is_none() {
             let index_cjs = candidate.join("index.cjs");
             if index_cjs.is_file() {
                 return Some(index_cjs);

@@ -2261,6 +2261,45 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     let raw_results: serde_json::Value =
         serde_json::from_slice(&fs::read(&artifacts.raw_results_archive_path).unwrap()).unwrap();
     assert_eq!(raw_results["results"].as_array().map(Vec::len), Some(3));
+    assert!(
+        raw_results["environment"]["cpu_model"]
+            .as_str()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "comparison raw_results should include cpu_model"
+    );
+    assert!(
+        raw_results["environment"]["memory_bytes"].is_number(),
+        "comparison raw_results should include memory_bytes"
+    );
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).unwrap();
+    assert!(
+        manifest["environment"]["cpu_model"]
+            .as_str()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "comparison run_manifest should include cpu_model"
+    );
+    assert!(
+        manifest["environment"]["memory_bytes"].is_number(),
+        "comparison run_manifest should include memory_bytes"
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_slice(&fs::read(&artifacts.summary_path).unwrap()).unwrap();
+    assert!(
+        summary["environment"]["cpu_model"]
+            .as_str()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        "comparison summary should include cpu_model"
+    );
+    assert!(
+        summary["environment"]["memory_bytes"].is_number(),
+        "comparison summary should include memory_bytes"
+    );
     assert_eq!(result.evidence_bundle.status, BundleStatus::Sealed);
     assert_eq!(result.evidence_bundle.provenances.len(), 1);
     assert_eq!(result.evidence_bundle.runs.len(), 9);
@@ -2274,5 +2313,118 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     assert_eq!(
         parity_targets,
         BTreeSet::from([ParityTarget::NodeJs, ParityTarget::Bun])
+    );
+}
+
+#[test]
+fn benchmark_comparison_manifest_fixture_is_valid() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = crate_root
+        .join("..")
+        .join("..")
+        .join("benchmarks/runtime_comparison/manifest.json");
+    let manifest_bytes =
+        fs::read(&manifest_path).expect("benchmark comparison manifest should exist");
+    let manifest: BenchmarkComparisonManifest =
+        serde_json::from_slice(&manifest_bytes).expect("manifest should parse");
+    validate_benchmark_comparison_manifest(&manifest).expect("manifest should validate");
+
+    let manifest_root = manifest_path
+        .parent()
+        .expect("manifest should have a parent directory");
+    for case in &manifest.cases {
+        let program_path = if case.program_path.is_absolute() {
+            case.program_path.clone()
+        } else {
+            manifest_root.join(&case.program_path)
+        };
+        assert!(
+            program_path.exists(),
+            "benchmark program missing for {} at {}",
+            case.benchmark_id,
+            program_path.display()
+        );
+    }
+}
+
+#[test]
+fn benchmark_comparison_manifest_covers_required_categories() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = crate_root
+        .join("..")
+        .join("..")
+        .join("benchmarks/runtime_comparison/manifest.json");
+    let manifest_bytes =
+        fs::read(&manifest_path).expect("benchmark comparison manifest should exist");
+    let manifest: BenchmarkComparisonManifest =
+        serde_json::from_slice(&manifest_bytes).expect("manifest should parse");
+
+    let categories: BTreeSet<BenchmarkCategory> =
+        manifest.cases.iter().map(|case| case.category).collect();
+    for required in BenchmarkCategory::all() {
+        assert!(
+            categories.contains(required),
+            "manifest missing required category {}",
+            required.as_str()
+        );
+    }
+}
+
+#[test]
+fn benchmark_comparison_manifest_minimum_case_counts() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = crate_root
+        .join("..")
+        .join("..")
+        .join("benchmarks/runtime_comparison/manifest.json");
+    let manifest_bytes =
+        fs::read(&manifest_path).expect("benchmark comparison manifest should exist");
+    let manifest: BenchmarkComparisonManifest =
+        serde_json::from_slice(&manifest_bytes).expect("manifest should parse");
+
+    let micro_count = manifest
+        .cases
+        .iter()
+        .filter(|case| case.category == BenchmarkCategory::Micro)
+        .count();
+    let macro_count = manifest
+        .cases
+        .iter()
+        .filter(|case| case.category == BenchmarkCategory::Macro)
+        .count();
+
+    assert!(
+        micro_count >= 10,
+        "expected at least 10 micro benchmarks, found {micro_count}"
+    );
+    assert!(
+        macro_count >= 3,
+        "expected at least 3 macro benchmarks, found {macro_count}"
+    );
+}
+
+#[test]
+fn benchmark_comparison_manifest_unique_ids() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = crate_root
+        .join("..")
+        .join("..")
+        .join("benchmarks/runtime_comparison/manifest.json");
+    let manifest_bytes =
+        fs::read(&manifest_path).expect("benchmark comparison manifest should exist");
+    let manifest: BenchmarkComparisonManifest =
+        serde_json::from_slice(&manifest_bytes).expect("manifest should parse");
+
+    let mut seen = BTreeSet::new();
+    let mut duplicates = Vec::new();
+    for case in &manifest.cases {
+        if !seen.insert(case.benchmark_id.clone()) {
+            duplicates.push(case.benchmark_id.clone());
+        }
+    }
+
+    assert!(
+        duplicates.is_empty(),
+        "benchmark comparison manifest has duplicate benchmark_id entries: {duplicates:?}"
     );
 }

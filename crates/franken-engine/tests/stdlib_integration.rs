@@ -133,6 +133,10 @@ fn install_stdlib_returns_valid_global_environment() {
         heap.get_property(env.global_object, &PropertyKey::from("JSON"))
             .is_ok()
     );
+    let global_this = heap
+        .get_property(env.global_object, &PropertyKey::from("globalThis"))
+        .expect("globalThis present");
+    assert_eq!(global_this, JsValue::Object(env.global_object));
 }
 
 #[test]
@@ -329,6 +333,33 @@ fn string_char_at_out_of_bounds() {
     )
     .unwrap();
     assert_eq!(result, JsValue::Str(String::new()));
+}
+
+#[test]
+fn string_at_handles_negative_and_non_bmp() {
+    let result =
+        exec_string_method(BuiltinId::StringPrototypeAt, "hello", &[JsValue::Int(0)]).unwrap();
+    assert_eq!(result, JsValue::Str("h".into()));
+
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeAt,
+        "hello",
+        &[JsValue::Int(-FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Str("o".into()));
+
+    let result =
+        exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap();
+    assert_eq!(result, JsValue::Str("😀".into()));
+
+    let result = exec_string_method(
+        BuiltinId::StringPrototypeAt,
+        "hello",
+        &[JsValue::Int(5 * FP_SCALE)],
+    )
+    .unwrap();
+    assert_eq!(result, JsValue::Undefined);
 }
 
 #[test]
@@ -2044,6 +2075,43 @@ fn array_includes_false() {
 }
 
 #[test]
+fn array_at_handles_positive_and_negative() {
+    let elements = vec![
+        JsValue::Int(10 * FP_SCALE),
+        JsValue::Int(20 * FP_SCALE),
+        JsValue::Int(30 * FP_SCALE),
+    ];
+    let result =
+        exec_array_method(BuiltinId::ArrayPrototypeAt, &elements, &[JsValue::Int(0)]).unwrap();
+    assert!(matches!(
+        result,
+        ArrayMethodResult::Value(JsValue::Int(v)) if v == 10 * FP_SCALE
+    ));
+
+    let result = exec_array_method(
+        BuiltinId::ArrayPrototypeAt,
+        &elements,
+        &[JsValue::Int(-FP_SCALE)],
+    )
+    .unwrap();
+    assert!(matches!(
+        result,
+        ArrayMethodResult::Value(JsValue::Int(v)) if v == 30 * FP_SCALE
+    ));
+
+    let result = exec_array_method(
+        BuiltinId::ArrayPrototypeAt,
+        &elements,
+        &[JsValue::Int(3 * FP_SCALE)],
+    )
+    .unwrap();
+    assert!(matches!(
+        result,
+        ArrayMethodResult::Value(JsValue::Undefined)
+    ));
+}
+
+#[test]
 fn array_join_default_separator() {
     let elements = vec![
         JsValue::Int(FP_SCALE),
@@ -3190,6 +3258,128 @@ fn heap_array_splice_returns_removed_array_and_preserves_order() {
     assert_eq!(result.trace.after_size, 4);
     assert!(result.trace.mutated_keys.contains(&"1".to_string()));
     assert!(result.trace.mutated_keys.contains(&"2".to_string()));
+}
+
+#[test]
+fn heap_array_copy_within_preserves_overlap_direction() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(3 * FP_SCALE),
+            JsValue::Int(4 * FP_SCALE),
+            JsValue::Int(5 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+
+    let result = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypeCopyWithin,
+        array,
+        &[
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(0),
+            JsValue::Int(3 * FP_SCALE),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(result.value, JsValue::Object(array));
+    assert_eq!(
+        read_array_elements(&heap, array).unwrap(),
+        vec![
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(3 * FP_SCALE),
+            JsValue::Int(5 * FP_SCALE),
+        ]
+    );
+    assert!(result.trace.mutated_keys.contains(&"1".to_string()));
+    assert!(result.trace.mutated_keys.contains(&"2".to_string()));
+    assert!(result.trace.mutated_keys.contains(&"3".to_string()));
+}
+
+#[test]
+fn heap_array_entries_keys_values_return_arrays() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let array = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[JsValue::Int(10 * FP_SCALE), JsValue::Int(20 * FP_SCALE)],
+    )
+    .unwrap();
+
+    let keys = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypeKeys,
+        array,
+        &[],
+    )
+    .unwrap();
+    let keys_handle = match keys.value {
+        JsValue::Object(handle) => handle,
+        other => panic!("expected keys array handle, got {other:?}"),
+    };
+    assert_eq!(
+        read_array_elements(&heap, keys_handle).unwrap(),
+        vec![JsValue::Int(0), JsValue::Int(FP_SCALE)]
+    );
+    assert!(keys.trace.mutated_keys.is_empty());
+
+    let values = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypeValues,
+        array,
+        &[],
+    )
+    .unwrap();
+    let values_handle = match values.value {
+        JsValue::Object(handle) => handle,
+        other => panic!("expected values array handle, got {other:?}"),
+    };
+    assert_eq!(
+        read_array_elements(&heap, values_handle).unwrap(),
+        vec![JsValue::Int(10 * FP_SCALE), JsValue::Int(20 * FP_SCALE)]
+    );
+    assert!(values.trace.mutated_keys.is_empty());
+
+    let entries = exec_heap_collection_method(
+        &mut heap,
+        BuiltinId::ArrayPrototypeEntries,
+        array,
+        &[],
+    )
+    .unwrap();
+    let entries_handle = match entries.value {
+        JsValue::Object(handle) => handle,
+        other => panic!("expected entries array handle, got {other:?}"),
+    };
+    let entry_values = read_array_elements(&heap, entries_handle).unwrap();
+    assert_eq!(entry_values.len(), 2);
+    let first_entry = match &entry_values[0] {
+        JsValue::Object(handle) => *handle,
+        other => panic!("expected entry array handle, got {other:?}"),
+    };
+    let second_entry = match &entry_values[1] {
+        JsValue::Object(handle) => *handle,
+        other => panic!("expected entry array handle, got {other:?}"),
+    };
+    assert_eq!(
+        read_array_elements(&heap, first_entry).unwrap(),
+        vec![JsValue::Int(0), JsValue::Int(10 * FP_SCALE)]
+    );
+    assert_eq!(
+        read_array_elements(&heap, second_entry).unwrap(),
+        vec![JsValue::Int(FP_SCALE), JsValue::Int(20 * FP_SCALE)]
+    );
+    assert!(entries.trace.mutated_keys.is_empty());
 }
 
 #[test]

@@ -592,7 +592,7 @@ impl TraceRecorder {
             policy_versions: self.policy_versions,
             incident_id: self.incident_id,
             metadata: self.metadata,
-            signature: AuthenticityHash::compute(b"unsigned"),
+            signature: AuthenticityHash::compute_keyed(&self.signing_key, b"unsigned"),
         };
 
         // Sign the finalized trace.

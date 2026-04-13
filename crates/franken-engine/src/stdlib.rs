@@ -60,6 +60,7 @@ pub enum BuiltinId {
     ArrayPrototypePop,
     ArrayPrototypeShift,
     ArrayPrototypeUnshift,
+    ArrayPrototypeAt,
     ArrayPrototypeSlice,
     ArrayPrototypeSplice,
     ArrayPrototypeConcat,
@@ -117,6 +118,7 @@ pub enum BuiltinId {
     StringPrototypeCharAt,
     StringPrototypeCharCodeAt,
     StringPrototypeCodePointAt,
+    StringPrototypeAt,
     StringPrototypeConcat,
     StringPrototypeIncludes,
     StringPrototypeStartsWith,
@@ -270,6 +272,7 @@ impl BuiltinId {
             Self::ArrayPrototypePop => "Array.prototype.pop",
             Self::ArrayPrototypeShift => "Array.prototype.shift",
             Self::ArrayPrototypeUnshift => "Array.prototype.unshift",
+            Self::ArrayPrototypeAt => "Array.prototype.at",
             Self::ArrayPrototypeSlice => "Array.prototype.slice",
             Self::ArrayPrototypeSplice => "Array.prototype.splice",
             Self::ArrayPrototypeConcat => "Array.prototype.concat",
@@ -323,6 +326,7 @@ impl BuiltinId {
             Self::StringPrototypeCharAt => "String.prototype.charAt",
             Self::StringPrototypeCharCodeAt => "String.prototype.charCodeAt",
             Self::StringPrototypeCodePointAt => "String.prototype.codePointAt",
+            Self::StringPrototypeAt => "String.prototype.at",
             Self::StringPrototypeConcat => "String.prototype.concat",
             Self::StringPrototypeIncludes => "String.prototype.includes",
             Self::StringPrototypeStartsWith => "String.prototype.startsWith",
@@ -1271,6 +1275,17 @@ pub fn exec_array_method(
             let found = elements.iter().skip(from).any(|e| same_value(e, search));
             Ok(ArrayMethodResult::Value(JsValue::Bool(found)))
         }
+        BuiltinId::ArrayPrototypeAt => {
+            let len = elements.len() as i64;
+            let mut idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
+            if idx < 0 {
+                idx = len.saturating_add(idx);
+            }
+            if idx < 0 || idx >= len {
+                return Ok(ArrayMethodResult::Value(JsValue::Undefined));
+            }
+            Ok(ArrayMethodResult::Value(elements[idx as usize].clone()))
+        }
         BuiltinId::ArrayPrototypeJoin => {
             let sep = opt_str_arg(args, 0).unwrap_or_else(|| ",".into());
             let parts: Vec<String> = elements.iter().map(coerce_to_string).collect();
@@ -1642,7 +1657,13 @@ pub fn exec_heap_collection_method(
         | BuiltinId::ArrayPrototypeUnshift
         | BuiltinId::ArrayPrototypeSplice
         | BuiltinId::ArrayPrototypeReverse
-        | BuiltinId::ArrayPrototypeFill => exec_heap_array_method(heap, builtin, this_handle, args),
+        | BuiltinId::ArrayPrototypeCopyWithin
+        | BuiltinId::ArrayPrototypeFill
+        | BuiltinId::ArrayPrototypeEntries
+        | BuiltinId::ArrayPrototypeKeys
+        | BuiltinId::ArrayPrototypeValues => {
+            exec_heap_array_method(heap, builtin, this_handle, args)
+        }
         BuiltinId::MapPrototypeGet
         | BuiltinId::MapPrototypeSet
         | BuiltinId::MapPrototypeHas
@@ -1730,6 +1751,95 @@ fn exec_heap_array_method(
         BuiltinId::ArrayPrototypeReverse => {
             after.reverse();
             JsValue::Object(this_handle)
+        }
+        BuiltinId::ArrayPrototypeCopyWithin => {
+            let len = after.len() as i64;
+            let target = match args.first() {
+                Some(arg) => resolve_array_index(
+                    coerce_to_int("Array.prototype.copyWithin", arg)? / FP_SCALE,
+                    len,
+                ),
+                None => 0,
+            };
+            let start = match args.get(1) {
+                Some(arg) => resolve_array_index(
+                    coerce_to_int("Array.prototype.copyWithin", arg)? / FP_SCALE,
+                    len,
+                ),
+                None => 0,
+            };
+            let end = match args.get(2) {
+                Some(arg) => resolve_array_index(
+                    coerce_to_int("Array.prototype.copyWithin", arg)? / FP_SCALE,
+                    len,
+                ),
+                None => len,
+            };
+            let count = (end - start).min(len - target).max(0) as usize;
+            if count == 0 {
+                return Ok(HeapCollectionMethodResult {
+                    value: JsValue::Object(this_handle),
+                    trace: build_collection_trace(
+                        builtin,
+                        CollectionKind::Array,
+                        this_handle,
+                        before.len(),
+                        after.len(),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                });
+            }
+            let to = target as usize;
+            let from = start as usize;
+            if target < start {
+                for i in 0..count {
+                    after[to + i] = after[from + i].clone();
+                }
+            } else {
+                for i in (0..count).rev() {
+                    after[to + i] = after[from + i].clone();
+                }
+            }
+            JsValue::Object(this_handle)
+        }
+        BuiltinId::ArrayPrototypeEntries
+        | BuiltinId::ArrayPrototypeKeys
+        | BuiltinId::ArrayPrototypeValues => {
+            let prototype = heap
+                .get_prototype_of(this_handle)
+                .map_err(object_error)?
+                .ok_or_else(|| {
+                    StdlibError::TypeError(
+                        "Array.prototype.* receiver is missing an array prototype".into(),
+                    )
+                })?;
+            let values = after.clone();
+            let output = match builtin {
+                BuiltinId::ArrayPrototypeKeys => {
+                    let mut keys = Vec::with_capacity(values.len());
+                    for idx in 0..values.len() {
+                        keys.push(JsValue::Int(idx as i64 * FP_SCALE));
+                    }
+                    keys
+                }
+                BuiltinId::ArrayPrototypeValues => values,
+                BuiltinId::ArrayPrototypeEntries => {
+                    let mut entries = Vec::with_capacity(values.len());
+                    for (idx, value) in values.into_iter().enumerate() {
+                        let pair = alloc_array_instance(
+                            heap,
+                            prototype,
+                            &[JsValue::Int(idx as i64 * FP_SCALE), value],
+                        )?;
+                        entries.push(JsValue::Object(pair));
+                    }
+                    entries
+                }
+                _ => unreachable!("entries/keys/values handled above"),
+            };
+            let handle = alloc_array_instance(heap, prototype, &output)?;
+            JsValue::Object(handle)
         }
         BuiltinId::ArrayPrototypeFill => {
             let fill_value = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -2285,6 +2395,21 @@ pub fn exec_string_method(
                 Some(code_point) => Ok(JsValue::Int(i64::from(code_point) * FP_SCALE)),
                 None => Ok(JsValue::Undefined),
             }
+        }
+        BuiltinId::StringPrototypeAt => {
+            let len = this.chars().count() as i64;
+            let mut idx = opt_int_arg(args, 0).unwrap_or(0) / FP_SCALE;
+            if idx < 0 {
+                idx = len.saturating_add(idx);
+            }
+            if idx < 0 || idx >= len {
+                return Ok(JsValue::Undefined);
+            }
+            let ch = this
+                .chars()
+                .nth(idx as usize)
+                .expect("index validated against length");
+            Ok(JsValue::Str(ch.to_string()))
         }
         BuiltinId::StringPrototypeIncludes => {
             let search = require_str("String.prototype.includes", args, 0)?;
@@ -4087,6 +4212,7 @@ fn install_array_builtins(
         "unshift",
         BuiltinId::ArrayPrototypeUnshift,
     );
+    install_builtin_fn(heap, registry, proto, "at", BuiltinId::ArrayPrototypeAt);
     install_builtin_fn(
         heap,
         registry,
@@ -4258,6 +4384,7 @@ fn install_string_builtins(
         "codePointAt",
         BuiltinId::StringPrototypeCodePointAt,
     );
+    install_builtin_fn(heap, registry, proto, "at", BuiltinId::StringPrototypeAt);
     install_builtin_fn(
         heap,
         registry,
@@ -4744,6 +4871,11 @@ fn install_global_properties(
         PropertyKey::from("Infinity"),
         JsValue::Float(f64::INFINITY.to_bits()),
     );
+    let _ = heap.set_property(
+        global,
+        PropertyKey::from("globalThis"),
+        JsValue::Object(global),
+    );
 
     // Global functions
     install_builtin_fn(heap, registry, global, "isNaN", BuiltinId::GlobalIsNaN);
@@ -4852,6 +4984,8 @@ mod tests {
         let obj_val = heap.get_property(env.global_object, &PropertyKey::from("Object"));
         assert!(obj_val.is_ok());
         assert!(matches!(obj_val.unwrap(), JsValue::Object(_)));
+        let global_this = heap.get_property(env.global_object, &PropertyKey::from("globalThis"));
+        assert_eq!(global_this.unwrap(), JsValue::Object(env.global_object));
     }
 
     #[test]
@@ -6019,6 +6153,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_string_at_handles_negative_and_non_bmp() {
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeAt, "hello", &[JsValue::Int(0)]).unwrap(),
+            JsValue::Str("h".into())
+        );
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeAt,
+                "hello",
+                &[JsValue::Int(-FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Str("o".into())
+        );
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap(),
+            JsValue::Str("😀".into())
+        );
+        assert_eq!(
+            exec_string_method(
+                BuiltinId::StringPrototypeAt,
+                "hello",
+                &[JsValue::Int(5 * FP_SCALE)]
+            )
+            .unwrap(),
+            JsValue::Undefined
+        );
+    }
+
     // -- Array method tests --------------------------------------------------
 
     #[test]
@@ -6063,6 +6227,37 @@ mod tests {
             )
             .unwrap(),
             ArrayMethodResult::Value(JsValue::Int(2 * FP_SCALE))
+        );
+    }
+
+    #[test]
+    fn test_array_at_positive_and_negative() {
+        let elements = vec![
+            JsValue::Int(10 * FP_SCALE),
+            JsValue::Int(20 * FP_SCALE),
+            JsValue::Int(30 * FP_SCALE),
+        ];
+        assert_eq!(
+            exec_array_method(BuiltinId::ArrayPrototypeAt, &elements, &[JsValue::Int(0)]).unwrap(),
+            ArrayMethodResult::Value(JsValue::Int(10 * FP_SCALE))
+        );
+        assert_eq!(
+            exec_array_method(
+                BuiltinId::ArrayPrototypeAt,
+                &elements,
+                &[JsValue::Int(-FP_SCALE)]
+            )
+            .unwrap(),
+            ArrayMethodResult::Value(JsValue::Int(30 * FP_SCALE))
+        );
+        assert_eq!(
+            exec_array_method(
+                BuiltinId::ArrayPrototypeAt,
+                &elements,
+                &[JsValue::Int(3 * FP_SCALE)]
+            )
+            .unwrap(),
+            ArrayMethodResult::Value(JsValue::Undefined)
         );
     }
 

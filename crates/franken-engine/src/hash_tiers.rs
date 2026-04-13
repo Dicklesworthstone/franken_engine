@@ -15,6 +15,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
@@ -115,7 +116,7 @@ impl fmt::Display for ContentHash {
 pub struct AuthenticityHash(pub [u8; 32]);
 
 impl AuthenticityHash {
-    /// Compute a keyed authenticity hash (HMAC-like) over the given bytes.
+    /// Compute a keyed authenticity hash (HMAC-SHA256) over the given bytes.
     ///
     /// The key is mixed into the state before and after processing.
     pub fn compute_keyed(key: &[u8], data: &[u8]) -> Self {
@@ -199,7 +200,7 @@ pub enum HashAlgorithm {
     WyhashInspired,
     /// Tier 2: legacy content-hash identifier for the SHA-256-backed path.
     SipInspiredCr,
-    /// Tier 3: SipHash-inspired keyed hash.
+    /// Tier 3: legacy identifier for the HMAC-SHA256-backed keyed hash.
     SipInspiredKeyed,
 }
 
@@ -297,107 +298,15 @@ fn collision_resistant_hash(input: &[u8]) -> [u8; 32] {
     output
 }
 
-/// Keyed hash: mixes key before and after data processing.
+/// Keyed hash: HMAC-SHA256 over the data.
 fn keyed_hash(key: &[u8], data: &[u8]) -> [u8; 32] {
-    let mut state: [u64; 4] = [
-        0x736f_6d65_7073_6575,
-        0x646f_7261_6e64_6f6d,
-        0x6c79_6765_6e65_7261,
-        0x7465_6462_7974_6573,
-    ];
-
-    // Mix in key first.
-    for chunk in key.chunks(8) {
-        let mut block = [0u8; 8];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let word = u64::from_le_bytes(block);
-        state[1] ^= word;
-        sip_round(&mut state);
-        state[2] ^= word;
-    }
-
-    // Mix in key length for domain separation.
-    state[0] ^= key.len() as u64;
-    state[3] ^= 0x0a;
-    sip_round(&mut state);
-
-    // Process data.
-    state[0] ^= data.len() as u64;
-    for chunk in data.chunks(8) {
-        let mut block = [0u8; 8];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let word = u64::from_le_bytes(block);
-        state[3] ^= word;
-        sip_round(&mut state);
-        sip_round(&mut state);
-        state[0] ^= word;
-    }
-
-    // Mix key again for outer keying.
-    for chunk in key.chunks(8) {
-        let mut block = [0u8; 8];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let word = u64::from_le_bytes(block);
-        state[0] ^= word;
-        sip_round(&mut state);
-    }
-
-    finalize_state(&mut state)
-}
-
-/// SipHash-like mixing round.
-#[inline]
-fn sip_round(state: &mut [u64; 4]) {
-    state[0] = state[0].wrapping_add(state[1]);
-    state[1] = state[1].rotate_left(13);
-    state[1] ^= state[0];
-    state[0] = state[0].rotate_left(32);
-
-    state[2] = state[2].wrapping_add(state[3]);
-    state[3] = state[3].rotate_left(16);
-    state[3] ^= state[2];
-
-    state[0] = state[0].wrapping_add(state[3]);
-    state[3] = state[3].rotate_left(21);
-    state[3] ^= state[0];
-
-    state[2] = state[2].wrapping_add(state[1]);
-    state[1] = state[1].rotate_left(17);
-    state[1] ^= state[2];
-    state[2] = state[2].rotate_left(32);
-}
-
-/// Finalize state into 32-byte output.
-fn finalize_state(state: &mut [u64; 4]) -> [u8; 32] {
-    state[2] ^= 0xff;
-    for _ in 0..4 {
-        sip_round(state);
-    }
-    let h1 = state[0] ^ state[1] ^ state[2] ^ state[3];
-
-    state[1] ^= 0xee;
-    for _ in 0..4 {
-        sip_round(state);
-    }
-    let h2 = state[0] ^ state[1] ^ state[2] ^ state[3];
-
-    state[0] ^= 0xdd;
-    for _ in 0..4 {
-        sip_round(state);
-    }
-    let h3 = state[0] ^ state[1] ^ state[2] ^ state[3];
-
-    state[3] ^= 0xcc;
-    for _ in 0..4 {
-        sip_round(state);
-    }
-    let h4 = state[0] ^ state[1] ^ state[2] ^ state[3];
-
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts keys of any size");
+    mac.update(data);
+    let digest = mac.finalize().into_bytes();
     let mut output = [0u8; 32];
-    output[0..8].copy_from_slice(&h1.to_le_bytes());
-    output[8..16].copy_from_slice(&h2.to_le_bytes());
-    output[16..24].copy_from_slice(&h3.to_le_bytes());
-    output[24..32].copy_from_slice(&h4.to_le_bytes());
+    output.copy_from_slice(&digest);
     output
 }
 

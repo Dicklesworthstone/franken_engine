@@ -713,27 +713,95 @@ pub fn lower_ir0_to_ir1(
                     ir1.ops.push(Ir1Op::Pop);
                 }
                 ExportKind::NamedClause(clause) => {
-                    for (local_name, exported_name) in parse_named_export_clause_bindings(clause) {
-                        if !declared_root_bindings.contains(local_name.as_str()) {
-                            return Err(LoweringPipelineError::SemanticViolation(
-                                SemanticError::new(
-                                    SemanticErrorCode::UndeclaredExportBinding,
-                                    Some(local_name.clone()),
-                                    Some(export.span.clone()),
-                                ),
-                            ));
+                    let specifiers = parse_named_export_clause_bindings(clause);
+                    if let Some(source_specifier) = parse_named_export_clause_source(clause) {
+                        if specifiers.is_empty() {
+                            ir1.ops.push(Ir1Op::ImportModule {
+                                specifier: source_specifier,
+                            });
+                            ir1.ops.push(Ir1Op::Pop);
+                        } else {
+                            let temp_binding_id = {
+                                let temp_name = make_internal_binding_name(
+                                    "reexport_namespace",
+                                    synthetic_export_index,
+                                );
+                                synthetic_export_index =
+                                    synthetic_export_index.saturating_add(1);
+                                alloc_binding(
+                                    &mut bindings,
+                                    &mut binding_lookup,
+                                    &mut binding_index,
+                                    root_scope_id,
+                                    &temp_name,
+                                    BindingKind::Const,
+                                )
+                                .map_err(LoweringPipelineError::SemanticViolation)?
+                            };
+                            ir1.ops.push(Ir1Op::ImportModule {
+                                specifier: source_specifier,
+                            });
+                            ir1.ops.push(Ir1Op::StoreBinding {
+                                binding_id: temp_binding_id,
+                            });
+                            ir1.ops.push(Ir1Op::Pop);
+
+                            for (import_name, exported_name) in specifiers {
+                                ir1.ops.push(Ir1Op::LoadBinding {
+                                    binding_id: temp_binding_id,
+                                });
+                                ir1.ops.push(Ir1Op::GetProperty {
+                                    key: Ir1PropertyKey::Static(import_name),
+                                });
+                                let export_binding_name = make_internal_binding_name(
+                                    "reexport_binding",
+                                    synthetic_export_index,
+                                );
+                                synthetic_export_index =
+                                    synthetic_export_index.saturating_add(1);
+                                let export_binding_id = alloc_binding(
+                                    &mut bindings,
+                                    &mut binding_lookup,
+                                    &mut binding_index,
+                                    root_scope_id,
+                                    &export_binding_name,
+                                    BindingKind::Const,
+                                )
+                                .map_err(LoweringPipelineError::SemanticViolation)?;
+                                ir1.ops.push(Ir1Op::StoreBinding {
+                                    binding_id: export_binding_id,
+                                });
+                                ir1.ops.push(Ir1Op::ExportBinding {
+                                    name: exported_name,
+                                    binding_id: export_binding_id,
+                                });
+                                ir1.ops.push(Ir1Op::Pop);
+                            }
                         }
-                        let binding_id = binding_lookup.get(local_name.as_str()).copied().ok_or(
-                            LoweringPipelineError::InvariantViolation {
-                                detail: "reserved root binding missing from binding lookup",
-                            },
-                        )?;
-                        ir1.ops.push(Ir1Op::LoadBinding { binding_id });
-                        ir1.ops.push(Ir1Op::ExportBinding {
-                            name: exported_name,
-                            binding_id,
-                        });
-                        ir1.ops.push(Ir1Op::Pop);
+                    } else {
+                        for (local_name, exported_name) in specifiers {
+                            if !declared_root_bindings.contains(local_name.as_str()) {
+                                return Err(LoweringPipelineError::SemanticViolation(
+                                    SemanticError::new(
+                                        SemanticErrorCode::UndeclaredExportBinding,
+                                        Some(local_name.clone()),
+                                        Some(export.span.clone()),
+                                    ),
+                                ));
+                            }
+                            let binding_id =
+                                binding_lookup.get(local_name.as_str()).copied().ok_or(
+                                    LoweringPipelineError::InvariantViolation {
+                                        detail: "reserved root binding missing from binding lookup",
+                                    },
+                                )?;
+                            ir1.ops.push(Ir1Op::LoadBinding { binding_id });
+                            ir1.ops.push(Ir1Op::ExportBinding {
+                                name: exported_name,
+                                binding_id,
+                            });
+                            ir1.ops.push(Ir1Op::Pop);
+                        }
                     }
                 }
             },
@@ -871,8 +939,7 @@ fn reserve_root_scope_bindings(
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     let trimmed = clause.trim();
-    let local_clause = trimmed
-        .split_once(" from ")
+    let local_clause = split_named_export_clause(trimmed)
         .map(|(head, _)| head.trim())
         .unwrap_or(trimmed);
 
@@ -908,6 +975,33 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
     } else {
         vec![(trimmed.to_string(), trimmed.to_string())]
     }
+}
+
+fn parse_named_export_clause_source(clause: &str) -> Option<String> {
+    let trimmed = clause.trim();
+    let (_head, source_raw) = split_named_export_clause(trimmed)?;
+    parse_quoted_export_source(source_raw.trim())
+}
+
+fn split_named_export_clause(clause: &str) -> Option<(&str, &str)> {
+    clause.split_once(" from ")
+}
+
+fn parse_quoted_export_source(input: &str) -> Option<String> {
+    if input.len() < 2 {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let first = bytes[0];
+    let last = bytes[bytes.len() - 1];
+    if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
+        let inner = &input[1..input.len() - 1];
+        if inner.contains('\n') || inner.contains('\r') {
+            return None;
+        }
+        return Some(inner.to_string());
+    }
+    None
 }
 
 fn alloc_pattern_primary_binding(
@@ -7835,6 +7929,33 @@ mod tests {
             .ops
             .iter()
             .any(|op| matches!(op, Ir1Op::ExportBinding { name, .. } if name == "published"));
+        assert!(has_export);
+    }
+
+    #[test]
+    fn lower_module_with_reexport_named_clause() {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Module,
+            body: vec![Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause("{ foo as bar } from \"./dep.js\"".to_string()),
+                span: span(),
+            })],
+            span: span(),
+        };
+        let ir0 = Ir0Module::from_syntax_tree(tree, "named_reexport.mjs");
+        let result = lower_ir0_to_ir1(&ir0).expect("re-export should lower");
+
+        let has_import = result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js"));
+        assert!(has_import);
+        let has_export = result
+            .module
+            .ops
+            .iter()
+            .any(|op| matches!(op, Ir1Op::ExportBinding { name, .. } if name == "bar"));
         assert!(has_export);
     }
 

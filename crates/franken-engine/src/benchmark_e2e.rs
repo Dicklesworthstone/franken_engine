@@ -1456,6 +1456,7 @@ pub fn run_benchmark_comparison_suite(
             };
 
             commands.push(render_benchmark_comparison_command(
+                runtime,
                 &runtime_bin,
                 &runtime_args,
                 manifest.fairness_policy.case_timeout_ms,
@@ -1531,6 +1532,7 @@ pub fn run_benchmark_comparison_suite(
 }
 
 fn render_benchmark_comparison_command(
+    runtime: RuntimeId,
     runtime_bin: &Path,
     runtime_args: &[String],
     case_timeout_ms: u64,
@@ -1541,12 +1543,16 @@ fn render_benchmark_comparison_command(
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
         .join(" ");
-    format!(
+    let base = format!(
         "/usr/bin/time -o <timing-file> -f %e\\t%M timeout {}s {} {}",
         timeout_secs,
         shell_quote(runtime_bin.to_string_lossy().as_ref()),
         joined_args
-    )
+    );
+    match runtime {
+        RuntimeId::FrankenEngine => format!("rch exec -- {}", base),
+        _ => base,
+    }
 }
 
 fn run_single_benchmark_comparison_sample(
@@ -1837,6 +1843,9 @@ pub struct BenchmarkEnvironmentManifest {
     pub timezone: String,
     pub os: String,
     pub arch: String,
+    pub cpu_model: String,
+    pub memory_bytes: u64,
+    pub engine_version: String,
     pub runtime_pins: BenchmarkRuntimePins,
     pub fairness_policy: BenchmarkFairnessPolicy,
 }
@@ -1849,6 +1858,8 @@ fn build_environment_manifest(
         .or_else(|_| env::var("LANG"))
         .unwrap_or_else(|_| "C".to_string());
     let timezone = env::var("TZ").unwrap_or_else(|_| "UTC".to_string());
+    let cpu_model = host_cpu_model().unwrap_or_else(|| env::consts::ARCH.to_string());
+    let memory_bytes = host_memory_bytes().unwrap_or(0);
 
     BenchmarkEnvironmentManifest {
         schema_version: BENCHMARK_ENV_SCHEMA_VERSION.to_string(),
@@ -1859,6 +1870,9 @@ fn build_environment_manifest(
         timezone,
         os: env::consts::OS.to_string(),
         arch: env::consts::ARCH.to_string(),
+        cpu_model,
+        memory_bytes,
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_pins: contract.runtime_pins.clone(),
         fairness_policy: contract.fairness_policy,
     }
@@ -1882,13 +1896,22 @@ pub fn write_evidence_artifacts(
     let raw_results_archive_path = output_dir.join("raw_results_archive.json");
 
     let commands = [
-        "cargo test -p frankenengine-engine --test benchmark_e2e --test benchmark_e2e_integration",
-        "cargo run -p frankenengine-engine --bin franken_lockstep_runner -- --preflight-only",
-        "scripts/run_benchmark_e2e_suite.sh report",
+        "rch exec -- cargo test -p frankenengine-engine --test benchmark_e2e --test benchmark_e2e_integration",
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_lockstep_runner -- --preflight-only",
+        "rch exec -- scripts/run_benchmark_e2e_suite.sh report",
     ];
     fs::write(&commands_path, commands.join("\n") + "\n")?;
 
     let env_manifest = build_environment_manifest(result, &contract);
+    let environment_summary = serde_json::json!({
+        "os": env_manifest.os.clone(),
+        "arch": env_manifest.arch.clone(),
+        "cpu_model": env_manifest.cpu_model.clone(),
+        "memory_bytes": env_manifest.memory_bytes,
+        "engine_version": env_manifest.engine_version.clone(),
+        "locale": env_manifest.locale.clone(),
+        "timezone": env_manifest.timezone.clone(),
+    });
     fs::write(
         &env_manifest_path,
         serde_json::to_string_pretty(&env_manifest).unwrap(),
@@ -1899,6 +1922,7 @@ pub fn write_evidence_artifacts(
         "run_id": result.config.run_id,
         "run_date": result.config.run_date,
         "seed": result.config.seed,
+        "environment": environment_summary,
         "families": result.config.families.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
         "profiles": result.config.profiles.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
         "measurements": result.measurements.iter().map(|m| {
@@ -1959,6 +1983,15 @@ pub fn write_evidence_artifacts(
         "run_id": result.config.run_id,
         "run_date": result.config.run_date,
         "seed": result.config.seed,
+        "environment": {
+            "os": env_manifest.os,
+            "arch": env_manifest.arch,
+            "cpu_model": env_manifest.cpu_model,
+            "memory_bytes": env_manifest.memory_bytes,
+            "engine_version": env_manifest.engine_version,
+            "locale": env_manifest.locale,
+            "timezone": env_manifest.timezone,
+        },
         "families": result.config.families.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
         "profiles": result.config.profiles.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
         "total_operations": result.total_operations,
@@ -2080,6 +2113,7 @@ pub fn write_evidence_artifacts(
         "blocked": result.blocked,
         "measurement_count": result.measurements.len(),
         "regression_count": result.regressions.len(),
+        "environment": environment_summary,
         "families": family_summaries,
     });
     fs::write(
@@ -2131,9 +2165,21 @@ pub fn write_benchmark_comparison_artifacts(
         timezone: env::var("TZ").unwrap_or_else(|_| "UTC".to_string()),
         os: env::consts::OS.to_string(),
         arch: env::consts::ARCH.to_string(),
+        cpu_model: host_cpu_model().unwrap_or_else(|| env::consts::ARCH.to_string()),
+        memory_bytes: host_memory_bytes().unwrap_or(0),
+        engine_version: result.manifest.runtime_pins.franken_engine.clone(),
         runtime_pins: contract.runtime_pins,
         fairness_policy: contract.fairness_policy,
     };
+    let environment_summary = serde_json::json!({
+        "os": env_manifest.os.clone(),
+        "arch": env_manifest.arch.clone(),
+        "cpu_model": env_manifest.cpu_model.clone(),
+        "memory_bytes": env_manifest.memory_bytes,
+        "engine_version": env_manifest.engine_version.clone(),
+        "locale": env_manifest.locale.clone(),
+        "timezone": env_manifest.timezone.clone(),
+    });
     fs::write(
         &env_manifest_path,
         serde_json::to_string_pretty(&env_manifest).unwrap(),
@@ -2143,6 +2189,7 @@ pub fn write_benchmark_comparison_artifacts(
         "schema_version": "franken-engine.benchmark-comparison.raw-results.v1",
         "run_id": &result.run_id,
         "run_date": &result.run_date,
+        "environment": environment_summary,
         "cases": result.manifest.cases.iter().map(|case| {
             serde_json::json!({
                 "benchmark_id": &case.benchmark_id,
@@ -2215,6 +2262,7 @@ pub fn write_benchmark_comparison_artifacts(
         "run_date": &result.run_date,
         "benchmark_count": result.manifest.cases.len(),
         "runtime_result_count": result.results.len(),
+        "environment": environment_summary,
         "runtimes": ["franken_engine", "node_lts", "bun_stable"],
         "evidence_bundle_status": result.evidence_bundle.status.to_string(),
     });
@@ -2227,6 +2275,15 @@ pub fn write_benchmark_comparison_artifacts(
         "schema_version": BENCHMARK_COMPARISON_SCHEMA_VERSION,
         "run_id": &result.run_id,
         "run_date": &result.run_date,
+        "environment": {
+            "os": env_manifest.os,
+            "arch": env_manifest.arch,
+            "cpu_model": env_manifest.cpu_model,
+            "memory_bytes": env_manifest.memory_bytes,
+            "engine_version": env_manifest.engine_version,
+            "locale": env_manifest.locale,
+            "timezone": env_manifest.timezone,
+        },
         "fairness_policy": result.manifest.fairness_policy,
         "runtime_pins": &result.manifest.runtime_pins,
         "artifacts": {
@@ -2973,6 +3030,22 @@ mod tests {
                 .unwrap()
                 .starts_with("franken-engine-")
         );
+        assert!(
+            env_manifest["cpu_model"]
+                .as_str()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            "cpu_model should be populated"
+        );
+        assert!(
+            env_manifest["memory_bytes"].is_number(),
+            "memory_bytes should be numeric"
+        );
+        assert_eq!(
+            env_manifest["engine_version"],
+            env!("CARGO_PKG_VERSION"),
+            "engine_version should match crate version"
+        );
         assert_eq!(env_manifest["fairness_policy"]["warmup_runs"], 2);
         assert_eq!(env_manifest["fairness_policy"]["sample_count"], 7);
         assert_eq!(env_manifest["fairness_policy"]["case_timeout_ms"], 30_000);
@@ -3009,7 +3082,7 @@ mod tests {
             "all events must be valid structured JSON with trace_id"
         );
         let commands = fs::read_to_string(&artifacts.commands_path).unwrap();
-        assert!(commands.contains("scripts/run_benchmark_e2e_suite.sh report"));
+        assert!(commands.contains("rch exec -- scripts/run_benchmark_e2e_suite.sh report"));
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3058,6 +3131,17 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&artifacts.summary_path).unwrap()).unwrap();
         let families = summary["families"].as_array().unwrap();
         assert_eq!(families.len(), 2);
+        assert!(
+            summary["environment"]["cpu_model"]
+                .as_str()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            "summary should include cpu_model"
+        );
+        assert!(
+            summary["environment"]["memory_bytes"].is_number(),
+            "summary should include memory_bytes"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

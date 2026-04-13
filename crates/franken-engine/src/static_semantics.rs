@@ -321,7 +321,11 @@ const KEYWORD_BINDINGS: &[&str] = &[
 /// be parsed (falls back to whole-clause comparison).
 fn extract_export_specifier_names(clause: &str) -> Vec<String> {
     let trimmed = clause.trim();
-    let inner = match trimmed.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+    let head = trimmed
+        .split_once(" from ")
+        .map(|(prefix, _)| prefix.trim())
+        .unwrap_or(trimmed);
+    let inner = match head.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
         Some(s) => s.trim(),
         None => return Vec::new(),
     };
@@ -5569,6 +5573,12 @@ mod tests {
     fn extract_export_specifier_names_with_alias() {
         let names = super::extract_export_specifier_names("{ a as x, b }");
         assert_eq!(names, vec!["x", "b"]);
+    }
+
+    #[test]
+    fn extract_export_specifier_names_with_from_clause() {
+        let names = super::extract_export_specifier_names("{ a as x } from \"./dep.js\"");
+        assert_eq!(names, vec!["x"]);
     }
 
     #[test]

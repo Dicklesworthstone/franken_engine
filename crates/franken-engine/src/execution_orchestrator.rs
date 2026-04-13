@@ -93,6 +93,7 @@ const DEFAULT_DRAIN_DEADLINE_TICKS: u64 = 10_000;
 const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
 #[allow(dead_code)]
 const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
+#[allow(dead_code)]
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
 

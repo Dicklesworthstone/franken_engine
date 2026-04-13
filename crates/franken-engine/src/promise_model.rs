@@ -758,11 +758,14 @@ impl MacrotaskQueue {
 /// Deterministic event loop state.
 ///
 /// Implements the ES2020 event loop turn model:
-/// 1. Drain all microtasks (FIFO).
-/// 2. Pick one macrotask (by priority).
-/// 3. Execute it (may enqueue new microtasks).
-/// 4. Drain all new microtasks.
-/// 5. Repeat.
+/// 1. Pick one macrotask (by priority).
+/// 2. Execute it (may enqueue new microtasks).
+/// 3. Drain all new microtasks (FIFO).
+/// 4. Repeat.
+///
+/// The `turn()` method only selects the next macrotask and advances the
+/// virtual clock as needed. Callers are responsible for executing the
+/// macrotask and invoking `drain_microtasks()` afterwards.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventLoop {
     /// The microtask queue.
@@ -788,31 +791,26 @@ impl EventLoop {
         }
     }
 
-    /// Execute one full event loop turn:
-    /// 1. Drain microtask queue.
-    /// 2. Pick and return one macrotask (if any).
+    /// Select the next macrotask for execution.
     ///
-    /// Returns the macrotask to execute (caller invokes the handler), plus
-    /// a count of microtasks drained. If no macrotask is ready, advances
-    /// the virtual clock to the next scheduled macrotask time.
+    /// Returns the macrotask to execute (caller invokes the handler). If no
+    /// macrotask is ready, advances the virtual clock to the next scheduled
+    /// macrotask time.
     pub fn turn(&mut self) -> TurnResult {
-        // Phase 1: drain all microtasks.
-        let micro_count = self.drain_microtasks();
-
-        // Phase 2: try to pick a macrotask at current time.
+        // Phase 1: pick a macrotask at current time.
         if let Some(task) = self.macrotasks.dequeue_ready(self.clock.now_ms()) {
             self.witness.push(WitnessEvent::MacrotaskExecuted {
                 source: task.source,
                 registration_seq: task.registration_seq,
             });
             return TurnResult {
-                microtasks_drained: micro_count,
+                microtasks_drained: 0,
                 macrotask: Some(task),
                 clock_advanced: false,
             };
         }
 
-        // Phase 3: advance clock to next macrotask if available.
+        // Phase 2: advance clock to next macrotask if available.
         if let Some(next_time) = self.macrotasks.next_scheduled_time() {
             let from = self.clock.now_ms();
             self.clock.advance_to(next_time);
@@ -828,7 +826,7 @@ impl EventLoop {
                     registration_seq: task.registration_seq,
                 });
                 return TurnResult {
-                    microtasks_drained: micro_count,
+                    microtasks_drained: 0,
                     macrotask: Some(task),
                     clock_advanced: true,
                 };
@@ -836,7 +834,7 @@ impl EventLoop {
         }
 
         TurnResult {
-            microtasks_drained: micro_count,
+            microtasks_drained: 0,
             macrotask: None,
             clock_advanced: false,
         }
@@ -1621,7 +1619,7 @@ mod tests {
     // ----- Event loop -----
 
     #[test]
-    fn event_loop_drains_microtasks_before_macrotasks() {
+    fn event_loop_selects_macrotask_without_draining_microtasks() {
         let mut event_loop = EventLoop::new();
         // Enqueue a microtask.
         event_loop.microtasks.enqueue(Microtask::PromiseReaction {
@@ -1636,10 +1634,10 @@ mod tests {
             .schedule(MacrotaskSource::Timer, ClosureHandle(0), 0, Label::Public);
 
         let result = event_loop.turn();
-        // Microtask drained first.
-        assert_eq!(result.microtasks_drained, 1);
-        // Then macrotask selected.
+        // Macrotask selected; microtasks remain for the caller to drain.
+        assert_eq!(result.microtasks_drained, 0);
         assert!(result.macrotask.is_some());
+        assert!(!event_loop.microtasks.is_empty());
     }
 
     #[test]

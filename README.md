@@ -189,7 +189,7 @@ frankenctl benchmark score --input ./artifacts/publication_gate_input.json --out
 ```bash
 frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks
 frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json
-frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json
+frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json
 ```
 
 ## Command Reference
@@ -209,7 +209,7 @@ serving as roadmap/library surfaces until dedicated CLI beads land them.
 | `frankenctl benchmark run` | Run bundled benchmark families and emit evidence artifacts | `frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks` |
 | `frankenctl benchmark score` | Score a publication-gate input against Node/Bun comparisons | `frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json` |
 | `frankenctl benchmark verify` | Verify a benchmark claim bundle and render a verdict report | `frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json` |
-| `frankenctl replay run` | Replay a captured nondeterminism trace in strict, best-effort, or validate mode | `frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json` |
+| `frankenctl replay run` | Replay a captured nondeterminism trace; `validate` mode compares it against `--compare-trace` | `frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json` |
 
 ## RGC Docs and Help Surface Audit
 
@@ -2202,7 +2202,7 @@ Artifacts are written under:
 |---|---|---|
 | Compile artifact verification fails | Source path, parse goal, or artifact contents are stale/mismatched | Rerun `frankenctl compile --input <source.js> --out <artifact.json> --goal <script|module>` and then `frankenctl verify compile-artifact --input <artifact.json>` |
 | `doctor` summary reports missing readiness signals | Runtime diagnostics input or optional signal bundles are incomplete | Rebuild the JSON input bundle and rerun `frankenctl doctor --input <runtime_input.json> --summary --out-dir <dir>` |
-| Replay mismatch on a captured trace | Snapshot or nondeterminism transcript is incomplete | Rerun `frankenctl replay run --trace <trace.json> --mode validate --out <report.json>` and inspect the replay report |
+| Replay mismatch on a captured trace | Snapshot or nondeterminism transcript is incomplete | Rerun `frankenctl replay run --trace <trace.json> --compare-trace <candidate-trace.json> --mode validate --out <report.json>` and inspect the replay report |
 | Receipt verification failure | Verifier input is stale or the receipt ID does not match the bundle | Run `frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> --summary` and inspect the rendered verdict |
 | Benchmark publication gate fails | Claim bundle or publication input is incomplete, stale, or below the scoring threshold | Run `frankenctl benchmark verify --bundle <dir> --summary --output <report.json>` and `frankenctl benchmark score --input <publication_gate_input.json> --output <results.json>` |
 

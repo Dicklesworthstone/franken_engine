@@ -27,8 +27,8 @@ use frankenengine_engine::esm_cjs_interop_parity::{
 use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
     CompatibilityMatrixError, CompatibilityMatrixErrorCode, CompatibilityMode,
-    CompatibilityObservation, CompatibilityRuntime, DEFAULT_MATRIX_JSON, DivergencePolicy,
-    DivergenceCategory, ExplicitShim, ModuleCompatibilityMatrix, ModuleFeature, ReferenceRuntime,
+    CompatibilityObservation, CompatibilityRuntime, DEFAULT_MATRIX_JSON, DivergenceCategory,
+    DivergencePolicy, ExplicitShim, ModuleCompatibilityMatrix, ModuleFeature, ReferenceRuntime,
 };
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, DeterministicModuleResolver, ExternalPackageDefinition,

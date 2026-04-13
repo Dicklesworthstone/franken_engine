@@ -26,6 +26,7 @@ use crate::baseline_interpreter::{
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
 };
+use crate::capability::RuntimeCapability;
 use crate::containment_executor::{
     ContainmentContext, ContainmentError, ContainmentExecutor, ContainmentReceipt, SandboxPolicy,
 };
@@ -43,7 +44,8 @@ use crate::expected_loss_selector::{
 };
 use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
 use crate::guardplane_adapter::{
-    GuardplaneAdapter, GuardplaneExecutionSummary, GuardplaneExtensionContext,
+    GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneExecutionSummary,
+    GuardplaneExtensionContext, GuardplaneOperation,
 };
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{DeclassificationReceipt, Label};
@@ -260,7 +262,13 @@ struct EvidenceRecordInput<'a> {
     ir3_schedule_cost: Option<TropicalWeight>,
     adaptive_router_summary: Option<&'a RouterSummary>,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
-    guardplane_summary: Option<&'a GuardplaneExecutionSummary>,
+    guardplane_report: Option<&'a GuardplaneHookReport>,
+}
+
+#[derive(Debug, Clone)]
+struct GuardplaneHookReport {
+    summary: GuardplaneExecutionSummary,
+    decisions: Vec<GuardplaneDecisionRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -585,7 +593,7 @@ impl ExecutionOrchestrator {
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
         // Step 6: Execute IR3.
-        let (routed, guardplane_summary) =
+        let (routed, guardplane_report) =
             self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
         let lane = routed.lane;
         let lane_reason = routed.reason;
@@ -619,7 +627,7 @@ impl ExecutionOrchestrator {
         }
 
         // Step 9: Record evidence.
-        let (entry, evidence_compression_certificate) =
+        let (entries, evidence_compression_certificate) =
             self.phase_record_evidence(EvidenceRecordInput {
                 trace_id: &trace_id,
                 decision_id: &decision_id,
@@ -631,9 +639,9 @@ impl ExecutionOrchestrator {
                 ir3_schedule_cost,
                 adaptive_router_summary: adaptive_router_summary.as_ref(),
                 optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
-                guardplane_summary: guardplane_summary.as_ref(),
+                guardplane_report: guardplane_report.as_ref(),
             })?;
-        let evidence_entries = vec![entry];
+        let evidence_entries = entries;
 
         // Step 10: Execute any selected containment action and attach a saga
         // only for the actions that require follow-up orchestration.
@@ -818,24 +826,20 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
-    fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<String> {
+    fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<RuntimeCapability> {
         ir3.required_capabilities
             .iter()
-            .filter_map(|capability| match capability.0.as_str() {
-                IFC_RUNTIME_GUARD_CAPABILITY => Some(capability.0.clone()),
-                _ => None,
-            })
+            .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
             .collect()
     }
 
     fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
-        let mut granted_capabilities = package
+        let mut granted_capabilities: BTreeSet<RuntimeCapability> = package
             .capabilities
             .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
+            .filter_map(|s| RuntimeCapability::from_tag_str(s))
+            .collect();
         granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
-        let granted_capabilities = granted_capabilities.into_iter().collect::<Vec<_>>();
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
@@ -861,7 +865,7 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
-    ) -> Result<(RoutedResult, Option<GuardplaneExecutionSummary>), OrchestratorError> {
+    ) -> Result<(RoutedResult, Option<GuardplaneHookReport>), OrchestratorError> {
         let guardplane_adapter = self.guardplane_adapter_for_package(package);
         let hook = guardplane_adapter.as_ref().map(|adapter| {
             let hook: Arc<dyn InterpreterHook> = adapter.clone();
@@ -872,8 +876,13 @@ impl ExecutionOrchestrator {
         let routed = Self::lane_router_for_execution(package, ir3)
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
             .map_err(OrchestratorError::Interpreter)?;
-        let summary = guardplane_adapter.as_ref().map(|adapter| adapter.summary());
-        Ok((routed, summary))
+        let report = guardplane_adapter
+            .as_ref()
+            .map(|adapter| GuardplaneHookReport {
+                summary: adapter.summary(),
+                decisions: adapter.decision_records(),
+            });
+        Ok((routed, report))
     }
 
     fn guardplane_adapter_for_package(
@@ -1098,7 +1107,7 @@ impl ExecutionOrchestrator {
     fn phase_record_evidence(
         &mut self,
         input: EvidenceRecordInput<'_>,
-    ) -> Result<(EvidenceEntry, Option<CompressionCertificate>), OrchestratorError> {
+    ) -> Result<(Vec<EvidenceEntry>, Option<CompressionCertificate>), OrchestratorError> {
         let EvidenceRecordInput {
             trace_id,
             decision_id,
@@ -1110,8 +1119,9 @@ impl ExecutionOrchestrator {
             ir3_schedule_cost,
             adaptive_router_summary,
             optimal_stopping_certificate,
-            guardplane_summary,
+            guardplane_report,
         } = input;
+        let guardplane_summary = guardplane_report.map(|report| &report.summary);
         let mut builder = EvidenceEntryBuilder::new(
             trace_id,
             decision_id,
@@ -1259,6 +1269,12 @@ impl ExecutionOrchestrator {
                 });
             }
         }
+        if let Some(requested) = exec.requested_hook_action.as_ref() {
+            builder = builder.meta(
+                "hook_requested_action".to_string(),
+                format_guardplane_hook_action(requested),
+            );
+        }
 
         let compression_certificate = Self::build_evidence_compression_certificate(
             package,
@@ -1287,7 +1303,150 @@ impl ExecutionOrchestrator {
 
         let entry = builder.build()?;
         self.ledger.emit(entry.clone())?;
-        Ok((entry, compression_certificate))
+        let mut entries: Vec<EvidenceEntry> = vec![entry];
+
+        if let Some(report) = guardplane_report {
+            for (index, decision) in report.decisions.iter().enumerate() {
+                let guardplane_entry = Self::build_guardplane_decision_entry(
+                    trace_id,
+                    decision_id,
+                    package,
+                    index,
+                    decision,
+                    &self.config,
+                )?;
+                self.ledger.emit(guardplane_entry.clone())?;
+                entries.push(guardplane_entry);
+            }
+        }
+
+        Ok((entries, compression_certificate))
+    }
+
+    fn build_guardplane_decision_entry(
+        trace_id: &str,
+        decision_id: &str,
+        package: &ExtensionPackage,
+        index: usize,
+        record: &GuardplaneDecisionRecord,
+        config: &OrchestratorConfig,
+    ) -> Result<EvidenceEntry, OrchestratorError> {
+        let mut builder = EvidenceEntryBuilder::new(
+            trace_id,
+            format!("{decision_id}:guardplane:{index}"),
+            &config.policy_id,
+            config.epoch,
+            DecisionType::SecurityAction,
+        )
+        .timestamp_ns(0);
+
+        for action in [
+            "allow",
+            "challenge",
+            "sandbox",
+            "suspend",
+            "terminate",
+            "quarantine",
+        ] {
+            builder = builder.candidate(CandidateAction::new(action, 0));
+        }
+
+        let action = format_guardplane_hook_action(&record.action);
+        builder = builder.chosen(ChosenAction {
+            action_name: action.clone(),
+            expected_loss_millionths: record.expected_loss_millionths,
+            rationale: format!(
+                "operation={} risk_state={:?} delta={} llr={}",
+                guardplane_operation_label(&record.operation),
+                record.risk_state,
+                record.posterior_delta_millionths,
+                record.log_likelihood_ratio_millionths
+            ),
+        });
+
+        builder = builder.witness(Witness {
+            witness_id: format!("{trace_id}:guardplane:{index}:posterior"),
+            witness_type: "guardplane_posterior".to_string(),
+            value: format!(
+                "benign={} anomalous={} malicious={} unknown={}",
+                record.posterior.p_benign,
+                record.posterior.p_anomalous,
+                record.posterior.p_malicious,
+                record.posterior.p_unknown
+            ),
+        });
+
+        builder = builder.witness(Witness {
+            witness_id: format!("{trace_id}:guardplane:{index}:operation"),
+            witness_type: "guardplane_operation".to_string(),
+            value: guardplane_operation_witness_value(&record.operation),
+        });
+
+        builder = builder.meta("extension_id".to_string(), package.extension_id.clone());
+        builder = builder.meta("extension_version".to_string(), package.version.clone());
+        builder = builder.meta("guardplane_decision_index".to_string(), index.to_string());
+        builder = builder.meta(
+            "guardplane_operation".to_string(),
+            guardplane_operation_label(&record.operation).to_string(),
+        );
+        builder = builder.meta("guardplane_action".to_string(), action);
+        builder = builder.meta(
+            "guardplane_selected_action".to_string(),
+            record.selected_action.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_threshold_action".to_string(),
+            record.threshold_action.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_risk_state".to_string(),
+            format!("{:?}", record.risk_state),
+        );
+        builder = builder.meta(
+            "guardplane_posterior_delta_millionths".to_string(),
+            record.posterior_delta_millionths.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_log_likelihood_ratio_millionths".to_string(),
+            record.log_likelihood_ratio_millionths.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_instruction_count".to_string(),
+            record.hook_context.instruction_count.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_ip".to_string(),
+            record.hook_context.current_ip.to_string(),
+        );
+        builder = builder.meta(
+            "guardplane_hook_extension_id".to_string(),
+            record.hook_context.extension_id.clone(),
+        );
+
+        match &record.operation {
+            GuardplaneOperation::PropertyAccess { key } => {
+                builder = builder.meta("guardplane_property_key".to_string(), key.clone());
+            }
+            GuardplaneOperation::Call {
+                callee_name,
+                arg_count,
+            } => {
+                if let Some(name) = callee_name {
+                    builder = builder.meta("guardplane_callee_name".to_string(), name.clone());
+                }
+                builder = builder.meta("guardplane_arg_count".to_string(), arg_count.to_string());
+            }
+            GuardplaneOperation::Allocation { kind, size_hint } => {
+                builder = builder.meta("guardplane_alloc_kind".to_string(), format!("{kind:?}"));
+                builder = builder.meta("guardplane_size_hint".to_string(), size_hint.to_string());
+            }
+            GuardplaneOperation::Import { specifier } => {
+                builder =
+                    builder.meta("guardplane_import_specifier".to_string(), specifier.clone());
+            }
+        }
+
+        Ok(builder.build()?)
     }
 
     fn update_adaptive_router(
@@ -1822,6 +1981,34 @@ fn format_guardplane_hook_action(action: &crate::baseline_interpreter::HookActio
         crate::baseline_interpreter::HookAction::Quarantine(reason) => {
             format!("quarantine:{reason}")
         }
+    }
+}
+
+fn guardplane_operation_label(operation: &GuardplaneOperation) -> &'static str {
+    match operation {
+        GuardplaneOperation::PropertyAccess { .. } => "property_access",
+        GuardplaneOperation::Call { .. } => "call",
+        GuardplaneOperation::Allocation { .. } => "allocation",
+        GuardplaneOperation::Import { .. } => "import",
+    }
+}
+
+fn guardplane_operation_witness_value(operation: &GuardplaneOperation) -> String {
+    match operation {
+        GuardplaneOperation::PropertyAccess { key } => {
+            format!("property_access key={key}")
+        }
+        GuardplaneOperation::Call {
+            callee_name,
+            arg_count,
+        } => {
+            let name = callee_name.as_deref().unwrap_or("<anonymous>");
+            format!("call callee={name} args={arg_count}")
+        }
+        GuardplaneOperation::Allocation { kind, size_hint } => {
+            format!("allocation kind={kind:?} size_hint={size_hint}")
+        }
+        GuardplaneOperation::Import { specifier } => format!("import specifier={specifier}"),
     }
 }
 
@@ -2694,6 +2881,23 @@ mod tests {
                 .get("guardplane_hook_enabled")
                 .map(String::as_str),
             Some("true")
+        );
+        assert!(
+            result.evidence_entries[0]
+                .metadata
+                .get("hook_requested_action")
+                .is_some(),
+            "hook-requested action should be recorded in evidence metadata"
+        );
+
+        let guardplane_entries: Vec<_> = result
+            .evidence_entries
+            .iter()
+            .filter(|entry| entry.metadata.get("guardplane_decision_index").is_some())
+            .collect();
+        assert!(
+            !guardplane_entries.is_empty(),
+            "guardplane decisions should emit evidence entries"
         );
     }
 

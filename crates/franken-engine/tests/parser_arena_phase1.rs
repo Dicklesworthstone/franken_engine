@@ -19,9 +19,8 @@ mod ast {
 mod parser_arena;
 
 use ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration,
+    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
+    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
     VariableDeclarationKind, VariableDeclarator,
 };
 use parser_arena::{

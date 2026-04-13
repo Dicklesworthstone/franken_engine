@@ -35,6 +35,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ast::ParseGoal;
+use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
@@ -536,7 +537,9 @@ impl ScopeFrame {
     }
 
     fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
-        if kind == BindingKind::Var && let Some(existing) = self.bindings.get(&name) {
+        if kind == BindingKind::Var
+            && let Some(existing) = self.bindings.get(&name)
+        {
             return Some(existing.clone());
         }
         let initialized = kind.is_hoisted();
@@ -963,7 +966,7 @@ pub struct InterpreterConfig {
     /// Optional module root used for resolving relative import specifiers.
     pub module_root: Option<String>,
     /// Set of capabilities granted to this execution context.
-    pub granted_capabilities: Vec<String>,
+    pub granted_capabilities: BTreeSet<RuntimeCapability>,
 }
 
 impl InterpreterConfig {
@@ -978,7 +981,7 @@ impl InterpreterConfig {
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
-            granted_capabilities: Vec::new(),
+            granted_capabilities: BTreeSet::new(),
         }
     }
 
@@ -993,7 +996,7 @@ impl InterpreterConfig {
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
-            granted_capabilities: Vec::new(),
+            granted_capabilities: BTreeSet::new(),
         }
     }
 
@@ -1008,7 +1011,7 @@ impl InterpreterConfig {
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
-            granted_capabilities: Vec::new(),
+            granted_capabilities: BTreeSet::new(),
         }
     }
 
@@ -1023,7 +1026,7 @@ impl InterpreterConfig {
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
-            granted_capabilities: Vec::new(),
+            granted_capabilities: BTreeSet::new(),
         }
     }
 }
@@ -1084,6 +1087,38 @@ struct ModuleExecutionSnapshot {
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Promise combinator state (Promise.all / race / allSettled / any)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+enum PromiseCombinatorState {
+    All(crate::promise_model::PromiseAllTracker),
+    AllSettled(crate::promise_model::PromiseAllSettledTracker),
+    Race(crate::promise_model::PromiseRaceTracker),
+    Any(crate::promise_model::PromiseAnyTracker),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PromiseCombinatorKind {
+    All,
+    AllSettled,
+    Race,
+    Any,
+}
+
+#[derive(Debug, Clone)]
+struct PromiseCombinatorWatcher {
+    combinator_id: u64,
+    index: u32,
+}
+
+#[derive(Debug, Clone)]
+enum PromiseSettlement {
+    Fulfilled(crate::object_model::JsValue),
+    Rejected(crate::object_model::JsValue),
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,8 +1187,15 @@ pub struct InterpreterCore {
     generators: Vec<GeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
-    /// Microtask queue for deterministic promise reaction scheduling.
-    microtask_queue: crate::promise_model::MicrotaskQueue,
+    /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
+    event_loop: crate::promise_model::EventLoop,
+    /// Active promise combinator trackers keyed by combinator id.
+    promise_combinators: BTreeMap<u64, PromiseCombinatorState>,
+    /// Watchers keyed by promise handle for combinator updates.
+    promise_combinator_watchers:
+        BTreeMap<crate::promise_model::PromiseHandle, Vec<PromiseCombinatorWatcher>>,
+    /// Monotonic combinator id generator.
+    next_promise_combinator_id: u64,
     /// Module registry/cache for ImportModule execution.
     module_state: ModuleState,
     /// Active CommonJS module context, if currently evaluating a CJS module.
@@ -1195,7 +1237,10 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
-            microtask_queue: crate::promise_model::MicrotaskQueue::new(),
+            event_loop: crate::promise_model::EventLoop::new(),
+            promise_combinators: BTreeMap::new(),
+            promise_combinator_watchers: BTreeMap::new(),
+            next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             active_cjs_context: None,
             current_module_specifier: None,
@@ -1328,6 +1373,9 @@ impl InterpreterCore {
         self.module_state = ModuleState::new();
         self.active_cjs_context = None;
         self.current_module_specifier = None;
+        self.promise_combinators.clear();
+        self.promise_combinator_watchers.clear();
+        self.next_promise_combinator_id = 0;
     }
 
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
@@ -1387,9 +1435,8 @@ impl InterpreterCore {
         exports_object: ObjectId,
         module_specifier: Option<&str>,
     ) -> Result<(), InterpreterError> {
-        let (filename_value, dirname_value) = self.cjs_filename_dirname(
-            module_specifier.or_else(|| self.current_module_specifier.as_deref()),
-        );
+        let (filename_value, dirname_value) = self
+            .cjs_filename_dirname(module_specifier.or(self.current_module_specifier.as_deref()));
 
         let mut replaced = Vec::with_capacity(4);
         {
@@ -1502,11 +1549,9 @@ impl InterpreterCore {
         let force_directory = specifier.ends_with('/');
         let candidate = self
             .resolve_require_candidate(&resolved, force_directory)
-            .ok_or_else(|| {
-                InterpreterError::ModuleResolutionFailed {
-                    specifier: specifier.to_string(),
-                    reason: format!("module not found at {}", resolved.display()),
-                }
+            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: format!("module not found at {}", resolved.display()),
             })?;
         let canonical =
             candidate
@@ -1647,36 +1692,19 @@ impl InterpreterCore {
             "exports".to_string(),
             Value::Object(exports_object),
         )?;
-        let (filename_value, dirname_value) =
-            self.cjs_filename_dirname(Some(module_specifier));
-        self.set_object_property(
-            module_object,
-            "id".to_string(),
-            filename_value.clone(),
-        )?;
+        let (filename_value, dirname_value) = self.cjs_filename_dirname(Some(module_specifier));
+        self.set_object_property(module_object, "id".to_string(), filename_value.clone())?;
         self.set_object_property(
             module_object,
             "filename".to_string(),
             filename_value.clone(),
         )?;
-        self.set_object_property(
-            module_object,
-            "path".to_string(),
-            dirname_value.clone(),
-        )?;
+        self.set_object_property(module_object, "path".to_string(), dirname_value.clone())?;
         let parent_value = parent_module_object
             .map(Value::Object)
             .unwrap_or(Value::Null);
-        self.set_object_property(
-            module_object,
-            "parent".to_string(),
-            parent_value,
-        )?;
-        self.set_object_property(
-            module_object,
-            "loaded".to_string(),
-            Value::Bool(false),
-        )?;
+        self.set_object_property(module_object, "parent".to_string(), parent_value)?;
+        self.set_object_property(module_object, "loaded".to_string(), Value::Bool(false))?;
         let context = CjsModuleContext {
             module_object,
             exports_object,
@@ -1868,11 +1896,7 @@ impl InterpreterCore {
             self.restore_module_execution(snapshot);
             return Err(err);
         }
-        let cjs_context = match self.init_cjs_environment(
-            module,
-            specifier,
-            parent_module_object,
-        ) {
+        let cjs_context = match self.init_cjs_environment(module, specifier, parent_module_object) {
             Ok(context) => context,
             Err(err) => {
                 self.active_cjs_context = previous_cjs_context;
@@ -1907,9 +1931,7 @@ impl InterpreterCore {
         };
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
-        eval_outcome
-            .and_then(|_| finalize_outcome)
-            .and_then(|_| loaded_outcome)
+        eval_outcome.and(finalize_outcome).and(loaded_outcome)
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
@@ -2841,20 +2863,21 @@ impl InterpreterCore {
                     let is_promise_cap = capability.0.starts_with("promise:");
 
                     if !is_promise_cap {
-                        // Check capability for non-promise hostcalls.
-                        if !self
-                            .config
-                            .granted_capabilities
-                            .iter()
-                            .any(|c| c == &capability.0)
-                        {
-                            self.emit_witness(
-                                WitnessEventKind::CapabilityChecked,
-                                Some(&format!("denied:{}", capability.0)),
-                            );
-                            return Err(InterpreterError::CapabilityDenied {
-                                capability: capability.0.clone(),
-                            });
+                        // Map the CapabilityTag string to a typed RuntimeCapability.
+                        // Tags that map to a RuntimeCapability are checked against
+                        // the granted set.  Tags with no mapping are internal
+                        // dispatch tags (ifc.*, hostcall.*) emitted by the
+                        // trusted lowering pipeline and pass through.
+                        if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0) {
+                            if !self.config.granted_capabilities.contains(&required_cap) {
+                                self.emit_witness(
+                                    WitnessEventKind::CapabilityChecked,
+                                    Some(&format!("denied:{}", capability.0)),
+                                );
+                                return Err(InterpreterError::CapabilityDenied {
+                                    capability: capability.0.clone(),
+                                });
+                            }
                         }
                     }
 
@@ -4427,7 +4450,12 @@ impl InterpreterCore {
             Value::Null => crate::object_model::JsValue::Null,
             Value::Bool(b) => crate::object_model::JsValue::Bool(*b),
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
+            Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
             Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
+            Value::Object(id) => crate::object_model::JsValue::Object(
+                crate::object_model::ObjectHandle(id.0),
+            ),
+            Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
             _ => crate::object_model::JsValue::Str(val.to_string()),
         }
     }
@@ -4441,9 +4469,477 @@ impl InterpreterCore {
             crate::object_model::JsValue::Bool(b) => Value::Bool(*b),
             crate::object_model::JsValue::Int(n) => Value::Int(*n),
             crate::object_model::JsValue::Str(s) => Value::Str(s.clone()),
-            _ => Value::Str(format!("{jv:?}")),
+            crate::object_model::JsValue::Float(bits) => {
+                Value::Float(Float64::new(f64::from_bits(*bits)))
+            }
+            crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
+            crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
+            crate::object_model::JsValue::Symbol(sym) => {
+                Value::Str(format!("Symbol({})", sym.0))
+            }
         }
     }
+
+    fn collect_promise_combinator_inputs(
+        &self,
+        args: RegRange,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if args.count == 0 {
+            return Ok(Vec::new());
+        }
+        let first = self.read_reg(args.start)?;
+        if args.count == 1 {
+            if let Value::Object(id) = first {
+                return Ok(self.read_array_like_values(id));
+            }
+            return Ok(vec![first]);
+        }
+        let mut values = Vec::with_capacity(args.count as usize);
+        for i in 0..args.count {
+            values.push(self.read_reg(args.start + i)?);
+        }
+        Ok(values)
+    }
+
+    fn read_array_like_values(&self, obj_id: ObjectId) -> Vec<Value> {
+        self.heap
+            .get(obj_id.0 as usize)
+            .map(|obj| {
+                let mut values = Vec::new();
+                let mut idx = 0u32;
+                while let Some(val) = obj.properties.get(&idx.to_string()) {
+                    values.push(val.clone());
+                    idx += 1;
+                }
+                values
+            })
+            .unwrap_or_default()
+    }
+
+    fn alloc_array_from_values(
+        &mut self,
+        values: &[Value],
+    ) -> Result<ObjectId, InterpreterError> {
+        let id = self.alloc_object_with_prototype(None)?;
+        for (index, value) in values.iter().cloned().enumerate() {
+            self.set_object_property(id, index.to_string(), value)?;
+        }
+        self.set_object_property(id, "length".to_string(), Value::Int(values.len() as i64))?;
+        Ok(id)
+    }
+
+    fn alloc_object_with_properties(
+        &mut self,
+        props: &[(&str, Value)],
+    ) -> Result<ObjectId, InterpreterError> {
+        let id = self.alloc_object_with_prototype(None)?;
+        for (key, value) in props {
+            self.set_object_property(id, (*key).to_string(), value.clone())?;
+        }
+        Ok(id)
+    }
+
+    fn build_promise_all_result(
+        &mut self,
+        values: Vec<crate::object_model::JsValue>,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let value_objs: Vec<Value> = values.iter().map(Self::js_value_to_value).collect();
+        let array_id = self.alloc_array_from_values(&value_objs)?;
+        Ok(Self::value_to_js_value(&Value::Object(array_id)))
+    }
+
+    fn build_promise_all_settled_result(
+        &mut self,
+        outcomes: BTreeMap<u32, crate::promise_model::SettledOutcome>,
+        total: u32,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let mut items = Vec::with_capacity(total as usize);
+        for index in 0..total {
+            let outcome = outcomes
+                .get(&index)
+                .cloned()
+                .unwrap_or(crate::promise_model::SettledOutcome {
+                    status: "fulfilled".into(),
+                    value: crate::object_model::JsValue::Undefined,
+                });
+            let value = Self::js_value_to_value(&outcome.value);
+            let mut props = vec![("status", Value::Str(outcome.status.clone()))];
+            if outcome.status == "fulfilled" {
+                props.push(("value", value));
+            } else {
+                props.push(("reason", value));
+            }
+            let obj_id = self.alloc_object_with_properties(&props)?;
+            items.push(Value::Object(obj_id));
+        }
+        let array_id = self.alloc_array_from_values(&items)?;
+        Ok(Self::value_to_js_value(&Value::Object(array_id)))
+    }
+
+    fn build_aggregate_error(
+        &mut self,
+        errors: Vec<crate::object_model::JsValue>,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let error_values: Vec<Value> = errors.iter().map(Self::js_value_to_value).collect();
+        let errors_array = self.alloc_array_from_values(&error_values)?;
+        let error_id = self.alloc_object_with_properties(&[
+            ("name", Value::Str("AggregateError".into())),
+            ("message", Value::Str("All promises were rejected".into())),
+            ("errors", Value::Object(errors_array)),
+        ])?;
+        Ok(Self::value_to_js_value(&Value::Object(error_id)))
+    }
+
+    fn register_combinator(&mut self, state: PromiseCombinatorState) -> u64 {
+        let id = self.next_promise_combinator_id;
+        self.next_promise_combinator_id = self.next_promise_combinator_id.saturating_add(1);
+        self.promise_combinators.insert(id, state);
+        id
+    }
+
+    fn add_combinator_watcher(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        watcher: PromiseCombinatorWatcher,
+    ) {
+        self.promise_combinator_watchers
+            .entry(handle)
+            .or_default()
+            .push(watcher);
+    }
+
+    fn fulfill_promise(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        value: crate::object_model::JsValue,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.promise_store
+            .fulfill(handle, value.clone(), label.clone(), &mut self.event_loop.microtasks)
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "pending promise".to_string(),
+                got: e.to_string(),
+            })?;
+        self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)?;
+        Ok(())
+    }
+
+    fn reject_promise(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        reason: crate::object_model::JsValue,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        self.promise_store
+            .reject(handle, reason.clone(), label.clone(), &mut self.event_loop.microtasks)
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "pending promise".to_string(),
+                got: e.to_string(),
+            })?;
+        self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)?;
+        Ok(())
+    }
+
+    fn notify_promise_settled(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        settlement: PromiseSettlement,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let watchers = match self.promise_combinator_watchers.remove(&handle) {
+            Some(watchers) => watchers,
+            None => return Ok(()),
+        };
+        for watcher in watchers {
+            match &settlement {
+                PromiseSettlement::Fulfilled(value) => self
+                    .update_combinator_fulfillment(
+                        watcher.combinator_id,
+                        watcher.index,
+                        value.clone(),
+                        label.clone(),
+                    )?,
+                PromiseSettlement::Rejected(reason) => self.update_combinator_rejection(
+                    watcher.combinator_id,
+                    watcher.index,
+                    reason.clone(),
+                    label.clone(),
+                )?,
+            }
+        }
+        Ok(())
+    }
+
+    fn update_combinator_fulfillment(
+        &mut self,
+        combinator_id: u64,
+        index: u32,
+        value: crate::object_model::JsValue,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        enum ResolutionData {
+            Fulfill(crate::promise_model::PromiseHandle, crate::object_model::JsValue),
+            FulfillAll(crate::promise_model::PromiseHandle, Vec<crate::object_model::JsValue>),
+            FulfillAllSettled(
+                crate::promise_model::PromiseHandle,
+                BTreeMap<u32, crate::promise_model::SettledOutcome>,
+                u32,
+            ),
+        }
+
+        let mut resolution: Option<ResolutionData> = None;
+        if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            match state {
+                PromiseCombinatorState::All(tracker) => {
+                    if tracker.settled {
+                        return Ok(());
+                    }
+                    if tracker.record_fulfillment(index, value) {
+                        tracker.mark_settled();
+                        let collected = tracker.collect_values();
+                        resolution =
+                            Some(ResolutionData::FulfillAll(tracker.result_promise, collected));
+                    }
+                }
+                PromiseCombinatorState::AllSettled(tracker) => {
+                    if tracker.record_fulfillment(index, value) {
+                        resolution = Some(ResolutionData::FulfillAllSettled(
+                            tracker.result_promise,
+                            tracker.outcomes.clone(),
+                            tracker.total,
+                        ));
+                    }
+                }
+                PromiseCombinatorState::Race(tracker) => {
+                    if tracker.try_settle() {
+                        resolution =
+                            Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                    }
+                }
+                PromiseCombinatorState::Any(tracker) => {
+                    if tracker.settled {
+                        return Ok(());
+                    }
+                    tracker.mark_settled();
+                    resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                }
+            }
+        }
+
+        if let Some(resolution) = resolution {
+            let (handle, value) = match resolution {
+                ResolutionData::Fulfill(handle, value) => (handle, value),
+                ResolutionData::FulfillAll(handle, values) => {
+                    let value = self.build_promise_all_result(values)?;
+                    (handle, value)
+                }
+                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
+                    let value = self.build_promise_all_settled_result(outcomes, total)?;
+                    (handle, value)
+                }
+            };
+            self.fulfill_promise(handle, value, label)?;
+            self.promise_combinators.remove(&combinator_id);
+        }
+        Ok(())
+    }
+
+    fn update_combinator_rejection(
+        &mut self,
+        combinator_id: u64,
+        index: u32,
+        reason: crate::object_model::JsValue,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        enum ResolutionData {
+            FulfillAllSettled(
+                crate::promise_model::PromiseHandle,
+                BTreeMap<u32, crate::promise_model::SettledOutcome>,
+                u32,
+            ),
+            Reject(crate::promise_model::PromiseHandle, crate::object_model::JsValue),
+            RejectAny(crate::promise_model::PromiseHandle, Vec<crate::object_model::JsValue>),
+        }
+
+        let mut resolution: Option<ResolutionData> = None;
+        if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
+            match state {
+                PromiseCombinatorState::All(tracker) => {
+                    if tracker.settled {
+                        return Ok(());
+                    }
+                    tracker.mark_settled();
+                    resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                }
+                PromiseCombinatorState::AllSettled(tracker) => {
+                    if tracker.record_rejection(index, reason) {
+                        resolution = Some(ResolutionData::FulfillAllSettled(
+                            tracker.result_promise,
+                            tracker.outcomes.clone(),
+                            tracker.total,
+                        ));
+                    }
+                }
+                PromiseCombinatorState::Race(tracker) => {
+                    if tracker.try_settle() {
+                        resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                    }
+                }
+                PromiseCombinatorState::Any(tracker) => {
+                    if tracker.settled {
+                        return Ok(());
+                    }
+                    if tracker.record_rejection(index, reason) {
+                        tracker.mark_settled();
+                        let errors = tracker.collect_errors();
+                        resolution = Some(ResolutionData::RejectAny(tracker.result_promise, errors));
+                    }
+                }
+            }
+        }
+
+        if let Some(resolution) = resolution {
+            match resolution {
+                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
+                    let value = self.build_promise_all_settled_result(outcomes, total)?;
+                    self.fulfill_promise(handle, value, label)?;
+                }
+                ResolutionData::Reject(handle, reason) => {
+                    self.reject_promise(handle, reason, label)?;
+                }
+                ResolutionData::RejectAny(handle, errors) => {
+                    let aggregate = self.build_aggregate_error(errors)?;
+                    self.reject_promise(handle, aggregate, label)?;
+                }
+            }
+            self.promise_combinators.remove(&combinator_id);
+        }
+        Ok(())
+    }
+
+    fn dispatch_promise_combinator(
+        &mut self,
+        kind: PromiseCombinatorKind,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let label = crate::ifc_artifacts::Label::Public;
+        let inputs = self.collect_promise_combinator_inputs(args)?;
+        let total = inputs.len() as u32;
+        let result_promise = self.promise_store.create();
+
+        match kind {
+            PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
+                let empty =
+                    self.build_promise_all_result(Vec::new())?;
+                self.fulfill_promise(result_promise, empty, label)?;
+                return Ok(Value::Promise(result_promise.0));
+            }
+            PromiseCombinatorKind::Any if total == 0 => {
+                let aggregate = self.build_aggregate_error(Vec::new())?;
+                self.reject_promise(result_promise, aggregate, label)?;
+                return Ok(Value::Promise(result_promise.0));
+            }
+            PromiseCombinatorKind::Race if total == 0 => {
+                return Ok(Value::Promise(result_promise.0));
+            }
+            _ => {}
+        }
+
+        let state = match kind {
+            PromiseCombinatorKind::All => PromiseCombinatorState::All(
+                crate::promise_model::PromiseAllTracker {
+                    result_promise,
+                    values: BTreeMap::new(),
+                    total,
+                    resolved_count: 0,
+                    settled: false,
+                },
+            ),
+            PromiseCombinatorKind::AllSettled => PromiseCombinatorState::AllSettled(
+                crate::promise_model::PromiseAllSettledTracker {
+                    result_promise,
+                    outcomes: BTreeMap::new(),
+                    total,
+                    settled_count: 0,
+                },
+            ),
+            PromiseCombinatorKind::Race => PromiseCombinatorState::Race(
+                crate::promise_model::PromiseRaceTracker {
+                    result_promise,
+                    settled: false,
+                },
+            ),
+            PromiseCombinatorKind::Any => PromiseCombinatorState::Any(
+                crate::promise_model::PromiseAnyTracker {
+                    result_promise,
+                    errors: BTreeMap::new(),
+                    total,
+                    rejected_count: 0,
+                    settled: false,
+                },
+            ),
+        };
+
+        let combinator_id = self.register_combinator(state);
+
+        for (index, input) in inputs.into_iter().enumerate() {
+            if !self.promise_combinators.contains_key(&combinator_id) {
+                break;
+            }
+            let index = index as u32;
+            match input {
+                Value::Promise(handle) => {
+                    let promise_handle = crate::promise_model::PromiseHandle(handle);
+                    let record = self
+                        .promise_store
+                        .get(promise_handle)
+                        .map_err(|e| InterpreterError::TypeError {
+                            expected: "promise".to_string(),
+                            got: e.to_string(),
+                        })?;
+                    match &record.state {
+                        crate::promise_model::PromiseState::Pending => {
+                            self.add_combinator_watcher(
+                                promise_handle,
+                                PromiseCombinatorWatcher {
+                                    combinator_id,
+                                    index,
+                                },
+                            );
+                        }
+                        crate::promise_model::PromiseState::Fulfilled(value) => {
+                            self.update_combinator_fulfillment(
+                                combinator_id,
+                                index,
+                                value.clone(),
+                                record.label.clone(),
+                            )?;
+                        }
+                        crate::promise_model::PromiseState::Rejected(reason) => {
+                            self.update_combinator_rejection(
+                                combinator_id,
+                                index,
+                                reason.clone(),
+                                record.label.clone(),
+                            )?;
+                        }
+                    }
+                }
+                other => {
+                    let js_val = Self::value_to_js_value(&other);
+                    self.update_combinator_fulfillment(
+                        combinator_id,
+                        index,
+                        js_val,
+                        label.clone(),
+                    )?;
+                }
+            }
+        }
+
+        Ok(Value::Promise(result_promise.0))
+    }
+
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
     ///
@@ -4459,8 +4955,10 @@ impl InterpreterCore {
     ///   arg0 = promise handle value.
     /// - `promise:finally` — register a finally handler.
     ///   arg0 = promise handle value.
-    /// - `promise:all` — create a Promise.all aggregate (simplified).
-    /// - `promise:race` — create a Promise.race aggregate (simplified).
+    /// - `promise:all` — create a Promise.all aggregate.
+    /// - `promise:race` — create a Promise.race aggregate.
+    /// - `promise:allSettled` — create a Promise.allSettled aggregate.
+    /// - `promise:any` — create a Promise.any aggregate.
     fn dispatch_promise_hostcall(
         &mut self,
         cap: &str,
@@ -4491,20 +4989,14 @@ impl InterpreterCore {
                         };
                         let js_val = Self::value_to_js_value(&val);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.promise_store
-                            .fulfill(handle, js_val, label, &mut self.microtask_queue)
-                            .map_err(|e| InterpreterError::TypeError {
-                                expected: "pending promise".to_string(),
-                                got: e.to_string(),
-                            })?;
+                        self.fulfill_promise(handle, js_val, label.clone())?;
                         Ok(Value::Promise(h))
                     }
                     _ => {
                         // Promise.resolve(value) — create a pre-resolved promise.
                         let js_val = Self::value_to_js_value(&arg0);
-                        let handle =
-                            self.promise_store
-                                .resolve(js_val, label, &mut self.microtask_queue);
+                        let handle = self.promise_store.create();
+                        self.fulfill_promise(handle, js_val, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -4524,22 +5016,14 @@ impl InterpreterCore {
                         };
                         let js_reason = Self::value_to_js_value(&reason);
                         let handle = crate::promise_model::PromiseHandle(h);
-                        self.promise_store
-                            .reject(handle, js_reason, label, &mut self.microtask_queue)
-                            .map_err(|e| InterpreterError::TypeError {
-                                expected: "pending promise".to_string(),
-                                got: e.to_string(),
-                            })?;
+                        self.reject_promise(handle, js_reason, label.clone())?;
                         Ok(Value::Promise(h))
                     }
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
                         let js_reason = Self::value_to_js_value(&arg0);
-                        let handle = self.promise_store.reject_with(
-                            js_reason,
-                            label,
-                            &mut self.microtask_queue,
-                        );
+                        let handle = self.promise_store.create();
+                        self.reject_promise(handle, js_reason, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -4568,7 +5052,7 @@ impl InterpreterCore {
                 // we register reactions with no closure handlers (identity propagation).
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
@@ -4596,7 +5080,7 @@ impl InterpreterCore {
                 };
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
@@ -4624,20 +5108,19 @@ impl InterpreterCore {
                 };
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
                     })?;
                 Ok(Value::Promise(result.0))
             }
-            "promise:all" | "promise:race" => {
-                // Simplified: create a pending promise that tracks the aggregate.
-                // Full semantics require iterating over the input promises and
-                // registering reactions — deferred to a follow-up bead.
-                let handle = self.promise_store.create();
-                Ok(Value::Promise(handle.0))
+            "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
+            "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
+            "promise:allSettled" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)
             }
+            "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
             _ => {
                 // Unknown promise sub-capability — return undefined.
                 Ok(Value::Undefined)
@@ -4655,7 +5138,7 @@ impl InterpreterCore {
         let mut drained = 0u32;
         let label = crate::ifc_artifacts::Label::Public;
 
-        while let Some(task) = self.microtask_queue.dequeue() {
+        while let Some(task) = self.event_loop.microtasks.dequeue() {
             drained += 1;
             if drained >= max_drain {
                 break;
@@ -4669,12 +5152,7 @@ impl InterpreterCore {
                 } => {
                     // With no closure handler, the identity transform propagates
                     // the argument to the result promise as a fulfillment value.
-                    let _ = self.promise_store.fulfill(
-                        result_promise,
-                        argument,
-                        label.clone(),
-                        &mut self.microtask_queue,
-                    );
+                    let _ = self.fulfill_promise(result_promise, argument, label.clone());
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
@@ -4685,16 +5163,15 @@ impl InterpreterCore {
                     // Simplified: resolve with undefined (full thenable
                     // unwrapping requires closure execution which is a
                     // follow-up bead).
-                    let _ = self.promise_store.fulfill(
+                    let _ = self.fulfill_promise(
                         promise,
                         crate::object_model::JsValue::Undefined,
                         label.clone(),
-                        &mut self.microtask_queue,
                     );
                 }
             }
         }
-        self.microtask_queue.compact();
+        self.event_loop.microtasks.compact();
     }
 
     fn property_key(value: &Value) -> String {
@@ -4885,7 +5362,7 @@ impl InterpreterCore {
                         // Safe integer range: -(2^53 - 1) to (2^53 - 1)
                         const MAX_SAFE: i64 = (1i64 << 53) - 1;
                         const MIN_SAFE: i64 = -MAX_SAFE;
-                        Ok(Value::Bool(n >= MIN_SAFE && n <= MAX_SAFE))
+                        Ok(Value::Bool((MIN_SAFE..=MAX_SAFE).contains(&n)))
                     }
                     Value::Float(f) => {
                         let v = f.inner();
@@ -4893,7 +5370,7 @@ impl InterpreterCore {
                             return Ok(Value::Bool(false));
                         }
                         const MAX_SAFE: f64 = ((1i64 << 53) - 1) as f64;
-                        Ok(Value::Bool(v >= -MAX_SAFE && v <= MAX_SAFE))
+                        Ok(Value::Bool((-MAX_SAFE..=MAX_SAFE).contains(&v)))
                     }
                     _ => Ok(Value::Bool(false)),
                 }
@@ -6680,7 +7157,7 @@ mod tests {
             Ir3Instruction::Halt,
         ]);
         let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = vec!["network".to_string()];
+        config.granted_capabilities = BTreeSet::from([RuntimeCapability::NetworkEgress]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
@@ -6719,7 +7196,7 @@ mod tests {
         m.required_capabilities = vec![CapabilityTag("fs".to_string())];
 
         let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = vec!["fs".to_string()];
+        config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
 

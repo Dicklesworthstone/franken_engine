@@ -1222,6 +1222,8 @@ fn comparison_environment_snapshot(
     pins: &BenchmarkRuntimePins,
     runtime: RuntimeId,
 ) -> EnvironmentSnapshot {
+    let cpu_model = host_cpu_model().unwrap_or_else(|| env::consts::ARCH.to_string());
+    let memory_bytes = host_memory_bytes().unwrap_or(0);
     let mut extra = BTreeMap::new();
     extra.insert("runtime_target".to_string(), runtime.as_str().to_string());
     extra.insert(
@@ -1230,15 +1232,48 @@ fn comparison_environment_snapshot(
     );
     EnvironmentSnapshot::new(
         env::consts::OS.to_string(),
-        env::consts::ARCH.to_string(),
+        cpu_model,
         std::thread::available_parallelism()
             .map(|parallelism| parallelism.get() as u32)
             .unwrap_or(1),
-        0,
-        "benchmark-comparison-suite".to_string(),
+        memory_bytes,
+        comparison_runtime_version_pin(pins, runtime).to_string(),
         pins.franken_engine.clone(),
         extra,
     )
+}
+
+fn host_cpu_model() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let cpuinfo = fs::read_to_string("/proc/cpuinfo").ok()?;
+    for line in cpuinfo.lines() {
+        let (label, value) = line.split_once(':')?;
+        let key = label.trim();
+        if key == "model name" || key == "Hardware" || key == "Processor" {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn host_memory_bytes() -> Option<u64> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let meminfo = fs::read_to_string("/proc/meminfo").ok()?;
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            let mut parts = rest.split_whitespace();
+            let kb: u64 = parts.next()?.parse().ok()?;
+            return kb.checked_mul(1024);
+        }
+    }
+    None
 }
 
 fn comparison_parity_target(runtime: RuntimeId) -> Option<ParityTarget> {

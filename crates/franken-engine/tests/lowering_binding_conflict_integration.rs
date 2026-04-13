@@ -23,9 +23,9 @@
 )]
 
 use frankenengine_engine::ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
+    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{

@@ -139,7 +139,7 @@ impl GuardplaneExtensionContext {
     }
 
     pub fn instruction_hooks_enabled(&self) -> bool {
-        metadata_lookup(
+        if metadata_lookup(
             &self.metadata,
             &[
                 "guardplane.enable_instruction_hooks",
@@ -147,10 +147,18 @@ impl GuardplaneExtensionContext {
             ],
         )
         .is_some_and(parse_boolish)
-            || !self.required_capabilities.is_empty()
-            || !self.denied_capabilities.is_empty()
-            || self.witness_confidence_millionths > 0
-            || self.trust_level != GuardplaneTrustLevel::Unknown
+            || self.witness_declared()
+        {
+            return true;
+        }
+
+        matches!(
+            self.trust_level,
+            GuardplaneTrustLevel::Provisional
+                | GuardplaneTrustLevel::Suspicious
+                | GuardplaneTrustLevel::Compromised
+                | GuardplaneTrustLevel::Revoked
+        )
     }
 
     fn witness_declared(&self) -> bool {
@@ -721,7 +729,16 @@ mod tests {
         let disabled = context_with_metadata(&[]);
         assert!(!disabled.instruction_hooks_enabled());
 
-        let enabled = context_with_metadata(&[("capability_witness.trust_level", "signed")]);
-        assert!(enabled.instruction_hooks_enabled());
+        let trusted = context_with_metadata(&[("capability_witness.trust_level", "signed")]);
+        assert!(!trusted.instruction_hooks_enabled());
+
+        let suspicious = context_with_metadata(&[("capability_witness.trust_level", "suspicious")]);
+        assert!(suspicious.instruction_hooks_enabled());
+
+        let explicit = context_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "signed"),
+        ]);
+        assert!(explicit.instruction_hooks_enabled());
     }
 }

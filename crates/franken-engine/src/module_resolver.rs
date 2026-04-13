@@ -2408,7 +2408,6 @@ mod tests {
         assert!(error.probe_sequence.is_empty());
     }
 
-
     #[test]
     fn external_package_root_strips_extension_probe_entry_suffix() {
         assert_eq!(external_package_root("pkg.js"), "pkg");
@@ -2941,17 +2940,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_skips_mjs_probes() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -2983,17 +2978,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_esm_js_returns_err_require_esm() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3021,8 +3012,6 @@ mod tests {
         );
     }
 
-
-    
     #[test]
     fn node_compat_external_relative_require_explicit_mjs_returns_err_require_esm() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
@@ -3057,8 +3046,6 @@ mod tests {
         assert_eq!(error.probe_sequence, vec!["pkg/lib.mjs"]);
     }
 
-
-    
     #[test]
     fn node_compat_external_relative_require_explicit_js_esm_returns_err_require_esm() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
@@ -3092,7 +3079,6 @@ mod tests {
         assert!(error.message.contains("pkg/lib.js"));
         assert_eq!(error.probe_sequence, vec!["pkg/lib.js"]);
     }
-
 
     #[test]
     fn node_compat_external_relative_require_explicit_js_cjs_resolves() {
@@ -3128,7 +3114,6 @@ mod tests {
         assert_eq!(outcome.module.probe_sequence, vec!["pkg/lib.js"]);
     }
 
-
     #[test]
     fn bun_compat_external_relative_require_explicit_mjs_resolves() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
@@ -3163,8 +3148,6 @@ mod tests {
         assert_eq!(outcome.module.probe_sequence, vec!["pkg/lib.mjs"]);
     }
 
-
-    
     #[test]
     fn bun_compat_external_relative_require_explicit_js_esm_resolves() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
@@ -3198,7 +3181,6 @@ mod tests {
         assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
         assert_eq!(outcome.module.probe_sequence, vec!["pkg/lib.js"]);
     }
-
 
     #[test]
     fn bun_compat_external_relative_require_explicit_js_cjs_resolves() {
@@ -3234,17 +3216,13 @@ mod tests {
         assert_eq!(outcome.module.probe_sequence, vec!["pkg/lib.js"]);
     }
 
-
     #[test]
     fn node_compat_external_relative_require_prefers_js_over_mjs() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3277,17 +3255,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_prefers_cjs_over_js() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3320,17 +3294,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_prefers_extension_over_index() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3363,17 +3333,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_falls_back_to_index_cjs() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3400,17 +3366,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_ignores_index_mjs() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3442,17 +3404,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_falls_back_to_index_js() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3485,17 +3443,13 @@ mod tests {
         );
     }
 
-
     #[test]
     fn node_compat_external_relative_require_prefers_index_cjs_over_index_js() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -3524,15 +3478,9 @@ mod tests {
         assert_eq!(outcome.module.record.id, "external:pkg/lib/index.cjs");
         assert_eq!(
             outcome.module.probe_sequence,
-            vec![
-                "pkg/lib",
-                "pkg/lib.cjs",
-                "pkg/lib.js",
-                "pkg/lib/index.cjs",
-            ]
+            vec!["pkg/lib", "pkg/lib.cjs", "pkg/lib.js", "pkg/lib/index.cjs",]
         );
     }
-
 
     #[test]
     fn node_compat_external_relative_require_does_not_probe_index_mjs_when_index_js_present() {
@@ -3540,10 +3488,7 @@ mod tests {
         resolver
             .register_external_module(
                 "pkg/entry.cjs",
-                ModuleDefinition::new(
-                    ModuleSyntax::CommonJs,
-                    "module.exports = require('./lib');",
-                ),
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
             .unwrap();
         resolver
@@ -5096,8 +5041,11 @@ mod tests {
 
     #[test]
     fn candidate_paths_import_includes_mjs_suffixes_in_node_compat_mode() {
-        let candidates =
-            candidate_paths("/app/lib", ImportStyle::Import, CompatibilityMode::NodeCompat);
+        let candidates = candidate_paths(
+            "/app/lib",
+            ImportStyle::Import,
+            CompatibilityMode::NodeCompat,
+        );
         assert!(candidates.contains(&"/app/lib".to_string()));
         assert!(candidates.contains(&"/app/lib.mjs".to_string()));
         assert!(candidates.contains(&"/app/lib.js".to_string()));
@@ -5120,8 +5068,11 @@ mod tests {
 
     #[test]
     fn candidate_paths_require_excludes_mjs_suffixes_in_node_compat_mode() {
-        let candidates =
-            candidate_paths("/app/lib", ImportStyle::Require, CompatibilityMode::NodeCompat);
+        let candidates = candidate_paths(
+            "/app/lib",
+            ImportStyle::Require,
+            CompatibilityMode::NodeCompat,
+        );
         assert!(candidates.contains(&"/app/lib".to_string()));
         assert!(candidates.contains(&"/app/lib.cjs".to_string()));
         assert!(candidates.contains(&"/app/lib.js".to_string()));
@@ -5149,44 +5100,61 @@ mod tests {
 
     #[test]
     fn candidate_paths_import_with_explicit_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.mjs", ImportStyle::Import, CompatibilityMode::Native);
+        let candidates = candidate_paths(
+            "/app/lib.mjs",
+            ImportStyle::Import,
+            CompatibilityMode::Native,
+        );
         assert_eq!(candidates, vec!["/app/lib.mjs".to_string()]);
     }
 
     #[test]
     fn candidate_paths_require_with_explicit_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.cjs", ImportStyle::Require, CompatibilityMode::NodeCompat);
+        let candidates = candidate_paths(
+            "/app/lib.cjs",
+            ImportStyle::Require,
+            CompatibilityMode::NodeCompat,
+        );
         assert_eq!(candidates, vec!["/app/lib.cjs".to_string()]);
     }
 
     #[test]
     fn candidate_paths_import_with_explicit_cjs_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.cjs", ImportStyle::Import, CompatibilityMode::Native);
+        let candidates = candidate_paths(
+            "/app/lib.cjs",
+            ImportStyle::Import,
+            CompatibilityMode::Native,
+        );
         assert_eq!(candidates, vec!["/app/lib.cjs".to_string()]);
     }
 
     #[test]
     fn candidate_paths_require_with_explicit_mjs_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.mjs", ImportStyle::Require, CompatibilityMode::NodeCompat);
+        let candidates = candidate_paths(
+            "/app/lib.mjs",
+            ImportStyle::Require,
+            CompatibilityMode::NodeCompat,
+        );
         assert_eq!(candidates, vec!["/app/lib.mjs".to_string()]);
     }
 
-
     #[test]
     fn candidate_paths_import_with_explicit_js_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.js", ImportStyle::Import, CompatibilityMode::Native);
+        let candidates = candidate_paths(
+            "/app/lib.js",
+            ImportStyle::Import,
+            CompatibilityMode::Native,
+        );
         assert_eq!(candidates, vec!["/app/lib.js".to_string()]);
     }
 
     #[test]
     fn candidate_paths_require_with_explicit_js_extension_has_single_candidate() {
-        let candidates =
-            candidate_paths("/app/lib.js", ImportStyle::Require, CompatibilityMode::NodeCompat);
+        let candidates = candidate_paths(
+            "/app/lib.js",
+            ImportStyle::Require,
+            CompatibilityMode::NodeCompat,
+        );
         assert_eq!(candidates, vec!["/app/lib.js".to_string()]);
     }
 

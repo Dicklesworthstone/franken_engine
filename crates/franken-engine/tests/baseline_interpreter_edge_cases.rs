@@ -25,10 +25,12 @@ use frankenengine_engine::baseline_interpreter::{
     HeapObject, InterpreterConfig, InterpreterCore, InterpreterError, InterpreterEvent, LaneChoice,
     LaneReason, LaneRouter, ObjectId, QuickJsLane, V8Lane, Value,
 };
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     WitnessEventKind,
 };
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -837,7 +839,7 @@ fn hostcall_capability_granted_returns_undefined() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = InterpreterConfig::quickjs_defaults();
-    cfg.granted_capabilities = vec!["fs".into()];
+    cfg.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     assert_eq!(result.value, Value::Undefined);
@@ -854,7 +856,7 @@ fn hostcall_records_decision() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = InterpreterConfig::quickjs_defaults();
-    cfg.granted_capabilities = vec!["fs".into()];
+    cfg.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     assert_eq!(result.hostcall_decisions.len(), 1);
@@ -879,7 +881,8 @@ fn multiple_hostcalls_sequential_decisions() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = InterpreterConfig::quickjs_defaults();
-    cfg.granted_capabilities = vec!["fs".into(), "net".into()];
+    cfg.granted_capabilities =
+        BTreeSet::from([RuntimeCapability::FsRead, RuntimeCapability::NetworkEgress]);
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     assert_eq!(result.hostcall_decisions.len(), 2);
@@ -917,7 +920,7 @@ fn witness_events_from_hostcall() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = InterpreterConfig::quickjs_defaults();
-    cfg.granted_capabilities = vec!["fs".into()];
+    cfg.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     assert!(
@@ -945,7 +948,7 @@ fn witness_events_seq_numbers_increment() {
         Ir3Instruction::Halt,
     ]);
     let mut cfg = InterpreterConfig::quickjs_defaults();
-    cfg.granted_capabilities = vec!["fs".into()];
+    cfg.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(cfg);
     let result = lane.execute(&m, "test").unwrap();
     for (i, evt) in result.witness_events.iter().enumerate() {

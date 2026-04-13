@@ -132,7 +132,7 @@ fn run_handshake_program(data: &[u8]) {
         max_lifetime_ticks: 16 + u64::from(byte(data, 1)),
         max_messages: 8 + u64::from(byte(data, 2)),
         max_buffered_messages: 1 + usize::from(byte(data, 3) % 16),
-        sequence_policy: if byte(data, 4) % 2 == 0 {
+        sequence_policy: if byte(data, 4).is_multiple_of(2) {
             SequencePolicy::Monotonic
         } else {
             SequencePolicy::Strict

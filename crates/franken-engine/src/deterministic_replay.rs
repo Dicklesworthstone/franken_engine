@@ -3,6 +3,31 @@
 //! Captures minimal nondeterminism traces, replays compile/runtime decisions
 //! bit-stably, provides deterministic failover to fallback paths, and generates
 //! postmortem-ready incident artifact bundles.
+//!
+//! ## Floating-Point Replay Support
+//!
+//! Floating-point operations are captured via [`NondeterminismSource::FloatingPointResult`]
+//! because IEEE 754 implementations may diverge cross-architecture:
+//! - x87 extended precision vs SSE/AVX double precision on x86
+//! - ARM NEON rounding differences
+//! - Compiler-specific optimizations (e.g., FMA fusion)
+//!
+//! ### Operations Captured
+//! All FP arithmetic results that may diverge cross-platform should be captured:
+//! - Division, square root, transcendentals (sin, cos, exp, log, pow)
+//! - Operations on subnormal values near underflow threshold
+//!
+//! ### Trusted-Deterministic Operations
+//! These FP operations are deterministic across all IEEE 754 implementations:
+//! - Addition, subtraction, multiplication of normalized values
+//! - Comparison operations
+//! - Bitwise operations (copysign, abs)
+//! - Integer-to-float and float-to-integer conversions
+//!
+//! ### Divergence Classification
+//! - **Benign**: Same infinity (exact match)
+//! - **Warning**: Both NaN (any NaN equals any NaN for replay), 1-4 ULP difference
+//! - **Critical**: NaN vs number, opposite infinities, >4 ULP difference
 
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use serde::{Deserialize, Serialize};
@@ -473,8 +498,7 @@ fn classify_divergence(
                         signed
                     }
                 }
-                let ulp_diff =
-                    (to_ordered(exp_bits) - to_ordered(act_bits)).unsigned_abs();
+                let ulp_diff = (to_ordered(exp_bits) - to_ordered(act_bits)).unsigned_abs();
                 if ulp_diff <= 1 {
                     DivergenceSeverity::Warning
                 } else if ulp_diff <= 4 {
@@ -2969,13 +2993,13 @@ mod tests {
     #[test]
     fn replay_fp_result_returns_traced_value() {
         let mut trace = NondeterminismTrace::new("fp-replay");
-        let original = 3.14159_f64;
+        let original = std::f64::consts::PI;
         trace.capture_fp_result(original, 100, "arith");
         trace.finalise(200);
 
         let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
         // Live value differs slightly
-        let live = 3.14159_f64 + 1e-15;
+        let live = std::f64::consts::PI + 1e-15;
         let result = engine.replay_fp_result(live).unwrap();
         // Should return the traced value, not live
         assert_eq!(result, original);
@@ -3116,5 +3140,122 @@ mod tests {
                 .iter()
                 .all(|e| e.source != NondeterminismSource::FloatingPointResult)
         );
+    }
+
+    #[test]
+    fn fp_encoding_deterministic_100_iterations() {
+        // Same value encoded 100 times produces identical results (same-arch determinism)
+        let value = std::f64::consts::E;
+        let first = encode_fp_for_trace(value);
+        for _ in 0..100 {
+            let encoded = encode_fp_for_trace(value);
+            assert_eq!(encoded, first, "encoding must be deterministic");
+        }
+    }
+
+    #[test]
+    fn fp_trace_deterministic_100_captures() {
+        // Capturing the same FP value 100 times produces identical trace events
+        let value = 1.414213562373095_f64; // sqrt(2)
+        let mut traces = Vec::new();
+        for i in 0..100 {
+            let mut trace = NondeterminismTrace::new(format!("det-{}", i));
+            trace.capture_fp_result(value, 0, "sqrt");
+            traces.push(trace.events[0].value.clone());
+        }
+        let first = &traces[0];
+        for (i, t) in traces.iter().enumerate() {
+            assert_eq!(t, first, "trace {} diverged", i);
+        }
+    }
+
+    #[test]
+    fn mixed_int_float_captures_only_float() {
+        let mut trace = NondeterminismTrace::new("mixed");
+
+        // Simulate integer operations (via generic capture for non-FP sources)
+        trace.capture(
+            NondeterminismSource::LaneSelectionRandom,
+            42i64.to_le_bytes().to_vec(),
+            100,
+            "int_op",
+        );
+
+        // Simulate float operation
+        trace.capture_fp_result(3.14, 200, "float_op");
+
+        // Another integer operation
+        trace.capture(
+            NondeterminismSource::ResourceCheck,
+            100u64.to_le_bytes().to_vec(),
+            300,
+            "int_op2",
+        );
+
+        // Simulate another float operation
+        trace.capture_fp_result(2.718, 400, "float_op2");
+
+        trace.finalise(500);
+
+        // Count FP events
+        let fp_events: Vec<_> = trace
+            .events
+            .iter()
+            .filter(|e| e.source == NondeterminismSource::FloatingPointResult)
+            .collect();
+
+        // Only 2 FP events, not the integer operations
+        assert_eq!(fp_events.len(), 2);
+        assert_eq!(trace.events.len(), 4); // Total 4 events (2 int + 2 float)
+    }
+
+    #[test]
+    fn replay_fp_strict_mode_divergence_recorded() {
+        let mut trace = NondeterminismTrace::new("strict-fp");
+        let original = 1.0_f64;
+        trace.capture_fp_result(original, 100, "arith");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Live value differs by more than 1 ULP but less than a factor of 2
+        let live = 1.0_f64 + 1e-10;
+        let _ = engine.replay_fp_result(live);
+
+        // Divergence should be recorded (Warning severity for small diff)
+        assert!(!engine.divergences.is_empty());
+    }
+
+    #[test]
+    fn replay_fp_validate_mode_returns_live() {
+        let mut trace = NondeterminismTrace::new("validate-fp");
+        let original = 2.5_f64;
+        trace.capture_fp_result(original, 100, "arith");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Validate);
+        let live = 2.500001_f64;
+        let result = engine.replay_fp_result(live).unwrap();
+
+        // In Validate mode, returns live value (not traced)
+        assert_eq!(result.to_bits(), live.to_bits());
+    }
+
+    #[test]
+    fn fp_replay_best_effort_continues_on_divergence() {
+        let mut trace = NondeterminismTrace::new("best-effort-fp");
+        let original = 100.0_f64;
+        trace.capture_fp_result(original, 100, "arith");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::BestEffort);
+        // Large divergence that would be Critical
+        let live = 200.0_f64;
+        let result = engine.replay_fp_result(live);
+
+        // Should succeed (best effort continues on divergence)
+        assert!(result.is_ok());
+        // But divergence is recorded
+        assert!(!engine.divergences.is_empty());
+        assert_eq!(engine.divergences[0].severity, DivergenceSeverity::Critical);
     }
 }

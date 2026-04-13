@@ -1733,9 +1733,9 @@ impl StaticSemanticsEvent {
 mod tests {
     use super::*;
     use crate::ast::{
-        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportClause, ImportDeclaration,
-        ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
-        VariableDeclarator,
+        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportClause,
+        ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+        VariableDeclarationKind, VariableDeclarator,
     };
 
     fn span(line: u64) -> SourceSpan {

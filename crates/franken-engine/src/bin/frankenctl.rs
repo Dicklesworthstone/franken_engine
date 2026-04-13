@@ -249,6 +249,7 @@ struct BenchmarkVerifyArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReplayArgs {
     trace: PathBuf,
+    compare_trace: Option<PathBuf>,
     mode: ReplayMode,
     out: Option<PathBuf>,
 }
@@ -1587,6 +1588,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let mut trace: Option<PathBuf> = None;
+    let mut compare_trace: Option<PathBuf> = None;
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
 
@@ -1594,6 +1596,13 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--trace" => trace = Some(PathBuf::from(next_arg(args, &mut index, "--trace")?)),
+            "--compare-trace" => {
+                compare_trace = Some(PathBuf::from(next_arg(
+                    args,
+                    &mut index,
+                    "--compare-trace",
+                )?))
+            }
             "--mode" => mode = parse_replay_mode(&next_arg(args, &mut index, "--mode")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             flag => return Err(format!("unknown replay run flag `{flag}`")),
@@ -1603,6 +1612,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
 
     Ok(CommandSpec::Replay(ReplayArgs {
         trace: trace.ok_or_else(|| "replay run requires --trace <path>".to_string())?,
+        compare_trace,
         mode,
         out,
     }))
@@ -3795,15 +3805,37 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         .validate_for_replay()
         .map_err(|error| format!("replay failed before sequence 0: {error}"))?;
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
-    let replay_events = trace.events.clone();
     let session_id = trace.session_id.clone();
     let event_count = trace.events.len();
+    let replay_events = match args.compare_trace.as_ref() {
+        Some(path) => {
+            let compare_trace = load_json_file::<NondeterminismTrace>(path)?;
+            compare_trace
+                .validate_for_replay()
+                .map_err(|error| format!("replay comparison failed before sequence 0: {error}"))?;
+            compare_trace.events
+        }
+        None => {
+            if args.mode == ReplayMode::Validate {
+                return Err(
+                    "replay run in validate mode requires --compare-trace <path>".to_string(),
+                );
+            }
+            trace.events.clone()
+        }
+    };
 
     let mut engine = ReplayEngine::new(trace, args.mode);
     for event in replay_events {
         engine
             .replay_next(event.source.clone(), &event.value)
             .map_err(|error| format!("replay failed at sequence {}: {error:?}", event.sequence))?;
+    }
+    if args.compare_trace.is_some() && !engine.is_complete() {
+        return Err(format!(
+            "replay comparison ended early after {} of {} captured events",
+            engine.replayed_events, event_count
+        ));
     }
 
     let output = ReplayCommandOutput {
@@ -4188,6 +4220,34 @@ fn build_react_cli_report(
 
 fn validate_compile_artifact(artifact: &CompileArtifact) -> Vec<String> {
     let mut errors = Vec::new();
+
+    if artifact.schema_version != COMPILE_ARTIFACT_SCHEMA_VERSION {
+        errors.push(format!(
+            "schema_version mismatch: expected `{COMPILE_ARTIFACT_SCHEMA_VERSION}`, got `{}`",
+            artifact.schema_version
+        ));
+    }
+
+    if !matches!(artifact.parse_goal.as_str(), "script" | "module") {
+        errors.push(format!(
+            "parse_goal must be `script` or `module`, got `{}`",
+            artifact.parse_goal
+        ));
+    }
+
+    if artifact.source_path.trim().is_empty() {
+        errors.push("source_path must not be empty".to_string());
+    }
+
+    for (field, value) in [
+        ("trace_id", artifact.trace_id.as_str()),
+        ("decision_id", artifact.decision_id.as_str()),
+        ("policy_id", artifact.policy_id.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            errors.push(format!("{field} must not be empty"));
+        }
+    }
 
     let expected_parse_hash = artifact.parse_event_ir.canonical_hash();
     if artifact.hashes.parse_event_ir != expected_parse_hash {
@@ -4706,7 +4766,8 @@ fn usage() -> String {
         "  frankenctl benchmark score --input <publication_gate_input.json>",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
-        "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
+        "      [--mode strict|best-effort|validate] [--out <report.json>]",
         "",
         "benchmark families:",
         "  boot-storm",
@@ -4901,7 +4962,8 @@ fn replay_usage() -> String {
 fn replay_run_usage() -> String {
     [
         "replay run usage:",
-        "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
+        "      [--mode strict|best-effort|validate] [--out <report.json>]",
     ]
     .join("\n")
 }
@@ -5095,6 +5157,30 @@ mod tests {
         ];
         let parsed = parse_command(&replay).expect("replay run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReplayRun));
+    }
+
+    #[test]
+    fn parse_replay_run_command_accepts_compare_trace() {
+        let args = vec![
+            "replay".to_string(),
+            "run".to_string(),
+            "--trace".to_string(),
+            "expected.json".to_string(),
+            "--compare-trace".to_string(),
+            "candidate.json".to_string(),
+            "--mode".to_string(),
+            "validate".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("replay run should parse compare trace");
+        assert_eq!(
+            parsed,
+            CommandSpec::Replay(ReplayArgs {
+                trace: PathBuf::from("expected.json"),
+                compare_trace: Some(PathBuf::from("candidate.json")),
+                mode: ReplayMode::Validate,
+                out: None,
+            })
+        );
     }
 
     #[test]
@@ -5436,6 +5522,63 @@ mod tests {
         ];
         let error = parse_command(&args).expect_err("unknown flag should fail");
         assert_eq!(error, "unknown verify compile-artifact flag `--bogus`");
+    }
+
+    #[test]
+    fn validate_compile_artifact_rejects_schema_and_context_drift() {
+        let source = std::env::temp_dir().join(format!(
+            "frankenctl-compile-artifact-drift-{}.js",
+            current_unix_ns()
+        ));
+        let artifact_path = std::env::temp_dir().join(format!(
+            "frankenctl-compile-artifact-drift-{}.json",
+            current_unix_ns()
+        ));
+        fs::write(&source, "const answer = 40 + 2;\n").expect("source fixture should write");
+
+        execute_compile(CompileArgs {
+            input: source.clone(),
+            out: artifact_path.clone(),
+            parse_goal: ParseGoal::Script,
+            trace_id: "trace-compile-artifact-drift".to_string(),
+            decision_id: "decision-compile-artifact-drift".to_string(),
+            policy_id: "policy-compile-artifact-drift".to_string(),
+        })
+        .expect("compile should succeed");
+
+        let mut artifact =
+            load_json_file::<CompileArtifact>(&artifact_path).expect("artifact should load");
+        artifact.schema_version = "franken-engine.frankenctl.compile-artifact.v0".to_string();
+        artifact.parse_goal = "bogus".to_string();
+        artifact.trace_id.clear();
+        artifact.source_path.clear();
+
+        let errors = validate_compile_artifact(&artifact);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("schema_version mismatch")),
+            "expected schema mismatch error, got {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("parse_goal must be")),
+            "expected parse_goal validation error, got {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("trace_id")),
+            "expected trace_id validation error, got {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("source_path must not be empty")),
+            "expected source_path validation error, got {errors:?}"
+        );
+
+        let _ = fs::remove_file(source);
+        let _ = fs::remove_file(artifact_path);
     }
 
     #[test]

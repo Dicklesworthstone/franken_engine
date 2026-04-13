@@ -1,7 +1,7 @@
 use frankenengine_extension_host::{
-    canonical_manifest_json, compute_content_hash, validate_manifest,
-    validate_manifest_with_context, Capability, ExtensionManifest, ManifestValidationContext,
-    ManifestValidationError, CURRENT_ENGINE_VERSION, MAX_NAME_LEN,
+    CURRENT_ENGINE_VERSION, Capability, ExtensionManifest, MAX_NAME_LEN, ManifestValidationContext,
+    ManifestValidationError, canonical_manifest_json, compute_content_hash, validate_manifest,
+    validate_manifest_with_context,
 };
 use serde_json::json;
 use std::collections::BTreeSet;

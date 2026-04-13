@@ -58,8 +58,7 @@ pub const DEFAULT_MAX_REGRESSION: u64 = 50_000;
 /// Default maximum unresolved blocker count.
 pub const DEFAULT_MAX_UNRESOLVED: u64 = 0;
 
-const SHIPPED_REPLAY_VALIDATE_HINT: &str =
-    "frankenctl replay run --trace <trace.json> --mode validate";
+const SHIPPED_REPLAY_VALIDATE_HINT: &str = "frankenctl replay run --trace <trace.json> --compare-trace <candidate-trace.json> --mode validate";
 
 // ---------------------------------------------------------------------------
 // OracleKind

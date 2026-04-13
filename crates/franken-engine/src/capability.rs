@@ -57,6 +57,8 @@ pub enum RuntimeCapability {
     FsRead,
     /// Perform filesystem writes.
     FsWrite,
+    /// Load modules (require/import).
+    ModuleLoad,
 }
 
 impl fmt::Display for RuntimeCapability {
@@ -78,8 +80,49 @@ impl fmt::Display for RuntimeCapability {
             Self::ProcessSpawn => "process_spawn",
             Self::FsRead => "fs_read",
             Self::FsWrite => "fs_write",
+            Self::ModuleLoad => "module_load",
         };
         f.write_str(name)
+    }
+}
+
+impl RuntimeCapability {
+    /// Map a capability-tag string (as used in [`CapabilityTag`] / hostcall
+    /// dispatch) to the corresponding typed capability.
+    ///
+    /// Returns `None` for internal-only tags (e.g. `"promise:*"`) that are
+    /// not security capabilities.
+    pub fn from_tag_str(tag: &str) -> Option<Self> {
+        match tag {
+            // Canonical snake_case names (from Display)
+            "vm_dispatch" => Some(Self::VmDispatch),
+            "gc_invoke" => Some(Self::GcInvoke),
+            "ir_lowering" => Some(Self::IrLowering),
+            "policy_read" => Some(Self::PolicyRead),
+            "policy_write" => Some(Self::PolicyWrite),
+            "evidence_emit" => Some(Self::EvidenceEmit),
+            "decision_invoke" => Some(Self::DecisionInvoke),
+            "network_egress" => Some(Self::NetworkEgress),
+            "lease_management" => Some(Self::LeaseManagement),
+            "idempotency_derive" => Some(Self::IdempotencyDerive),
+            "extension_lifecycle" => Some(Self::ExtensionLifecycle),
+            "heap_allocate" => Some(Self::HeapAllocate),
+            "env_read" => Some(Self::EnvRead),
+            "process_spawn" => Some(Self::ProcessSpawn),
+            "fs_read" => Some(Self::FsRead),
+            "fs_write" => Some(Self::FsWrite),
+            "module_load" => Some(Self::ModuleLoad),
+
+            // Short aliases used in IR / tests
+            "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net.write"
+            | "network.write" => Some(Self::NetworkEgress),
+            "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
+            "fs:write" | "fs.write" => Some(Self::FsWrite),
+            "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
+
+            // Unknown / internal tags — not mapped
+            _ => None,
+        }
     }
 }
 
@@ -147,6 +190,7 @@ impl CapabilityProfile {
                 ProcessSpawn,
                 FsRead,
                 FsWrite,
+                ModuleLoad,
             ]),
         }
     }
@@ -313,7 +357,7 @@ mod tests {
     #[test]
     fn full_caps_contains_all_capabilities() {
         let full = CapabilityProfile::full();
-        assert_eq!(full.len(), 16);
+        assert_eq!(full.len(), 17);
         assert!(full.has(RuntimeCapability::VmDispatch));
         assert!(full.has(RuntimeCapability::PolicyWrite));
         assert!(full.has(RuntimeCapability::NetworkEgress));
@@ -1141,7 +1185,7 @@ mod tests {
         for cap in &all {
             assert!(full.has(*cap), "full profile should have {:?}", cap);
         }
-        assert_eq!(full.len(), 16);
+        assert_eq!(full.len(), 17);
     }
 
     #[test]
@@ -1477,5 +1521,76 @@ mod tests {
     #[test]
     fn engine_core_is_not_empty() {
         assert!(!CapabilityProfile::engine_core().is_empty());
+    }
+
+    // -- from_tag_str mapping --
+
+    #[test]
+    fn from_tag_str_canonical_names() {
+        assert_eq!(
+            RuntimeCapability::from_tag_str("vm_dispatch"),
+            Some(RuntimeCapability::VmDispatch)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("fs_read"),
+            Some(RuntimeCapability::FsRead)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("network_egress"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("module_load"),
+            Some(RuntimeCapability::ModuleLoad)
+        );
+    }
+
+    #[test]
+    fn from_tag_str_short_aliases() {
+        assert_eq!(
+            RuntimeCapability::from_tag_str("network"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("net"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("fs"),
+            Some(RuntimeCapability::FsRead)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("fs:read"),
+            Some(RuntimeCapability::FsRead)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("fs:write"),
+            Some(RuntimeCapability::FsWrite)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("net:connect"),
+            Some(RuntimeCapability::NetworkEgress)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("module:require"),
+            Some(RuntimeCapability::ModuleLoad)
+        );
+        assert_eq!(
+            RuntimeCapability::from_tag_str("module:import"),
+            Some(RuntimeCapability::ModuleLoad)
+        );
+    }
+
+    #[test]
+    fn from_tag_str_unknown_returns_none() {
+        assert_eq!(RuntimeCapability::from_tag_str("promise:resolve"), None);
+        assert_eq!(RuntimeCapability::from_tag_str("unknown"), None);
+        assert_eq!(RuntimeCapability::from_tag_str(""), None);
+    }
+
+    #[test]
+    fn full_profile_includes_module_load() {
+        let full = CapabilityProfile::full();
+        assert!(full.has(RuntimeCapability::ModuleLoad));
     }
 }

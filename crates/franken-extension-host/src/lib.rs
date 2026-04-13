@@ -368,9 +368,86 @@ const fn has_capability_const(set: &[Capability], capability: Capability) -> boo
     false
 }
 
-const fn is_supported_engine_version_const(version: &str) -> bool {
+const fn parse_semver_component_const(bytes: &[u8], start: usize) -> Option<(u64, usize)> {
+    if start >= bytes.len() {
+        return None;
+    }
+
+    let mut idx = start;
+    let mut value = 0_u64;
+    let mut saw_digit = false;
+    while idx < bytes.len() {
+        let byte = bytes[idx];
+        if byte == b'.' {
+            break;
+        }
+        if byte < b'0' || byte > b'9' {
+            return None;
+        }
+        value = match value.checked_mul(10) {
+            Some(value) => value,
+            None => return None,
+        };
+        value = match value.checked_add((byte - b'0') as u64) {
+            Some(value) => value,
+            None => return None,
+        };
+        saw_digit = true;
+        idx += 1;
+    }
+
+    if !saw_digit {
+        return None;
+    }
+
+    Some((value, idx))
+}
+
+const fn parse_semver_const(version: &str) -> Option<(u64, u64, u64)> {
     let bytes = version.as_bytes();
-    bytes.len() >= 2 && bytes[0] == b'0' && bytes[1] == b'.'
+
+    let (major, major_end) = match parse_semver_component_const(bytes, 0) {
+        Some(parsed) => parsed,
+        None => return None,
+    };
+    if major_end >= bytes.len() || bytes[major_end] != b'.' {
+        return None;
+    }
+
+    let (minor, minor_end) = match parse_semver_component_const(bytes, major_end + 1) {
+        Some(parsed) => parsed,
+        None => return None,
+    };
+    if minor_end >= bytes.len() || bytes[minor_end] != b'.' {
+        return None;
+    }
+
+    let (patch, patch_end) = match parse_semver_component_const(bytes, minor_end + 1) {
+        Some(parsed) => parsed,
+        None => return None,
+    };
+    if patch_end != bytes.len() {
+        return None;
+    }
+
+    Some((major, minor, patch))
+}
+
+const fn semver_leq_const(requested: (u64, u64, u64), supported: (u64, u64, u64)) -> bool {
+    requested.0 < supported.0
+        || (requested.0 == supported.0
+            && (requested.1 < supported.1
+                || (requested.1 == supported.1 && requested.2 <= supported.2)))
+}
+
+const fn is_supported_engine_version_const(version: &str) -> bool {
+    match (
+        parse_semver_const(version),
+        parse_semver_const(CURRENT_ENGINE_VERSION),
+    ) {
+        (Some(requested), Some(supported)) => semver_leq_const(requested, supported),
+        _ => false,
+    }
 }
 
 /// Validate capability lattice implications.
@@ -1269,13 +1346,13 @@ impl ExtensionLifecycleManager {
     }
 
     fn ensure_monotonic(&mut self, timestamp_ns: u64) -> Result<(), LifecycleError> {
-        if let Some(previous) = self.last_timestamp_ns {
-            if timestamp_ns < previous {
-                return Err(LifecycleError::NonMonotonicTimestamp {
-                    previous,
-                    current: timestamp_ns,
-                });
-            }
+        if let Some(previous) = self.last_timestamp_ns
+            && timestamp_ns < previous
+        {
+            return Err(LifecycleError::NonMonotonicTimestamp {
+                previous,
+                current: timestamp_ns,
+            });
         }
         self.last_timestamp_ns = Some(timestamp_ns);
         Ok(())
@@ -2534,35 +2611,35 @@ impl CapabilityEscrowGateway {
         self.receipts
             .iter()
             .filter(|receipt| {
-                if let Some(extension_id) = query.extension_id.as_deref() {
-                    if receipt.extension_id != extension_id {
-                        return false;
-                    }
+                if let Some(extension_id) = query.extension_id.as_deref()
+                    && receipt.extension_id != extension_id
+                {
+                    return false;
                 }
-                if let Some(capability) = query.capability {
-                    if receipt.capability != capability {
-                        return false;
-                    }
+                if let Some(capability) = query.capability
+                    && receipt.capability != capability
+                {
+                    return false;
                 }
-                if let Some(decision) = query.decision {
-                    if receipt.decision != decision {
-                        return false;
-                    }
+                if let Some(decision) = query.decision
+                    && receipt.decision != decision
+                {
+                    return false;
                 }
-                if let Some(outcome) = query.outcome.as_deref() {
-                    if receipt.outcome != outcome {
-                        return false;
-                    }
+                if let Some(outcome) = query.outcome.as_deref()
+                    && receipt.outcome != outcome
+                {
+                    return false;
                 }
-                if let Some(start_ns) = query.timestamp_from_ns {
-                    if receipt.timestamp_ns < start_ns {
-                        return false;
-                    }
+                if let Some(start_ns) = query.timestamp_from_ns
+                    && receipt.timestamp_ns < start_ns
+                {
+                    return false;
                 }
-                if let Some(end_ns) = query.timestamp_to_ns {
-                    if receipt.timestamp_ns > end_ns {
-                        return false;
-                    }
+                if let Some(end_ns) = query.timestamp_to_ns
+                    && receipt.timestamp_ns > end_ns
+                {
+                    return false;
                 }
                 true
             })
@@ -3398,40 +3475,40 @@ impl HostcallDispatcher {
             };
         }
 
-        if let Some(clearance) = self.sink_policy.clearance_for(hostcall_type) {
-            if !FlowLabelLattice::can_flow_to_sink(&argument.label, &clearance) {
-                let event = FlowViolationEvent {
-                    trace_id: context.trace_id.to_string(),
-                    decision_id: context.decision_id.to_string(),
-                    policy_id: context.policy_id.to_string(),
-                    component: "runtime_flow_enforcement".to_string(),
-                    event: "hostcall_flow_violation".to_string(),
-                    outcome: "blocked".to_string(),
-                    error_code: "FE-FLOW-0001".to_string(),
-                    extension_id: extension_id.to_string(),
-                    hostcall_type,
-                    source_label: argument.label,
-                    sink_clearance: clearance,
-                };
-                self.violation_events.push(event);
-                self.guardplane_evidence.push(FlowViolationEvidence {
-                    extension_id: extension_id.to_string(),
-                    hostcall_type,
-                    source_label: argument.label,
-                    sink_clearance: clearance,
-                    decision_id: context.decision_id.to_string(),
-                });
+        if let Some(clearance) = self.sink_policy.clearance_for(hostcall_type)
+            && !FlowLabelLattice::can_flow_to_sink(&argument.label, &clearance)
+        {
+            let event = FlowViolationEvent {
+                trace_id: context.trace_id.to_string(),
+                decision_id: context.decision_id.to_string(),
+                policy_id: context.policy_id.to_string(),
+                component: "runtime_flow_enforcement".to_string(),
+                event: "hostcall_flow_violation".to_string(),
+                outcome: "blocked".to_string(),
+                error_code: "FE-FLOW-0001".to_string(),
+                extension_id: extension_id.to_string(),
+                hostcall_type,
+                source_label: argument.label,
+                sink_clearance: clearance,
+            };
+            self.violation_events.push(event);
+            self.guardplane_evidence.push(FlowViolationEvidence {
+                extension_id: extension_id.to_string(),
+                hostcall_type,
+                source_label: argument.label,
+                sink_clearance: clearance,
+                decision_id: context.decision_id.to_string(),
+            });
 
-                return HostcallDispatchOutcome {
-                    result: HostcallResult::Denied {
-                        reason: DenialReason::FlowViolation {
-                            source: argument.label,
-                            sink: clearance,
-                        },
+            return HostcallDispatchOutcome {
+                result: HostcallResult::Denied {
+                    reason: DenialReason::FlowViolation {
+                        source: argument.label,
+                        sink: clearance,
                     },
-                    output: None,
-                };
-            }
+                },
+                output: None,
+            };
         }
 
         HostcallDispatchOutcome {
@@ -6061,6 +6138,15 @@ mod tests {
     const STATIC_INVALID_RESULT: Result<(), StaticManifestValidationError> =
         validate_static_manifest(&STATIC_INVALID_MANIFEST);
 
+    const STATIC_MALFORMED_VERSION_MANIFEST: StaticExtensionManifest = StaticExtensionManifest {
+        name: "static-ext",
+        entrypoint: "index.js",
+        min_engine_version: "0.1",
+        capabilities: &[Capability::FsRead],
+    };
+    const STATIC_MALFORMED_VERSION_RESULT: Result<(), StaticManifestValidationError> =
+        validate_static_manifest(&STATIC_MALFORMED_VERSION_MANIFEST);
+
     #[test]
     fn const_validation_path_is_const_evaluable() {
         assert_eq!(STATIC_VALID_RESULT, Ok(()));
@@ -6071,6 +6157,22 @@ mod tests {
                 missing_implied: Capability::FsRead,
             })
         );
+    }
+
+    #[test]
+    fn const_validation_rejects_malformed_engine_version() {
+        assert_eq!(
+            STATIC_MALFORMED_VERSION_RESULT,
+            Err(StaticManifestValidationError::UnsupportedEngineVersion)
+        );
+    }
+
+    #[test]
+    fn const_engine_version_gate_rejects_higher_patch_versions() {
+        let (major, minor, patch) =
+            parse_semver(CURRENT_ENGINE_VERSION).expect("current engine version must parse");
+        let higher_patch = format!("{major}.{minor}.{}", patch + 1);
+        assert!(!is_supported_engine_version_const(higher_patch.as_str()));
     }
 }
 
@@ -6967,9 +7069,11 @@ mod declassification_tests {
         assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].request_id, "req-receipt-1");
         assert_eq!(receipts[1].request_id, "req-receipt-2");
-        assert!(receipts
-            .iter()
-            .all(|receipt| receipt.verify(&gateway.public_key())));
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.verify(&gateway.public_key()))
+        );
     }
 
     #[test]
@@ -7173,11 +7277,13 @@ mod delegate_cell_tests {
             delegate.guardplane_state().posterior_micros,
             DelegateCellPolicy::default().initial_posterior_micros
         );
-        assert!(delegate
-            .lifecycle_manager()
-            .transition_log()
-            .iter()
-            .any(|record| record.to_state == ExtensionState::Running));
+        assert!(
+            delegate
+                .lifecycle_manager()
+                .transition_log()
+                .iter()
+                .any(|record| record.to_state == ExtensionState::Running)
+        );
         assert!(!delegate.events().is_empty());
     }
 
@@ -7217,10 +7323,12 @@ mod delegate_cell_tests {
                 }
             }
         ));
-        assert!(delegate
-            .evidence()
-            .iter()
-            .any(|item| matches!(item, DelegateCellEvidence::CapabilityEscrow(_))));
+        assert!(
+            delegate
+                .evidence()
+                .iter()
+                .any(|item| matches!(item, DelegateCellEvidence::CapabilityEscrow(_)))
+        );
         assert!(delegate.guardplane_state().posterior_micros > baseline);
     }
 
@@ -7266,10 +7374,12 @@ mod delegate_cell_tests {
         assert_eq!(violation.component, "runtime_flow_enforcement");
         assert_eq!(violation.event, "hostcall_flow_violation");
         assert_eq!(violation.error_code, "FE-FLOW-0001");
-        assert!(delegate
-            .evidence()
-            .iter()
-            .any(|item| matches!(item, DelegateCellEvidence::FlowViolation(_))));
+        assert!(
+            delegate
+                .evidence()
+                .iter()
+                .any(|item| matches!(item, DelegateCellEvidence::FlowViolation(_)))
+        );
     }
 
     #[test]
@@ -7294,14 +7404,18 @@ mod delegate_cell_tests {
             delegate.state(),
             ExtensionState::Terminated | ExtensionState::Quarantined
         ));
-        assert!(delegate
-            .lifecycle_manager()
-            .pending_cancel_token()
-            .is_none());
-        assert!(delegate
-            .evidence()
-            .iter()
-            .any(|item| matches!(item, DelegateCellEvidence::LifetimeExpired { .. })));
+        assert!(
+            delegate
+                .lifecycle_manager()
+                .pending_cancel_token()
+                .is_none()
+        );
+        assert!(
+            delegate
+                .evidence()
+                .iter()
+                .any(|item| matches!(item, DelegateCellEvidence::LifetimeExpired { .. }))
+        );
     }
 
     #[test]
@@ -7437,10 +7551,12 @@ mod delegate_cell_tests {
                 ..
             }
         ));
-        assert!(denied_delegate
-            .evidence()
-            .iter()
-            .any(|item| matches!(item, DelegateCellEvidence::DeclassificationDenied(_))));
+        assert!(
+            denied_delegate
+                .evidence()
+                .iter()
+                .any(|item| matches!(item, DelegateCellEvidence::DeclassificationDenied(_)))
+        );
     }
 
     #[test]
@@ -7788,11 +7904,13 @@ mod delegate_cell_tests {
         );
         assert_eq!(quarantine_record.outcome, "ok");
         assert!(quarantine_record.error_code.is_none());
-        assert!(delegate
-            .events()
-            .iter()
-            .any(|event| event.event == "delegate_quarantine_mesh_propagated"
-                && event.outcome == "ok"));
+        assert!(
+            delegate
+                .events()
+                .iter()
+                .any(|event| event.event == "delegate_quarantine_mesh_propagated"
+                    && event.outcome == "ok")
+        );
         let quarantine_evidence_targets = delegate
             .evidence()
             .iter()

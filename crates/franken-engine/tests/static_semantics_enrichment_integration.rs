@@ -22,9 +22,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{
-    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
-    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, ExportDeclaration, ExportKind, Expression, ExpressionStatement, ImportClause,
+    ImportDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use frankenengine_engine::ir_contract::BindingKind;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};

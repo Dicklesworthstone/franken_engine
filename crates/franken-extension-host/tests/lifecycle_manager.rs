@@ -1,7 +1,7 @@
 use frankenengine_extension_host::{
-    compute_content_hash, BudgetExhaustionPolicy, CancellationConfig, Capability,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
     ExtensionLifecycleManager, ExtensionManifest, ExtensionState, LifecycleContext,
-    LifecycleTransition, ResourceBudget, CURRENT_ENGINE_VERSION,
+    LifecycleTransition, ResourceBudget, compute_content_hash,
 };
 use std::collections::BTreeSet;
 

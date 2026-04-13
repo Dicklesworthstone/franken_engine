@@ -8,9 +8,9 @@ use frankenengine_extension_host::{
     DelegateCellEvidence, DelegateCellFactory, DelegateCellManifest, DelegateCellPolicy,
     DelegationScope, ExtensionManifest, ExtensionState, FlowEnforcementContext, FlowLabel,
     GuardplaneDecisionLogEntry, GuardplanePolicyAction, HostcallResult, HostcallSinkPolicy,
-    HostcallType, IntegrityLevel, Labeled, LifecycleContext, LifecycleTransition, ResourceBudget,
-    SecrecyLevel, MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET,
-    MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES,
+    HostcallType, IntegrityLevel, Labeled, LifecycleContext, LifecycleTransition,
+    MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET, MAX_DELEGATE_LIFETIME_NS,
+    MAX_DELEGATE_MEMORY_BUDGET_BYTES, ResourceBudget, SecrecyLevel,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -383,10 +383,12 @@ fn factory_uses_manifest_delegation_scope_in_events() {
         )
         .expect("delegate created");
 
-    assert!(delegate
-        .events()
-        .iter()
-        .all(|e| e.delegation_scope == "trust_chain_rotation"));
+    assert!(
+        delegate
+            .events()
+            .iter()
+            .all(|e| e.delegation_scope == "trust_chain_rotation")
+    );
 }
 
 // ---------------------------------------------------------------------------

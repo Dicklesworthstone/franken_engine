@@ -647,7 +647,9 @@ impl ParserArena {
                 span,
             } => Ok(Statement::Import(ImportDeclaration {
                 clause: match &binding {
-                    Some(name) => ImportClause::Default { local: name.clone() },
+                    Some(name) => ImportClause::Default {
+                        local: name.clone(),
+                    },
                     None => ImportClause::SideEffect,
                 },
                 binding,

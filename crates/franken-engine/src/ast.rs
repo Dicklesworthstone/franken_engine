@@ -356,9 +356,15 @@ impl ImportSpecifier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImportClause {
     SideEffect,
-    Default { local: String },
-    Namespace { local: String },
-    Named { specifiers: Vec<ImportSpecifier> },
+    Default {
+        local: String,
+    },
+    Namespace {
+        local: String,
+    },
+    Named {
+        specifiers: Vec<ImportSpecifier>,
+    },
     DefaultAndNamed {
         default: String,
         specifiers: Vec<ImportSpecifier>,
@@ -467,7 +473,10 @@ impl ImportClause {
                 .iter()
                 .map(|spec| spec.local_name.as_str())
                 .collect(),
-            Self::DefaultAndNamed { default, specifiers } => {
+            Self::DefaultAndNamed {
+                default,
+                specifiers,
+            } => {
                 let mut names = vec![default.as_str()];
                 names.extend(specifiers.iter().map(|spec| spec.local_name.as_str()));
                 names

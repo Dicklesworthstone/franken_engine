@@ -25,10 +25,12 @@ use frankenengine_engine::baseline_interpreter::{
     LEGACY_QUICKJS_PROFILE_LABEL, LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneReason, LaneRouter,
     ObjectId, QuickJsLane, THROUGHPUT_PROFILE_LABEL, V8Lane, Value,
 };
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
     IteratorCloseReason, RegRange,
 };
+use std::collections::BTreeSet;
 
 // ============================================================================
 // Helpers
@@ -1055,7 +1057,7 @@ fn enrichment_witness_instruction_index_tracks() {
         Ir3Instruction::Halt, // 3
     ]);
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["fs".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(config);
     let result = lane.execute(&m, "enrichment-trace").unwrap();
     assert!(!result.hostcall_decisions.is_empty());

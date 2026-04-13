@@ -1318,8 +1318,8 @@ mod tests {
             let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
             PackageIndex::build(config, packages, exports).unwrap()
         };
-        let h1 = make_idx().content_hash().clone();
-        let h2 = make_idx().content_hash().clone();
+        let h1 = *make_idx().content_hash();
+        let h2 = *make_idx().content_hash();
         assert_eq!(h1, h2);
     }
 

@@ -1,10 +1,10 @@
 use frankenengine_extension_host::{
-    compute_content_hash, BudgetExhaustionPolicy, Capability, CapabilityEscrowDecisionKind,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, Capability, CapabilityEscrowDecisionKind,
     CapabilityEscrowError, CapabilityEscrowReceiptQuery, CapabilityEscrowRoute,
     CapabilityEscrowState, DelegateCell, DelegateCellError, DelegateCellFactory,
     DelegateCellManifest, DelegationScope, DenialReason, ExtensionManifest, ExtensionState,
     FlowEnforcementContext, HostcallResult, HostcallType, Labeled, LifecycleContext,
-    LifecycleTransition, ResourceBudget, CURRENT_ENGINE_VERSION,
+    LifecycleTransition, ResourceBudget, compute_content_hash,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -131,11 +131,13 @@ fn escrow_state_machine_transitions_challenge_to_approved_to_expired() {
     delegate
         .expire_capability_escrow(400_000_000_300, &fctx())
         .expect("expire escrow");
-    assert!(delegate
-        .capability_escrow_records()
-        .values()
-        .any(|record| record.request_id == request_id
-            && record.state == CapabilityEscrowState::Expired));
+    assert!(
+        delegate
+            .capability_escrow_records()
+            .values()
+            .any(|record| record.request_id == request_id
+                && record.state == CapabilityEscrowState::Expired)
+    );
 }
 
 #[test]
@@ -263,9 +265,11 @@ fn emergency_grant_is_signed_bounded_and_requires_post_review() {
         .expect("issue emergency grant");
 
     assert!(grant.verify(&delegate.capability_escrow_public_key()));
-    assert!(delegate
-        .pending_emergency_post_reviews()
-        .contains(grant.grant_id.as_str()));
+    assert!(
+        delegate
+            .pending_emergency_post_reviews()
+            .contains(grant.grant_id.as_str())
+    );
 
     let first = delegate
         .dispatch_hostcall(
@@ -316,9 +320,11 @@ fn emergency_grant_is_signed_bounded_and_requires_post_review() {
     delegate
         .complete_emergency_post_review(&grant.grant_id)
         .expect("complete post review");
-    assert!(!delegate
-        .pending_emergency_post_reviews()
-        .contains(grant.grant_id.as_str()));
+    assert!(
+        !delegate
+            .pending_emergency_post_reviews()
+            .contains(grant.grant_id.as_str())
+    );
 
     let second_completion = delegate.complete_emergency_post_review(&grant.grant_id);
     assert!(matches!(
@@ -438,10 +444,12 @@ fn expired_emergency_grants_cannot_bypass_escrow() {
             }
         }
     ));
-    assert!(delegate
-        .capability_escrow_events()
-        .iter()
-        .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0007")));
+    assert!(
+        delegate
+            .capability_escrow_events()
+            .iter()
+            .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0007"))
+    );
 }
 
 #[test]

@@ -36,6 +36,7 @@ use frankenengine_engine::ir_contract::{
     CapabilityTag, EffectBoundary, HostcallDecisionRecord, Ir3Instruction, Ir3Module, RegRange,
     WitnessEventKind,
 };
+use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,7 +75,10 @@ fn make_multi_hostcall_module(caps: &[&str]) -> Ir3Module {
 
 fn config_with_caps(caps: &[&str]) -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = caps.iter().map(|c| c.to_string()).collect();
+    config.granted_capabilities = caps
+        .iter()
+        .filter_map(|c| RuntimeCapability::from_tag_str(c))
+        .collect();
     config
 }
 
@@ -509,11 +513,11 @@ fn interpreter_config_default_has_no_capabilities() {
 #[test]
 fn interpreter_config_with_capabilities_serde_roundtrip() {
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec![
-        "fs:read".to_string(),
-        "fs:write".to_string(),
-        "net:connect".to_string(),
-    ];
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::FsRead,
+        RuntimeCapability::FsWrite,
+        RuntimeCapability::NetworkEgress,
+    ]);
     let json = serde_json::to_string(&config).unwrap();
     let back: InterpreterConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config.granted_capabilities, back.granted_capabilities);

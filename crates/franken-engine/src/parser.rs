@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub use crate::ast::ParseGoal;
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
@@ -22,7 +23,6 @@ use crate::ast::{
     ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
     VariableDeclarator, WhileStatement,
 };
-pub use crate::ast::ParseGoal;
 use crate::deterministic_serde::{self, CanonicalValue};
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -2969,7 +2969,7 @@ fn parse_named_import_specifiers(
                     "unsupported named import specifier; expected `name` or `name as alias`",
                     source_label.to_string(),
                     Some(span.clone()),
-                ))
+                ));
             }
         };
 
@@ -8876,7 +8876,10 @@ mod tests {
         match &tree.body[0] {
             Statement::Import(import) => {
                 match &import.clause {
-                    ImportClause::DefaultAndNamed { default, specifiers } => {
+                    ImportClause::DefaultAndNamed {
+                        default,
+                        specifiers,
+                    } => {
                         assert_eq!(default, "dep");
                         assert_eq!(specifiers.len(), 1);
                         assert_eq!(specifiers[0].import_name, "run");
@@ -10523,7 +10526,7 @@ mod tests {
     #[test]
     fn parse_f64_numeric_literal_decimal() {
         assert_eq!(parse_f64_numeric_literal("1.5"), Some(1.5));
-        assert_eq!(parse_f64_numeric_literal("3.14159"), Some(3.14159));
+        assert_eq!(parse_f64_numeric_literal("2.25"), Some(2.25));
         assert_eq!(parse_f64_numeric_literal("0.0"), Some(0.0));
     }
 

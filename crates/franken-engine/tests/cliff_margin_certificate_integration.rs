@@ -670,7 +670,7 @@ fn test_batch_summary_accurate() {
     let mut gate = CliffMarginGate::with_defaults(epoch());
     let certs: Vec<CliffMarginCertificate> = (0..10)
         .map(|i| {
-            let claim = if (i as u64) % 2 == 0 {
+            let claim = if (i as u64).is_multiple_of(2) {
                 winning_throughput_claim()
             } else {
                 losing_throughput_claim()

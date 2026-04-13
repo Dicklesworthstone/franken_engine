@@ -1655,6 +1655,109 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
 }
 
 #[test]
+fn frankenctl_replay_validate_mode_requires_compare_trace() {
+    let trace_path = temp_path("frankenctl_replay_validate_requires_compare", "json");
+
+    let mut trace = NondeterminismTrace::new("session-validate-requires-compare");
+    trace.capture(
+        NondeterminismSource::TimerRead,
+        vec![1, 2, 3],
+        1,
+        "integration-test",
+    );
+    trace.finalise(2);
+
+    fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap())
+        .expect("trace file should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            trace_path.to_str().unwrap(),
+            "--mode",
+            "validate",
+        ])
+        .output()
+        .expect("replay validate command should execute");
+
+    assert!(
+        !output.status.success(),
+        "validate replay should fail closed"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("requires --compare-trace <path>"),
+        "stderr should explain validate-mode compare requirement: {stderr}"
+    );
+
+    let _ = fs::remove_file(trace_path);
+}
+
+#[test]
+fn frankenctl_replay_validate_mode_detects_compare_trace_divergence() {
+    let trace_path = temp_path("frankenctl_replay_validate_trace", "json");
+    let compare_trace_path = temp_path("frankenctl_replay_validate_compare", "json");
+
+    let mut trace = NondeterminismTrace::new("session-validate-trace");
+    trace.capture(
+        NondeterminismSource::TimerRead,
+        vec![1, 2, 3],
+        1,
+        "integration-test",
+    );
+    trace.finalise(2);
+
+    let mut compare_trace = NondeterminismTrace::new("session-validate-live");
+    compare_trace.capture(
+        NondeterminismSource::TimerRead,
+        vec![9, 9, 9],
+        1,
+        "integration-test",
+    );
+    compare_trace.finalise(2);
+
+    fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap())
+        .expect("trace file should write");
+    fs::write(
+        &compare_trace_path,
+        serde_json::to_vec_pretty(&compare_trace).unwrap(),
+    )
+    .expect("compare trace file should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "replay",
+            "run",
+            "--trace",
+            trace_path.to_str().unwrap(),
+            "--compare-trace",
+            compare_trace_path.to_str().unwrap(),
+            "--mode",
+            "validate",
+        ])
+        .output()
+        .expect("replay validate compare command should execute");
+
+    assert!(
+        output.status.success(),
+        "validate replay compare failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["mode"].as_str(), Some("validate"));
+    assert_eq!(stdout_json["event_count"].as_u64(), Some(1));
+    assert_eq!(stdout_json["replayed_events"].as_u64(), Some(1));
+    assert_eq!(stdout_json["divergence_count"].as_u64(), Some(1));
+    assert_eq!(stdout_json["critical_divergences"].as_u64(), Some(0));
+    assert_eq!(stdout_json["complete"].as_bool(), Some(true));
+
+    let _ = fs::remove_file(trace_path);
+    let _ = fs::remove_file(compare_trace_path);
+}
+
+#[test]
 fn frankenctl_verify_compile_artifact_failure_includes_trace_and_remediation() {
     let artifact_path = temp_path("frankenctl_invalid_compile_artifact", "json");
     fs::write(&artifact_path, "{}\n").expect("invalid artifact fixture should write");
@@ -2389,6 +2492,7 @@ fn frankenctl_replay_best_effort_mode() {
 #[test]
 fn frankenctl_replay_validate_mode() {
     let trace_path = temp_path("frankenctl_replay_validate", "json");
+    let compare_trace_path = temp_path("frankenctl_replay_validate_compare_match", "json");
 
     let mut trace = NondeterminismTrace::new("session-validate");
     trace.capture(
@@ -2399,6 +2503,11 @@ fn frankenctl_replay_validate_mode() {
     );
     trace.finalise(2);
     fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap()).unwrap();
+    fs::write(
+        &compare_trace_path,
+        serde_json::to_vec_pretty(&trace).unwrap(),
+    )
+    .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -2406,6 +2515,8 @@ fn frankenctl_replay_validate_mode() {
             "run",
             "--trace",
             trace_path.to_str().unwrap(),
+            "--compare-trace",
+            compare_trace_path.to_str().unwrap(),
             "--mode",
             "validate",
         ])
@@ -2419,8 +2530,10 @@ fn frankenctl_replay_validate_mode() {
     );
     let json = parse_stdout_json(&output);
     assert_eq!(json["mode"].as_str(), Some("validate"));
+    assert_eq!(json["divergence_count"].as_u64(), Some(0));
 
     let _ = fs::remove_file(trace_path);
+    let _ = fs::remove_file(compare_trace_path);
 }
 
 #[test]

@@ -27,6 +27,7 @@ use frankenengine_engine::baseline_interpreter::{
     ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore, InterpreterError,
     InterpreterEvent, LaneChoice, LaneReason, LaneRouter, ObjectId, QuickJsLane, V8Lane, Value,
 };
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
     RegRange, WitnessEventKind,
@@ -350,7 +351,8 @@ fn v8_budget_larger_than_quickjs() {
 #[test]
 fn config_serde_roundtrip() {
     let mut c = InterpreterConfig::v8_defaults();
-    c.granted_capabilities = vec!["net".into(), "fs".into()];
+    c.granted_capabilities =
+        BTreeSet::from([RuntimeCapability::NetworkEgress, RuntimeCapability::FsRead]);
     let json = serde_json::to_string(&c).unwrap();
     let back: InterpreterConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(c, back);
@@ -966,7 +968,10 @@ fn hostcall_capability_denied() {
 fn hostcall_module_require_denied_without_capability() {
     let m = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
             Ir3Instruction::HostCall {
                 capability: CapabilityTag("module:require".into()),
                 args: RegRange { start: 0, count: 1 },
@@ -995,7 +1000,7 @@ fn hostcall_capability_granted_returns_undefined() {
         Ir3Instruction::Halt,
     ]);
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["fs".into()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
     let lane = QuickJsLane::with_config(config);
     let r = lane.execute(&m, "integ").unwrap();
     assert_eq!(r.value, Value::Undefined);
@@ -1014,7 +1019,7 @@ fn hostcall_module_require_rejects_non_string_specifier() {
         },
     ]);
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["module:require".into()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&m, "integ").unwrap_err();
     assert!(matches!(
@@ -1041,7 +1046,7 @@ fn hostcall_module_require_rejects_bare_specifier() {
         vec!["dep".to_string()],
     );
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["module:require".into()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&m, "integ").unwrap_err();
     match err {
@@ -1076,7 +1081,7 @@ fn hostcall_module_require_rejects_missing_file() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".into()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&module, "integ").unwrap_err();
     match err {
@@ -1124,7 +1129,7 @@ fn hostcall_module_require_resolves_extensionless_to_mjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".into()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-extless-mjs-trace")
@@ -1163,7 +1168,8 @@ fn hostcall_produces_dispatch_and_capability_witness() {
     m.required_capabilities = vec![CapabilityTag("db".into())];
 
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["db".into()];
+    // "db" is an unmapped tag — passes through typed check.
+    config.granted_capabilities = BTreeSet::new();
     let lane = QuickJsLane::with_config(config);
     let r = lane.execute(&m, "integ").unwrap();
 
@@ -1632,7 +1638,8 @@ fn witness_events_have_monotonic_seq() {
     m.required_capabilities = vec![CapabilityTag("a".into()), CapabilityTag("b".into())];
 
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = vec!["a".into(), "b".into()];
+    // "a"/"b" are unmapped tags — pass through typed check.
+    config.granted_capabilities = BTreeSet::new();
     let lane = QuickJsLane::with_config(config);
     let r = lane.execute(&m, "integ").unwrap();
 
@@ -2002,10 +2009,23 @@ fn import_module_executes_and_returns_export() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
             Ir3Instruction::Return { value: 3 },
         ],
         vec!["./dep.js".to_string(), "value".to_string()],
@@ -2015,14 +2035,13 @@ fn import_module_executes_and_returns_export() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(7));
 }
-
 
 #[test]
 fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
@@ -2035,10 +2054,23 @@ fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
             Ir3Instruction::Return { value: 3 },
         ],
         vec!["./dep".to_string(), "value".to_string()],
@@ -2048,7 +2080,7 @@ fn import_module_prefers_mjs_over_js_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-mjs-prefer-trace")
@@ -2069,10 +2101,23 @@ fn import_module_resolves_index_mjs_for_directory_specifier() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
             Ir3Instruction::Return { value: 3 },
         ],
         vec!["./pkg".to_string(), "value".to_string()],
@@ -2082,7 +2127,7 @@ fn import_module_resolves_index_mjs_for_directory_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-index-mjs-trace")
@@ -2099,12 +2144,32 @@ fn import_module_cjs_default_export_bridges_module_exports() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
-            Ir3Instruction::LoadStr { dst: 4, pool_index: 2 },
-            Ir3Instruction::GetProperty { obj: 3, key: 4, dst: 5 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
             Ir3Instruction::Return { value: 5 },
         ],
         vec![
@@ -2118,7 +2183,7 @@ fn import_module_cjs_default_export_bridges_module_exports() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-import-cjs-default-trace")
@@ -2135,10 +2200,23 @@ fn import_module_cjs_named_exports_project_properties() {
 
     let mut module = test_module_with_pool(
         vec![
-            Ir3Instruction::LoadStr { dst: 0, pool_index: 0 },
-            Ir3Instruction::ImportModule { specifier: 0, dst: 1 },
-            Ir3Instruction::LoadStr { dst: 2, pool_index: 1 },
-            Ir3Instruction::GetProperty { obj: 1, key: 2, dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 1,
+                key: 2,
+                dst: 3,
+            },
             Ir3Instruction::Return { value: 3 },
         ],
         vec!["./config.cjs".to_string(), "port".to_string()],
@@ -2209,7 +2287,7 @@ fn require_module_allows_cjs_to_read_esm_namespace() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-esm-trace")
@@ -2271,7 +2349,7 @@ fn require_module_allows_cjs_to_read_esm_default_export() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-esm-default-trace")
@@ -2322,7 +2400,7 @@ module.exports = first === second;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-esm-cache-trace")
@@ -2371,7 +2449,7 @@ fn require_module_returns_cjs_module_exports_value() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-cjs-trace")
@@ -2424,7 +2502,7 @@ fn require_module_resolves_relative_to_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-cjs-trace")
@@ -2477,7 +2555,7 @@ fn require_module_resolves_extensionless_relative_to_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-extensionless-cjs-trace")
@@ -2528,7 +2606,7 @@ fn require_module_resolves_parent_relative_from_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-parent-cjs-trace")
@@ -2585,7 +2663,7 @@ fn require_module_resolves_directory_relative_to_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-dir-cjs-trace")
@@ -2644,7 +2722,7 @@ fn require_module_resolves_parent_directory_relative_to_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-parent-dir-cjs-trace")
@@ -2699,10 +2777,13 @@ fn require_module_resolves_extensionless_parent_relative_from_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-relative-parent-extensionless-cjs-trace")
+        .execute(
+            &module,
+            "module-require-relative-parent-extensionless-cjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(7));
 }
@@ -2754,7 +2835,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-prefers-cjs-trace")
@@ -2809,10 +2890,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-relative-prefers-cjs-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-relative-prefers-cjs-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(5));
 }
@@ -2870,7 +2954,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-index-js-over-mjs-trace")
@@ -2933,10 +3017,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-parent-relative-index-js-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-parent-relative-index-js-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(17));
 }
@@ -2992,7 +3079,7 @@ fn require_module_prefers_index_cjs_over_index_mjs_when_relative_from_cjs_entry(
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-index-cjs-over-mjs-trace")
@@ -3053,10 +3140,13 @@ fn require_module_prefers_index_cjs_over_index_js_for_parent_relative_directory(
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-parent-relative-index-cjs-over-js-trace")
+        .execute(
+            &module,
+            "module-require-parent-relative-index-cjs-over-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(22));
 }
@@ -3114,10 +3204,13 @@ fn require_module_prefers_index_cjs_over_index_mjs_for_parent_relative_directory
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-parent-relative-index-cjs-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-parent-relative-index-cjs-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(25));
 }
@@ -3171,7 +3264,7 @@ fn require_module_resolves_index_mjs_when_only_index_mjs_relative_from_cjs_entry
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-index-mjs-only-trace")
@@ -3228,7 +3321,7 @@ fn require_module_resolves_index_js_when_only_index_js_relative_from_cjs_entry()
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-index-js-only-trace")
@@ -3285,14 +3378,13 @@ fn require_module_resolves_directory_with_trailing_slash_relative_from_cjs_entry
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-relative-trailing-slash-cjs-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(10));
 }
-
 
 #[test]
 fn require_module_trailing_slash_prefers_directory_index_over_file_neighbor() {
@@ -3341,7 +3433,7 @@ fn require_module_trailing_slash_prefers_directory_index_over_file_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -3403,14 +3495,13 @@ fn require_module_resolves_parent_trailing_slash_relative_from_cjs_entry() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-parent-trailing-slash-cjs-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(6));
 }
-
 
 #[test]
 fn require_module_parent_trailing_slash_prefers_directory_index_over_file_neighbor() {
@@ -3465,7 +3556,7 @@ fn require_module_parent_trailing_slash_prefers_directory_index_over_file_neighb
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -3527,10 +3618,13 @@ fn require_module_prefers_index_cjs_for_extensionless_index_relative_from_cjs_en
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-relative-index-extensionless-cjs-trace")
+        .execute(
+            &module,
+            "module-require-relative-index-extensionless-cjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(12));
 }
@@ -3580,10 +3674,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-explicit-js-over-cjs-neighbor-trace")
+        .execute(
+            &module,
+            "module-require-explicit-js-over-cjs-neighbor-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(7));
 }
@@ -3633,10 +3730,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-explicit-mjs-over-cjs-neighbor-trace")
+        .execute(
+            &module,
+            "module-require-explicit-mjs-over-cjs-neighbor-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(10));
 }
@@ -3686,7 +3786,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-js-only-trace")
@@ -3745,7 +3845,7 @@ fn require_module_resolves_nested_require_relative_to_cjs_dependency() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-relative-trace")
@@ -3760,11 +3860,7 @@ fn require_module_nested_cjs_dirname_binding_is_relative_to_inner_module() {
     let nested_dir = root.join("nested");
     fs::create_dir_all(&nested_dir).expect("create nested dir");
     let inner_path = nested_dir.join("inner.cjs");
-    fs::write(
-        &inner_path,
-        "module.exports = { dirname: __dirname };",
-    )
-    .expect("write inner module");
+    fs::write(&inner_path, "module.exports = { dirname: __dirname };").expect("write inner module");
     let entry_path = root.join("entry.cjs");
     fs::write(
         &entry_path,
@@ -3800,7 +3896,7 @@ fn require_module_nested_cjs_dirname_binding_is_relative_to_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-dirname-trace")
@@ -3821,11 +3917,8 @@ fn require_module_nested_cjs_filename_binding_is_inner_module() {
     let nested_dir = root.join("nested");
     fs::create_dir_all(&nested_dir).expect("create nested dir");
     let inner_path = nested_dir.join("inner.cjs");
-    fs::write(
-        &inner_path,
-        "module.exports = { filename: __filename };",
-    )
-    .expect("write inner module");
+    fs::write(&inner_path, "module.exports = { filename: __filename };")
+        .expect("write inner module");
     let entry_path = root.join("entry.cjs");
     fs::write(
         &entry_path,
@@ -3861,13 +3954,16 @@ fn require_module_nested_cjs_filename_binding_is_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-filename-trace")
         .expect("execute");
     let expected_file = inner_path.canonicalize().unwrap_or(inner_path);
-    assert_eq!(result.value, Value::Str(expected_file.display().to_string()));
+    assert_eq!(
+        result.value,
+        Value::Str(expected_file.display().to_string())
+    );
 }
 
 #[test]
@@ -3921,7 +4017,7 @@ fn require_module_nested_parent_relative_resolves_from_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-relative-trace")
@@ -3984,7 +4080,7 @@ fn require_module_nested_parent_relative_directory_resolves_from_inner_module() 
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-dir-trace")
@@ -4053,7 +4149,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4121,10 +4217,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-slash-js-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-js-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(41));
 }
@@ -4186,10 +4285,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-js-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-cjs-over-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(63));
 }
@@ -4251,16 +4353,20 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-cjs-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(51));
 }
 
 #[test]
-fn require_module_nested_parent_relative_directory_trailing_slash_prefers_cjs_over_mjs_with_js_neighbor() {
+fn require_module_nested_parent_relative_directory_trailing_slash_prefers_cjs_over_mjs_with_js_neighbor()
+ {
     let root = temp_module_dir("module_require_nested_parent_dir_slash_cjs_over_mjs_with_js");
     fs::create_dir_all(&root).expect("create module root");
     let root_pkg = root.join("pkg");
@@ -4318,10 +4424,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-slash-cjs-over-mjs-with-js-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-cjs-over-mjs-with-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(67));
 }
@@ -4385,7 +4494,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4451,7 +4560,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-dir-mjs-only-trace")
@@ -4518,7 +4627,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4586,7 +4695,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4652,7 +4761,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4720,7 +4829,7 @@ module.exports = mod.default;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4788,7 +4897,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4860,7 +4969,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -4872,7 +4981,8 @@ module.exports = value;",
 }
 
 #[test]
-fn require_module_nested_parent_relative_explicit_index_extensionless_prefers_mjs_when_no_cjs_or_js() {
+fn require_module_nested_parent_relative_explicit_index_extensionless_prefers_mjs_when_no_cjs_or_js()
+ {
     let root = temp_module_dir("module_require_nested_parent_explicit_index_extensionless_mjs");
     fs::create_dir_all(&root).expect("create module root");
     let root_pkg = root.join("pkg");
@@ -4930,7 +5040,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5000,7 +5110,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5012,8 +5122,10 @@ module.exports = value;",
 }
 
 #[test]
-fn require_module_nested_parent_relative_explicit_index_extensionless_ignores_nested_pkg_trailing_slash() {
-    let root = temp_module_dir("module_require_nested_parent_explicit_index_slash_ignores_nested_pkg");
+fn require_module_nested_parent_relative_explicit_index_extensionless_ignores_nested_pkg_trailing_slash()
+ {
+    let root =
+        temp_module_dir("module_require_nested_parent_explicit_index_slash_ignores_nested_pkg");
     fs::create_dir_all(&root).expect("create module root");
     let root_pkg = root.join("pkg");
     fs::create_dir_all(&root_pkg).expect("create root package dir");
@@ -5070,7 +5182,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5140,7 +5252,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5153,7 +5265,8 @@ module.exports = value;",
 
 #[test]
 fn require_module_nested_parent_relative_explicit_index_mjs_ignores_nested_pkg() {
-    let root = temp_module_dir("module_require_nested_parent_explicit_index_mjs_ignores_nested_pkg");
+    let root =
+        temp_module_dir("module_require_nested_parent_explicit_index_mjs_ignores_nested_pkg");
     fs::create_dir_all(&root).expect("create module root");
     let root_pkg = root.join("pkg");
     fs::create_dir_all(&root_pkg).expect("create root package dir");
@@ -5210,7 +5323,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5223,7 +5336,8 @@ module.exports = value;",
 
 #[test]
 fn require_module_nested_parent_relative_explicit_index_cjs_ignores_nested_pkg() {
-    let root = temp_module_dir("module_require_nested_parent_explicit_index_cjs_ignores_nested_pkg");
+    let root =
+        temp_module_dir("module_require_nested_parent_explicit_index_cjs_ignores_nested_pkg");
     fs::create_dir_all(&root).expect("create module root");
     let root_pkg = root.join("pkg");
     fs::create_dir_all(&root_pkg).expect("create root package dir");
@@ -5278,7 +5392,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5352,7 +5466,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5416,7 +5530,7 @@ module.exports = mod.default;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-explicit-mjs-trace")
@@ -5479,7 +5593,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-explicit-js-trace")
@@ -5542,7 +5656,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -5605,7 +5719,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-explicit-cjs-trace")
@@ -5668,10 +5782,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-slash-mjs-only-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-slash-mjs-only-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(73));
 }
@@ -5733,10 +5850,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-dir-js-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-dir-js-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(44));
 }
@@ -5800,7 +5920,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-parent-dir-cjs-js-mjs-trace")
@@ -5867,10 +5987,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-explicit-js-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-js-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(56));
 }
@@ -5935,10 +6058,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-parent-explicit-cjs-over-js-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-parent-explicit-cjs-over-js-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(68));
 }
@@ -5994,7 +6120,7 @@ fn require_module_nested_explicit_mjs_resolves_from_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-explicit-mjs-trace")
@@ -6057,7 +6183,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-explicit-js-trace")
@@ -6120,7 +6246,7 @@ fn require_module_nested_directory_specifier_resolves_from_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-dir-specifier-trace")
@@ -6183,7 +6309,7 @@ fn require_module_nested_directory_without_trailing_slash_resolves_from_inner_mo
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-dir-no-slash-trace")
@@ -6252,7 +6378,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -6326,7 +6452,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -6396,7 +6522,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -6462,7 +6588,7 @@ fn require_module_nested_extensionless_prefers_cjs_in_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-extensionless-cjs-trace")
@@ -6525,7 +6651,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-extensionless-js-trace")
@@ -6588,7 +6714,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-extensionless-mjs-trace")
@@ -6651,7 +6777,7 @@ fn require_module_nested_explicit_index_cjs_resolves_from_inner_module() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-explicit-index-cjs-trace")
@@ -6718,7 +6844,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-explicit-index-js-trace")
@@ -6785,7 +6911,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-nested-explicit-index-mjs-trace")
@@ -6856,10 +6982,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-js-over-cjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-js-over-cjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(31));
 }
@@ -6927,10 +7056,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-mjs-over-cjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-mjs-over-cjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(41));
 }
@@ -6998,10 +7130,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-mjs-over-js-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-mjs-over-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(39));
 }
@@ -7065,10 +7200,13 @@ fn require_module_nested_explicit_index_cjs_over_mjs_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-cjs-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-cjs-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(27));
 }
@@ -7132,10 +7270,13 @@ fn require_module_nested_explicit_index_cjs_over_js_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-cjs-over-js-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-cjs-over-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(23));
 }
@@ -7203,10 +7344,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-explicit-index-js-over-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-explicit-index-js-over-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(37));
 }
@@ -7274,7 +7418,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -7346,7 +7490,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -7416,7 +7560,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -7484,7 +7628,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(
@@ -7558,10 +7702,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-directory-index-prefers-nested-cjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-directory-index-prefers-nested-cjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(95));
 }
@@ -7627,10 +7774,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-directory-index-prefers-nested-js-trace")
+        .execute(
+            &module,
+            "module-require-nested-directory-index-prefers-nested-js-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(71));
 }
@@ -7694,10 +7844,13 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
-        .execute(&module, "module-require-nested-directory-index-prefers-nested-mjs-trace")
+        .execute(
+            &module,
+            "module-require-nested-directory-index-prefers-nested-mjs-trace",
+        )
         .expect("execute");
     assert_eq!(result.value, Value::Int(62));
 }
@@ -7745,7 +7898,7 @@ fn require_module_uses_explicit_cjs_specifier_even_with_js_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-cjs-trace")
@@ -7796,7 +7949,7 @@ fn require_module_uses_explicit_cjs_specifier_even_with_mjs_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-cjs-mjs-neighbor-trace")
@@ -7847,7 +8000,7 @@ fn require_module_uses_explicit_mjs_specifier_even_with_cjs_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-mjs-trace")
@@ -7898,7 +8051,7 @@ fn require_module_uses_explicit_mjs_specifier_even_with_js_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-mjs-js-neighbor-trace")
@@ -7949,7 +8102,7 @@ fn require_module_prefers_cjs_over_mjs_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-prefers-cjs-trace")
@@ -8002,7 +8155,7 @@ module.exports = value;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-prefers-cjs-over-js-trace")
@@ -8055,7 +8208,7 @@ fn require_module_resolves_index_cjs_for_directory_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-index-cjs-trace")
@@ -8108,7 +8261,7 @@ fn require_module_prefers_index_cjs_over_index_js() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-index-cjs-over-js-trace")
@@ -8159,7 +8312,7 @@ fn require_module_resolves_index_js_when_only_index_js() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-index-js-only-trace")
@@ -8212,7 +8365,7 @@ fn require_module_uses_explicit_index_mjs_even_with_index_cjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-index-mjs-trace")
@@ -8265,7 +8418,7 @@ fn require_module_uses_explicit_index_js_even_with_index_cjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-index-js-trace")
@@ -8318,7 +8471,7 @@ fn require_module_uses_explicit_index_mjs_even_with_index_js() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-index-mjs-js-trace")
@@ -8371,7 +8524,7 @@ fn require_module_uses_explicit_index_js_even_with_index_mjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-index-js-mjs-trace")
@@ -8424,7 +8577,7 @@ fn require_module_uses_explicit_index_cjs_even_with_index_mjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-index-cjs-trace")
@@ -8473,7 +8626,7 @@ fn require_module_falls_back_to_mjs_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-fallback-mjs-trace")
@@ -8524,7 +8677,7 @@ fn require_module_falls_back_to_index_mjs_for_directory_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-fallback-index-mjs-trace")
@@ -8575,7 +8728,7 @@ fn require_module_prefers_js_over_mjs_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-js-prefer-trace")
@@ -8624,7 +8777,7 @@ fn require_module_falls_back_to_js_for_extensionless_specifier() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-fallback-js-trace")
@@ -8675,7 +8828,7 @@ fn require_module_uses_explicit_js_specifier_even_with_cjs_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-js-trace")
@@ -8726,7 +8879,7 @@ fn require_module_uses_explicit_js_specifier_even_with_mjs_neighbor() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-explicit-js-mjs-neighbor-trace")
@@ -8775,7 +8928,7 @@ fn require_module_allows_cjs_to_read_js_default_export() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-js-extension-trace")
@@ -8824,7 +8977,7 @@ fn require_module_allows_cjs_to_read_js_named_export() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-js-named-trace")
@@ -8877,7 +9030,7 @@ fn require_module_exposes_js_default_and_named_exports() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-js-default-named-trace")
@@ -8928,7 +9081,7 @@ module.exports = first === second;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-js-cache-trace")
@@ -8981,7 +9134,7 @@ fn require_module_prefers_index_js_over_index_mjs() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-index-js-trace")
@@ -8994,8 +9147,7 @@ fn cjs_module_exposes_filename_binding() {
     let root = temp_module_dir("cjs_filename_binding");
     fs::create_dir_all(&root).expect("create module root");
     let entry_path = root.join("entry.cjs");
-    fs::write(&entry_path, "module.exports = { filename: __filename };")
-        .expect("write cjs module");
+    fs::write(&entry_path, "module.exports = { filename: __filename };").expect("write cjs module");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9054,8 +9206,7 @@ fn cjs_module_exposes_dirname_binding() {
     let root = temp_module_dir("cjs_dirname_binding");
     fs::create_dir_all(&root).expect("create module root");
     let entry_path = root.join("entry.cjs");
-    fs::write(&entry_path, "module.exports = { dirname: __dirname };")
-        .expect("write cjs module");
+    fs::write(&entry_path, "module.exports = { dirname: __dirname };").expect("write cjs module");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9178,8 +9329,7 @@ fn cjs_module_exports_module_id() {
     let root = temp_module_dir("cjs_module_id");
     fs::create_dir_all(&root).expect("create module root");
     let entry_path = root.join("entry.cjs");
-    fs::write(&entry_path, "module.exports = { id: module.id };")
-        .expect("write cjs module");
+    fs::write(&entry_path, "module.exports = { id: module.id };").expect("write cjs module");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9238,8 +9388,7 @@ fn cjs_module_exports_loaded_true_after_eval() {
     let root = temp_module_dir("cjs_module_loaded");
     fs::create_dir_all(&root).expect("create module root");
     let entry_path = root.join("entry.cjs");
-    fs::write(&entry_path, "module.exports = module;")
-        .expect("write cjs module");
+    fs::write(&entry_path, "module.exports = module;").expect("write cjs module");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9294,8 +9443,7 @@ fn cjs_module_parent_tracks_require_chain() {
     let root = temp_module_dir("cjs_module_parent_chain");
     fs::create_dir_all(&root).expect("create module root");
     let child_path = root.join("child.cjs");
-    fs::write(&child_path, "module.exports = module;")
-        .expect("write child module");
+    fs::write(&child_path, "module.exports = module;").expect("write child module");
     let parent_path = root.join("parent.cjs");
     fs::write(
         &parent_path,
@@ -9344,7 +9492,7 @@ fn cjs_module_parent_tracks_require_chain() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-cjs-parent-chain-trace")
@@ -9361,8 +9509,7 @@ fn cjs_entry_module_parent_is_null() {
     let root = temp_module_dir("cjs_entry_parent_null");
     fs::create_dir_all(&root).expect("create module root");
     let child_path = root.join("child.cjs");
-    fs::write(&child_path, "module.exports = module;")
-        .expect("write child module");
+    fs::write(&child_path, "module.exports = module;").expect("write child module");
     let parent_path = root.join("parent.cjs");
     fs::write(
         &parent_path,
@@ -9411,7 +9558,7 @@ fn cjs_entry_module_parent_is_null() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-cjs-parent-null-trace")
@@ -9424,8 +9571,7 @@ fn cjs_module_exports_module_path() {
     let root = temp_module_dir("cjs_module_path");
     fs::create_dir_all(&root).expect("create module root");
     let entry_path = root.join("entry.cjs");
-    fs::write(&entry_path, "module.exports = { path: module.path };")
-        .expect("write cjs module");
+    fs::write(&entry_path, "module.exports = { path: module.path };").expect("write cjs module");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9534,7 +9680,7 @@ fn require_module_cjs_cycle_reads_partial_exports() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-cycle-trace")
@@ -9553,8 +9699,7 @@ fn cjs_module_loaded_false_during_cycle() {
     )
     .expect("write a.cjs");
     let b_path = root.join("b.cjs");
-    fs::write(&b_path, "module.exports = require('./a.cjs');\n")
-        .expect("write b.cjs");
+    fs::write(&b_path, "module.exports = require('./a.cjs');\n").expect("write b.cjs");
 
     let mut module = test_module_with_pool(
         vec![
@@ -9597,7 +9742,7 @@ fn cjs_module_loaded_false_during_cycle() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-cjs-loaded-cycle-trace")
@@ -9610,8 +9755,7 @@ fn cjs_require_returns_cached_exports() {
     let root = temp_module_dir("module_require_cache");
     fs::create_dir_all(&root).expect("create module root");
     let dep_path = root.join("dep.cjs");
-    fs::write(&dep_path, "module.exports = { count: 0 };")
-        .expect("write dep module");
+    fs::write(&dep_path, "module.exports = { count: 0 };").expect("write dep module");
     let entry_path = root.join("entry.cjs");
     fs::write(
         &entry_path,
@@ -9663,7 +9807,7 @@ module.exports = { count: b.count };",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-cache-trace")
@@ -9714,7 +9858,7 @@ module.exports = first === second;",
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-require-identity-trace")
@@ -9789,7 +9933,7 @@ fn cjs_exports_reassignment_does_not_replace_module_exports() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-exports-reassign-trace")
@@ -9864,7 +10008,7 @@ fn cjs_module_exports_reassignment_severs_exports_alias() {
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.module_root = Some(root.display().to_string());
-    config.granted_capabilities = vec!["module:require".to_string()];
+    config.granted_capabilities = BTreeSet::from([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let result = lane
         .execute(&module, "module-exports-reassign-alias-trace")

@@ -490,42 +490,42 @@ pub fn lower_ir0_to_ir1(
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
-                let alloc_import_binding = |name: &str,
-                                                bindings: &mut Vec<ResolvedBinding>,
-                                                binding_lookup: &mut BTreeMap<String, BindingId>,
-                                                binding_index: &mut u32|
-                 -> Result<BindingId, LoweringPipelineError> {
-                    alloc_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        name,
-                        BindingKind::Import,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)
-                };
+                let alloc_import_binding =
+                    |name: &str,
+                     bindings: &mut Vec<ResolvedBinding>,
+                     binding_lookup: &mut BTreeMap<String, BindingId>,
+                     binding_index: &mut u32|
+                     -> Result<BindingId, LoweringPipelineError> {
+                        alloc_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            name,
+                            BindingKind::Import,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)
+                    };
 
-                let make_temp_binding = |synthetic_import_index: &mut u32,
-                                             bindings: &mut Vec<ResolvedBinding>,
-                                             binding_lookup: &mut BTreeMap<String, BindingId>,
-                                             binding_index: &mut u32|
-                 -> Result<BindingId, LoweringPipelineError> {
-                    let temp_name = make_internal_binding_name(
-                        "import_namespace",
-                        *synthetic_import_index,
-                    );
-                    *synthetic_import_index = synthetic_import_index.saturating_add(1);
-                    alloc_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        &temp_name,
-                        BindingKind::Const,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)
-                };
+                let make_temp_binding =
+                    |synthetic_import_index: &mut u32,
+                     bindings: &mut Vec<ResolvedBinding>,
+                     binding_lookup: &mut BTreeMap<String, BindingId>,
+                     binding_index: &mut u32|
+                     -> Result<BindingId, LoweringPipelineError> {
+                        let temp_name =
+                            make_internal_binding_name("import_namespace", *synthetic_import_index);
+                        *synthetic_import_index = synthetic_import_index.saturating_add(1);
+                        alloc_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            &temp_name,
+                            BindingKind::Const,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)
+                    };
 
                 match &import.clause {
                     ImportClause::SideEffect => {
@@ -586,7 +586,10 @@ pub fn lower_ir0_to_ir1(
                             ir1.ops.push(Ir1Op::Pop);
                         }
                     }
-                    ImportClause::DefaultAndNamed { default, specifiers } => {
+                    ImportClause::DefaultAndNamed {
+                        default,
+                        specifiers,
+                    } => {
                         let temp_binding_id = make_temp_binding(
                             &mut synthetic_import_index,
                             &mut bindings,
@@ -952,6 +955,7 @@ fn alloc_pattern_primary_binding(
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
 /// for each property. Array patterns use numeric index strings.
 #[allow(clippy::only_used_in_recursion)]
+#[allow(clippy::too_many_arguments)]
 fn lower_destructuring_to_ir1(
     pattern: &BindingPattern,
     source_bid: BindingId,
@@ -5411,25 +5415,26 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
-            if let Expression::Identifier(name) = callee.as_ref() {
-                if name == "require" && !binding_lookup.contains_key(name.as_str()) {
-                    for arg in arguments {
-                        lower_expression_to_ir1(
-                            arg,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
-                        )?;
-                    }
-                    ops.push(Ir1Op::HostCall {
-                        capability: "module:require".to_string(),
-                        arg_count: arguments.len() as u32,
-                    });
-                    return Ok(());
+            if let Expression::Identifier(name) = callee.as_ref()
+                && name == "require"
+                && !binding_lookup.contains_key(name.as_str())
+            {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
                 }
+                ops.push(Ir1Op::HostCall {
+                    capability: "module:require".to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
             }
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
@@ -11079,7 +11084,10 @@ mod tests {
             }
         }
         assert_eq!(index_one, 1, "should emit GetProperty for outer index '1'");
-        assert_eq!(index_zero, 1, "should emit GetProperty for nested index '0'");
+        assert_eq!(
+            index_zero, 1,
+            "should emit GetProperty for nested index '0'"
+        );
     }
 
     #[test]

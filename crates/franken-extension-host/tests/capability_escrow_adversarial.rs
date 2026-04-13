@@ -1,9 +1,9 @@
 use frankenengine_extension_host::{
-    compute_content_hash, BudgetExhaustionPolicy, Capability, CapabilityEscrowDecisionKind,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, Capability, CapabilityEscrowDecisionKind,
     CapabilityEscrowState, DelegateCell, DelegateCellFactory, DelegateCellManifest,
     DelegationScope, DenialReason, EscrowFloodProtectionContract, ExtensionManifest,
     FlowEnforcementContext, HostcallResult, HostcallType, Labeled, LifecycleContext,
-    ResourceBudget, CURRENT_ENGINE_VERSION,
+    ResourceBudget, compute_content_hash,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -135,10 +135,12 @@ fn time_delayed_escalation_after_benign_sequence_still_requires_escrow() {
         .expect("retry should still route through escrow");
     assert_pending_challenge(&retry.result, Capability::ProcessSpawn);
 
-    assert!(delegate
-        .capability_escrow_records()
-        .values()
-        .all(|record| record.state != CapabilityEscrowState::Approved));
+    assert!(
+        delegate
+            .capability_escrow_records()
+            .values()
+            .all(|record| record.state != CapabilityEscrowState::Approved)
+    );
     assert!(delegate.capability_escrow_receipts().iter().all(|receipt| {
         matches!(
             receipt.decision,
@@ -223,10 +225,12 @@ fn emergency_grant_exhaustion_does_not_convert_to_persistent_authority() {
     assert_pending_challenge(&third.result, Capability::ProcessSpawn);
 
     assert!(delegate.active_emergency_grants().is_empty());
-    assert!(delegate
-        .capability_escrow_events()
-        .iter()
-        .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0008")));
+    assert!(
+        delegate
+            .capability_escrow_events()
+            .iter()
+            .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0008"))
+    );
 
     delegate
         .complete_emergency_post_review(&grant.grant_id)
@@ -295,10 +299,12 @@ fn grant_expiry_boundary_fails_closed_at_expiry_timestamp() {
     assert_pending_challenge(&at_expiry.result, Capability::ProcessSpawn);
 
     assert!(delegate.active_emergency_grants().is_empty());
-    assert!(delegate
-        .capability_escrow_events()
-        .iter()
-        .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0007")));
+    assert!(
+        delegate
+            .capability_escrow_events()
+            .iter()
+            .any(|event| event.error_code.as_deref() == Some("FE-ESCROW-0007"))
+    );
 }
 
 #[test]

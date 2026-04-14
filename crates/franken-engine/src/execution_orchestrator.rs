@@ -844,6 +844,7 @@ impl ExecutionOrchestrator {
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
+        quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.module_root = package
             .source_file
             .as_deref()
@@ -852,6 +853,7 @@ impl ExecutionOrchestrator {
 
         let mut v8_config = InterpreterConfig::v8_defaults();
         v8_config.granted_capabilities = granted_capabilities;
+        v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.module_root = package
             .source_file
             .as_deref()

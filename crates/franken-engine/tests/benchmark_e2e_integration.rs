@@ -41,8 +41,9 @@ use std::path::Path;
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
     BENCHMARK_E2E_SCHEMA_VERSION, BENCHMARK_ENV_SCHEMA_VERSION, BenchmarkComparisonCase,
-    BenchmarkComparisonManifest, BenchmarkComparisonRuntimeCommands, BenchmarkComparisonSample,
-    BenchmarkEnvironmentManifest, BenchmarkFairnessPolicy, BenchmarkFamily,
+    BenchmarkComparisonError, BenchmarkComparisonManifest,
+    BenchmarkComparisonRuntimeCommands, BenchmarkComparisonSample, BenchmarkEnvironmentManifest,
+    BenchmarkFairnessPolicy, BenchmarkFamily,
     BenchmarkHarnessContract, BenchmarkHarnessContractError, BenchmarkMeasurement,
     BenchmarkRuntimePins, BenchmarkSuiteConfig, LatencyDistribution, MIN_START_BUDGET_MILLIONTHS,
     RegressionThresholds, ScaleProfile, Xorshift64, detect_regression, measurements_to_cases,
@@ -2426,5 +2427,32 @@ fn benchmark_comparison_manifest_unique_ids() {
     assert!(
         duplicates.is_empty(),
         "benchmark comparison manifest has duplicate benchmark_id entries: {duplicates:?}"
+    );
+}
+
+#[test]
+fn benchmark_comparison_manifest_rejects_duplicate_ids() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = crate_root
+        .join("..")
+        .join("..")
+        .join("benchmarks/runtime_comparison/manifest.json");
+    let manifest_bytes =
+        fs::read(&manifest_path).expect("benchmark comparison manifest should exist");
+    let mut manifest: BenchmarkComparisonManifest =
+        serde_json::from_slice(&manifest_bytes).expect("manifest should parse");
+
+    let duplicate = manifest
+        .cases
+        .first()
+        .cloned()
+        .expect("manifest must contain at least one case");
+    manifest.cases.push(duplicate);
+
+    let error =
+        validate_benchmark_comparison_manifest(&manifest).expect_err("expected duplicate to fail");
+    assert!(
+        matches!(error, BenchmarkComparisonError::DuplicateBenchmarkId { .. }),
+        "expected DuplicateBenchmarkId error, got {error:?}"
     );
 }

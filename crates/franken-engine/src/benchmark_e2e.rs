@@ -1056,6 +1056,9 @@ pub enum BenchmarkComparisonError {
     },
     EmptyCases,
     EmptyBenchmarkId,
+    DuplicateBenchmarkId {
+        benchmark_id: String,
+    },
     MissingProgramPath {
         benchmark_id: String,
     },
@@ -1086,6 +1089,12 @@ impl std::fmt::Display for BenchmarkComparisonError {
             Self::EmptyCases => f.write_str("benchmark comparison manifest must contain cases"),
             Self::EmptyBenchmarkId => {
                 f.write_str("benchmark comparison cases must have non-empty benchmark_id values")
+            }
+            Self::DuplicateBenchmarkId { benchmark_id } => {
+                write!(
+                    f,
+                    "benchmark comparison manifest contains duplicate benchmark_id `{benchmark_id}`"
+                )
             }
             Self::MissingProgramPath { benchmark_id } => {
                 write!(
@@ -1139,9 +1148,15 @@ pub fn validate_benchmark_comparison_manifest(
         fairness_policy: manifest.fairness_policy,
     })
     .map_err(|error| BenchmarkComparisonError::InvalidHarnessContract(error.to_string()))?;
+    let mut seen_ids = BTreeSet::new();
     for case in &manifest.cases {
         if case.benchmark_id.trim().is_empty() {
             return Err(BenchmarkComparisonError::EmptyBenchmarkId);
+        }
+        if !seen_ids.insert(case.benchmark_id.clone()) {
+            return Err(BenchmarkComparisonError::DuplicateBenchmarkId {
+                benchmark_id: case.benchmark_id.clone(),
+            });
         }
         if case.program_path.as_os_str().is_empty() {
             return Err(BenchmarkComparisonError::MissingProgramPath {

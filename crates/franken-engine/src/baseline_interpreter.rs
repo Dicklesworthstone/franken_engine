@@ -967,6 +967,8 @@ pub struct InterpreterConfig {
     pub module_root: Option<String>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
+    /// Optional extension ID for logging and diagnostics.
+    pub extension_id: Option<String>,
 }
 
 impl InterpreterConfig {
@@ -982,6 +984,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
+            extension_id: None,
         }
     }
 
@@ -997,6 +1000,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
+            extension_id: None,
         }
     }
 
@@ -1012,6 +1016,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
+            extension_id: None,
         }
     }
 
@@ -1027,6 +1032,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
+            extension_id: None,
         }
     }
 }
@@ -1043,6 +1049,29 @@ pub struct InterpreterEvent {
     pub event: String,
     pub outcome: String,
     pub error_code: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Console output capture (RC-1.10: console.log/error/warn)
+// ---------------------------------------------------------------------------
+
+/// Console log level for deterministic capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConsoleLevel {
+    Log,
+    Error,
+    Warn,
+}
+
+/// A captured console output entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleEntry {
+    /// Log level (log, error, warn).
+    pub level: ConsoleLevel,
+    /// Stringified arguments joined by space.
+    pub message: String,
+    /// Instruction count at which the log was emitted.
+    pub instruction_index: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,6 +1093,8 @@ pub struct ExecutionResult {
     pub hostcall_decisions: Vec<HostcallDecisionRecord>,
     /// Structured events emitted.
     pub events: Vec<InterpreterEvent>,
+    /// Console output captured from console.log/error/warn calls.
+    pub console_output: Vec<ConsoleEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1202,6 +1233,8 @@ pub struct InterpreterCore {
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
     current_module_specifier: Option<String>,
+    /// Console output captured for deterministic replay.
+    console_output: Vec<ConsoleEntry>,
 }
 
 impl InterpreterCore {
@@ -1244,6 +1277,7 @@ impl InterpreterCore {
             module_state: ModuleState::new(),
             active_cjs_context: None,
             current_module_specifier: None,
+            console_output: Vec::new(),
         }
     }
 
@@ -1267,6 +1301,7 @@ impl InterpreterCore {
             witness_events: std::mem::take(&mut self.witness_events),
             hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
             events: std::mem::take(&mut self.events),
+            console_output: std::mem::take(&mut self.console_output),
         }
     }
 
@@ -2917,6 +2952,8 @@ impl InterpreterCore {
                         self.require_module(module, &specifier)?
                     } else if capability.0.starts_with("number:") {
                         self.dispatch_number_hostcall(&capability.0, args)?
+                    } else if capability.0.starts_with("console:") {
+                        self.dispatch_console_hostcall(&capability.0, args)?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
@@ -5379,6 +5416,104 @@ impl InterpreterCore {
                 // Unknown number hostcall
                 Ok(Value::Undefined)
             }
+        }
+    }
+
+    /// Dispatch console hostcalls: console.log, console.error, console.warn.
+    ///
+    /// Hostcall capabilities:
+    /// - `console:log` — console.log(...args)
+    /// - `console:error` — console.error(...args)
+    /// - `console:warn` — console.warn(...args)
+    ///
+    /// Console output is captured in `self.console_output` for deterministic replay.
+    fn dispatch_console_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let level = match cap {
+            "console:log" => ConsoleLevel::Log,
+            "console:error" => ConsoleLevel::Error,
+            "console:warn" => ConsoleLevel::Warn,
+            _ => return Ok(Value::Undefined), // Unknown console method
+        };
+
+        // Collect arguments as strings
+        let mut parts = Vec::new();
+        for i in 0..args.count {
+            let reg = args.start.checked_add(i).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            let val = self.read_reg(reg)?;
+            parts.push(self.value_to_string(&val));
+        }
+
+        let message = parts.join(" ");
+
+        self.console_output.push(ConsoleEntry {
+            level,
+            message,
+            instruction_index: self.instructions_executed,
+        });
+
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched,
+            Some(&format!("console:{}", match level {
+                ConsoleLevel::Log => "log",
+                ConsoleLevel::Error => "error",
+                ConsoleLevel::Warn => "warn",
+            })),
+        );
+
+        Ok(Value::Undefined)
+    }
+
+    /// Convert a Value to a string representation for console output.
+    fn value_to_string(&self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() {
+                    "NaN".to_string()
+                } else if v.is_infinite() {
+                    if v.is_sign_negative() {
+                        "-Infinity".to_string()
+                    } else {
+                        "Infinity".to_string()
+                    }
+                } else if v == 0.0 && v.is_sign_negative() {
+                    "0".to_string() // JS prints -0 as "0"
+                } else {
+                    format!("{v}")
+                }
+            }
+            Value::Str(s) => s.clone(),
+            Value::Object(id) => {
+                // Try to get a simple string representation
+                if let Some(obj) = self.heap.get(id.0 as usize) {
+                    if obj.properties.is_empty() {
+                        "[object Object]".to_string()
+                    } else {
+                        format!("[object Object]") // Keep it simple
+                    }
+                } else {
+                    format!("[object#{}]", id.0)
+                }
+            }
+            Value::Function(idx) => format!("[Function: fn{}]", idx),
+            Value::Closure(idx) => format!("[Function: closure{}]", idx),
+            Value::Iterator(idx) => format!("[object Iterator#{}]", idx),
+            Value::GeneratorFunction(idx) => format!("[GeneratorFunction: gen{}]", idx),
+            Value::Generator(idx) => format!("[object Generator#{}]", idx),
+            Value::Promise(idx) => format!("[object Promise#{}]", idx),
         }
     }
 

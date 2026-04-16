@@ -104,7 +104,10 @@ fn run_async_test(module: &Ir3Module) -> Result<ExecutionResult, InterpreterErro
 fn async_function_basic_execution() {
     // async function simpleAsync() { return 42; }
     let instructions = vec![
-        Ir3Instruction::LoadInt { dest_reg: 0, value: 42 },
+        Ir3Instruction::LoadInt {
+            dest_reg: 0,
+            value: 42,
+        },
         Ir3Instruction::Return { src_reg: 0 },
     ];
 
@@ -138,19 +141,35 @@ fn async_function_with_await() {
     // }
     let instructions = vec![
         // Create Promise.resolve(100)
-        Ir3Instruction::LoadBuiltin { dest_reg: 0, builtin_id: 42 }, // Promise.resolve
-        Ir3Instruction::LoadInt { dest_reg: 1, value: 100 },
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 0,
+            builtin_id: 42,
+        }, // Promise.resolve
+        Ir3Instruction::LoadInt {
+            dest_reg: 1,
+            value: 100,
+        },
         Ir3Instruction::Call {
             dest_reg: 2,
             function_reg: 0,
             arg_start: 1,
-            arg_count: 1
+            arg_count: 1,
         },
         // Await the promise
-        Ir3Instruction::Await { dest_reg: 3, promise_reg: 2 },
+        Ir3Instruction::Await {
+            dest_reg: 3,
+            promise_reg: 2,
+        },
         // Multiply by 2
-        Ir3Instruction::LoadInt { dest_reg: 4, value: 2 },
-        Ir3Instruction::Mul { dest_reg: 5, lhs_reg: 3, rhs_reg: 4 },
+        Ir3Instruction::LoadInt {
+            dest_reg: 4,
+            value: 2,
+        },
+        Ir3Instruction::Mul {
+            dest_reg: 5,
+            lhs_reg: 3,
+            rhs_reg: 4,
+        },
         Ir3Instruction::Return { src_reg: 5 },
     ];
 
@@ -167,7 +186,10 @@ fn async_function_with_await() {
     let result = run_async_test(&module);
 
     // Should succeed without throwing errors
-    assert!(result.is_ok(), "Async function with await should execute successfully");
+    assert!(
+        result.is_ok(),
+        "Async function with await should execute successfully"
+    );
 }
 
 // ============================================================================
@@ -183,26 +205,71 @@ fn promise_all_with_multiple_promises() {
     // ]).then(values => values.reduce((a, b) => a + b, 0))
     let instructions = vec![
         // Create array of promises
-        Ir3Instruction::LoadBuiltin { dest_reg: 0, builtin_id: 42 }, // Promise.resolve
-        Ir3Instruction::LoadInt { dest_reg: 1, value: 1 },
-        Ir3Instruction::Call { dest_reg: 2, function_reg: 0, arg_start: 1, arg_count: 1 },
-
-        Ir3Instruction::LoadInt { dest_reg: 3, value: 2 },
-        Ir3Instruction::Call { dest_reg: 4, function_reg: 0, arg_start: 3, arg_count: 1 },
-
-        Ir3Instruction::LoadInt { dest_reg: 5, value: 3 },
-        Ir3Instruction::Call { dest_reg: 6, function_reg: 0, arg_start: 5, arg_count: 1 },
-
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 0,
+            builtin_id: 42,
+        }, // Promise.resolve
+        Ir3Instruction::LoadInt {
+            dest_reg: 1,
+            value: 1,
+        },
+        Ir3Instruction::Call {
+            dest_reg: 2,
+            function_reg: 0,
+            arg_start: 1,
+            arg_count: 1,
+        },
+        Ir3Instruction::LoadInt {
+            dest_reg: 3,
+            value: 2,
+        },
+        Ir3Instruction::Call {
+            dest_reg: 4,
+            function_reg: 0,
+            arg_start: 3,
+            arg_count: 1,
+        },
+        Ir3Instruction::LoadInt {
+            dest_reg: 5,
+            value: 3,
+        },
+        Ir3Instruction::Call {
+            dest_reg: 6,
+            function_reg: 0,
+            arg_start: 5,
+            arg_count: 1,
+        },
         // Create array [promise1, promise2, promise3]
-        Ir3Instruction::NewArray { dest_reg: 7, size: 3 },
-        Ir3Instruction::StoreArrayElement { array_reg: 7, index_reg: 1, value_reg: 2 },
-        Ir3Instruction::StoreArrayElement { array_reg: 7, index_reg: 3, value_reg: 4 },
-        Ir3Instruction::StoreArrayElement { array_reg: 7, index_reg: 5, value_reg: 6 },
-
+        Ir3Instruction::NewArray {
+            dest_reg: 7,
+            size: 3,
+        },
+        Ir3Instruction::StoreArrayElement {
+            array_reg: 7,
+            index_reg: 1,
+            value_reg: 2,
+        },
+        Ir3Instruction::StoreArrayElement {
+            array_reg: 7,
+            index_reg: 3,
+            value_reg: 4,
+        },
+        Ir3Instruction::StoreArrayElement {
+            array_reg: 7,
+            index_reg: 5,
+            value_reg: 6,
+        },
         // Call Promise.all
-        Ir3Instruction::LoadBuiltin { dest_reg: 8, builtin_id: 43 }, // Promise.all
-        Ir3Instruction::Call { dest_reg: 9, function_reg: 8, arg_start: 7, arg_count: 1 },
-
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 8,
+            builtin_id: 43,
+        }, // Promise.all
+        Ir3Instruction::Call {
+            dest_reg: 9,
+            function_reg: 8,
+            arg_start: 7,
+            arg_count: 1,
+        },
         Ir3Instruction::Return { src_reg: 9 },
     ];
 
@@ -228,35 +295,50 @@ fn async_function_with_promise_all_and_array_methods() {
     // }
     let instructions = vec![
         // Load userIds parameter (assume reg 0)
-        Ir3Instruction::LoadParam { dest_reg: 0, param_idx: 0 },
-
+        Ir3Instruction::LoadParam {
+            dest_reg: 0,
+            param_idx: 0,
+        },
         // Create mapper function for userIds.map()
-        Ir3Instruction::LoadFunction { dest_reg: 1, function_idx: 1 }, // async mapper
+        Ir3Instruction::LoadFunction {
+            dest_reg: 1,
+            function_idx: 1,
+        }, // async mapper
         Ir3Instruction::CallMethod {
             dest_reg: 2,
             object_reg: 0,
             method_name_idx: 0, // "map"
             arg_start: 1,
-            arg_count: 1
+            arg_count: 1,
         },
-
         // Call Promise.all on mapped array
-        Ir3Instruction::LoadBuiltin { dest_reg: 3, builtin_id: 43 }, // Promise.all
-        Ir3Instruction::Call { dest_reg: 4, function_reg: 3, arg_start: 2, arg_count: 1 },
-
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 3,
+            builtin_id: 43,
+        }, // Promise.all
+        Ir3Instruction::Call {
+            dest_reg: 4,
+            function_reg: 3,
+            arg_start: 2,
+            arg_count: 1,
+        },
         // Await Promise.all result
-        Ir3Instruction::Await { dest_reg: 5, promise_reg: 4 },
-
+        Ir3Instruction::Await {
+            dest_reg: 5,
+            promise_reg: 4,
+        },
         // Filter users where id > 0
-        Ir3Instruction::LoadFunction { dest_reg: 6, function_idx: 2 }, // filter predicate
+        Ir3Instruction::LoadFunction {
+            dest_reg: 6,
+            function_idx: 2,
+        }, // filter predicate
         Ir3Instruction::CallMethod {
             dest_reg: 7,
             object_reg: 5,
             method_name_idx: 1, // "filter"
             arg_start: 6,
-            arg_count: 1
+            arg_count: 1,
         },
-
         Ir3Instruction::Return { src_reg: 7 },
     ];
 
@@ -303,7 +385,10 @@ fn async_function_with_promise_all_and_array_methods() {
     let module = test_module_with_pool_and_functions(instructions, constant_pool, functions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Complex async workflow should execute successfully");
+    assert!(
+        result.is_ok(),
+        "Complex async workflow should execute successfully"
+    );
 }
 
 // ============================================================================
@@ -327,19 +412,34 @@ fn async_error_propagation() {
     let instructions = vec![
         // Try block start
         Ir3Instruction::TryBegin { handler_offset: 6 },
-
         // Call throwsError()
-        Ir3Instruction::LoadFunction { dest_reg: 0, function_idx: 1 },
-        Ir3Instruction::Call { dest_reg: 1, function_reg: 0, arg_start: 0, arg_count: 0 },
-        Ir3Instruction::Await { dest_reg: 2, promise_reg: 1 },
-
+        Ir3Instruction::LoadFunction {
+            dest_reg: 0,
+            function_idx: 1,
+        },
+        Ir3Instruction::Call {
+            dest_reg: 1,
+            function_reg: 0,
+            arg_start: 0,
+            arg_count: 0,
+        },
+        Ir3Instruction::Await {
+            dest_reg: 2,
+            promise_reg: 1,
+        },
         // Should not reach - return "should not reach"
-        Ir3Instruction::LoadString { dest_reg: 3, string_idx: 0 },
+        Ir3Instruction::LoadString {
+            dest_reg: 3,
+            string_idx: 0,
+        },
         Ir3Instruction::Return { src_reg: 3 },
-
         // Catch block (offset 6)
         Ir3Instruction::CatchBegin { error_reg: 4 },
-        Ir3Instruction::LoadProperty { dest_reg: 5, object_reg: 4, property_idx: 1 }, // e.message
+        Ir3Instruction::LoadProperty {
+            dest_reg: 5,
+            object_reg: 4,
+            property_idx: 1,
+        }, // e.message
         Ir3Instruction::Return { src_reg: 5 },
         Ir3Instruction::TryEnd,
     ];
@@ -373,7 +473,10 @@ fn async_error_propagation() {
     let module = test_module_with_pool_and_functions(instructions, constant_pool, functions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Async error propagation should be handled correctly");
+    assert!(
+        result.is_ok(),
+        "Async error propagation should be handled correctly"
+    );
 }
 
 // ============================================================================
@@ -423,117 +526,242 @@ fn comprehensive_async_workflow_integration() {
     // This is a complex instruction sequence that represents the above logic
     let instructions = vec![
         // Load request parameter
-        Ir3Instruction::LoadParam { dest_reg: 0, param_idx: 0 },
-
+        Ir3Instruction::LoadParam {
+            dest_reg: 0,
+            param_idx: 0,
+        },
         // Extract userId and sessionId from request
-        Ir3Instruction::LoadProperty { dest_reg: 1, object_reg: 0, property_idx: 0 }, // req.userId
-        Ir3Instruction::LoadProperty { dest_reg: 2, object_reg: 0, property_idx: 1 }, // req.sessionId
-
+        Ir3Instruction::LoadProperty {
+            dest_reg: 1,
+            object_reg: 0,
+            property_idx: 0,
+        }, // req.userId
+        Ir3Instruction::LoadProperty {
+            dest_reg: 2,
+            object_reg: 0,
+            property_idx: 1,
+        }, // req.sessionId
         // Create Promise.all for user and metadata fetching
-        Ir3Instruction::LoadFunction { dest_reg: 3, function_idx: 1 }, // fetchUser
-        Ir3Instruction::Call { dest_reg: 4, function_reg: 3, arg_start: 1, arg_count: 1 },
-
-        Ir3Instruction::LoadFunction { dest_reg: 5, function_idx: 2 }, // fetchMetadata
-        Ir3Instruction::Call { dest_reg: 6, function_reg: 5, arg_start: 2, arg_count: 1 },
-
+        Ir3Instruction::LoadFunction {
+            dest_reg: 3,
+            function_idx: 1,
+        }, // fetchUser
+        Ir3Instruction::Call {
+            dest_reg: 4,
+            function_reg: 3,
+            arg_start: 1,
+            arg_count: 1,
+        },
+        Ir3Instruction::LoadFunction {
+            dest_reg: 5,
+            function_idx: 2,
+        }, // fetchMetadata
+        Ir3Instruction::Call {
+            dest_reg: 6,
+            function_reg: 5,
+            arg_start: 2,
+            arg_count: 1,
+        },
         // Create array for Promise.all([fetchUser, fetchMetadata])
-        Ir3Instruction::NewArray { dest_reg: 7, size: 2 },
-        Ir3Instruction::LoadInt { dest_reg: 8, value: 0 },
-        Ir3Instruction::LoadInt { dest_reg: 9, value: 1 },
-        Ir3Instruction::StoreArrayElement { array_reg: 7, index_reg: 8, value_reg: 4 },
-        Ir3Instruction::StoreArrayElement { array_reg: 7, index_reg: 9, value_reg: 6 },
-
-        Ir3Instruction::LoadBuiltin { dest_reg: 10, builtin_id: 43 }, // Promise.all
-        Ir3Instruction::Call { dest_reg: 11, function_reg: 10, arg_start: 7, arg_count: 1 },
-        Ir3Instruction::Await { dest_reg: 12, promise_reg: 11 }, // [user, metadata]
-
+        Ir3Instruction::NewArray {
+            dest_reg: 7,
+            size: 2,
+        },
+        Ir3Instruction::LoadInt {
+            dest_reg: 8,
+            value: 0,
+        },
+        Ir3Instruction::LoadInt {
+            dest_reg: 9,
+            value: 1,
+        },
+        Ir3Instruction::StoreArrayElement {
+            array_reg: 7,
+            index_reg: 8,
+            value_reg: 4,
+        },
+        Ir3Instruction::StoreArrayElement {
+            array_reg: 7,
+            index_reg: 9,
+            value_reg: 6,
+        },
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 10,
+            builtin_id: 43,
+        }, // Promise.all
+        Ir3Instruction::Call {
+            dest_reg: 11,
+            function_reg: 10,
+            arg_start: 7,
+            arg_count: 1,
+        },
+        Ir3Instruction::Await {
+            dest_reg: 12,
+            promise_reg: 11,
+        }, // [user, metadata]
         // Extract user and metadata from result array
-        Ir3Instruction::LoadArrayElement { dest_reg: 13, array_reg: 12, index_reg: 8 }, // user
-        Ir3Instruction::LoadArrayElement { dest_reg: 14, array_reg: 12, index_reg: 9 }, // metadata
-
+        Ir3Instruction::LoadArrayElement {
+            dest_reg: 13,
+            array_reg: 12,
+            index_reg: 8,
+        }, // user
+        Ir3Instruction::LoadArrayElement {
+            dest_reg: 14,
+            array_reg: 12,
+            index_reg: 9,
+        }, // metadata
         // Get user.postIds for mapping
-        Ir3Instruction::LoadProperty { dest_reg: 15, object_reg: 13, property_idx: 2 }, // user.postIds
-
+        Ir3Instruction::LoadProperty {
+            dest_reg: 15,
+            object_reg: 13,
+            property_idx: 2,
+        }, // user.postIds
         // Map over postIds to fetch posts with likes and comments
-        Ir3Instruction::LoadFunction { dest_reg: 16, function_idx: 3 }, // async post mapper
+        Ir3Instruction::LoadFunction {
+            dest_reg: 16,
+            function_idx: 3,
+        }, // async post mapper
         Ir3Instruction::CallMethod {
             dest_reg: 17,
             object_reg: 15,
             method_name_idx: 2, // "map"
             arg_start: 16,
-            arg_count: 1
+            arg_count: 1,
         },
-
         // Await Promise.all for all post processing
-        Ir3Instruction::LoadBuiltin { dest_reg: 18, builtin_id: 43 }, // Promise.all
-        Ir3Instruction::Call { dest_reg: 19, function_reg: 18, arg_start: 17, arg_count: 1 },
-        Ir3Instruction::Await { dest_reg: 20, promise_reg: 19 }, // posts with engagement data
-
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 18,
+            builtin_id: 43,
+        }, // Promise.all
+        Ir3Instruction::Call {
+            dest_reg: 19,
+            function_reg: 18,
+            arg_start: 17,
+            arg_count: 1,
+        },
+        Ir3Instruction::Await {
+            dest_reg: 20,
+            promise_reg: 19,
+        }, // posts with engagement data
         // Filter published posts with likes > 0
-        Ir3Instruction::LoadFunction { dest_reg: 21, function_idx: 4 }, // filter predicate
+        Ir3Instruction::LoadFunction {
+            dest_reg: 21,
+            function_idx: 4,
+        }, // filter predicate
         Ir3Instruction::CallMethod {
             dest_reg: 22,
             object_reg: 20,
             method_name_idx: 3, // "filter"
             arg_start: 21,
-            arg_count: 1
+            arg_count: 1,
         },
-
         // Map to summary format
-        Ir3Instruction::LoadFunction { dest_reg: 23, function_idx: 5 }, // summary mapper
+        Ir3Instruction::LoadFunction {
+            dest_reg: 23,
+            function_idx: 5,
+        }, // summary mapper
         Ir3Instruction::CallMethod {
             dest_reg: 24,
             object_reg: 22,
             method_name_idx: 2, // "map"
             arg_start: 23,
-            arg_count: 1
+            arg_count: 1,
         },
-
         // Construct final response object
         Ir3Instruction::NewObject { dest_reg: 25 },
-
         // user: { id: user.id, name: user.name, verified: user.verified }
         Ir3Instruction::NewObject { dest_reg: 26 },
-        Ir3Instruction::LoadProperty { dest_reg: 27, object_reg: 13, property_idx: 3 }, // user.id
-        Ir3Instruction::LoadProperty { dest_reg: 28, object_reg: 13, property_idx: 4 }, // user.name
-        Ir3Instruction::LoadProperty { dest_reg: 29, object_reg: 13, property_idx: 5 }, // user.verified
-        Ir3Instruction::StoreProperty { object_reg: 26, property_idx: 3, value_reg: 27 }, // id
-        Ir3Instruction::StoreProperty { object_reg: 26, property_idx: 4, value_reg: 28 }, // name
-        Ir3Instruction::StoreProperty { object_reg: 26, property_idx: 5, value_reg: 29 }, // verified
-
+        Ir3Instruction::LoadProperty {
+            dest_reg: 27,
+            object_reg: 13,
+            property_idx: 3,
+        }, // user.id
+        Ir3Instruction::LoadProperty {
+            dest_reg: 28,
+            object_reg: 13,
+            property_idx: 4,
+        }, // user.name
+        Ir3Instruction::LoadProperty {
+            dest_reg: 29,
+            object_reg: 13,
+            property_idx: 5,
+        }, // user.verified
+        Ir3Instruction::StoreProperty {
+            object_reg: 26,
+            property_idx: 3,
+            value_reg: 27,
+        }, // id
+        Ir3Instruction::StoreProperty {
+            object_reg: 26,
+            property_idx: 4,
+            value_reg: 28,
+        }, // name
+        Ir3Instruction::StoreProperty {
+            object_reg: 26,
+            property_idx: 5,
+            value_reg: 29,
+        }, // verified
         // Add user object to response
-        Ir3Instruction::StoreProperty { object_reg: 25, property_idx: 6, value_reg: 26 }, // user
-
+        Ir3Instruction::StoreProperty {
+            object_reg: 25,
+            property_idx: 6,
+            value_reg: 26,
+        }, // user
         // Add posts to response
-        Ir3Instruction::StoreProperty { object_reg: 25, property_idx: 7, value_reg: 24 }, // posts
-
+        Ir3Instruction::StoreProperty {
+            object_reg: 25,
+            property_idx: 7,
+            value_reg: 24,
+        }, // posts
         // metadata: { sessionId: metadata.sessionId, timestamp: Date.now() }
         Ir3Instruction::NewObject { dest_reg: 30 },
-        Ir3Instruction::LoadProperty { dest_reg: 31, object_reg: 14, property_idx: 1 }, // metadata.sessionId
-        Ir3Instruction::LoadBuiltin { dest_reg: 32, builtin_id: 44 }, // Date.now
-        Ir3Instruction::Call { dest_reg: 33, function_reg: 32, arg_start: 0, arg_count: 0 },
-        Ir3Instruction::StoreProperty { object_reg: 30, property_idx: 1, value_reg: 31 }, // sessionId
-        Ir3Instruction::StoreProperty { object_reg: 30, property_idx: 8, value_reg: 33 }, // timestamp
-
+        Ir3Instruction::LoadProperty {
+            dest_reg: 31,
+            object_reg: 14,
+            property_idx: 1,
+        }, // metadata.sessionId
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 32,
+            builtin_id: 44,
+        }, // Date.now
+        Ir3Instruction::Call {
+            dest_reg: 33,
+            function_reg: 32,
+            arg_start: 0,
+            arg_count: 0,
+        },
+        Ir3Instruction::StoreProperty {
+            object_reg: 30,
+            property_idx: 1,
+            value_reg: 31,
+        }, // sessionId
+        Ir3Instruction::StoreProperty {
+            object_reg: 30,
+            property_idx: 8,
+            value_reg: 33,
+        }, // timestamp
         // Add metadata to response
-        Ir3Instruction::StoreProperty { object_reg: 25, property_idx: 9, value_reg: 30 }, // metadata
-
+        Ir3Instruction::StoreProperty {
+            object_reg: 25,
+            property_idx: 9,
+            value_reg: 30,
+        }, // metadata
         Ir3Instruction::Return { src_reg: 25 },
     ];
 
     let constant_pool = vec![
-        "userId".to_string(),      // 0
-        "sessionId".to_string(),   // 1
-        "map".to_string(),         // 2
-        "filter".to_string(),      // 3
-        "postIds".to_string(),     // 4
-        "id".to_string(),          // 5
-        "name".to_string(),        // 6
-        "verified".to_string(),    // 7
-        "user".to_string(),        // 8
-        "posts".to_string(),       // 9
-        "timestamp".to_string(),   // 10
-        "metadata".to_string(),    // 11
+        "userId".to_string(),    // 0
+        "sessionId".to_string(), // 1
+        "map".to_string(),       // 2
+        "filter".to_string(),    // 3
+        "postIds".to_string(),   // 4
+        "id".to_string(),        // 5
+        "name".to_string(),      // 6
+        "verified".to_string(),  // 7
+        "user".to_string(),      // 8
+        "posts".to_string(),     // 9
+        "timestamp".to_string(), // 10
+        "metadata".to_string(),  // 11
     ];
 
     let main_function = Ir3FunctionDesc {
@@ -603,7 +831,10 @@ fn comprehensive_async_workflow_integration() {
     let module = test_module_with_pool_and_functions(instructions, constant_pool, functions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Comprehensive async workflow should execute successfully");
+    assert!(
+        result.is_ok(),
+        "Comprehensive async workflow should execute successfully"
+    );
 
     // Verify that we get a Promise back (which would be resolved by the event loop)
     match result.unwrap().value {
@@ -627,31 +858,58 @@ fn async_generator_basic_functionality() {
     //   }
     // }
     let instructions = vec![
-        Ir3Instruction::LoadParam { dest_reg: 0, param_idx: 0 }, // max
-        Ir3Instruction::LoadInt { dest_reg: 1, value: 0 },       // i = 0
-
+        Ir3Instruction::LoadParam {
+            dest_reg: 0,
+            param_idx: 0,
+        }, // max
+        Ir3Instruction::LoadInt {
+            dest_reg: 1,
+            value: 0,
+        }, // i = 0
         // Loop start
-        Ir3Instruction::Lt { dest_reg: 2, lhs_reg: 1, rhs_reg: 0 }, // i < max
-        Ir3Instruction::JumpIfFalse { condition_reg: 2, target_offset: 15 },
-
+        Ir3Instruction::Lt {
+            dest_reg: 2,
+            lhs_reg: 1,
+            rhs_reg: 0,
+        }, // i < max
+        Ir3Instruction::JumpIfFalse {
+            condition_reg: 2,
+            target_offset: 15,
+        },
         // Create timeout promise (simplified - normally would call setTimeout)
-        Ir3Instruction::LoadBuiltin { dest_reg: 3, builtin_id: 42 }, // Promise.resolve
-        Ir3Instruction::LoadInt { dest_reg: 4, value: 1 },
-        Ir3Instruction::Call { dest_reg: 5, function_reg: 3, arg_start: 4, arg_count: 1 },
-
+        Ir3Instruction::LoadBuiltin {
+            dest_reg: 3,
+            builtin_id: 42,
+        }, // Promise.resolve
+        Ir3Instruction::LoadInt {
+            dest_reg: 4,
+            value: 1,
+        },
+        Ir3Instruction::Call {
+            dest_reg: 5,
+            function_reg: 3,
+            arg_start: 4,
+            arg_count: 1,
+        },
         // Await the timeout
-        Ir3Instruction::Await { dest_reg: 6, promise_reg: 5 },
-
+        Ir3Instruction::Await {
+            dest_reg: 6,
+            promise_reg: 5,
+        },
         // Yield current value of i
         Ir3Instruction::Yield { value_reg: 1 },
-
         // Increment i
-        Ir3Instruction::LoadInt { dest_reg: 7, value: 1 },
-        Ir3Instruction::Add { dest_reg: 1, lhs_reg: 1, rhs_reg: 7 }, // i++
-
+        Ir3Instruction::LoadInt {
+            dest_reg: 7,
+            value: 1,
+        },
+        Ir3Instruction::Add {
+            dest_reg: 1,
+            lhs_reg: 1,
+            rhs_reg: 7,
+        }, // i++
         // Jump back to loop condition
         Ir3Instruction::Jump { target_offset: 2 },
-
         // Loop end - generator complete
         Ir3Instruction::GeneratorReturn { value_reg: None },
     ];
@@ -670,7 +928,10 @@ fn async_generator_basic_functionality() {
     let module = test_module_with_pool_and_functions(instructions, vec![], functions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Async generator should execute successfully");
+    assert!(
+        result.is_ok(),
+        "Async generator should execute successfully"
+    );
 
     // Should return an async generator object
     match result.unwrap().value {
@@ -694,46 +955,67 @@ fn large_scale_promise_all() {
 
     // Create many Promise.resolve(i) calls
     for i in 0..num_promises {
-        instructions.push(Ir3Instruction::LoadBuiltin { dest_reg: i * 3, builtin_id: 42 }); // Promise.resolve
-        instructions.push(Ir3Instruction::LoadInt { dest_reg: i * 3 + 1, value: i as i64 });
+        instructions.push(Ir3Instruction::LoadBuiltin {
+            dest_reg: i * 3,
+            builtin_id: 42,
+        }); // Promise.resolve
+        instructions.push(Ir3Instruction::LoadInt {
+            dest_reg: i * 3 + 1,
+            value: i as i64,
+        });
         instructions.push(Ir3Instruction::Call {
             dest_reg: i * 3 + 2,
             function_reg: i * 3,
             arg_start: i * 3 + 1,
-            arg_count: 1
+            arg_count: 1,
         });
     }
 
     // Create array for all promises
     let array_reg = num_promises * 3;
-    instructions.push(Ir3Instruction::NewArray { dest_reg: array_reg, size: num_promises });
+    instructions.push(Ir3Instruction::NewArray {
+        dest_reg: array_reg,
+        size: num_promises,
+    });
 
     // Add all promises to array
     for i in 0..num_promises {
-        instructions.push(Ir3Instruction::LoadInt { dest_reg: array_reg + 1, value: i as i64 });
+        instructions.push(Ir3Instruction::LoadInt {
+            dest_reg: array_reg + 1,
+            value: i as i64,
+        });
         instructions.push(Ir3Instruction::StoreArrayElement {
             array_reg,
             index_reg: array_reg + 1,
-            value_reg: i * 3 + 2
+            value_reg: i * 3 + 2,
         });
     }
 
     // Call Promise.all
     let promise_all_reg = array_reg + 2;
-    instructions.push(Ir3Instruction::LoadBuiltin { dest_reg: promise_all_reg, builtin_id: 43 }); // Promise.all
+    instructions.push(Ir3Instruction::LoadBuiltin {
+        dest_reg: promise_all_reg,
+        builtin_id: 43,
+    }); // Promise.all
     instructions.push(Ir3Instruction::Call {
         dest_reg: promise_all_reg + 1,
         function_reg: promise_all_reg,
         arg_start: array_reg,
-        arg_count: 1
+        arg_count: 1,
     });
 
-    instructions.push(Ir3Instruction::Return { src_reg: promise_all_reg + 1 });
+    instructions.push(Ir3Instruction::Return {
+        src_reg: promise_all_reg + 1,
+    });
 
     let module = test_module(instructions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Large scale Promise.all should handle {} promises", num_promises);
+    assert!(
+        result.is_ok(),
+        "Large scale Promise.all should handle {} promises",
+        num_promises
+    );
 }
 
 #[test]
@@ -744,21 +1026,54 @@ fn nested_async_calls_stress_test() {
     //   return await deepNested(depth - 1) + 1;
     // }
     let instructions = vec![
-        Ir3Instruction::LoadParam { dest_reg: 0, param_idx: 0 }, // depth
-        Ir3Instruction::LoadInt { dest_reg: 1, value: 0 },
-        Ir3Instruction::Lte { dest_reg: 2, lhs_reg: 0, rhs_reg: 1 }, // depth <= 0
-        Ir3Instruction::JumpIfFalse { condition_reg: 2, target_offset: 6 },
-
+        Ir3Instruction::LoadParam {
+            dest_reg: 0,
+            param_idx: 0,
+        }, // depth
+        Ir3Instruction::LoadInt {
+            dest_reg: 1,
+            value: 0,
+        },
+        Ir3Instruction::Lte {
+            dest_reg: 2,
+            lhs_reg: 0,
+            rhs_reg: 1,
+        }, // depth <= 0
+        Ir3Instruction::JumpIfFalse {
+            condition_reg: 2,
+            target_offset: 6,
+        },
         // Base case: return depth
         Ir3Instruction::Return { src_reg: 0 },
-
         // Recursive case: deepNested(depth - 1) + 1
-        Ir3Instruction::LoadInt { dest_reg: 3, value: 1 },
-        Ir3Instruction::Sub { dest_reg: 4, lhs_reg: 0, rhs_reg: 3 }, // depth - 1
-        Ir3Instruction::LoadFunction { dest_reg: 5, function_idx: 0 }, // self reference
-        Ir3Instruction::Call { dest_reg: 6, function_reg: 5, arg_start: 4, arg_count: 1 },
-        Ir3Instruction::Await { dest_reg: 7, promise_reg: 6 },
-        Ir3Instruction::Add { dest_reg: 8, lhs_reg: 7, rhs_reg: 3 }, // + 1
+        Ir3Instruction::LoadInt {
+            dest_reg: 3,
+            value: 1,
+        },
+        Ir3Instruction::Sub {
+            dest_reg: 4,
+            lhs_reg: 0,
+            rhs_reg: 3,
+        }, // depth - 1
+        Ir3Instruction::LoadFunction {
+            dest_reg: 5,
+            function_idx: 0,
+        }, // self reference
+        Ir3Instruction::Call {
+            dest_reg: 6,
+            function_reg: 5,
+            arg_start: 4,
+            arg_count: 1,
+        },
+        Ir3Instruction::Await {
+            dest_reg: 7,
+            promise_reg: 6,
+        },
+        Ir3Instruction::Add {
+            dest_reg: 8,
+            lhs_reg: 7,
+            rhs_reg: 3,
+        }, // + 1
         Ir3Instruction::Return { src_reg: 8 },
     ];
 
@@ -776,5 +1091,8 @@ fn nested_async_calls_stress_test() {
     let module = test_module_with_pool_and_functions(instructions, vec![], functions);
     let result = run_async_test(&module);
 
-    assert!(result.is_ok(), "Nested async calls should handle recursion properly");
+    assert!(
+        result.is_ok(),
+        "Nested async calls should handle recursion properly"
+    );
 }

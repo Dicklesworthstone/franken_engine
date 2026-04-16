@@ -3043,16 +3043,16 @@ impl InterpreterCore {
                         // the granted set.  Tags with no mapping are internal
                         // dispatch tags (ifc.*, hostcall.*) emitted by the
                         // trusted lowering pipeline and pass through.
-                        if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0) {
-                            if !self.config.granted_capabilities.contains(&required_cap) {
-                                self.emit_witness(
-                                    WitnessEventKind::CapabilityChecked,
-                                    Some(&format!("denied:{}", capability.0)),
-                                );
-                                return Err(InterpreterError::CapabilityDenied {
-                                    capability: capability.0.clone(),
-                                });
-                            }
+                        if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0)
+                            && !self.config.granted_capabilities.contains(&required_cap)
+                        {
+                            self.emit_witness(
+                                WitnessEventKind::CapabilityChecked,
+                                Some(&format!("denied:{}", capability.0)),
+                            );
+                            return Err(InterpreterError::CapabilityDenied {
+                                capability: capability.0.clone(),
+                            });
                         }
                     }
 
@@ -5691,7 +5691,7 @@ impl InterpreterCore {
                     if obj.properties.is_empty() {
                         "[object Object]".to_string()
                     } else {
-                        format!("[object Object]") // Keep it simple
+                        "[object Object]".to_string() // Keep it simple
                     }
                 } else {
                     format!("[object#{}]", id.0)

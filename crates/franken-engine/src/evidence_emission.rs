@@ -95,22 +95,16 @@ impl fmt::Display for ActionCategory {
 // ---------------------------------------------------------------------------
 
 /// Policy for handling evidence emission failures.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum EvidenceEmissionPolicy {
     /// Fail-closed: emission failure blocks execution.
+    #[default]
     FailClosed,
     /// Fail-open: emission failure logs warning but continues execution.
     FailOpen {
         /// Whether to log emission failures.
         log: bool,
     },
-}
-
-impl Default for EvidenceEmissionPolicy {
-    fn default() -> Self {
-        // Default to fail-closed for security-critical evidence
-        Self::FailClosed
-    }
 }
 
 impl EvidenceEmissionPolicy {

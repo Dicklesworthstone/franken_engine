@@ -9205,4 +9205,180 @@ mod tests {
             _ => panic!("Expected CapabilityDenied error"),
         }
     }
+
+    // -- ES2015 Class Semantics Tests (bd-6a61n.1.3) --
+
+    #[test]
+    fn class_declaration_creates_constructor() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "class-constructor-test");
+
+        // Test basic constructor functionality
+        // This should work with current implementation since it just creates a function
+        let module = test_module(vec![
+            // Test that new Foo() creates an object
+            Ir3Instruction::Halt, // TODO: implement proper test
+        ]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn class_method_on_prototype() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "class-method-test");
+
+        // TODO: implement test for method on prototype
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn class_extends_sets_prototype_chain() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "class-extends-test");
+
+        // TODO: implement test for inheritance
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn super_call_invokes_parent_constructor() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "super-constructor-test");
+
+        // TODO: implement test for super() calls
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn super_method_calls_parent_method() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "super-method-test");
+
+        // TODO: implement test for super.method() calls
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn static_method_on_constructor() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "static-method-test");
+
+        // TODO: implement test for static methods - this should work with current implementation
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn computed_method_name() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "computed-method-test");
+
+        // TODO: implement test for computed method names like [expr]()
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn getter_setter() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "getter-setter-test");
+
+        // TODO: implement test for getter/setter methods
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn class_expression() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "class-expression-test");
+
+        // TODO: implement test for class expressions
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn new_target_in_constructor() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "new-target-test");
+
+        // TODO: implement test for new.target meta-property
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+    }
 }

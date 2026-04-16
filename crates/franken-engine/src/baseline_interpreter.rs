@@ -5687,12 +5687,8 @@ impl InterpreterCore {
             Value::Str(s) => s.clone(),
             Value::Object(id) => {
                 // Try to get a simple string representation
-                if let Some(obj) = self.heap.get(id.0 as usize) {
-                    if obj.properties.is_empty() {
-                        "[object Object]".to_string()
-                    } else {
-                        "[object Object]".to_string() // Keep it simple
-                    }
+                if let Some(_obj) = self.heap.get(id.0 as usize) {
+                    "[object Object]".to_string() // Keep it simple
                 } else {
                     format!("[object#{}]", id.0)
                 }
@@ -8202,6 +8198,51 @@ mod tests {
         assert_eq!(c.max_total_memory_bytes, 512 * 1024 * 1024);
         assert_eq!(c.max_scope_depth, 512);
         assert!(c.granted_capabilities.is_empty());
+    }
+
+    #[test]
+    fn interpreter_config_supports_all_runtime_capability_variants() {
+        // Test exhaustiveness: verify all 17 RuntimeCapability variants can be inserted
+        let all_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::GcInvoke,
+            RuntimeCapability::IrLowering,
+            RuntimeCapability::PolicyRead,
+            RuntimeCapability::PolicyWrite,
+            RuntimeCapability::EvidenceEmit,
+            RuntimeCapability::DecisionInvoke,
+            RuntimeCapability::NetworkEgress,
+            RuntimeCapability::LeaseManagement,
+            RuntimeCapability::IdempotencyDerive,
+            RuntimeCapability::ExtensionLifecycle,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::EnvRead,
+            RuntimeCapability::ProcessSpawn,
+            RuntimeCapability::FsRead,
+            RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
+        ]);
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = all_capabilities.clone();
+
+        // Verify all capabilities are stored and can be retrieved
+        assert_eq!(config.granted_capabilities.len(), 17); // 17 total capabilities
+        assert!(
+            config
+                .granted_capabilities
+                .contains(&RuntimeCapability::VmDispatch)
+        );
+        assert!(
+            config
+                .granted_capabilities
+                .contains(&RuntimeCapability::ModuleLoad)
+        );
+
+        // Verify BTreeSet maintains deterministic ordering
+        let capabilities_vec: Vec<_> = config.granted_capabilities.iter().collect();
+        let capabilities_vec2: Vec<_> = all_capabilities.iter().collect();
+        assert_eq!(capabilities_vec, capabilities_vec2);
     }
 
     #[test]

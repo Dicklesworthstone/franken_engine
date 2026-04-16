@@ -423,8 +423,8 @@ pub fn generate_keypair() -> (SigningKey, VerificationKey) {
     // Generate 32 random bytes for the signing key
     let mut rng = rand::thread_rng();
     let mut seed = [0u8; 32];
-    for i in 0..32 {
-        seed[i] = rng.r#gen::<u8>();
+    for byte in &mut seed {
+        *byte = rng.r#gen::<u8>();
     }
     generate_keypair_from_seed(&seed)
 }

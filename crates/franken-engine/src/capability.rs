@@ -251,8 +251,26 @@ impl CapabilityProfile {
             .intersection(&other.capabilities)
             .copied()
             .collect();
+
+        // Determine the correct ProfileKind based on the intersection
+        let kind = if caps.is_empty() {
+            ProfileKind::ComputeOnly
+        } else if caps == CapabilityProfile::full().capabilities {
+            ProfileKind::Full
+        } else if caps == CapabilityProfile::engine_core().capabilities {
+            ProfileKind::EngineCore
+        } else if caps == CapabilityProfile::policy().capabilities {
+            ProfileKind::Policy
+        } else if caps == CapabilityProfile::remote().capabilities {
+            ProfileKind::Remote
+        } else {
+            // If no exact match with named profiles, use ComputeOnly as default
+            // (This could be enhanced to use Custom in future if that variant is added)
+            ProfileKind::ComputeOnly
+        };
+
         CapabilityProfile {
-            kind: ProfileKind::ComputeOnly,
+            kind,
             capabilities: caps,
         }
     }
@@ -701,11 +719,13 @@ mod tests {
     }
 
     #[test]
-    fn intersection_result_kind_is_compute_only() {
+    fn intersection_result_kind_matches_actual_capabilities() {
         let full = CapabilityProfile::full();
         let ec = CapabilityProfile::engine_core();
         let inter = full.intersect(&ec);
-        assert_eq!(inter.kind, ProfileKind::ComputeOnly);
+        // full ∩ engine_core = engine_core capabilities, so kind should be EngineCore
+        assert_eq!(inter.kind, ProfileKind::EngineCore);
+        assert_eq!(inter.capabilities, ec.capabilities);
     }
 
     // ── Enrichment: has / len / is_empty ─────────────────────────
@@ -1277,11 +1297,85 @@ mod tests {
     }
 
     #[test]
-    fn intersection_result_kind_always_compute_only() {
+    fn intersection_result_kind_reflects_actual_intersection() {
         let full = CapabilityProfile::full();
         let ec = CapabilityProfile::engine_core();
         let result = full.intersect(&ec);
+        // full ∩ engine_core should have EngineCore kind since it contains exactly EngineCore capabilities
+        assert_eq!(result.kind, ProfileKind::EngineCore);
+        assert_eq!(result.capabilities, ec.capabilities);
+    }
+
+    // -- Capability profile intersection kind correctness tests (bd-3pa1u.4) --
+
+    #[test]
+    fn intersect_full_with_full_returns_full_kind() {
+        let full1 = CapabilityProfile::full();
+        let full2 = CapabilityProfile::full();
+        let result = full1.intersect(&full2);
+        assert_eq!(result.kind, ProfileKind::Full);
+        assert_eq!(result.capabilities, full1.capabilities);
+    }
+
+    #[test]
+    fn intersect_compute_only_with_anything_returns_compute_only() {
+        let co = CapabilityProfile::compute_only();
+        let ec = CapabilityProfile::engine_core();
+        let full = CapabilityProfile::full();
+        let policy = CapabilityProfile::policy();
+
+        let result1 = co.intersect(&ec);
+        assert_eq!(result1.kind, ProfileKind::ComputeOnly);
+        assert!(result1.is_empty());
+
+        let result2 = ec.intersect(&co);
+        assert_eq!(result2.kind, ProfileKind::ComputeOnly);
+        assert!(result2.is_empty());
+
+        let result3 = co.intersect(&full);
+        assert_eq!(result3.kind, ProfileKind::ComputeOnly);
+        assert!(result3.is_empty());
+
+        let result4 = policy.intersect(&co);
+        assert_eq!(result4.kind, ProfileKind::ComputeOnly);
+        assert!(result4.is_empty());
+    }
+
+    #[test]
+    fn intersect_engine_core_with_remote_has_no_overlap() {
+        let ec = CapabilityProfile::engine_core();
+        let remote = CapabilityProfile::remote();
+        let result = ec.intersect(&remote);
+        // EngineCore and Remote have no overlapping capabilities, so intersection is empty
         assert_eq!(result.kind, ProfileKind::ComputeOnly);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn intersect_profile_with_itself_preserves_identity() {
+        let profiles = [
+            CapabilityProfile::full(),
+            CapabilityProfile::engine_core(),
+            CapabilityProfile::policy(),
+            CapabilityProfile::remote(),
+            CapabilityProfile::compute_only(),
+        ];
+
+        for profile in &profiles {
+            let result = profile.intersect(profile);
+            assert_eq!(result.kind, profile.kind);
+            assert_eq!(result.capabilities, profile.capabilities);
+        }
+    }
+
+    #[test]
+    fn intersect_full_with_engine_core_returns_engine_core_kind() {
+        let full = CapabilityProfile::full();
+        let ec = CapabilityProfile::engine_core();
+        let result = full.intersect(&ec);
+        // This is the key test case from the bead requirements
+        assert_eq!(result.kind, ProfileKind::EngineCore);
+        assert_eq!(result.capabilities, ec.capabilities);
     }
 
     #[test]

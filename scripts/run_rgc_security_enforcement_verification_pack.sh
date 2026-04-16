@@ -391,7 +391,7 @@ write_manifest() {
     echo '  ],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\","
-    echo "    \"trace_ids\": \"${trace_ids_path}\","
+    echo '    "trace_ids": "'"${trace_ids_path}"'",'
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
     echo "    \"step_logs_dir\": \"${step_logs_dir}\","

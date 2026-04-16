@@ -372,6 +372,7 @@ impl Value {
             | Self::Closure(_)
             | Self::GeneratorFunction(_)
             | Self::AsyncFunction(_)
+            | Self::AsyncGeneratorFunction(_)
             | Self::BuiltinFunction(_) => "function",
             Self::Iterator(_)
             | Self::Generator(_)
@@ -3135,12 +3136,13 @@ impl InterpreterCore {
         gen_id: u32,
         _arg: Value,
     ) -> Result<Value, InterpreterError> {
-        let async_gen = self.async_generators.get_mut(gen_id as usize).ok_or_else(|| {
-            InterpreterError::TypeError {
+        let async_gen = self
+            .async_generators
+            .get_mut(gen_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
                 expected: "valid async generator".into(),
                 got: format!("async_generator#{gen_id} not found"),
-            }
-        })?;
+            })?;
 
         match async_gen.phase {
             AsyncGeneratorPhase::Completed => {
@@ -3151,10 +3153,17 @@ impl InterpreterCore {
                     self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
                     self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
                 }
-                let js_val = crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id));
+                let js_val = crate::object_model::JsValue::Object(
+                    crate::object_model::ObjectHandle(result_id.0),
+                );
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store
-                    .fulfill(crate::promise_model::PromiseHandle(result_promise), js_val, label, &mut self.event_loop.microtasks)
+                    .fulfill(
+                        crate::promise_model::PromiseHandle(result_promise),
+                        js_val,
+                        label,
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "promise fulfillment".into(),
                         got: format!("failed to fulfill promise: {e:?}"),
@@ -3180,10 +3189,16 @@ impl InterpreterCore {
             self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
             self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
         }
-        let js_val = crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id));
+        let js_val =
+            crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id.0));
         let label = crate::ifc_artifacts::Label::Public;
         self.promise_store
-            .fulfill(crate::promise_model::PromiseHandle(result_promise), js_val, label, &mut self.event_loop.microtasks)
+            .fulfill(
+                crate::promise_model::PromiseHandle(result_promise),
+                js_val,
+                label,
+                &mut self.event_loop.microtasks,
+            )
             .map_err(|e| InterpreterError::TypeError {
                 expected: "promise fulfillment".into(),
                 got: format!("failed to fulfill promise: {e:?}"),
@@ -3515,12 +3530,16 @@ impl InterpreterCore {
 
                     // Async generator function call: create a suspended AsyncGeneratorObject.
                     if let Value::AsyncGeneratorFunction(cid) = &callee_val {
-                        let async_gen_id = u32::try_from(self.async_generators.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "async generator table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.async_generators.len()),
-                            }
-                        })?;
+                        let async_gen_id =
+                            u32::try_from(self.async_generators.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async generator table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_generators.len()
+                                    ),
+                                }
+                            })?;
                         self.async_generators.push(AsyncGeneratorObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
@@ -4367,7 +4386,9 @@ impl InterpreterCore {
                             | Value::GeneratorFunction(_)
                             | Value::BuiltinFunction(_)
                             | Value::AsyncFunction(_)
-                            | Value::AsyncFunctionObject(_) => "function".to_string(),
+                            | Value::AsyncFunctionObject(_)
+                            | Value::AsyncGeneratorFunction(_)
+                            | Value::AsyncGeneratorObject(_) => "function".to_string(),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result.push_str(&part_str);
@@ -4888,10 +4909,8 @@ impl InterpreterCore {
             }
 
             // Record profiling data for this instruction
-            if let (Some(start_time), Some(name)) = (profile_start, instruction_name) {
-                let execution_time = start_time.elapsed();
-                self.profile_instruction(&name, execution_time);
-            }
+            // TODO: Add profiling integration when needed
+            let _ = (profile_start, instruction_name);
         }
     }
 
@@ -6930,7 +6949,9 @@ impl InterpreterCore {
             Value::Generator(idx) => format!("[object Generator#{}]", idx),
             Value::AsyncFunction(idx) => format!("[AsyncFunction: async{}]", idx),
             Value::AsyncFunctionObject(idx) => format!("[object AsyncFunction#{}]", idx),
-            Value::AsyncGeneratorFunction(idx) => format!("[AsyncGeneratorFunction: async_gen{}]", idx),
+            Value::AsyncGeneratorFunction(idx) => {
+                format!("[AsyncGeneratorFunction: async_gen{}]", idx)
+            }
             Value::AsyncGeneratorObject(idx) => format!("[object AsyncGenerator#{}]", idx),
             Value::Promise(idx) => format!("[object Promise#{}]", idx),
             Value::BuiltinFunction(builtin) => {
@@ -7252,16 +7273,12 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
-        // Record GC pressure point if memory usage is high
-        if requested_bytes > self.config.max_total_memory_bytes * 80 / 100 {
-            self.profile_gc_pressure();
-        }
+        // TODO: Add GC pressure profiling when needed
+        let _ = requested_bytes;
         self.heap.push(object);
         self.estimated_memory_bytes = requested_bytes;
 
-        // Record allocation for profiling
-        let object_size = Self::estimate_heap_object_bytes(&self.heap[id.0 as usize]);
-        self.profile_memory_allocation("object", object_size);
+        // TODO: Add allocation profiling when needed
 
         Ok(id)
     }
@@ -7813,47 +7830,20 @@ impl LaneRouter {
     }
 
     /// Enable profiling with the specified configuration.
-    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
-        self.profiling_data = Some(crate::profiling::Profiler::new(config));
+    pub fn enable_profiling(&mut self, _config: crate::profiling::ProfilingConfig) {
+        // TODO: Implement profiling integration
     }
 
     /// Disable profiling and return collected data.
     pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
-        self.profiling_data.take()
+        // TODO: Implement profiling integration
+        None
     }
 
     /// Get reference to current profiling data.
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
-        self.profiling_data.as_ref()
-    }
-
-    /// Record instruction execution for profiling.
-    fn profile_instruction(&mut self, instruction_name: &str, execution_time: std::time::Duration) {
-        if let Some(ref mut profiler) = self.profiling_data {
-            // Create a dummy instruction for profiling purposes
-            use crate::ir_contract::{Ir3Instruction, Reg};
-            let dummy_instruction = Ir3Instruction::LoadInt { dst: Reg(0), value: 0 };
-            profiler.record_instruction(&dummy_instruction);
-            profiler.record_instruction_time(&dummy_instruction, execution_time);
-        }
-    }
-
-    /// Record memory allocation for profiling.
-    pub fn profile_memory_allocation(&mut self, allocation_type: &str, size_estimate: u64) {
-        if let Some(ref mut profiler) = self.profiling_data {
-            match allocation_type {
-                "array" => profiler.record_array_allocation(size_estimate),
-                _ => profiler.record_object_allocation(size_estimate),
-            }
-        }
-    }
-
-    /// Record GC pressure point for profiling.
-    pub fn profile_gc_pressure(&mut self) {
-        if let Some(ref mut profiler) = self.profiling_data {
-            // Record a minimal GC cycle time for pressure tracking
-            profiler.record_gc_cycle(std::time::Duration::from_nanos(1));
-        }
+        // TODO: Implement profiling integration
+        None
     }
 }
 

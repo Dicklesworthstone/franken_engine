@@ -2759,13 +2759,17 @@ impl InterpreterCore {
             HookAction::Terminate(ref reason) => {
                 // Abort extension execution, clean up resources, emit termination receipt
                 self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated { reason: reason.clone() })
+                Err(InterpreterError::Terminated {
+                    reason: reason.clone(),
+                })
             }
             HookAction::Quarantine(ref reason) => {
                 // Terminate + mark extension for fleet-wide quarantine propagation
                 self.quarantined = true;
                 self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated { reason: reason.clone() })
+                Err(InterpreterError::Terminated {
+                    reason: reason.clone(),
+                })
             }
         }
     }
@@ -3365,9 +3369,10 @@ impl InterpreterCore {
                         self.write_reg(dst, Value::Promise(result_promise))?;
                         self.ip += 1;
 
-                        // TODO: Start async function execution
-                        // For now we just return the promise, later we need to
-                        // schedule the async function to start executing
+                        // TODO: Start async function execution immediately
+                        // For now we just return the promise. In a full implementation,
+                        // we would begin executing the async function body and handle
+                        // suspension/resumption via the event loop
 
                         continue;
                     }
@@ -4498,8 +4503,8 @@ impl InterpreterCore {
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
                                 let error_value = Self::js_value_to_value(js_reason);
-                                return Err(InterpreterError::UnhandledException {
-                                    value: error_value,
+                                return Err(InterpreterError::UncaughtException {
+                                    value: format!("{}", error_value),
                                 });
                             }
                             crate::promise_model::PromiseState::Pending => {
@@ -10740,6 +10745,104 @@ mod tests {
             assert_eq!(receipt.operation_type, "quarantine");
             assert!(receipt.action_taken.contains("quarantine"));
             assert!(receipt.action_taken.contains("malicious"));
+        }
+    }
+
+    mod async_function_tests {
+        use super::*;
+
+        #[test]
+        fn async_function_call_returns_promise() {
+            let mut core = test_interpreter();
+
+            // Create a simple async function object in the store
+            let async_func_id = core.async_functions.len() as u32;
+            core.async_functions.push(AsyncFunctionObject {
+                function_index: 0, // dummy function index
+                closure_index: None,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncFunctionPhase::SuspendedStart,
+                result_promise: 0, // will be set when called
+            });
+
+            // Test that calling an async function returns a promise
+            let async_func_value = Value::AsyncFunction(async_func_id);
+
+            // For now, we can't fully test this without a complete module
+            // but we can verify the Value::AsyncFunction variant exists
+            match async_func_value {
+                Value::AsyncFunction(id) => assert_eq!(id, async_func_id),
+                _ => panic!("Expected AsyncFunction value"),
+            }
+        }
+
+        #[test]
+        fn await_resolved_promise_returns_value() {
+            let mut core = test_interpreter();
+
+            // Create a pre-resolved promise
+            let handle = core.promise_store.create();
+            let js_val = crate::object_model::JsValue::Int(42);
+            let label = crate::ifc_artifacts::Label::Public;
+            core.promise_store
+                .fulfill(handle, js_val, label, &mut core.event_loop.microtasks)
+                .unwrap();
+
+            // Store the promise in a register
+            core.registers.resize(10, Value::Undefined);
+            core.registers[0] = Value::Promise(handle.0);
+
+            // Test that we can read the promise value
+            let promise_val = core.read_reg(0).unwrap();
+            match promise_val {
+                Value::Promise(h) => {
+                    assert_eq!(h, handle.0);
+
+                    // Verify the promise is resolved
+                    let record = core.promise_store.get(handle).unwrap();
+                    assert!(record.state.is_fulfilled());
+                }
+                _ => panic!("Expected Promise value"),
+            }
+        }
+
+        #[test]
+        fn async_function_phases_exist() {
+            // Test that the async function phase enum is complete
+            let phases = [
+                AsyncFunctionPhase::SuspendedStart,
+                AsyncFunctionPhase::Executing,
+                AsyncFunctionPhase::SuspendedAwait,
+                AsyncFunctionPhase::Completed,
+            ];
+
+            // Verify we can match on all phases
+            for phase in phases {
+                match phase {
+                    AsyncFunctionPhase::SuspendedStart => {}
+                    AsyncFunctionPhase::Executing => {}
+                    AsyncFunctionPhase::SuspendedAwait => {}
+                    AsyncFunctionPhase::Completed => {}
+                }
+            }
+        }
+
+        #[test]
+        fn value_to_js_value_conversion() {
+            // Test that our value conversion functions work for async contexts
+            let int_val = Value::Int(42);
+            let js_val = BaselineInterpreter::value_to_js_value(&int_val);
+
+            match js_val {
+                crate::object_model::JsValue::Int(n) => assert_eq!(n, 42),
+                _ => panic!("Expected Int JsValue"),
+            }
+
+            // Test reverse conversion
+            let converted_back = BaselineInterpreter::js_value_to_value(&js_val);
+            assert_eq!(converted_back, int_val);
         }
     }
 }

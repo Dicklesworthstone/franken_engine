@@ -1559,6 +1559,17 @@ pub enum Ir3Instruction {
     /// Throw from an async function. Rejects the async function's
     /// result Promise with the given error value.
     AsyncThrow { error_reg: Reg },
+
+    // ── Async generator instructions ──────────────────────────────────────
+    /// Create an async generator object from the current function frame.
+    /// `function_index` identifies the async generator body in the function table.
+    /// `capture_count` is the number of captured variables.
+    /// The async generator starts in a suspended-at-start state.
+    CreateAsyncGenerator {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
 }
 
 impl Ir3Instruction {
@@ -2343,6 +2354,25 @@ impl Ir3Instruction {
                 map.insert(
                     "error_reg".to_string(),
                     CanonicalValue::U64(u64::from(*error_reg)),
+                );
+            }
+            Self::CreateAsyncGenerator {
+                dst,
+                function_index,
+                capture_count,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("create_async_generator".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "function_index".to_string(),
+                    CanonicalValue::U64(u64::from(*function_index)),
+                );
+                map.insert(
+                    "capture_count".to_string(),
+                    CanonicalValue::U64(u64::from(*capture_count)),
                 );
             }
         }

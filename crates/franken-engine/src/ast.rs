@@ -1597,6 +1597,12 @@ pub enum Expression {
         pattern: String,
         flags: String,
     },
+    /// Class expression: `class { ... }` or `class Name { ... }`.
+    ClassExpression {
+        name: Option<String>,
+        super_class: Option<Box<Expression>>,
+        body: Vec<MethodDefinition>,
+    },
     /// Super keyword for accessing parent class methods and constructor.
     Super,
 }
@@ -1916,6 +1922,15 @@ impl Expression {
                     CanonicalValue::String(pattern.clone()),
                 );
                 map.insert("flags".to_string(), CanonicalValue::String(flags.clone()));
+            }
+            Self::ClassExpression { name, .. } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("class_expression".to_string()),
+                );
+                if let Some(n) = name {
+                    map.insert("name".to_string(), CanonicalValue::String(n.clone()));
+                }
             }
             Self::Super => {
                 map.insert(

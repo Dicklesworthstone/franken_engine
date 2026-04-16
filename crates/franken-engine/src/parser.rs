@@ -5227,7 +5227,8 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::Super
         | Expression::Function { .. }
         | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. } => false,
+        | Expression::RegExpLiteral { .. }
+        | Expression::ClassExpression { .. } => false,
     }
 }
 

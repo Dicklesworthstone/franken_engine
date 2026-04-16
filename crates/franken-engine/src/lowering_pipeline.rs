@@ -6225,6 +6225,17 @@ fn lower_expression_to_ir1(
                 quasi_count: quasis.len() as u32,
             });
         }
+        Expression::ClassExpression { name, super_class, body } => {
+            // Lower class expression similar to class declaration
+            // but as an expression that returns a constructor function
+            let class_name = name.as_ref().map(String::as_str).unwrap_or("anonymous");
+
+            // For now, treat class expressions like function expressions
+            // TODO: Implement full class expression lowering
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+        }
     }
     Ok(())
 }

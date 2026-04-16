@@ -304,6 +304,7 @@ pub mod quickening_feedback_lattice;
 pub mod react_compile_operator_surface;
 pub mod react_compile_run_parity;
 pub mod react_compile_verification;
+pub mod react_compilation_pipeline;
 pub mod react_doctor_preflight;
 pub mod react_jsx_lowering;
 pub mod react_lane_inference;

@@ -33,7 +33,7 @@ use frankenengine_engine::fleet_simulator::{
     FleetSimulator, FleetSimulatorError, InstanceState, QuarantineStats,
 };
 use frankenengine_engine::tee_attestation_policy::{
-    MockTeeProvider, TeePlatform, AttestationQuote,
+    AttestationQuote, MockTeeProvider, TeePlatform,
 };
 
 // ---------------------------------------------------------------------------
@@ -80,16 +80,18 @@ struct ConvergenceMetrics {
 /// Test containment thresholds.
 fn test_containment_thresholds() -> ContainmentThresholds {
     ContainmentThresholds::new(
-        0.1,  // posterior_threshold
-        0.05, // tightening_factor
+        0.1,                        // posterior_threshold
+        0.05,                       // tightening_factor
         Duration::from_millis(100), // observation_window
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 /// Create test artifacts directory.
 fn create_test_artifacts_dir() -> PathBuf {
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let artifacts_dir = PathBuf::from("artifacts/fleet_evidence").join(format!("test_{}", timestamp));
+    let artifacts_dir =
+        PathBuf::from("artifacts/fleet_evidence").join(format!("test_{}", timestamp));
     fs::create_dir_all(&artifacts_dir).unwrap();
     artifacts_dir
 }
@@ -134,12 +136,14 @@ fn test_quarantine_broadcast() {
     let evidence_hash = "evidence_broadcast_test_123".to_string();
 
     // Broadcast quarantine decision
-    fleet.broadcast_quarantine_decision(
-        extension_id.clone(),
-        reason,
-        evidence_hash.clone(),
-        originator,
-    ).unwrap();
+    fleet
+        .broadcast_quarantine_decision(
+            extension_id.clone(),
+            reason,
+            evidence_hash.clone(),
+            originator,
+        )
+        .unwrap();
 
     // Check that quarantine was recorded
     assert!(fleet.is_extension_quarantined(&evidence_hash));
@@ -166,34 +170,40 @@ fn test_convergence_measured() {
     let start_time = Instant::now();
 
     // Broadcast quarantine decision
-    fleet.broadcast_quarantine_decision(
-        extension_id.clone(),
-        "Convergence measurement test".to_string(),
-        evidence_hash.clone(),
-        originator,
-    ).unwrap();
+    fleet
+        .broadcast_quarantine_decision(
+            extension_id.clone(),
+            "Convergence measurement test".to_string(),
+            evidence_hash.clone(),
+            originator,
+        )
+        .unwrap();
 
     // Simulate processing on each instance
     for i in 0..config.instance_count {
         let node_id = NodeId(format!("node_{}", i));
 
         // Process quarantine decision
-        fleet.process_quarantine_decision(
-            extension_id.clone(),
-            "Convergence measurement test".to_string(),
-            evidence_hash.clone(),
-            NodeId("node_0".to_string()),
-            fleet.current_lamport_timestamp() + 1,
-            node_id.clone(),
-        ).unwrap();
+        fleet
+            .process_quarantine_decision(
+                extension_id.clone(),
+                "Convergence measurement test".to_string(),
+                evidence_hash.clone(),
+                NodeId("node_0".to_string()),
+                fleet.current_lamport_timestamp() + 1,
+                node_id.clone(),
+            )
+            .unwrap();
 
         // Process acknowledgment
-        fleet.process_quarantine_ack(
-            extension_id.clone(),
-            evidence_hash.clone(),
-            node_id,
-            fleet.current_lamport_timestamp(),
-        ).unwrap();
+        fleet
+            .process_quarantine_ack(
+                extension_id.clone(),
+                evidence_hash.clone(),
+                node_id,
+                fleet.current_lamport_timestamp(),
+            )
+            .unwrap();
     }
 
     let convergence_time = start_time.elapsed();
@@ -242,23 +252,27 @@ fn test_duplicate_quarantine_ignored() {
     let evidence_hash = "duplicate_evidence_789".to_string();
 
     // First quarantine decision
-    fleet.broadcast_quarantine_decision(
-        extension_id.clone(),
-        "First decision".to_string(),
-        evidence_hash.clone(),
-        originator.clone(),
-    ).unwrap();
+    fleet
+        .broadcast_quarantine_decision(
+            extension_id.clone(),
+            "First decision".to_string(),
+            evidence_hash.clone(),
+            originator.clone(),
+        )
+        .unwrap();
 
     let stats_after_first = fleet.get_quarantine_stats();
     assert_eq!(stats_after_first.total_quarantine_decisions, 1);
 
     // Duplicate decision with same evidence hash
-    fleet.broadcast_quarantine_decision(
-        extension_id.clone(),
-        "Duplicate decision".to_string(),
-        evidence_hash.clone(),
-        originator,
-    ).unwrap();
+    fleet
+        .broadcast_quarantine_decision(
+            extension_id.clone(),
+            "Duplicate decision".to_string(),
+            evidence_hash.clone(),
+            originator,
+        )
+        .unwrap();
 
     let stats_after_duplicate = fleet.get_quarantine_stats();
     assert_eq!(stats_after_duplicate.total_quarantine_decisions, 1); // No change
@@ -309,22 +323,26 @@ fn test_convergence_slo_met() {
         let start_time = Instant::now();
 
         // Broadcast and process quarantine
-        fleet.broadcast_quarantine_decision(
-            extension_id.clone(),
-            "SLO measurement test".to_string(),
-            evidence_hash.clone(),
-            originator.clone(),
-        ).unwrap();
+        fleet
+            .broadcast_quarantine_decision(
+                extension_id.clone(),
+                "SLO measurement test".to_string(),
+                evidence_hash.clone(),
+                originator.clone(),
+            )
+            .unwrap();
 
         // Simulate fast convergence
         for i in 0..config.instance_count {
             let node_id = NodeId(format!("node_{}", i));
-            fleet.process_quarantine_ack(
-                extension_id.clone(),
-                evidence_hash.clone(),
-                node_id,
-                fleet.current_lamport_timestamp() + i as u64 + 1,
-            ).unwrap();
+            fleet
+                .process_quarantine_ack(
+                    extension_id.clone(),
+                    evidence_hash.clone(),
+                    node_id,
+                    fleet.current_lamport_timestamp() + i as u64 + 1,
+                )
+                .unwrap();
         }
 
         let convergence_time = start_time.elapsed();
@@ -343,12 +361,25 @@ fn test_convergence_slo_met() {
     let max_time = *sorted_times.last().unwrap();
     let mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
 
-    let violations = sorted_times.iter().filter(|&&t| t > config.max_convergence_ms).count();
+    let violations = sorted_times
+        .iter()
+        .filter(|&&t| t > config.max_convergence_ms)
+        .count();
     let slo_met = violations == 0;
 
     // All measurements should be well under SLO
-    assert!(p99 < config.max_convergence_ms, "p99 {} exceeds SLO {}", p99, config.max_convergence_ms);
-    assert!(slo_met, "SLO violated in {} out of {} events", violations, sorted_times.len());
+    assert!(
+        p99 < config.max_convergence_ms,
+        "p99 {} exceeds SLO {}",
+        p99,
+        config.max_convergence_ms
+    );
+    assert!(
+        slo_met,
+        "SLO violated in {} out of {} events",
+        violations,
+        sorted_times.len()
+    );
 }
 
 #[test]
@@ -362,12 +393,14 @@ fn test_evidence_bundle_complete() {
     let evidence_hash = "evidence_bundle_test".to_string();
 
     // Broadcast quarantine decision
-    fleet.broadcast_quarantine_decision(
-        extension_id.clone(),
-        "Evidence bundle completeness test".to_string(),
-        evidence_hash.clone(),
-        originator,
-    ).unwrap();
+    fleet
+        .broadcast_quarantine_decision(
+            extension_id.clone(),
+            "Evidence bundle completeness test".to_string(),
+            evidence_hash.clone(),
+            originator,
+        )
+        .unwrap();
 
     // Export event log as evidence
     let event_log = fleet.export_event_log();
@@ -405,22 +438,26 @@ fn test_100_quarantine_events() {
         let start_time = Instant::now();
 
         // Broadcast quarantine decision
-        fleet.broadcast_quarantine_decision(
-            extension_id.clone(),
-            format!("Bulk test event {}", event_id),
-            evidence_hash.clone(),
-            originator,
-        ).unwrap();
+        fleet
+            .broadcast_quarantine_decision(
+                extension_id.clone(),
+                format!("Bulk test event {}", event_id),
+                evidence_hash.clone(),
+                originator,
+            )
+            .unwrap();
 
         // Simulate acknowledgments from all instances
         for i in 0..config.instance_count {
             let node_id = NodeId(format!("node_{}", i));
-            fleet.process_quarantine_ack(
-                extension_id.clone(),
-                evidence_hash.clone(),
-                node_id,
-                fleet.current_lamport_timestamp() + i as u64 + 1,
-            ).unwrap();
+            fleet
+                .process_quarantine_ack(
+                    extension_id.clone(),
+                    evidence_hash.clone(),
+                    node_id,
+                    fleet.current_lamport_timestamp() + i as u64 + 1,
+                )
+                .unwrap();
         }
 
         let convergence_time = start_time.elapsed();
@@ -434,7 +471,10 @@ fn test_100_quarantine_events() {
     let p50 = sorted_times[sorted_times.len() * 50 / 100];
     let p95 = sorted_times[sorted_times.len() * 95 / 100];
     let p99 = sorted_times[sorted_times.len() * 99 / 100];
-    let violations = sorted_times.iter().filter(|&&t| t > config.max_convergence_ms).count();
+    let violations = sorted_times
+        .iter()
+        .filter(|&&t| t > config.max_convergence_ms)
+        .count();
 
     // Verify fleet handled 100 events
     let stats = fleet.get_quarantine_stats();
@@ -443,10 +483,16 @@ fn test_100_quarantine_events() {
 
     // Most events should meet SLO
     let slo_compliance = (100 - violations) as f64 / 100.0;
-    assert!(slo_compliance > 0.95, "SLO compliance {} below 95%", slo_compliance);
+    assert!(
+        slo_compliance > 0.95,
+        "SLO compliance {} below 95%",
+        slo_compliance
+    );
 
-    println!("100-event statistics: p50={}ms, p95={}ms, p99={}ms, violations={}",
-             p50, p95, p99, violations);
+    println!(
+        "100-event statistics: p50={}ms, p95={}ms, p99={}ms, violations={}",
+        p50, p95, p99, violations
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -454,10 +500,7 @@ fn test_100_quarantine_events() {
 // ---------------------------------------------------------------------------
 
 /// Generate convergence metrics from timing data.
-fn generate_convergence_metrics(
-    times: &[u64],
-    max_convergence_ms: u64
-) -> ConvergenceMetrics {
+fn generate_convergence_metrics(times: &[u64], max_convergence_ms: u64) -> ConvergenceMetrics {
     let mut sorted_times = times.to_vec();
     sorted_times.sort();
 
@@ -467,7 +510,10 @@ fn generate_convergence_metrics(
     let max_ms = *sorted_times.last().unwrap();
     let mean_ms = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
 
-    let violations = sorted_times.iter().filter(|&&t| t > max_convergence_ms).count();
+    let violations = sorted_times
+        .iter()
+        .filter(|&&t| t > max_convergence_ms)
+        .count();
     let slo_met = violations == 0;
 
     ConvergenceMetrics {

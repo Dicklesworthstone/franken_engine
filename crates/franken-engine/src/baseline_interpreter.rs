@@ -1354,6 +1354,17 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
+        // Check VmDispatch capability before executing
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::VmDispatch)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "VmDispatch".to_string(),
+            });
+        }
+
         let current_seed = self.capture_execution_seed();
         let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
             (Some(previous_pre_run), Some(previous_post_run))
@@ -5985,6 +5996,17 @@ impl InterpreterCore {
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
+        // Check HeapAllocate capability before allocating objects
+        if !self
+            .config
+            .granted_capabilities
+            .contains(&RuntimeCapability::HeapAllocate)
+        {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "HeapAllocate".to_string(),
+            });
+        }
+
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -9106,5 +9128,81 @@ mod tests {
             Value::Float(Float64::new(f64::INFINITY)).type_name(),
             "number"
         );
+    }
+
+    // -- Capability enforcement tests (bd-3pa1u.2) --
+
+    #[test]
+    fn heap_allocate_capability_required_for_object_allocation() {
+        // Test with HeapAllocate capability - should succeed
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        let mut core = InterpreterCore::new(config, "heap-alloc-test");
+
+        let result = core.alloc_object_with_prototype(None);
+        assert!(result.is_ok());
+
+        // Test without HeapAllocate capability - should fail
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.clear(); // Remove all capabilities
+        let mut core = InterpreterCore::new(config, "no-heap-alloc-test");
+
+        let err = core.alloc_object_with_prototype(None).unwrap_err();
+        assert!(
+            matches!(err, InterpreterError::CapabilityDenied { capability } if capability == "HeapAllocate")
+        );
+    }
+
+    #[test]
+    fn vm_dispatch_capability_required_for_execution() {
+        // Test with VmDispatch capability - should succeed
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        let mut core = InterpreterCore::new(config, "vm-dispatch-test");
+
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let result = core.execute(&module);
+        assert!(result.is_ok());
+
+        // Test without VmDispatch capability - should fail
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.clear(); // Remove all capabilities
+        let mut core = InterpreterCore::new(config, "no-vm-dispatch-test");
+
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let err = core.execute(&module).unwrap_err();
+        assert!(
+            matches!(err, InterpreterError::CapabilityDenied { capability } if capability == "VmDispatch")
+        );
+    }
+
+    #[test]
+    fn capability_denied_error_contains_missing_capability_name() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.clear(); // Remove all capabilities
+        let mut core = InterpreterCore::new(config, "capability-error-test");
+
+        // Test that VmDispatch error contains the correct capability name
+        let module = test_module(vec![Ir3Instruction::Halt]);
+        let err = core.execute(&module).unwrap_err();
+        match err {
+            InterpreterError::CapabilityDenied { capability } => {
+                assert_eq!(capability, "VmDispatch");
+            }
+            _ => panic!("Expected CapabilityDenied error"),
+        }
+
+        // Test that HeapAllocate error contains the correct capability name
+        let err = core.alloc_object_with_prototype(None).unwrap_err();
+        match err {
+            InterpreterError::CapabilityDenied { capability } => {
+                assert_eq!(capability, "HeapAllocate");
+            }
+            _ => panic!("Expected CapabilityDenied error"),
+        }
     }
 }

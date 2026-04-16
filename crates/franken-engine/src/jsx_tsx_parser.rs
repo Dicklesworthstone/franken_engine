@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::hash_tiers::ContentHash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::ast::SourceSpan;
 
@@ -1369,12 +1369,12 @@ pub fn run_jsx_corpus(
         });
     }
 
-    let mut hasher = Sha256::new();
+    let mut combined_data = Vec::new();
     for ev in &specimens {
-        hasher.update(ev.specimen_id.as_bytes());
-        hasher.update(ev.verdict.as_str().as_bytes());
+        combined_data.extend_from_slice(ev.specimen_id.as_bytes());
+        combined_data.extend_from_slice(ev.verdict.as_str().as_bytes());
     }
-    let evidence_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
+    let evidence_hash = format!("sha256:{}", ContentHash::compute(&combined_data).to_hex());
 
     let manifest = JsxRunManifest {
         schema_version: JSX_PARSER_MANIFEST_SCHEMA_VERSION.to_string(),

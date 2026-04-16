@@ -17,9 +17,9 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::hash_tiers::ContentHash;
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
@@ -362,10 +362,7 @@ impl EvidenceEntryBuilder {
 ///
 /// Uses SHA-256 for collision resistance and tamper detection.
 fn deterministic_hash(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let digest = hasher.finalize();
-    hex::encode(digest)
+    ContentHash::compute(input.as_bytes()).to_hex()
 }
 
 // ---------------------------------------------------------------------------
@@ -1741,9 +1738,7 @@ fn digest_json(value: &serde_json::Value) -> String {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
+    ContentHash::compute(bytes).to_hex()
 }
 
 impl BundleFileArtifact {

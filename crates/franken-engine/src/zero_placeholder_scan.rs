@@ -5,8 +5,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::hash_tiers::ContentHash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::lowering_gap_inventory::{self, LoweringGapInventory, LoweringGapStatus};
 use crate::parser_gap_inventory::{self, ParserGapInventory, ParserGapRemediationStatus};
@@ -765,14 +765,7 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
+    ContentHash::compute(bytes).to_hex()
 }
 
 fn repo_root() -> PathBuf {

@@ -19,13 +19,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::hash_tiers::ContentHash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::callback_stdlib_dispatch::{
     CallbackKind, DispatchDecision, DispatchStrategy, DispatchTrace, StdlibMethod,
 };
-use crate::hash_tiers::ContentHash;
 use crate::runtime_config::GatesConfig;
 use crate::security_epoch::SecurityEpoch;
 
@@ -206,22 +205,24 @@ impl WorkloadScenario {
 
     /// Content hash for deterministic identity.
     pub fn content_hash(&self) -> ContentHash {
-        let mut h = Sha256::new();
-        h.update(self.scenario_id.as_bytes());
-        h.update(serialize_for_identity(&self.method, "serialize workload method").as_bytes());
-        h.update(
+        let mut combined_data = Vec::new();
+        combined_data.extend_from_slice(self.scenario_id.as_bytes());
+        combined_data.extend_from_slice(
+            serialize_for_identity(&self.method, "serialize workload method").as_bytes(),
+        );
+        combined_data.extend_from_slice(
             serialize_for_identity(&self.callback_kind, "serialize workload callback kind")
                 .as_bytes(),
         );
-        h.update(
+        combined_data.extend_from_slice(
             serialize_for_identity(
                 &self.mutation_contract,
                 "serialize workload mutation contract",
             )
             .as_bytes(),
         );
-        h.update(self.collection_size.to_le_bytes());
-        ContentHash::compute(&h.finalize())
+        combined_data.extend_from_slice(&self.collection_size.to_le_bytes());
+        ContentHash::compute(&combined_data)
     }
 }
 
@@ -267,19 +268,21 @@ pub struct ScenarioResult {
 impl ScenarioResult {
     /// Seal the content hash.
     pub fn seal(&mut self) {
-        let mut h = Sha256::new();
-        h.update(self.scenario_id.as_bytes());
-        h.update(serialize_for_identity(&self.outcome, "serialize scenario outcome").as_bytes());
-        h.update(
+        let mut combined_data = Vec::new();
+        combined_data.extend_from_slice(self.scenario_id.as_bytes());
+        combined_data.extend_from_slice(
+            serialize_for_identity(&self.outcome, "serialize scenario outcome").as_bytes(),
+        );
+        combined_data.extend_from_slice(
             serialize_for_identity(&self.actual_strategy, "serialize dispatch strategy").as_bytes(),
         );
-        h.update(if self.mutation_honored {
+        combined_data.extend_from_slice(if self.mutation_honored {
             &[1u8]
         } else {
             &[0u8]
         });
-        h.update(self.observed_cost_millionths.to_le_bytes());
-        self.content_hash = ContentHash::compute(&h.finalize());
+        combined_data.extend_from_slice(&self.observed_cost_millionths.to_le_bytes());
+        self.content_hash = ContentHash::compute(&combined_data);
     }
 }
 
@@ -357,21 +360,21 @@ pub struct VerificationReport {
 impl VerificationReport {
     /// Seal the content hash.
     pub fn rehash(&mut self) {
-        let mut h = Sha256::new();
-        h.update(self.report_id.as_bytes());
-        h.update(self.epoch.as_u64().to_le_bytes());
-        h.update(self.total_scenarios.to_le_bytes());
-        h.update(self.pass_count.to_le_bytes());
-        h.update(self.fail_count.to_le_bytes());
-        h.update(self.pass_rate_millionths.to_le_bytes());
-        h.update(self.mutation_violations.len().to_le_bytes());
-        h.update(self.strategy_mismatch_count.to_le_bytes());
+        let mut combined_data = Vec::new();
+        combined_data.extend_from_slice(self.report_id.as_bytes());
+        combined_data.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
+        combined_data.extend_from_slice(&self.total_scenarios.to_le_bytes());
+        combined_data.extend_from_slice(&self.pass_count.to_le_bytes());
+        combined_data.extend_from_slice(&self.fail_count.to_le_bytes());
+        combined_data.extend_from_slice(&self.pass_rate_millionths.to_le_bytes());
+        combined_data.extend_from_slice(&self.mutation_violations.len().to_le_bytes());
+        combined_data.extend_from_slice(&self.strategy_mismatch_count.to_le_bytes());
         for (k, v) in &self.method_summary {
-            h.update(k.as_bytes());
-            h.update(v.pass_count.to_le_bytes());
-            h.update(v.fail_count.to_le_bytes());
+            combined_data.extend_from_slice(k.as_bytes());
+            combined_data.extend_from_slice(&v.pass_count.to_le_bytes());
+            combined_data.extend_from_slice(&v.fail_count.to_le_bytes());
         }
-        self.content_hash = ContentHash::compute(&h.finalize());
+        self.content_hash = ContentHash::compute(&combined_data);
     }
 }
 

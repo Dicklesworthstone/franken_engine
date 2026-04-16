@@ -628,7 +628,7 @@ mod tests {
         let arr = SortedSignatureArray::new(entries).unwrap();
         assert_eq!(arr.len(), 2);
         // Verify sorted order.
-        assert!(arr.entries()[0].signer.inner < arr.entries()[1].signer.inner);
+        assert!(arr.entries()[0].signer.as_bytes() < arr.entries()[1].signer.as_bytes());
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
 
         // Verify sorted.
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
+            assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
         }
     }
 
@@ -710,7 +710,7 @@ mod tests {
         ];
 
         // Force reverse order if needed.
-        if entries[0].signer.inner < entries[1].signer.inner {
+        if entries[0].signer.as_bytes() < entries[1].signer.as_bytes() {
             entries.swap(0, 1);
         }
 
@@ -740,7 +740,7 @@ mod tests {
 
         assert_eq!(arr.len(), 3);
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
+            assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
         }
     }
 
@@ -1221,7 +1221,7 @@ mod tests {
         assert_eq!(arr.len(), 3);
         // First entry should have the smallest key.
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
+            assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
         }
     }
 
@@ -1241,7 +1241,7 @@ mod tests {
             .unwrap();
         assert_eq!(arr.len(), 3);
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
+            assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
         }
     }
 

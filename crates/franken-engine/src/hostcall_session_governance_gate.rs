@@ -21,11 +21,9 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -640,12 +638,12 @@ pub struct DecisionReceipt {
 impl DecisionReceipt {
     /// Create a new receipt with computed hash.
     pub fn new(epoch: SecurityEpoch, verdict: GateVerdict, evidence_hash: ContentHash) -> Self {
-        let mut h = Sha256::new();
-        h.update(COMPONENT.as_bytes());
-        h.update(epoch.as_u64().to_le_bytes());
-        h.update(verdict.as_str().as_bytes());
-        h.update(evidence_hash.as_bytes());
-        let receipt_hash = ContentHash::compute(&h.finalize());
+        let mut combined_data = Vec::new();
+        combined_data.extend_from_slice(COMPONENT.as_bytes());
+        combined_data.extend_from_slice(&epoch.as_u64().to_le_bytes());
+        combined_data.extend_from_slice(verdict.as_str().as_bytes());
+        combined_data.extend_from_slice(evidence_hash.as_bytes());
+        let receipt_hash = ContentHash::compute(&combined_data);
 
         Self {
             receipt_hash,
@@ -892,23 +890,23 @@ pub fn evaluate(
     };
 
     // Compute receipt hash over all inputs.
-    let mut h = Sha256::new();
-    h.update(COMPONENT.as_bytes());
-    h.update(conformance.session_id.as_bytes());
-    h.update(conformance.conformance_fraction.to_le_bytes());
-    h.update((drops.len() as u64).to_le_bytes());
+    let mut combined_data = Vec::new();
+    combined_data.extend_from_slice(COMPONENT.as_bytes());
+    combined_data.extend_from_slice(conformance.session_id.as_bytes());
+    combined_data.extend_from_slice(&conformance.conformance_fraction.to_le_bytes());
+    combined_data.extend_from_slice(&(drops.len() as u64).to_le_bytes());
     for d in drops {
-        h.update(d.drop_rate.to_le_bytes());
+        combined_data.extend_from_slice(&d.drop_rate.to_le_bytes());
     }
-    h.update((degraded.len() as u64).to_le_bytes());
+    combined_data.extend_from_slice(&(degraded.len() as u64).to_le_bytes());
     for d in degraded {
-        h.update(d.severity.to_le_bytes());
+        combined_data.extend_from_slice(&d.severity.to_le_bytes());
     }
     if let Some(delta) = observability {
-        h.update(delta.overhead_fraction.to_le_bytes());
+        combined_data.extend_from_slice(&delta.overhead_fraction.to_le_bytes());
     }
-    h.update(verdict.as_str().as_bytes());
-    let receipt_hash = ContentHash::compute(&h.finalize());
+    combined_data.extend_from_slice(verdict.as_str().as_bytes());
+    let receipt_hash = ContentHash::compute(&combined_data);
 
     GateResult {
         verdict,

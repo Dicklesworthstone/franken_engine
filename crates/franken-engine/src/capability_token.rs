@@ -2615,6 +2615,23 @@ mod tests {
     }
 
     #[test]
+    fn verify_token_rejects_empty_audience_token() {
+        // Manually construct a token with empty audience (bypassing TokenBuilder validation)
+        // to test that verify_token() properly rejects it
+        let sk = make_sk(1);
+        let mut token = build_basic_token(&sk); // This has non-empty audience
+
+        // Manually set audience to empty to simulate an old insecure token
+        token.audience = BTreeSet::new();
+
+        let ctx = basic_ctx();
+        let presenter = make_principal(10); // Any presenter should fail with empty audience
+
+        let err = verify_token(&token, &presenter, &ctx).unwrap_err();
+        assert!(matches!(err, TokenError::EmptyAudience));
+    }
+
+    #[test]
     fn error_display_empty_audience_enrichment() {
         let err = TokenError::EmptyAudience;
         assert_eq!(err.to_string(), "empty audience");

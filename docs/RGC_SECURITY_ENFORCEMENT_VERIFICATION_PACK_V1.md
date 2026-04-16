@@ -64,6 +64,7 @@ is treated as a gate failure.
 
 Vector contract checks are also fail-closed and include:
 
+- pack/vector `contract_version` and `bead_id` alignment,
 - required attack-class coverage,
 - unique scenario ids and deterministic seeds,
 - replay-required and non-empty command templates.

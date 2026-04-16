@@ -278,7 +278,7 @@ fn wymix(a: u64, b: u64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2/3: shared unkeyed content hash + keyed authenticity hash
+// Tier 2/3: content hash + keyed authenticity hash
 // ---------------------------------------------------------------------------
 
 /// Collision-resistant hash producing 32 bytes via SHA-256.
@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticity_hash_empty_key_differs_from_unkeyed() {
+    fn authenticity_hash_empty_key_differs_from_content_hash() {
         let keyed_empty = AuthenticityHash::compute_keyed(b"", b"data");
         let content = ContentHash::compute(b"data");
         assert_ne!(keyed_empty.as_bytes(), content.as_bytes());

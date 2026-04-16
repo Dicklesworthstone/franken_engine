@@ -122,6 +122,20 @@ fn v8_eval_executes_expression_instead_of_echoing_source() {
 }
 
 #[test]
+fn quickjs_eval_counter_closure_persists_captured_mutation() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let outcome = engine
+        .eval(
+            "function counter() { let n = 0; return function() { n += 1; return n; }; } \
+             const inc = counter(); inc(); inc(); inc();",
+        )
+        .expect("counter closure should execute");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.value, "3");
+}
+
+#[test]
 fn quickjs_eval_normalizes_typescript_and_reports_source_ingestion() {
     let mut engine = QuickJsInspiredNativeEngine;
     let outcome = engine

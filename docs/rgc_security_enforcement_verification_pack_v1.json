@@ -49,7 +49,7 @@
     {
       "scenario_id": "invalid_vectors_semantics",
       "path_type": "failure",
-      "command_template": "run_rgc_security_enforcement_verification_pack.sh ci (with duplicate seeds or missing attack_class coverage)",
+      "command_template": "run_rgc_security_enforcement_verification_pack.sh ci (with duplicate seeds, contract drift, or missing attack_class coverage)",
       "expected_exit_code": 1,
       "expected_error_code": "FE-RGC-059-VECTORS-0003",
       "expected_message_fragment": "vector contract validation failed"

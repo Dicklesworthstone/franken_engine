@@ -2386,6 +2386,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert_eq!(reward, 400_000);
@@ -3467,6 +3468,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.resource_score_millionths, 1_000_000);

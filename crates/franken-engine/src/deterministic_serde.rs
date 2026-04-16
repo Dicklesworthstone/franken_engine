@@ -1802,9 +1802,9 @@ mod tests {
     fn float_all_nan_variants_canonicalize_same() {
         // Different NaN bit patterns should all canonicalize to the same value
         let nan1 = CanonicalF64::new(f64::NAN);
-        let nan2 = CanonicalF64::from_bits(0x7FF0_0000_0000_0001); // signaling NaN
-        let nan3 = CanonicalF64::from_bits(0x7FFF_FFFF_FFFF_FFFF); // NaN with max payload
-        let nan4 = CanonicalF64::from_bits(0xFFF8_0000_0000_0000); // negative quiet NaN
+        let _nan2 = CanonicalF64::from_bits(0x7FF0_0000_0000_0001); // signaling NaN
+        let _nan3 = CanonicalF64::from_bits(0x7FFF_FFFF_FFFF_FFFF); // NaN with max payload
+        let _nan4 = CanonicalF64::from_bits(0xFFF8_0000_0000_0000); // negative quiet NaN
 
         // All are NaN
         assert!(nan1.is_nan());

@@ -298,7 +298,7 @@ fn rgc_059_vectors_are_deterministic_unique_and_complete() {
     let contract = parse_contract();
 
     assert_eq!(vectors.schema_version, VECTORS_SCHEMA_VERSION);
-    assert_eq!(vectors.contract_version, "1.0.0");
+    assert_eq!(vectors.contract_version, contract.contract_version);
     assert_eq!(vectors.bead_id, "bd-1lsy.11.9");
     assert_eq!(vectors.generated_by, "bd-1lsy.11.9");
     assert!(vectors.generated_at_utc.ends_with('Z'));
@@ -417,6 +417,17 @@ fn rgc_059_gate_script_uses_repo_local_target_dir() {
         script.contains("rch-artifact-retrieval-failed"),
         "gate script should surface artifact retrieval failures in failed_command"
     );
+    for validation in [
+        "contract_version mismatch",
+        "bead_id mismatch",
+        "vectors_contract_version",
+        "vectors_bead_id",
+    ] {
+        assert!(
+            script.contains(validation),
+            "gate script should fail closed on pack/vector contract drift: {validation}"
+        );
+    }
     for command in [
         "cat ${manifest_path}",
         "cat ${events_path}",
@@ -518,6 +529,7 @@ fn rgc_059_doc_describes_latest_complete_replay_and_explicit_bundle_requirements
     let doc = read_pack_doc();
 
     for fragment in [
+        "pack/vector `contract_version` and `bead_id` alignment",
         "latest complete artifact bundle",
         "newest artifact directory is incomplete, it warns and falls back to the latest complete directory",
         "printed bundle came from the current failed invocation or from an older complete directory",

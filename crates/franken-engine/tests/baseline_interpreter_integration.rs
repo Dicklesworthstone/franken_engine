@@ -1350,6 +1350,7 @@ fn router_with_custom_configs() {
         max_scope_depth: 512,
         module_root: None,
         granted_capabilities: BTreeSet::new(),
+        extension_id: None,
     };
     let v8_cfg = InterpreterConfig {
         instruction_budget: 500,
@@ -1361,6 +1362,7 @@ fn router_with_custom_configs() {
         max_scope_depth: 512,
         module_root: None,
         granted_capabilities: BTreeSet::new(),
+        extension_id: None,
     };
     let router = LaneRouter::with_configs(qjs_cfg, v8_cfg);
     let m = test_module(vec![

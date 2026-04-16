@@ -2090,17 +2090,10 @@ impl InterpreterCore {
             self.suspended_abrupt_completions
                 .truncate(frame.saved_suspended_abrupt_depth);
             self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.persist_closure_capture_updates(&frame);
+            self.restore_scope_chain_for_frame(&frame);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
-            // Restore scope chain. For closure calls, restore the
-            // full saved chain; for plain calls, just pop to depth.
-            if let Some(saved) = frame.saved_scope_chain {
-                self.scope_chain.frames = saved;
-            } else {
-                while self.scope_chain.depth() > frame.saved_scope_depth {
-                    self.scope_chain.pop();
-                }
-            }
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
@@ -2126,14 +2119,51 @@ impl InterpreterCore {
         }
     }
 
+    fn persist_closure_capture_updates(&mut self, frame: &CallFrame) {
+        let Some(closure_id) = frame.closure_id else {
+            return;
+        };
+        let Some(previous_env) = self
+            .closures
+            .get(closure_id as usize)
+            .map(|closure| closure.captured_env.clone())
+        else {
+            return;
+        };
+        let captured_depth = frame
+            .captured_scope_depth
+            .min(self.scope_chain.frames.len());
+        let updated_env = self.scope_chain.frames[..captured_depth].to_vec();
+
+        for closure in &mut self.closures {
+            if closure.captured_env == previous_env {
+                closure.captured_env = updated_env.clone();
+            }
+        }
+    }
+
+    fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
+        // Restore scope chain. For closure calls, restore the full saved chain;
+        // for plain calls, just pop to the caller depth.
+        if let Some(saved) = &frame.saved_scope_chain {
+            self.scope_chain.frames = saved.clone();
+        } else {
+            while self.scope_chain.depth() > frame.saved_scope_depth {
+                self.scope_chain.pop();
+            }
+        }
+    }
+
     fn unwind_call_stack_to(&mut self, target_depth: usize) -> (Option<Value>, Option<Value>) {
         let mut restored_pending_exception = None;
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
         while self.call_stack.len() > target_depth {
             if let Some(frame) = self.call_stack.pop() {
+                self.persist_closure_capture_updates(&frame);
                 self.register_base = frame.register_base;
                 self.finally_modes.truncate(frame.saved_finally_mode_depth);
+                self.restore_scope_chain_for_frame(&frame);
                 restored_pending_exception = frame.saved_pending_exception;
                 restored_pending_return = frame.saved_pending_return;
                 restored_suspended_abrupt_depth = Some(frame.saved_suspended_abrupt_depth);
@@ -2774,8 +2804,7 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth =
-                                captured_env.as_ref().map_or(0, Vec::len);
+                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -3450,8 +3479,7 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
-                            let captured_scope_depth =
-                                captured_env.as_ref().map_or(0, Vec::len);
+                            let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -8508,6 +8536,77 @@ mod tests {
             result_object.properties.get("value"),
             Some(&Value::Str(payload))
         );
+    }
+
+    #[test]
+    fn closure_calls_persist_mutated_capture_across_shared_environment() {
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 0 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 1,
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::CreateClosure {
+                    dst: 2,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    callee: 1,
+                    args: RegRange {
+                        start: 10,
+                        count: 0,
+                    },
+                    dst: 3,
+                },
+                Ir3Instruction::Call {
+                    callee: 2,
+                    args: RegRange {
+                        start: 10,
+                        count: 0,
+                    },
+                    dst: 4,
+                },
+                Ir3Instruction::Move { dst: 0, src: 4 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 2,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec!["n".to_string()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 9,
+            arity: 0,
+            frame_size: 4,
+            name: Some("increment".to_string()),
+            is_generator: false,
+        });
+
+        let result = quickjs_execute(&module).unwrap();
+        assert_eq!(result.value, Value::Int(2));
     }
 
     #[test]

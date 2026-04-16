@@ -49,17 +49,29 @@ if ! jq -e '.' "$vectors_json" >/dev/null 2>&1; then
 fi
 
 validate_vectors_contract() {
-  local duplicate_ids duplicate_seeds
+  local duplicate_ids duplicate_seeds contract_version vectors_contract_version contract_bead_id vectors_bead_id
   local -a required_classes=()
   local -a attack_classes=()
   local -a scenario_ids=()
   local -a deterministic_seeds=()
   local -a validation_errors=()
 
+  contract_version="$(jq -r '.contract_version // ""' "$contract_json")"
+  vectors_contract_version="$(jq -r '.contract_version // ""' "$vectors_json")"
+  contract_bead_id="$(jq -r '.bead_id // ""' "$contract_json")"
+  vectors_bead_id="$(jq -r '.bead_id // ""' "$vectors_json")"
   mapfile -t required_classes < <(jq -r '.required_attack_classes[]? // empty' "$contract_json")
   mapfile -t attack_classes < <(jq -r '.vectors[]?.attack_class // empty' "$vectors_json")
   mapfile -t scenario_ids < <(jq -r '.vectors[]?.scenario_id // empty' "$vectors_json")
   mapfile -t deterministic_seeds < <(jq -r '.vectors[]?.deterministic_seed // empty' "$vectors_json")
+
+  if [[ -z "$contract_version" || -z "$vectors_contract_version" || "$contract_version" != "$vectors_contract_version" ]]; then
+    validation_errors+=("contract_version mismatch: pack=${contract_version:-<missing>} vectors=${vectors_contract_version:-<missing>}")
+  fi
+
+  if [[ -z "$contract_bead_id" || -z "$vectors_bead_id" || "$contract_bead_id" != "$vectors_bead_id" ]]; then
+    validation_errors+=("bead_id mismatch: pack=${contract_bead_id:-<missing>} vectors=${vectors_bead_id:-<missing>}")
+  fi
 
   if (( ${#scenario_ids[@]} == 0 )); then
     validation_errors+=("vectors array must be non-empty")

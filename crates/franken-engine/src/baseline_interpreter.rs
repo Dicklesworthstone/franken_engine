@@ -11085,5 +11085,119 @@ mod tests {
             let converted_back = BaselineInterpreter::js_value_to_value(&js_val);
             assert_eq!(converted_back, int_val);
         }
+
+        #[test]
+        fn async_generator_creation() {
+            let mut core = test_interpreter();
+
+            // Test CreateAsyncGenerator instruction
+            let result = core
+                .run_module(test_module(vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+
+            match result.value {
+                Value::AsyncGeneratorFunction(_) => {}
+                _ => panic!("Expected AsyncGeneratorFunction value"),
+            }
+        }
+
+        #[test]
+        fn async_generator_function_call_creates_object() {
+            let mut core = test_interpreter();
+
+            // First create async generator function, then call it
+            let result = core
+                .run_module(test_module(vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange { start: 1, count: 0 },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+
+            match result.value {
+                Value::AsyncGeneratorObject(_) => {}
+                _ => panic!("Expected AsyncGeneratorObject value"),
+            }
+        }
+
+        #[test]
+        fn async_generator_next_returns_promise() {
+            let mut core = test_interpreter();
+
+            // Create async generator, call it to get object, then call .next()
+            let async_gen_id = {
+                core.async_generators.push(AsyncGeneratorObject {
+                    function_index: 0,
+                    closure_index: None,
+                    saved_ip: 0,
+                    saved_registers: Vec::new(),
+                    saved_register_base: 0,
+                    phase: AsyncGeneratorPhase::Completed,
+                });
+                (core.async_generators.len() - 1) as u32
+            };
+
+            let result = core
+                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
+                .unwrap();
+
+            match result {
+                Value::Promise(_) => {}
+                _ => panic!("Expected Promise value, got {:?}", result),
+            }
+        }
+
+        #[test]
+        fn async_generator_phases_exist() {
+            // Test that async generator phase enum is complete
+            let phases = [
+                AsyncGeneratorPhase::SuspendedStart,
+                AsyncGeneratorPhase::SuspendedYield,
+                AsyncGeneratorPhase::SuspendedAwait,
+                AsyncGeneratorPhase::Executing,
+                AsyncGeneratorPhase::Completed,
+            ];
+
+            for phase in phases {
+                match phase {
+                    AsyncGeneratorPhase::SuspendedStart => {}
+                    AsyncGeneratorPhase::SuspendedYield => {}
+                    AsyncGeneratorPhase::SuspendedAwait => {}
+                    AsyncGeneratorPhase::Executing => {}
+                    AsyncGeneratorPhase::Completed => {}
+                }
+            }
+        }
+
+        #[test]
+        fn async_generator_value_types() {
+            // Test async generator value type predicates
+            let async_gen_func = Value::AsyncGeneratorFunction(0);
+            let async_gen_obj = Value::AsyncGeneratorObject(0);
+
+            assert_eq!(async_gen_func.type_name(), "function");
+            assert_eq!(async_gen_obj.type_name(), "object");
+
+            assert!(async_gen_func.is_truthy());
+            assert!(async_gen_obj.is_truthy());
+
+            assert!(!async_gen_func.is_nullish());
+            assert!(!async_gen_obj.is_nullish());
+        }
     }
 }

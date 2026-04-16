@@ -75,8 +75,27 @@ __pycache__/
 /target_check_cc/
 /target_local/
 
-# Beads issue tracker history backups
+# Beads issue tracker history backups and rebuild-failed recovery artifacts
 .beads/.br_history/
+.beads/.br_recovery/
+
+# Stale beads snapshot dumps (agent-generated; not canonical state)
+.beads_snapshot_*/
+.beads_recovery/
+
+# NTM agent orchestration state (PIDs, summaries, rate-limit caches)
+.ntm/
+
+# Claude Code agent scratch (session locks, worktree links, rejected hunks)
+.claude/
+
+# Codex/Gemini agent scratch files
+.codex
+.gemini/
+
+# Additional stray alternate build-target roots (rch / checkout)
+/target_standalone/
+crates/*/target_standalone/
 
 # Ephemeral one-off refactoring scripts (agent-generated)
 apply_fix.py

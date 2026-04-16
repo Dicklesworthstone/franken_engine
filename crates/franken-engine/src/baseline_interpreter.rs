@@ -4402,7 +4402,7 @@ impl InterpreterCore {
             deleted_keys: BTreeSet::new(),
             done: false,
             closed: false,
-        }));
+        }))?;
         Ok(Value::Iterator(handle))
     }
 
@@ -4441,7 +4441,7 @@ impl InterpreterCore {
             next_index: 0,
             done: false,
             closed: false,
-        }));
+        }))?;
         Ok(Value::Iterator(handle))
     }
 
@@ -5938,7 +5938,7 @@ impl InterpreterCore {
     ///
     /// Returns an error if the heap exceeds `u32::MAX` objects, preventing
     /// silent ObjectId aliasing.
-    fn alloc_object_with_prototype(
+    pub fn alloc_object_with_prototype(
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
@@ -5970,18 +5970,25 @@ impl InterpreterCore {
 
     /// Allocate a new object on the heap and return its ID.
     ///
-    /// Panics if the heap exceeds `u32::MAX` objects. For fallible
-    /// allocation in the interpreter loop, use
-    /// `alloc_object_with_prototype` directly.
+    /// This method has been removed to prevent panics on memory exhaustion.
+    /// Use `alloc_object_with_prototype(None)?` instead for fallible allocation.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use alloc_object_with_prototype(None)? instead to avoid panics on memory exhaustion"
+    )]
     pub fn alloc_object(&mut self) -> ObjectId {
         self.alloc_object_with_prototype(None)
             .expect("heap object allocation failed")
     }
 
-    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
-        let handle = u32::try_from(self.iterators.len()).expect("iterator table capacity exceeded");
+    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> Result<u32, InterpreterError> {
+        let handle =
+            u32::try_from(self.iterators.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "iterator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.iterators.len()),
+            })?;
         self.iterators.push(iterator);
-        handle
+        Ok(handle)
     }
 
     fn expect_iterator_handle(&self, iterator: Value) -> Result<u32, InterpreterError> {
@@ -6680,7 +6687,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
-        let oid = core.alloc_object();
+        let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
             .properties
             .insert("secret".to_string(), Value::Int(99));
@@ -6839,7 +6846,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook);
 
-        let oid = core.alloc_object();
+        let oid = core.alloc_object_with_prototype(None).unwrap();
         core.registers[1] = Value::Object(oid);
         core.registers[2] = Value::Str("key".to_string());
         core.registers[3] = Value::Int(7);
@@ -6914,7 +6921,7 @@ mod tests {
     fn interpreter_hook_none_preserves_execution_when_unset() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test-trace");
-        let oid = core.alloc_object();
+        let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
             .properties
             .insert("stable".to_string(), Value::Int(12));
@@ -8184,10 +8191,10 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
         assert_eq!(core.estimated_memory_bytes(), 0);
-        let id = core.alloc_object();
+        let id = core.alloc_object_with_prototype(None).unwrap();
         assert_eq!(id, ObjectId(0));
         assert_eq!(core.heap_size(), 1);
-        let id2 = core.alloc_object();
+        let id2 = core.alloc_object_with_prototype(None).unwrap();
         assert_eq!(id2, ObjectId(1));
         assert_eq!(core.heap_size(), 2);
         assert!(core.estimated_memory_bytes() > 0);
@@ -8237,7 +8244,7 @@ mod tests {
     fn estimated_memory_bytes_tracks_property_growth() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "memory-estimate");
-        let oid = core.alloc_object();
+        let oid = core.alloc_object_with_prototype(None).unwrap();
         let before = core.estimated_memory_bytes();
         core.heap[oid.0 as usize]
             .properties
@@ -8482,6 +8489,70 @@ mod tests {
             result_object.properties.get("value"),
             Some(&Value::Str(payload))
         );
+    }
+
+    #[test]
+    fn scope_chain_snapshot_produces_correct_frame_count() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "snapshot-frame-count");
+
+        // Push 4 additional frames (starting with 1 global = 5 total)
+        for _ in 0..4 {
+            core.scope_chain.push(core.config.max_scope_depth).unwrap();
+        }
+
+        let snapshot = core.scope_chain.snapshot();
+        assert_eq!(snapshot.len(), 5);
+    }
+
+    #[test]
+    fn closure_captures_correctly_at_deep_scope_chain() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_scope_depth = 15; // Allow deeper nesting
+        let mut core = InterpreterCore::new(config, "deep-closure-capture");
+
+        // Build scope chain with depth 10, adding a binding at each level
+        for i in 0..10 {
+            if i > 0 {
+                core.scope_chain.push(core.config.max_scope_depth).unwrap();
+            }
+            let binding_name = format!("var{}", i);
+            let binding_value = format!("value{}", i);
+            core.scope_chain.current_mut().bindings.insert(
+                binding_name.clone(),
+                ScopeBinding {
+                    value: Value::Str(binding_value.clone()),
+                    kind: BindingKind::Var,
+                    initialized: true,
+                },
+            );
+        }
+
+        assert_eq!(core.scope_chain.depth(), 10);
+
+        // Create a closure by capturing the scope chain
+        let captured_env = core.snapshot_scope_chain().unwrap();
+        assert_eq!(captured_env.len(), 10);
+
+        // Verify all bindings are preserved in the capture
+        for (level, frame) in captured_env.iter().enumerate() {
+            let binding_name = format!("var{}", level);
+            let expected_value = format!("value{}", level);
+            if let Some(binding) = frame.bindings.get(&binding_name) {
+                assert_eq!(binding.value, Value::Str(expected_value));
+            } else {
+                panic!("Missing binding {} at scope level {}", binding_name, level);
+            }
+        }
+
+        // Verify we can store the closure
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env,
+        });
+
+        // Verify the closure ID is valid
+        assert_eq!(core.closures.len(), 1);
     }
 
     #[test]

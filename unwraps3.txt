@@ -1,0 +1,790 @@
+crates/franken-engine/src/object_model.rs:721: .expect("mathematically impossible via instruction budget"),
+crates/franken-engine/src/object_model.rs:739: .expect("mathematically impossible via instruction budget"),
+crates/franken-engine/src/object_model.rs:752: .expect("mathematically impossible via instruction budget");
+crates/franken-engine/src/jsx_tsx_parser.rs:1536: let result = parse_jsx("<div>hello</div>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1549: let result = parse_jsx("<br />", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1561: let result = parse_jsx("<App />", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1575: let result = parse_jsx("<>hello</>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1586: let result = parse_jsx("<><div>inner</div></>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1605: let result = parse_jsx(r#"<div className="app">x</div>"#, &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1628: let result = parse_jsx("<div count={42}>x</div>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1651: let result = parse_jsx("<Comp {...props} />", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1668: let result = parse_jsx("<input disabled />", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1690: .unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1703: let result = parse_jsx("<div>{x + 1}</div>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1720: let result = parse_jsx("<div><span>inner</span></div>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1739: let result = parse_jsx("<Ctx.Provider>x</Ctx.Provider>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1751: let result = parse_jsx("<svg:rect />", &ns_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1839: let result = parse_jsx("<div />", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1849: let result = parse_jsx(source, &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1869: let json = serde_json::to_string(&el).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1870: let roundtrip: JsxElement = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1883: let json = serde_json::to_string(&node).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1884: let roundtrip: JsxNode = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1891: let json = serde_json::to_string(&config).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1892: let roundtrip: JsxParserConfig = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1904: let json = serde_json::to_string(&d).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1905: let roundtrip: JsxDiagnostic = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1915: let json = serde_json::to_string(&err).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1916: let roundtrip: JsxParseError = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1931: let json = serde_json::to_string(&m).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1932: let roundtrip: JsxRunManifest = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1946: let json = serde_json::to_string(&inv).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:1947: let roundtrip: JsxEvidenceInventory = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:2066: let result = parse_jsx(r#"<Item key="a" />"#, &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:2078: let result = parse_jsx("<div>text{expr}<span /></div>", &default_config()).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:2098: let json = serde_json::to_string(&val).unwrap();
+crates/franken-engine/src/jsx_tsx_parser.rs:2099: let roundtrip: JsxAttributeValue = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/observability_publication_bundle.rs:1016: .expect("off surface");
+crates/franken-engine/src/observability_publication_bundle.rs:1023: .expect("budgeted surface");
+crates/franken-engine/src/observability_publication_bundle.rs:1030: .expect("exact-shadow surface");
+crates/franken-engine/src/key_derivation.rs:463: Ok(self.cache.get(&cache_key).expect("just inserted"))
+crates/franken-engine/src/migration_compatibility.rs:1605: let active = self.active_migration.take().expect("must have active");
+crates/franken-engine/src/asupersync_contract_matrix.rs:528: .expect("kernel release present"),
+crates/franken-engine/src/asupersync_contract_matrix.rs:534: .expect("decision release present"),
+crates/franken-engine/src/asupersync_contract_matrix.rs:537: .expect("kernel release present"),
+crates/franken-engine/src/asupersync_contract_matrix.rs:540: .expect("evidence release present"),
+crates/franken-engine/src/asupersync_contract_matrix.rs:546: .expect("evidence release present"),
+crates/franken-engine/src/asupersync_contract_matrix.rs:552: .expect("frankenlab release present"),
+crates/franken-engine/src/flow_lattice.rs:670: .expect("checked above");
+crates/franken-engine/src/flow_lattice.rs:809: .expect("checked above");
+crates/franken-engine/src/deterministic_probabilistic_telemetry.rs:1172: windows.last_mut().expect("just pushed")
+crates/franken-engine/src/synthesis_budget.rs:448: self.exhaustion_reason.clone().unwrap(),
+crates/franken-engine/src/synthesis_budget.rs:479: self.exhaustion_reason.clone().unwrap(),
+crates/franken-engine/src/constrained_ambient_benchmark_lane.rs:274: .expect("intersection ids must exist");
+crates/franken-engine/src/constrained_ambient_benchmark_lane.rs:277: .expect("intersection ids must exist");
+crates/franken-engine/src/ts_module_resolution.rs:1902: let slot = perfect_hash_slot(key, salt, table_size).expect("table size is non-zero");
+crates/franken-engine/src/claim_entitlement.rs:311: .expect("embedded claim entitlement contract must parse")
+crates/franken-engine/src/module_index_parity_gate.rs:935: self.rollback_history.last().unwrap()
+crates/franken-engine/src/alloc_domain.rs:345: .expect("no duplicate");
+crates/franken-engine/src/alloc_domain.rs:351: .expect("no duplicate");
+crates/franken-engine/src/alloc_domain.rs:357: .expect("no duplicate");
+crates/franken-engine/src/alloc_domain.rs:363: .expect("no duplicate");
+crates/franken-engine/src/alloc_domain.rs:369: .expect("no duplicate");
+crates/franken-engine/src/seqlock_rollout_guard.rs:266: .expect("accepted candidates must build")
+crates/franken-engine/src/seqlock_rollout_guard.rs:374: .expect("starvation row must exist");
+crates/franken-engine/src/seqlock_rollout_guard.rs:378: .expect("model-check row must exist");
+crates/franken-engine/src/seqlock_rollout_guard.rs:398: .expect("safety row must exist");
+crates/franken-engine/src/seqlock_rollout_guard.rs:741: .expect("during-write probe must complete deterministically");
+crates/franken-engine/src/seqlock_rollout_guard.rs:1142: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1145: .unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1306: let json = serde_json::to_string_pretty(&artifact).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1340: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1343: .unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1659: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1662: .unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1703: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1706: .unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1850: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1852: .unwrap()
+crates/franken-engine/src/seqlock_rollout_guard.rs:1866: let name = p.file_name().unwrap().to_str().unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1884: let json = serde_json::to_string_pretty(&artifact).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1885: let back: super::StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1900: let json = serde_json::to_string_pretty(&artifact).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1901: let back: super::LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1916: let json = serde_json::to_string_pretty(&artifact).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1917: let back: super::SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1933: let json = serde_json::to_string_pretty(&artifact).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1934: let back: super::SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1941: let json = serde_json::to_string_pretty(&fixture).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:1942: let back: super::DocsContractFixture = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2026: let json = serde_json::to_string(&obs).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2027: let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2042: let json = serde_json::to_string(&obs).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2043: let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2054: let json = serde_json::to_string(&reference).unwrap();
+crates/franken-engine/src/seqlock_rollout_guard.rs:2055: let back: super::ManifestArtifactReference = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/semantic_transport_ledger.rs:828: .expect("fallback id should not fail")
+crates/franken-engine/src/semantic_transport_ledger.rs:923: .expect("fallback id should not fail")
+crates/franken-engine/src/epoch_barrier.rs:406: let new_epoch = self.pending_new_epoch.take().expect("pending epoch set");
+crates/franken-engine/src/epoch_barrier.rs:407: let reason = self.pending_reason.take().expect("pending reason set");
+crates/franken-engine/src/epoch_barrier.rs:408: let trace_id = self.pending_trace_id.take().expect("pending trace set");
+crates/franken-engine/src/mmr_proof.rs:591: .expect("position exists");
+crates/franken-engine/src/self_adjusting_resolution_graph.rs:1100: build_graph(nodes, edges, roots).expect("canonical manifest must build successfully")
+crates/franken-engine/src/metadata_substrate_governance.rs:722: *categories.iter().next().unwrap()
+crates/franken-engine/src/dark_matter_saturation_gate.rs:494: let first = self.observations.first().unwrap();
+crates/franken-engine/src/dark_matter_saturation_gate.rs:495: let last = self.observations.last().unwrap();
+crates/franken-engine/src/dark_matter_saturation_gate.rs:528: let end = self.observations.last().unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1263: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1270: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1298: let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1323: let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1364: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1365: let hash = ts.seal_region(rid, 100, 20).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1366: ts.release_region(rid).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1390: let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1411: let batch1 = ts.build_batch(entries1, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1413: protocol.check_replay(1, 100, None).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1438: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1440: let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1523: let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1525: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1768: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1788: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1797: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1806: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1808: ts.release_region(rid).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1815: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1852: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1921: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1924: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1937: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1939: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:1950: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2080: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2082: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2477: ts.release_region(rid).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2488: let rid = ts.allocate_region(1024, 10).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2499: ts.seal_region(rid, 100, 20).unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2756: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2759: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2772: .unwrap();
+crates/franken-engine/src/hostcall_batch_transport.rs:2774: .unwrap();
+crates/franken-engine/src/novelty_scoring_contract.rs:1205: .expect("candidate must exist");
+crates/franken-engine/src/evidence_ledger.rs:1573: .expect("build default stitching entry")
+crates/franken-engine/src/deterministic_serde.rs:268: let v = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
+crates/franken-engine/src/deterministic_serde.rs:273: let v = i64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
+crates/franken-engine/src/deterministic_serde.rs:289: let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+crates/franken-engine/src/deterministic_serde.rs:297: let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+crates/franken-engine/src/deterministic_serde.rs:306: let count = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+crates/franken-engine/src/deterministic_serde.rs:322: let count = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+crates/franken-engine/src/deterministic_serde.rs:328: let key_len = u32::from_be_bytes(data[cur..cur + 4].try_into().unwrap()) as usize;
+crates/franken-engine/src/deterministic_serde.rs:401: let actual_schema = SchemaHash(data[..32].try_into().unwrap());
+crates/franken-engine/src/deterministic_serde.rs:494: let schema_hash = SchemaHash(data[..32].try_into().unwrap());
+crates/franken-engine/src/delegation_chain.rs:350: .expect("non-empty delegation chain must have leaf");
+crates/franken-engine/src/receipt_verifier_pipeline.rs:1449: let json = serde_json::to_string(&check).unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:1450: let back: LayerCheck = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:1839: .unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:1853: .unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:1867: .unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:2169: let json = serde_json::to_string(&check).unwrap();
+crates/franken-engine/src/receipt_verifier_pipeline.rs:2170: let back: LayerCheck = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/canonical_encoding.rs:435: let schema_bytes: [u8; 32] = bytes[..32].try_into().unwrap();
+crates/franken-engine/src/canonical_encoding.rs:991: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1022: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1042: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1352: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1384: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1400: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1461: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1482: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1493: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1504: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1515: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1526: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1537: .unwrap();
+crates/franken-engine/src/canonical_encoding.rs:1571: .unwrap()
+crates/franken-engine/src/canonical_encoding.rs:2137: .unwrap();
+crates/franken-engine/src/signature_preimage.rs:104: write!(s, "{byte:02x}").unwrap();
+crates/franken-engine/src/signature_preimage.rs:1120: .unwrap();
+crates/franken-engine/src/signature_preimage.rs:1334: .unwrap();
+crates/franken-engine/src/signature_preimage.rs:1576: .unwrap();
+crates/franken-engine/src/module_cache.rs:652: event: self.events.last().expect("event was just pushed").clone(),
+crates/franken-engine/src/module_cache.rs:1746: .expect("default S3-FIFO baseline corpus should be valid")
+crates/franken-engine/src/safety_decision_router.rs:339: .expect("valid 2x2 loss matrix");
+crates/franken-engine/src/esm_cjs_interop_parity.rs:2310: .expect("normalized entry module should exist");
+crates/franken-engine/src/esm_cjs_interop_parity.rs:2452: .expect("async evaluation order should reference a registered specimen module");
+crates/franken-engine/src/esm_cjs_interop_parity.rs:2472: .expect("async evaluation order should reference a registered specimen module");
+crates/franken-engine/src/esm_cjs_interop_parity.rs:2483: .expect("async evaluation order should reference a registered specimen module");
+crates/franken-engine/src/shape_transition_algebra.rs:393: .expect("retained property must exist");
+crates/franken-engine/src/shape_transition_algebra.rs:533: .expect("shape index and registry must stay aligned");
+crates/franken-engine/src/shape_transition_algebra.rs:775: self.cells.last_mut().expect("just pushed")
+crates/franken-engine/src/test262_release_gate.rs:1566: let json = serde_json::to_string(&reason).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:1567: let back: Test262WaiverReason = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:1589: let waivers = Test262WaiverSet::load_toml(&path).expect("load missing file");
+crates/franken-engine/src/test262_release_gate.rs:1593: .expect("missing-file default should validate");
+crates/franken-engine/src/test262_release_gate.rs:1782: let json = serde_json::to_string(&outcome).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:1783: let back: Test262Outcome = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:1796: let json = serde_json::to_string(&outcome).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:1797: let back: Test262ObservedOutcome = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2006: let pin = parse_pin_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2020: let pin = parse_pin_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2043: let profile = parse_profile_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2065: let ws = parse_waiver_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2076: let ws = parse_waiver_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2147: let json = serde_json::to_string(&pin).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2148: let back: Test262PinSet = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2155: let json = serde_json::to_string(&profile).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2156: let back: Test262Profile = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2163: let json = serde_json::to_string(&ws).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2164: let back: Test262WaiverSet = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2171: let json = serde_json::to_string(&cfg).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2172: let back: Test262RunnerConfig = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2218: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2252: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2280: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2304: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2330: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2354: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2380: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2476: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2500: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2509: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2531: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2559: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2590: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2592: let warning = result.summary.pass_regression_warning.as_ref().unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2623: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2659: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2677: hwm.write_json(&path).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2678: let loaded = Test262HighWaterMark::load_json(&path).unwrap().unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2687: let loaded = Test262HighWaterMark::load_json(&path).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2711: .unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2716: let collector = Test262EvidenceCollector::new(&dir).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2717: let artifacts = collector.collect(&result, &hwm).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2724: let evidence = fs::read_to_string(&artifacts.evidence_path).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2857: let (k, v) = parse_key_value(1, "name = \"value\"").unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2874: write_atomic(&path, b"hello world").unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2954: let profile = parse_profile_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:2982: let ws = parse_waiver_toml(toml).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3026: let bytes = canonical_json_bytes(&pin).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3027: let back: Test262PinSet = serde_json::from_slice(&bytes).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3049: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3050: let back: Test262LogEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3073: let json = serde_json::to_string(&summary).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3074: let back: Test262RunSummary = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3088: let json = serde_json::to_string(&warning).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3089: let back: Test262PassRegressionWarning = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3102: let json = serde_json::to_string(&arts).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3103: let back: Test262CollectedArtifacts = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3163: let json = serde_json::to_string(&obs).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3164: let back: Test262ObservedResult = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3177: let json = serde_json::to_string(&wa).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3178: let back: DeterministicWorkerAssignment = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3191: let json = serde_json::to_string(&inc).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3192: let back: Test262ProfileInclude = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3203: let json = serde_json::to_string(&exc).unwrap();
+crates/franken-engine/src/test262_release_gate.rs:3204: let back: Test262ProfileExclude = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/wasm_runtime_lane.rs:410: .expect("wasm dom batch id")
+crates/franken-engine/src/wasm_runtime_lane.rs:519: .expect("wasm flush id")
+crates/franken-engine/src/wasm_runtime_lane.rs:718: .expect("wasm lane id")
+crates/franken-engine/src/resource_certificate_governance.rs:709: *categories.iter().next().unwrap()
+crates/franken-engine/src/rgc_planning_track.rs:1305: .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().expect("unix epoch"))
+crates/franken-engine/src/resource_certificate_consumer.rs:470: let payload = serde_json::to_vec(value).expect("resource certificate hash preimage is valid");
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1035: let a = m.for_surface(SurfaceId::LabRuntime).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1042: let a = m.for_surface(SurfaceId::ReleaseGate).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1049: let json = serde_json::to_string(&m).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1050: let m2: GapMatrix = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1057: let json = serde_json::to_string(&s).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1058: let s2: SurfaceId = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1071: let json = serde_json::to_string(&c).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1072: let c2: CoverageLevel = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1084: let json = serde_json::to_string(&d).unwrap();
+crates/franken-engine/src/frankenlab_surface_gap_matrix.rs:1085: let d2: MigrationDecision = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/execution_orchestrator.rs:431: .expect("adaptive router configuration must be valid");
+crates/franken-engine/src/execution_orchestrator.rs:472: .expect("stopping policy configuration must be valid");
+crates/franken-engine/src/specialization_rollback_gate.rs:811: self.rollback_history.last().unwrap()
+crates/franken-engine/src/vectorized_builtin_governance.rs:876: *categories.iter().next().unwrap()
+crates/franken-engine/src/closure_model.rs:396: Ok(self.chain.pop().expect("checked non-empty"))
+crates/franken-engine/src/security_e2e.rs:928: serde_json::to_string_pretty(&manifest).unwrap(),
+crates/franken-engine/src/security_e2e.rs:944: lines.push(serde_json::to_string(&entry).unwrap());
+crates/franken-engine/src/security_e2e.rs:955: lines.push(serde_json::to_string(&entry).unwrap());
+crates/franken-engine/src/security_e2e.rs:989: serde_json::to_string_pretty(&summary).unwrap(),
+crates/franken-engine/src/portfolio_governor.rs:624: let state = self.moonshots.get_mut(moonshot_id).unwrap();
+crates/franken-engine/src/portfolio_governor.rs:684: let state = self.moonshots.get_mut(moonshot_id).unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1105: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1226: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1230: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1276: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1298: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1309: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1331: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1342: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1365: .unwrap()
+crates/franken-engine/src/portfolio_governor.rs:1384: .unwrap()
+crates/franken-engine/src/portfolio_governor.rs:1407: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1410: .unwrap()
+crates/franken-engine/src/portfolio_governor.rs:1421: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1433: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1498: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1613: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1625: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1838: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1847: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1850: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:1872: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:2056: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:2073: .unwrap();
+crates/franken-engine/src/portfolio_governor.rs:2082: .unwrap();
+crates/franken-engine/src/slot_registry.rs:906: Ok(self.slots.get(&id).expect("just inserted"))
+crates/franken-engine/src/slot_registry.rs:1162: Ok(self.slots.get(id).expect("slot exists"))
+crates/franken-engine/src/slot_registry.rs:1219: Ok(self.slots.get(id).expect("slot exists"))
+crates/franken-engine/src/slot_registry.rs:1259: Ok(self.slots.get(id).expect("slot exists"))
+crates/franken-engine/src/hostcall_session_protocol.rs:1287: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1294: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1301: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1308: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1341: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1348: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1381: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1388: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1391: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1398: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1431: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1438: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1441: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1479: state.check_replay(seq, seq * 10, None).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1547: state.attach_key_schedule(ks).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1610: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1617: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1631: state.attach_key_schedule(ks).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1632: state.check_replay(1, 10, None).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1633: state.check_replay(2, 20, None).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1636: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1643: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1650: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1657: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1690: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1697: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1706: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1739: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1746: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1753: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1760: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1767: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1800: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1807: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:1817: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2495: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2504: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2529: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2536: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2539: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2550: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2564: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2571: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2581: state.attach_key_schedule(ks).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2603: state.attach_key_schedule(ks).unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2618: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2625: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2642: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2649: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2656: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2670: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2677: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2680: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2710: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2717: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2720: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2742: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2758: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2765: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2772: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2779: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2792: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2799: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2817: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2824: .unwrap();
+crates/franken-engine/src/hostcall_session_protocol.rs:2827: .unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1284: let json = serde_json::to_string(&kind).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1285: let back: FlamegraphKind = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1297: let json = serde_json::to_string(&sample).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1298: let back: FoldedStackSample = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1311: let json = serde_json::to_string(&entry).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1312: let back: FlamegraphDiffEntry = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1320: let json = serde_json::to_string(&meta).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1321: let back: FlamegraphMetadata = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1329: let json = serde_json::to_string(&link).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1330: let back: FlamegraphEvidenceLink = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1348: let json = serde_json::to_string(&evt).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1349: let back: FlamegraphPipelineEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1534: let result = parse_folded_stacks("test", "main;foo 100\nmain;bar 200\n").unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1542: let result = parse_folded_stacks("test", "main;foo 100\nmain;foo 50\n").unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1549: let result = parse_folded_stacks("test", "\nmain;foo 10\n\nmain;bar 20\n\n").unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1707: let entries = build_diff_entries(&baseline, &candidate).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1718: let entries = build_diff_entries(&samples, &samples).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1729: let entries = build_diff_entries(&baseline, &candidate).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1743: let entries = build_diff_entries(&baseline, &candidate).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:1798: validate_flamegraph_artifact(&test_artifact()).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2037: let json = serde_json::to_string(v).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2038: let back: FlamegraphKind = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2072: let json = serde_json::to_string(&sample).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2073: let back: FoldedStackSample = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2085: let json = serde_json::to_string(&entry).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2086: let back: FlamegraphDiffEntry = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2093: let json = serde_json::to_string(&query).unwrap();
+crates/franken-engine/src/flamegraph_pipeline.rs:2094: let back: FlamegraphQuery = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/s3_fifo_cache_gate.rs:1086: Self::new(S3FifoCacheConfig::default(), epoch).expect("default config is valid")
+crates/franken-engine/src/regexp_deterministic_engine.rs:1800: let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1828: compile_regexp(&pattern, &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1848: let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1863: let c1 = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1864: let c2 = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1876: let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1877: let json = serde_json::to_string(&compiled).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:1878: let deser: CompiledRegExp = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:2486: let json = serde_json::to_string(&compiled).unwrap();
+crates/franken-engine/src/regexp_deterministic_engine.rs:2487: let deser: CompiledRegExp = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/parser.rs:3233: let next_char = rest.chars().next().unwrap();
+crates/franken-engine/src/counterfactual_intervention_planner.rs:676: .unwrap(); // safe: viable is non-empty
+crates/franken-engine/src/counterfactual_intervention_planner.rs:764: let wave = plan_wave(passes, 500_000).expect("manifest wave should succeed");
+crates/franken-engine/src/counterfactual_intervention_planner.rs:1085: .unwrap();
+crates/franken-engine/src/counterfactual_intervention_planner.rs:1090: .unwrap();
+crates/franken-engine/src/ts_normalization.rs:1367: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1381: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1387: .expect("escaped string should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1399: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1405: .expect("escaped string should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1417: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1423: .expect("escaped template should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1435: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1454: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/ts_normalization.rs:1593: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1607: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1614: .expect("escaped string should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1627: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1634: .expect("escaped string should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1647: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1654: .expect("escaped template byte should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1667: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1685: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:1733: .expect("scanner index should remain on char boundary");
+crates/franken-engine/src/ts_normalization.rs:2440: .expect("cursor should remain on a char boundary");
+crates/franken-engine/src/hindsight_escalation_bundle.rs:584: self.receipts.last().expect("just pushed")
+crates/franken-engine/src/conformance_harness.rs:1567: .expect("IFC logs always carry category");
+crates/franken-engine/src/governance_hooks.rs:1244: let last = results.last().unwrap();
+crates/franken-engine/src/governance_hooks.rs:1819: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2220: .unwrap()
+crates/franken-engine/src/governance_hooks.rs:2511: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2522: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2534: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2552: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2567: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2582: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2597: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2614: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2644: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2658: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2674: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:2682: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3033: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3049: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3076: .unwrap()
+crates/franken-engine/src/governance_hooks.rs:3130: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3152: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3378: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3412: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3440: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3448: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3514: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3517: .unwrap();
+crates/franken-engine/src/governance_hooks.rs:3602: .unwrap();
+crates/franken-engine/src/hook_effect_contract.rs:346: .expect("hook manifest id derivation")
+crates/franken-engine/src/hook_effect_contract.rs:455: .expect("effect id derivation")
+crates/franken-engine/src/hook_effect_contract.rs:772: .expect("transformation receipt id derivation")
+crates/franken-engine/src/hook_effect_contract.rs:824: .expect("phase transition id derivation")
+crates/franken-engine/src/hook_effect_contract.rs:874: Ok(self.transition_log.last().expect("just pushed"))
+crates/franken-engine/src/hook_effect_contract.rs:1017: .expect("contract id derivation")
+crates/franken-engine/src/hook_effect_contract.rs:1158: .expect("unsupported semantics diagnostic id derivation")
+crates/franken-engine/src/proof_specialization_receipt.rs:819: .expect("test proof id derivation");
+crates/franken-engine/src/proof_specialization_receipt.rs:881: .expect("valid test receipt")
+crates/franken-engine/src/frontier_complex_cartography.rs:1043: let mut complex = build_complex(simplices).expect("manifest complex should be valid");
+crates/franken-engine/src/frontier_complex_cartography.rs:1047: let diagram = compute_persistence(&complex).expect("manifest persistence should succeed");
+crates/franken-engine/src/global_coherence_checker.rs:1162: .unwrap()
+crates/franken-engine/src/law_mining.rs:1356: .expect("fixture evidence entry should build")
+crates/franken-engine/src/acquisition_experiment_oracle.rs:797: .expect("manifest plan should always succeed")
+crates/franken-engine/src/marker_stream.rs:467: self.markers.last().expect("just pushed")
+crates/franken-engine/src/marker_stream.rs:630: let latest = self.markers.last().expect("checked non-empty");
+crates/franken-engine/src/frir_schema.rs:981: let last = self.witnesses.last().unwrap();
+crates/franken-engine/src/js_runtime_lane.rs:465: .expect("patch batch id derivation")
+crates/franken-engine/src/js_runtime_lane.rs:959: .expect("flush summary id derivation")
+crates/franken-engine/src/js_runtime_lane.rs:1006: .expect("lane id derivation")
+crates/franken-engine/src/security_conformance.rs:1200: .unwrap()
+crates/franken-engine/src/security_conformance.rs:1246: .unwrap()
+crates/franken-engine/src/security_conformance.rs:1294: .unwrap()
+crates/franken-engine/src/security_conformance.rs:1376: .unwrap();
+crates/franken-engine/src/security_conformance.rs:1471: let json = serde_json::to_string(&variant).unwrap();
+crates/franken-engine/src/security_conformance.rs:1517: let json = serde_json::to_string(&variant).unwrap();
+crates/franken-engine/src/security_conformance.rs:1518: let back: SecurityOutcome = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/security_conformance.rs:2270: .unwrap();
+crates/franken-engine/src/security_conformance.rs:2301: .unwrap();
+crates/franken-engine/src/security_conformance.rs:2326: .unwrap();
+crates/franken-engine/src/obstruction_certificate.rs:1214: .expect("fallback derive_id should not fail")
+crates/franken-engine/src/incident_replay_bundle.rs:365: current_level.into_iter().next().unwrap()
+crates/franken-engine/src/incident_replay_bundle.rs:1553: .unwrap()
+crates/franken-engine/src/incident_replay_bundle.rs:1877: .unwrap()
+crates/franken-engine/src/benchmark_e2e.rs:1141: serde_json::to_string_pretty(&env_manifest).unwrap(),
+crates/franken-engine/src/benchmark_e2e.rs:1199: serde_json::to_string_pretty(&raw_results).unwrap(),
+crates/franken-engine/src/benchmark_e2e.rs:1229: serde_json::to_string_pretty(&manifest).unwrap(),
+crates/franken-engine/src/benchmark_e2e.rs:1251: evidence_lines.push(serde_json::to_string(&entry).unwrap());
+crates/franken-engine/src/benchmark_e2e.rs:1264: evidence_lines.push(serde_json::to_string(&entry).unwrap());
+crates/franken-engine/src/benchmark_e2e.rs:1278: evidence_lines.push(serde_json::to_string(&entry).unwrap());
+crates/franken-engine/src/benchmark_e2e.rs:1296: .map(|entry| serde_json::to_string(&entry).unwrap())
+crates/franken-engine/src/benchmark_e2e.rs:1334: serde_json::to_string_pretty(&summary).unwrap(),
+crates/franken-engine/src/benchmark_e2e.rs:2061: .unwrap()
+crates/franken-engine/src/parser_event_ast_equivalence.rs:732: .expect("second materialization should succeed for non-tampered");
+crates/franken-engine/src/controller_interference_guard.rs:486: .expect("registration must exist");
+crates/franken-engine/src/controller_interference_guard.rs:489: .expect("registration must exist");
+crates/franken-engine/src/law_proof_refutation.rs:517: return self.campaign_results.last().expect("just pushed");
+crates/franken-engine/src/law_proof_refutation.rs:586: self.campaign_results.last().expect("just pushed")
+crates/franken-engine/src/claim_envelope_contract.rs:127: .expect("embedded claim envelope contract must parse")
+crates/franken-engine/src/conformance_vector_gen.rs:1102: .unwrap();
+crates/franken-engine/src/conformance_vector_gen.rs:1869: let json = serde_json::to_string(&VectorCategory::Fault).unwrap();
+crates/franken-engine/src/baseline_interpreter.rs:348: self.frames.last_mut().expect("scope chain never empty")
+crates/franken-engine/src/baseline_interpreter.rs:2669: .expect("heap object capacity exceeded")
+crates/franken-engine/src/baseline_interpreter.rs:2673: let handle = u32::try_from(self.iterators.len()).expect("iterator table capacity exceeded");
+crates/franken-engine/src/native_addon_parity_gate.rs:1120: match violated_axes.iter().next().unwrap() {
+crates/franken-engine/src/semantic_contract_baseline.rs:1518: derive_id(ObjectDomain::EvidenceRecord, "drift", &schema, b"fallback").expect("fallback id")
+crates/franken-engine/src/epoch_invalidation.rs:767: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:985: .unwrap()
+crates/franken-engine/src/epoch_invalidation.rs:1185: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1227: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1261: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1336: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1398: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1407: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1440: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1459: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1481: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:1724: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2291: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2329: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2351: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2386: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2475: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2512: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2608: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2771: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2785: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2799: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2854: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2915: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2936: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2966: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:2969: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3005: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3103: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3162: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3199: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3285: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3414: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3511: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3603: .unwrap();
+crates/franken-engine/src/epoch_invalidation.rs:3610: .unwrap();
+crates/franken-engine/src/revocation_freshness.rs:248: let sig = sign_preimage(signing_key, &preimage).expect("signing should not fail");
+crates/franken-engine/src/escape_analysis_certificate.rs:1087: let json = serde_json::to_string(&env).unwrap();
+crates/franken-engine/src/escape_analysis_certificate.rs:1088: let back: OptimizationEligibilityEnvelope = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/escape_analysis_certificate.rs:1479: let json = serde_json::to_string(&env).unwrap();
+crates/franken-engine/src/escape_analysis_certificate.rs:1480: let back: OptimizationEligibilityEnvelope = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/escape_analysis_certificate.rs:1717: .unwrap()
+crates/franken-engine/src/escape_analysis_certificate.rs:1735: .unwrap()
+crates/franken-engine/src/promise_model.rs:548: .expect("fresh promise cannot be already settled");
+crates/franken-engine/src/promise_model.rs:561: .expect("fresh promise cannot be already settled");
+crates/franken-engine/src/stdlib.rs:4651: let value = json_parse(&mut heap, &env, input).expect("parse JSON into heap");
+crates/franken-engine/src/stdlib.rs:4695: let arr_proto = heap.get(env.prototypes.array_prototype).unwrap();
+crates/franken-engine/src/stdlib.rs:4696: let arr_ordinary = arr_proto.as_ordinary().unwrap();
+crates/franken-engine/src/stdlib.rs:4708: let te_proto = heap.get(env.prototypes.type_error_prototype).unwrap();
+crates/franken-engine/src/stdlib.rs:4709: let te_ord = te_proto.as_ordinary().unwrap();
+crates/franken-engine/src/stdlib.rs:4712: let err_proto = heap.get(env.prototypes.error_prototype).unwrap();
+crates/franken-engine/src/stdlib.rs:4713: let err_ord = err_proto.as_ordinary().unwrap();
+crates/franken-engine/src/stdlib.rs:4721: let math_obj = heap.get(env.namespaces.math).unwrap();
+crates/franken-engine/src/stdlib.rs:4723: math_obj.as_ordinary().unwrap().class_tag.as_deref(),
+crates/franken-engine/src/stdlib.rs:4734: .unwrap();
+crates/franken-engine/src/stdlib.rs:4748: .unwrap();
+crates/franken-engine/src/stdlib.rs:4758: .unwrap();
+crates/franken-engine/src/stdlib.rs:4775: exec_math(BuiltinId::MathAbs, &[JsValue::Int(-5 * FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4779: exec_math(BuiltinId::MathAbs, &[JsValue::Int(3 * FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4789: exec_math(BuiltinId::MathFloor, &[JsValue::Int(val)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4793: exec_math(BuiltinId::MathCeil, &[JsValue::Int(val)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4805: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4813: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4821: exec_math(BuiltinId::MathSign, &[JsValue::Int(42 * FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4825: exec_math(BuiltinId::MathSign, &[JsValue::Int(-7 * FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4829: exec_math(BuiltinId::MathSign, &[JsValue::Int(0)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4842: exec_math(BuiltinId::MathMax, &args).unwrap(),
+crates/franken-engine/src/stdlib.rs:4846: exec_math(BuiltinId::MathMin, &args).unwrap(),
+crates/franken-engine/src/stdlib.rs:4854: exec_math(BuiltinId::MathMax, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4862: exec_math(BuiltinId::MathClz32, &[JsValue::Int(FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:4871: exec_math(BuiltinId::MathImul, &args).unwrap(),
+crates/franken-engine/src/stdlib.rs:4886: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4895: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4918: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4931: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4944: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4953: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4966: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4975: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4988: .unwrap(),
+crates/franken-engine/src/stdlib.rs:4997: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5010: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5023: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5036: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5045: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5058: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5071: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5093: exec_string_method(BuiltinId::StringPrototypeTrim, "  hello  ", &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5097: exec_string_method(BuiltinId::StringPrototypeTrimStart, "  hello  ", &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5101: exec_string_method(BuiltinId::StringPrototypeTrimEnd, "  hello  ", &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5114: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5123: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5136: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5156: exec_string_method(BuiltinId::StringPrototypeToUpperCase, "hello", &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5160: exec_string_method(BuiltinId::StringPrototypeToLowerCase, "HELLO", &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5173: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5183: exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5187: exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE + 500_000, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5200: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5208: exec_number_method(BuiltinId::NumberPrototypeToString, 42 * FP_SCALE, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5212: exec_number_method(BuiltinId::NumberPrototypeToString, 3_141_593, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5226: parse_json_value("\"hello\"").unwrap(),
+crates/franken-engine/src/stdlib.rs:5234: parse_json_value("\"hello\\nworld\"").unwrap(),
+crates/franken-engine/src/stdlib.rs:5238: parse_json_value("\"tab\\there\"").unwrap(),
+crates/franken-engine/src/stdlib.rs:5247: json_stringify(&heap, &JsValue::Null).unwrap(),
+crates/franken-engine/src/stdlib.rs:5251: json_stringify(&heap, &JsValue::Bool(true)).unwrap(),
+crates/franken-engine/src/stdlib.rs:5255: json_stringify(&heap, &JsValue::Int(42 * FP_SCALE)).unwrap(),
+crates/franken-engine/src/stdlib.rs:5259: json_stringify(&heap, &JsValue::Str("hello".into())).unwrap(),
+crates/franken-engine/src/stdlib.rs:5268: json_stringify(&heap, &JsValue::Str("line\nnewline".into())).unwrap(),
+crates/franken-engine/src/stdlib.rs:5277: json_stringify(&heap, &JsValue::Int(-(FP_SCALE / 2))).unwrap(),
+crates/franken-engine/src/stdlib.rs:5286: json_stringify(&heap, &JsValue::Undefined).unwrap(),
+crates/franken-engine/src/stdlib.rs:5295: let value = json_parse(&mut heap, &env, r#"{"answer":42,"nested":[1,null,"ok"]}"#).unwrap();
+crates/franken-engine/src/stdlib.rs:5297: json_stringify(&heap, &value).unwrap(),
+crates/franken-engine/src/stdlib.rs:5306: let value = json_parse(&mut heap, &env, "{}").unwrap();
+crates/franken-engine/src/stdlib.rs:5311: .unwrap();
+crates/franken-engine/src/stdlib.rs:5375: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5383: exec_math(BuiltinId::MathTrunc, &[JsValue::Int(3_700_000)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5387: exec_math(BuiltinId::MathTrunc, &[JsValue::Int(-3_700_000)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5395: pad_string("hello", 3, " ", true, "padStart").unwrap(),
+crates/franken-engine/src/stdlib.rs:5407: read_array_elements(&heap, handle).unwrap(),
+crates/franken-engine/src/stdlib.rs:5424: .expect("read nested property");
+crates/franken-engine/src/stdlib.rs:5430: .expect("read nested array property");
+crates/franken-engine/src/stdlib.rs:5435: heap.get_prototype_of(root).unwrap(),
+crates/franken-engine/src/stdlib.rs:5439: read_array_elements(&heap, array_handle).unwrap(),
+crates/franken-engine/src/stdlib.rs:5453: let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).unwrap();
+crates/franken-engine/src/stdlib.rs:5466: let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(FP_SCALE)]).unwrap();
+crates/franken-engine/src/stdlib.rs:5482: let result = exec_math(BuiltinId::MathLog, &[JsValue::Int(2_718_282)]).unwrap();
+crates/franken-engine/src/stdlib.rs:5501: let result = exec_math(BuiltinId::MathLog2, &[JsValue::Int(2 * FP_SCALE)]).unwrap();
+crates/franken-engine/src/stdlib.rs:5515: let result = exec_math(BuiltinId::MathLog10, &[JsValue::Int(10 * FP_SCALE)]).unwrap();
+crates/franken-engine/src/stdlib.rs:5533: .unwrap();
+crates/franken-engine/src/stdlib.rs:5540: exec_math(BuiltinId::MathHypot, &[]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5549: exec_math(BuiltinId::MathFround, &[JsValue::Int(3_141_593)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5559: exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Undefined]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5563: exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Int(42 * FP_SCALE)]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5567: exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("abc".into())]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5571: exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("123".into())]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5580: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5584: exec_global_function(BuiltinId::GlobalIsFinite, &[JsValue::Undefined]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5592: exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("42".into())]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5604: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5612: exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("-10".into())]).unwrap(),
+crates/franken-engine/src/stdlib.rs:5622: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5631: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5642: .unwrap();
+crates/franken-engine/src/stdlib.rs:5650: .unwrap();
+crates/franken-engine/src/stdlib.rs:5661: .unwrap();
+crates/franken-engine/src/stdlib.rs:5701: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5709: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5731: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5746: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5771: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5797: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5806: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5819: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5828: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5841: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5850: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5870: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5879: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5897: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5915: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5924: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5946: .unwrap(),
+crates/franken-engine/src/stdlib.rs:5982: .unwrap(),
+crates/franken-engine/src/stdlib.rs:6003: .unwrap(),
+crates/franken-engine/src/stdlib.rs:6029: .unwrap(),
+crates/franken-engine/src/stdlib.rs:6048: .unwrap(),
+crates/franken-engine/src/stdlib.rs:6175: .unwrap();
+crates/franken-engine/src/stdlib.rs:6185: .unwrap();
+crates/franken-engine/src/stdlib.rs:6198: .unwrap();
+crates/franken-engine/src/stdlib.rs:6209: .unwrap();
+crates/franken-engine/src/stdlib.rs:6220: .unwrap();
+crates/franken-engine/src/stdlib.rs:6233: .unwrap();
+crates/franken-engine/src/stdlib.rs:6244: .unwrap();
+crates/franken-engine/src/stdlib.rs:6255: .unwrap();
+crates/franken-engine/src/stdlib.rs:6268: .unwrap();
+crates/franken-engine/src/stdlib.rs:6279: .unwrap();
+crates/franken-engine/src/stdlib.rs:6298: .unwrap();
+crates/franken-engine/src/stdlib.rs:6321: .unwrap();
+crates/franken-engine/src/stdlib.rs:6342: .unwrap();
+crates/franken-engine/src/stdlib.rs:6358: .unwrap();
+crates/franken-engine/src/stdlib.rs:6382: .unwrap();
+crates/franken-engine/src/stdlib.rs:6403: .unwrap();
+crates/franken-engine/src/stdlib.rs:6409: .unwrap();
+crates/franken-engine/src/stdlib.rs:6416: .unwrap();
+crates/franken-engine/src/stdlib.rs:6480: .unwrap();
+crates/franken-engine/src/stdlib.rs:6490: .unwrap();
+crates/franken-engine/src/stdlib.rs:6500: .unwrap();
+crates/franken-engine/src/stdlib.rs:6510: .unwrap();
+crates/franken-engine/src/stdlib.rs:6523: .unwrap();
+crates/franken-engine/src/stdlib.rs:6539: .unwrap();
+crates/franken-engine/src/stdlib.rs:6593: .unwrap();
+crates/franken-engine/src/stdlib.rs:6603: .unwrap();
+crates/franken-engine/src/stdlib.rs:6618: let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).unwrap();
+crates/franken-engine/src/stdlib.rs:6669: .unwrap();
+crates/franken-engine/src/stdlib.rs:6685: .unwrap();
+crates/franken-engine/src/stdlib.rs:6712: .unwrap();
+crates/franken-engine/src/stdlib.rs:6725: .unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:650: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:651: let restored: LeakEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:668: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:669: let restored: LeakEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:747: let json = serde_json::to_string(&diag).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:748: let restored: LeakDiagnostic = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:765: let json = serde_json::to_string(&diag).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:766: let restored: LeakDiagnostic = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:783: let json = serde_json::to_string(&metrics).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:784: let restored: LeakMetrics = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:830: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:831: let restored: LeakEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:846: let json = serde_json::to_string(&metrics).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:847: let restored: LeakMetrics = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:905: let json = serde_json::to_string(&diag).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:906: let restored: LeakDiagnostic = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:934: let json = serde_json::to_string(&resp).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1042: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1073: let json = serde_json::to_string(&diag).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1234: let alert = serde_json::to_string(&FailoverAction::AlertOnly).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1238: .unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1247: let json = serde_json::to_string(&resp).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1266: let json = serde_json::to_string(&resp).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1516: let json = serde_json::to_string(&metrics).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1517: let restored: LeakMetrics = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1532: let json = serde_json::to_string(&diag).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1533: let restored: LeakDiagnostic = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1639: let json = serde_json::to_string(&event).unwrap();
+crates/franken-engine/src/obligation_leak_policy.rs:1640: let restored: LeakEvent = serde_json::from_str(&json).unwrap();
+crates/franken-engine/src/privacy_learning_contract.rs:1074: .expect("commitment was just pushed and must exist"))
+crates/franken-engine/src/privacy_learning_contract.rs:1160: .expect("snapshot summary was just pushed and must exist"))
+crates/franken-engine/src/obstruction_witness_emitter.rs:660: .expect("canonical witness w1");
+crates/franken-engine/src/obstruction_witness_emitter.rs:669: .expect("canonical witness w2");
+crates/franken-engine/src/obstruction_witness_emitter.rs:678: .expect("canonical witness w3");
+crates/franken-engine/src/obstruction_witness_emitter.rs:687: .expect("canonical witness w4");
+crates/franken-engine/src/obstruction_witness_emitter.rs:696: .expect("canonical witness w5");
+crates/franken-engine/src/obstruction_witness_emitter.rs:705: .expect("canonical witness w6");
+crates/franken-engine/src/obstruction_witness_emitter.rs:714: .expect("canonical witness w7");
+crates/franken-engine/src/obstruction_witness_emitter.rs:757: .expect("canonical manifest report should succeed")
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:294: mgr.load_extension("ext-ns-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:295: mgr.create_session("ext-ns-1", "sess-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:296: mgr.create_session("ext-ns-1", "sess-2", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:346: mgr.load_extension("ext-fc-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:347: mgr.create_session("ext-fc-1", "sess-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:378: mgr.load_extension("ext-q-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:379: mgr.create_session("ext-q-1", "sess-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:411: mgr.load_extension("ext-r-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:412: mgr.create_session("ext-r-1", "sess-active", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:440: mgr.load_extension("ext-d-1", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:441: mgr.load_extension("ext-d-2", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:482: mgr.load_extension(&format!("ext-m-{i}"), cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:487: mgr.create_session("ext-m-0", "s0a", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:488: mgr.create_session("ext-m-0", "s0b", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:489: mgr.create_session("ext-m-1", "s1a", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:490: mgr.create_session("ext-m-2", "s2a", cx).unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:1260: .unwrap();
+crates/franken-engine/src/frankenlab_extension_lifecycle.rs:1265: .unwrap();
+crates/franken-engine/src/runtime_hotspot_optimization_campaign.rs:203: .expect("campaign results must not be empty")
+crates/franken-engine/src/bin/franken_kernel_synthesis_contract.rs:712: let config = parse_args(&args).expect("args should parse");
+crates/franken-engine/src/bin/franken_security_conformance_runner.rs:281: .expect("validated observation map");
+crates/franken-engine/src/bin/franken_engine_product_blocker_ledger.rs:670: .expect("tier_1_critical rollup must exist");
+crates/franken-engine/src/bin/franken_engine_product_blocker_ledger.rs:688: .expect("tier_1_critical rollup must exist");
+crates/franken-engine/src/bin/franken_shipped_path_parity.rs:1680: .expect("system time should be after unix epoch")
+crates/franken-engine/src/control_plane/mod.rs:747: .expect("standalone audit entry should produce valid evidence ledger")
+Total outside tests: 789

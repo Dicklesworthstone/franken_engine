@@ -117,17 +117,8 @@ pub struct AuthenticityHash(pub [u8; 32]);
 
 impl AuthenticityHash {
     /// Compute a keyed authenticity hash (HMAC-SHA256) over the given bytes.
-    ///
-    /// The key is mixed into the state before and after processing.
     pub fn compute_keyed(key: &[u8], data: &[u8]) -> Self {
         Self(keyed_hash(key, data))
-    }
-
-    /// Compute an unkeyed authenticity hash using the same SHA-256 content
-    /// hash path (for contexts where the key is applied externally, e.g.,
-    /// HKDF expand).
-    pub fn compute(data: &[u8]) -> Self {
-        Self(collision_resistant_hash(data))
     }
 
     /// Access the raw bytes.
@@ -465,12 +456,15 @@ mod tests {
     }
 
     #[test]
-    fn authenticity_hash_unkeyed_matches_content_hash() {
-        // Unkeyed authenticity hash should produce same output as content hash
-        // (same underlying algorithm).
-        let auth = AuthenticityHash::compute(b"test data");
-        let content = ContentHash::compute(b"test data");
-        assert_eq!(auth.as_bytes(), content.as_bytes());
+    fn authenticity_hash_known_hmac_sha256_vector() {
+        let key = [0x0bu8; 20];
+        let hash = AuthenticityHash::compute_keyed(&key, b"Hi There");
+        let expected = hex::decode(
+            "b0344c61d8db38535ca8afceaf0bf12b\
+             881dc200c9833da726e9376c2e32cff7",
+        )
+        .expect("valid HMAC-SHA256 test vector");
+        assert_eq!(hash.as_bytes(), expected.as_slice());
     }
 
     #[test]
@@ -484,10 +478,10 @@ mod tests {
     }
 
     #[test]
-    fn authenticity_hash_keyed_differs_from_unkeyed() {
+    fn authenticity_hash_keyed_differs_from_content_hash() {
         let keyed = AuthenticityHash::compute_keyed(b"any-key", b"test data");
-        let unkeyed = AuthenticityHash::compute(b"test data");
-        assert_ne!(keyed.as_bytes(), unkeyed.as_bytes());
+        let content = ContentHash::compute(b"test data");
+        assert_ne!(keyed.as_bytes(), content.as_bytes());
     }
 
     #[test]
@@ -506,7 +500,7 @@ mod tests {
 
     #[test]
     fn authenticity_hash_display() {
-        let h = AuthenticityHash::compute(b"test");
+        let h = AuthenticityHash::compute_keyed(b"key", b"test");
         let display = h.to_string();
         assert!(display.starts_with("authenticity:"));
     }
@@ -519,7 +513,7 @@ mod tests {
         // The test verifies the types exist and are distinct at runtime.
         let t1 = IntegrityHash::compute(b"data");
         let t2 = ContentHash::compute(b"data");
-        let t3 = AuthenticityHash::compute(b"data");
+        let t3 = AuthenticityHash::compute_keyed(b"key", b"data");
 
         // t1 is u64, t2 and t3 are [u8; 32] — structurally different.
         assert_eq!(std::mem::size_of_val(&t1), 8);
@@ -694,11 +688,10 @@ mod tests {
     // -- Tier 2/3 consistency --
 
     #[test]
-    fn content_and_unkeyed_authenticity_use_same_algorithm() {
-        // Important invariant: unkeyed Tier 3 = Tier 2 algorithm.
+    fn content_and_keyed_authenticity_are_separated() {
         let c = ContentHash::compute(b"shared-test-vector");
-        let a = AuthenticityHash::compute(b"shared-test-vector");
-        assert_eq!(c.as_bytes(), a.as_bytes());
+        let a = AuthenticityHash::compute_keyed(b"shared-key", b"shared-test-vector");
+        assert_ne!(c.as_bytes(), a.as_bytes());
     }
 
     // -----------------------------------------------------------------------
@@ -924,7 +917,7 @@ mod tests {
         let data = b"cross-tier-display-check";
         let d1 = IntegrityHash::compute(data).to_string();
         let d2 = ContentHash::compute(data).to_string();
-        let d3 = AuthenticityHash::compute(data).to_string();
+        let d3 = AuthenticityHash::compute_keyed(b"display-key", data).to_string();
         let mut seen = std::collections::BTreeSet::new();
         seen.insert(d1);
         seen.insert(d2);
@@ -1073,10 +1066,9 @@ mod tests {
 
     #[test]
     fn authenticity_hash_empty_key_differs_from_unkeyed() {
-        // Domain separation in keyed_hash means even empty key differs.
         let keyed_empty = AuthenticityHash::compute_keyed(b"", b"data");
-        let unkeyed = AuthenticityHash::compute(b"data");
-        assert_ne!(keyed_empty.as_bytes(), unkeyed.as_bytes());
+        let content = ContentHash::compute(b"data");
+        assert_ne!(keyed_empty.as_bytes(), content.as_bytes());
     }
 
     #[test]

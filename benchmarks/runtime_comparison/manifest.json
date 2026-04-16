@@ -1,0 +1,206 @@
+{
+  "schema_version": "franken-engine.benchmark-comparison-manifest.v1",
+  "runtime_pins": {
+    "franken_engine": "franken-engine-local",
+    "node_lts": "22.13.1",
+    "bun_stable": "1.1.43"
+  },
+  "runtime_commands": {
+    "frankenctl": "frankenctl",
+    "node": "node",
+    "bun": "bun"
+  },
+  "fairness_policy": {
+    "warmup_runs": 2,
+    "sample_count": 30,
+    "case_timeout_ms": 30000
+  },
+  "cases": [
+    {
+      "benchmark_id": "micro-arithmetic-loop",
+      "category": "micro",
+      "program_path": "programs/micro_arithmetic_loop.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-function-calls",
+      "category": "micro",
+      "program_path": "programs/micro_function_calls.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-object-property-access",
+      "category": "micro",
+      "program_path": "programs/micro_object_property_access.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-array-indexing",
+      "category": "micro",
+      "program_path": "programs/micro_array_indexing.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-string-concat",
+      "category": "micro",
+      "program_path": "programs/micro_string_concat.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-object-creation",
+      "category": "micro",
+      "program_path": "programs/micro_object_creation.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-array-push-pop",
+      "category": "micro",
+      "program_path": "programs/micro_array_push_pop.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-array-iteration",
+      "category": "micro",
+      "program_path": "programs/micro_array_iteration.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-branching",
+      "category": "micro",
+      "program_path": "programs/micro_branching.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-bitwise-ops",
+      "category": "micro",
+      "program_path": "programs/micro_bitwise_ops.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-modulo-ops",
+      "category": "micro",
+      "program_path": "programs/micro_modulo_ops.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-property-write",
+      "category": "micro",
+      "program_path": "programs/micro_property_write.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-comparison-ops",
+      "category": "micro",
+      "program_path": "programs/micro_comparison_ops.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-boolean-logic",
+      "category": "micro",
+      "program_path": "programs/micro_boolean_logic.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-float-arithmetic",
+      "category": "micro",
+      "program_path": "programs/micro_float_arithmetic.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-closure-capture",
+      "category": "micro",
+      "program_path": "programs/micro_closure_capture.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-exception-handling",
+      "category": "micro",
+      "program_path": "programs/micro_exception_handling.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-class-instantiation",
+      "category": "micro",
+      "program_path": "programs/micro_class_instantiation.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "micro-json-roundtrip",
+      "category": "micro",
+      "program_path": "programs/micro_json_roundtrip.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-tree-traversal",
+      "category": "macro",
+      "program_path": "programs/macro_tree_traversal.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-matrix-multiply",
+      "category": "macro",
+      "program_path": "programs/macro_matrix_multiply.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-string-scan",
+      "category": "macro",
+      "program_path": "programs/macro_string_scan.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-json-roundtrip",
+      "category": "macro",
+      "program_path": "programs/macro_json_roundtrip.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-recursive-fibonacci",
+      "category": "macro",
+      "program_path": "programs/macro_recursive_fibonacci.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-object-graph",
+      "category": "macro",
+      "program_path": "programs/macro_object_graph.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-regex-match",
+      "category": "macro",
+      "program_path": "programs/macro_regex_match.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-sort-numbers",
+      "category": "macro",
+      "program_path": "programs/macro_sort_numbers.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "macro-prime-sieve",
+      "category": "macro",
+      "program_path": "programs/macro_prime_sieve.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "memory-allocation-pressure",
+      "category": "memory",
+      "program_path": "programs/memory_allocation_pressure.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "throughput-queue-sim",
+      "category": "throughput",
+      "program_path": "programs/throughput_queue_sim.js",
+      "args": []
+    },
+    {
+      "benchmark_id": "startup-bootstrap",
+      "category": "startup",
+      "program_path": "programs/startup_bootstrap.js",
+      "args": []
+    }
+  ]
+}

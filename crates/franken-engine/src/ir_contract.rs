@@ -1538,6 +1538,27 @@ pub enum Ir3Instruction {
         delegate: bool,
         resume_dst: Reg,
     },
+
+    // ── Async function instructions ──────────────────────────────────────
+    /// Create an async function object from the current function frame.
+    /// `function_index` identifies the async function body in the function table.
+    /// `capture_count` is the number of captured variables.
+    /// The async function starts in a suspended-at-start state.
+    CreateAsyncFunction {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
+    /// Await a value (Promise) in an async function. Suspends execution
+    /// until the promise resolves, then resumes with the resolved value.
+    /// If the promise rejects, throws an exception at the await site.
+    AwaitValue { promise_reg: Reg },
+    /// Return from an async function. Resolves the async function's
+    /// result Promise with the given value.
+    AsyncReturn { value_reg: Reg },
+    /// Throw from an async function. Rejects the async function's
+    /// result Promise with the given error value.
+    AsyncThrow { error_reg: Reg },
 }
 
 impl Ir3Instruction {
@@ -2273,6 +2294,55 @@ impl Ir3Instruction {
                 map.insert(
                     "resume_dst".to_string(),
                     CanonicalValue::U64(u64::from(*resume_dst)),
+                );
+            }
+            Self::CreateAsyncFunction {
+                dst,
+                function_index,
+                capture_count,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("create_async_function".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "function_index".to_string(),
+                    CanonicalValue::U64(u64::from(*function_index)),
+                );
+                map.insert(
+                    "capture_count".to_string(),
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                );
+            }
+            Self::AwaitValue { promise_reg } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("await_value".to_string()),
+                );
+                map.insert(
+                    "promise_reg".to_string(),
+                    CanonicalValue::U64(u64::from(*promise_reg)),
+                );
+            }
+            Self::AsyncReturn { value_reg } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("async_return".to_string()),
+                );
+                map.insert(
+                    "value_reg".to_string(),
+                    CanonicalValue::U64(u64::from(*value_reg)),
+                );
+            }
+            Self::AsyncThrow { error_reg } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("async_throw".to_string()),
+                );
+                map.insert(
+                    "error_reg".to_string(),
+                    CanonicalValue::U64(u64::from(*error_reg)),
                 );
             }
         }

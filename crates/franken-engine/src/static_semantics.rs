@@ -1484,7 +1484,8 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::This
         | Expression::Super
         | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. } => {}
+        | Expression::RegExpLiteral { .. }
+        | Expression::ClassExpression { .. } => {}
     }
 }
 
@@ -1596,7 +1597,8 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         | Expression::This
         | Expression::Super
         | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. } => {}
+        | Expression::RegExpLiteral { .. }
+        | Expression::ClassExpression { .. } => {}
     }
 }
 

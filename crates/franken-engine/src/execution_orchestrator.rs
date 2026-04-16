@@ -1687,6 +1687,12 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }
             | &crate::ir_contract::Ir3Instruction::Yield { .. } => "generator_op",
+            &crate::ir_contract::Ir3Instruction::CreateAsyncFunction { .. } => {
+                "create_async_function"
+            }
+            &crate::ir_contract::Ir3Instruction::AwaitValue { .. } => "await_value",
+            &crate::ir_contract::Ir3Instruction::AsyncReturn { .. } => "async_return",
+            &crate::ir_contract::Ir3Instruction::AsyncThrow { .. } => "async_throw",
         }
     }
 

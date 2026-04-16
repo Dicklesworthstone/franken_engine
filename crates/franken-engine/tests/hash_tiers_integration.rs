@@ -147,9 +147,9 @@ fn authenticity_hash_different_data_differ() {
 }
 
 #[test]
-fn authenticity_hash_unkeyed_deterministic() {
-    let a = AuthenticityHash::compute(b"test");
-    let b = AuthenticityHash::compute(b"test");
+fn authenticity_hash_keyed_deterministic_repeated() {
+    let a = AuthenticityHash::compute_keyed(b"test-key", b"test");
+    let b = AuthenticityHash::compute_keyed(b"test-key", b"test");
     assert_eq!(a, b);
 }
 
@@ -169,22 +169,22 @@ fn authenticity_hash_to_hex_is_64_chars() {
 
 #[test]
 fn authenticity_hash_display_format() {
-    let h = AuthenticityHash::compute(b"test");
+    let h = AuthenticityHash::compute_keyed(b"display-key", b"test");
     let display = h.to_string();
     assert!(display.starts_with("authenticity:"));
 }
 
 #[test]
 fn authenticity_hash_constant_time_eq_same() {
-    let a = AuthenticityHash::compute(b"same");
-    let b = AuthenticityHash::compute(b"same");
+    let a = AuthenticityHash::compute_keyed(b"ct-key", b"same");
+    let b = AuthenticityHash::compute_keyed(b"ct-key", b"same");
     assert!(a.constant_time_eq(&b));
 }
 
 #[test]
 fn authenticity_hash_constant_time_eq_different() {
-    let a = AuthenticityHash::compute(b"aaa");
-    let b = AuthenticityHash::compute(b"bbb");
+    let a = AuthenticityHash::compute_keyed(b"ct-key", b"aaa");
+    let b = AuthenticityHash::compute_keyed(b"ct-key", b"bbb");
     assert!(!a.constant_time_eq(&b));
 }
 
@@ -205,7 +205,7 @@ fn same_input_different_tiers_may_differ() {
     let data = b"cross-tier-test";
     let integrity = IntegrityHash::compute(data);
     let content = ContentHash::compute(data);
-    let authenticity = AuthenticityHash::compute(data);
+    let authenticity = AuthenticityHash::compute_keyed(b"cross-tier-key", data);
 
     // Different types, can't directly compare — verify they're distinct types
     let _ = integrity.as_u64();
@@ -393,16 +393,16 @@ fn content_hash_ordering_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn authenticity_hash_keyed_differs_from_unkeyed() {
+fn authenticity_hash_keyed_differs_from_content_hash() {
     let data = b"same-data";
     let keyed = AuthenticityHash::compute_keyed(b"a-key", data);
-    let unkeyed = AuthenticityHash::compute(data);
-    assert_ne!(keyed, unkeyed);
+    let content = ContentHash::compute(data);
+    assert_ne!(keyed.as_bytes(), content.as_bytes());
 }
 
 #[test]
 fn authenticity_hash_hex_is_lowercase() {
-    let h = AuthenticityHash::compute(b"hex-check");
+    let h = AuthenticityHash::compute_keyed(b"hex-key", b"hex-check");
     let hex = h.to_hex();
     assert_eq!(hex, hex.to_lowercase());
 }
@@ -416,8 +416,8 @@ fn authenticity_hash_empty_key_differs_from_empty_data() {
 
 #[test]
 fn authenticity_hash_ordering_is_deterministic() {
-    let a = AuthenticityHash::compute(b"first");
-    let b = AuthenticityHash::compute(b"second");
+    let a = AuthenticityHash::compute_keyed(b"ord-key", b"first");
+    let b = AuthenticityHash::compute_keyed(b"ord-key", b"second");
     let _ = a.cmp(&b);
 }
 
@@ -426,12 +426,11 @@ fn authenticity_hash_ordering_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn content_and_authenticity_unkeyed_produce_same_bytes() {
-    // Per docs: unkeyed authenticity uses same algorithm as content
+fn content_and_keyed_authenticity_produce_distinct_bytes() {
     let data = b"domain-test";
     let content = ContentHash::compute(data);
-    let auth = AuthenticityHash::compute(data);
-    assert_eq!(content.as_bytes(), auth.as_bytes());
+    let auth = AuthenticityHash::compute_keyed(b"domain-key", data);
+    assert_ne!(content.as_bytes(), auth.as_bytes());
 }
 
 #[test]
@@ -439,7 +438,7 @@ fn display_prefixes_are_distinct() {
     let data = b"prefix-test";
     let i = IntegrityHash::compute(data).to_string();
     let c = ContentHash::compute(data).to_string();
-    let a = AuthenticityHash::compute(data).to_string();
+    let a = AuthenticityHash::compute_keyed(b"prefix-key", data).to_string();
     assert!(i.starts_with("integrity:"));
     assert!(c.starts_with("content:"));
     assert!(a.starts_with("authenticity:"));
@@ -745,7 +744,7 @@ fn enrichment_content_hash_partial_ord_consistent() {
 
 #[test]
 fn enrichment_authenticity_hash_debug_contains_type_name() {
-    let h = AuthenticityHash::compute(b"debug-auth");
+    let h = AuthenticityHash::compute_keyed(b"debug-key", b"debug-auth");
     let debug = format!("{:?}", h);
     assert!(debug.contains("AuthenticityHash"));
 }
@@ -760,14 +759,14 @@ fn enrichment_authenticity_hash_clone_produces_equal() {
 
 #[test]
 fn enrichment_authenticity_hash_copy_both_usable() {
-    let h = AuthenticityHash::compute(b"copy-auth");
+    let h = AuthenticityHash::compute_keyed(b"copy-key", b"copy-auth");
     let copied = h;
     assert_eq!(h.to_hex(), copied.to_hex());
 }
 
 #[test]
-fn enrichment_authenticity_hash_serde_unkeyed_roundtrip() {
-    let h = AuthenticityHash::compute(b"unkeyed-serde");
+fn enrichment_authenticity_hash_serde_keyed_roundtrip() {
+    let h = AuthenticityHash::compute_keyed(b"serde-key", b"keyed-serde");
     let json = serde_json::to_string(&h).unwrap();
     let decoded: AuthenticityHash = serde_json::from_str(&json).unwrap();
     assert_eq!(h, decoded);
@@ -817,8 +816,8 @@ fn enrichment_authenticity_hash_constant_time_eq_single_bit_diff_last_byte() {
 
 #[test]
 fn enrichment_authenticity_hash_constant_time_eq_symmetric() {
-    let a = AuthenticityHash::compute(b"symmetric-a");
-    let b = AuthenticityHash::compute(b"symmetric-b");
+    let a = AuthenticityHash::compute_keyed(b"symmetric-key", b"symmetric-a");
+    let b = AuthenticityHash::compute_keyed(b"symmetric-key", b"symmetric-b");
     assert_eq!(a.constant_time_eq(&b), b.constant_time_eq(&a));
 }
 
@@ -830,10 +829,10 @@ fn enrichment_authenticity_hash_keyed_not_commutative() {
 }
 
 #[test]
-fn enrichment_authenticity_hash_empty_key_differs_from_unkeyed() {
+fn enrichment_authenticity_hash_empty_key_differs_from_content_hash() {
     let keyed_empty = AuthenticityHash::compute_keyed(b"", b"message");
-    let unkeyed = AuthenticityHash::compute(b"message");
-    assert_ne!(keyed_empty, unkeyed);
+    let content = ContentHash::compute(b"message");
+    assert_ne!(keyed_empty.as_bytes(), content.as_bytes());
 }
 
 #[test]
@@ -875,8 +874,8 @@ fn enrichment_authenticity_hash_hex_length_always_64() {
 
 #[test]
 fn enrichment_authenticity_hash_partial_ord_consistent() {
-    let a = AuthenticityHash::compute(b"x");
-    let b = AuthenticityHash::compute(b"y");
+    let a = AuthenticityHash::compute_keyed(b"ord-key", b"x");
+    let b = AuthenticityHash::compute_keyed(b"ord-key", b"y");
     assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
 }
 
@@ -1235,22 +1234,23 @@ fn enrichment_cross_tier_display_prefixes_never_overlap() {
     let data = b"overlap-check";
     let d1 = IntegrityHash::compute(data).to_string();
     let d2 = ContentHash::compute(data).to_string();
-    let d3 = AuthenticityHash::compute(data).to_string();
+    let d3 = AuthenticityHash::compute_keyed(b"display-key", data).to_string();
     assert!(!d2.starts_with(&d1));
     assert!(!d3.starts_with(&d1));
     assert!(!d3.starts_with(&d2));
 }
 
 #[test]
-fn enrichment_cross_tier_content_unkeyed_auth_same_bytes() {
+fn enrichment_cross_tier_content_keyed_auth_distinct_bytes() {
     for i in 0..10 {
         let data: Vec<u8> = vec![i; i as usize * 3 + 1];
         let c = ContentHash::compute(&data);
-        let a = AuthenticityHash::compute(&data);
-        assert_eq!(
+        let key = [i; 8];
+        let a = AuthenticityHash::compute_keyed(&key, &data);
+        assert_ne!(
             c.as_bytes(),
             a.as_bytes(),
-            "unkeyed auth must match content for input len {}",
+            "keyed auth must differ from content for input len {}",
             data.len()
         );
     }
@@ -1277,7 +1277,7 @@ fn enrichment_cross_tier_display_strings_all_unique() {
     let mut set = std::collections::BTreeSet::new();
     set.insert(IntegrityHash::compute(data).to_string());
     set.insert(ContentHash::compute(data).to_string());
-    set.insert(AuthenticityHash::compute(data).to_string());
+    set.insert(AuthenticityHash::compute_keyed(b"display-key", data).to_string());
     assert_eq!(set.len(), 3);
 }
 

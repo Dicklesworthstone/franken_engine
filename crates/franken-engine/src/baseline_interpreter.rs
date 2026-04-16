@@ -2691,8 +2691,8 @@ impl InterpreterCore {
                     }
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env) = match &callee_val {
-                        Value::Function(idx) => (*idx, None),
+                    let (func_idx, captured_env, closure_id) = match &callee_val {
+                        Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id) | Value::GeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -2704,6 +2704,7 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -2773,6 +2774,8 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
+                            let captured_scope_depth =
+                                captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -2808,6 +2811,8 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                closure_id,
+                                captured_scope_depth,
                             });
 
                             // If calling a closure, restore its captured environment.
@@ -2869,8 +2874,8 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    let (func_idx, captured_env) = match &callee_val {
-                        Value::Function(idx) => (*idx, None),
+                    let (func_idx, captured_env, closure_id) = match &callee_val {
+                        Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -2882,6 +2887,7 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -2924,6 +2930,7 @@ impl InterpreterCore {
                         .as_ref()
                         .map(|env| Self::estimate_scope_chain_bytes(env))
                         .unwrap_or(0);
+                    let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
                     let saved_chain = if captured_env.is_some() {
                         Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
                     } else {
@@ -2942,6 +2949,8 @@ impl InterpreterCore {
                         saved_finally_mode_depth: self.finally_modes.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
+                        closure_id,
+                        captured_scope_depth,
                     });
 
                     if let Some(env) = captured_env {
@@ -3374,8 +3383,8 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
 
                     // Resolve function index and optional captured environment.
-                    let (func_idx, captured_env) = match &callee_val {
-                        Value::Function(idx) => (*idx, None),
+                    let (func_idx, captured_env, closure_id) = match &callee_val {
+                        Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -3387,6 +3396,7 @@ impl InterpreterCore {
                             (
                                 closure.function_index,
                                 Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                                Some(*closure_id),
                             )
                         }
                         _ => {
@@ -3440,6 +3450,8 @@ impl InterpreterCore {
                                 .as_ref()
                                 .map(|env| Self::estimate_scope_chain_bytes(env))
                                 .unwrap_or(0);
+                            let captured_scope_depth =
+                                captured_env.as_ref().map_or(0, Vec::len);
                             let saved_chain = if captured_env.is_some() {
                                 Some(self.snapshot_scope_chain_with_temporary_budget(
                                     captured_env_bytes,
@@ -3462,6 +3474,8 @@ impl InterpreterCore {
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
                                 saved_scope_chain: saved_chain,
+                                closure_id,
+                                captured_scope_depth,
                             });
 
                             // If calling a closure, restore its captured environment.

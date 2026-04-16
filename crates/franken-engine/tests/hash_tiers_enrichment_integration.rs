@@ -38,10 +38,9 @@ fn enrichment_same_data_different_representation_per_tier() {
     let data = b"cross-tier-isolation-test-payload";
     let t1 = IntegrityHash::compute(data);
     let t2 = ContentHash::compute(data);
-    let t3 = AuthenticityHash::compute(data);
+    let t3 = AuthenticityHash::compute_keyed(b"cross-tier-key", data);
 
-    // Tier 2 and Tier 3 (unkeyed) use the same algorithm, so bytes match
-    assert_eq!(t2.as_bytes(), t3.as_bytes(), "unkeyed T3 matches T2");
+    assert_ne!(t2.as_bytes(), t3.as_bytes(), "keyed T3 differs from T2");
 
     // But Display representations must differ due to prefixes
     let d1 = t1.to_string();
@@ -69,7 +68,7 @@ fn enrichment_tier1_size_differs_from_tier2_tier3() {
     let data = b"size-check";
     let t1 = IntegrityHash::compute(data);
     let t2 = ContentHash::compute(data);
-    let t3 = AuthenticityHash::compute(data);
+    let t3 = AuthenticityHash::compute_keyed(b"size-check-key", data);
 
     assert_eq!(std::mem::size_of_val(&t1), 8);
     assert_eq!(std::mem::size_of_val(&t2), 32);
@@ -215,8 +214,8 @@ fn enrichment_key_data_swap_produces_different_hash() {
 fn enrichment_key_data_swap_with_identical_material() {
     let a = AuthenticityHash::compute_keyed(b"same", b"same");
     assert_eq!(a.as_bytes().len(), 32);
-    let unkeyed = AuthenticityHash::compute(b"same");
-    assert_ne!(a.as_bytes(), unkeyed.as_bytes());
+    let b = AuthenticityHash::compute_keyed(b"same", b"different");
+    assert_ne!(a.as_bytes(), b.as_bytes());
 }
 
 #[test]
@@ -483,7 +482,7 @@ fn enrichment_display_prefixes_are_distinct() {
     let data = b"prefix-check";
     let d1 = IntegrityHash::compute(data).to_string();
     let d2 = ContentHash::compute(data).to_string();
-    let d3 = AuthenticityHash::compute(data).to_string();
+    let d3 = AuthenticityHash::compute_keyed(b"display-key", data).to_string();
 
     assert!(d1.starts_with("integrity:"));
     assert!(d2.starts_with("content:"));
@@ -570,14 +569,14 @@ fn enrichment_hash_algorithm_display_all_unique_enrichment() {
 fn enrichment_all_tiers_handle_empty_input() {
     let t1 = IntegrityHash::compute(b"");
     let t2 = ContentHash::compute(b"");
-    let t3 = AuthenticityHash::compute(b"");
-    let t3k = AuthenticityHash::compute_keyed(b"", b"");
+    let t3 = AuthenticityHash::compute_keyed(b"tier3-key", b"");
+    let t3_empty_key = AuthenticityHash::compute_keyed(b"", b"");
 
     // All should produce valid, deterministic results
     assert_eq!(t1, IntegrityHash::compute(b""));
     assert_eq!(t2, ContentHash::compute(b""));
-    assert_eq!(t3, AuthenticityHash::compute(b""));
-    assert_eq!(t3k, AuthenticityHash::compute_keyed(b"", b""));
+    assert_eq!(t3, AuthenticityHash::compute_keyed(b"tier3-key", b""));
+    assert_eq!(t3_empty_key, AuthenticityHash::compute_keyed(b"", b""));
 }
 
 #[test]
@@ -585,7 +584,7 @@ fn enrichment_empty_and_nonempty_always_differ() {
     assert_ne!(IntegrityHash::compute(b""), IntegrityHash::compute(b"\0"));
     assert_ne!(ContentHash::compute(b""), ContentHash::compute(b"\0"));
     assert_ne!(
-        AuthenticityHash::compute(b""),
-        AuthenticityHash::compute(b"\0")
+        AuthenticityHash::compute_keyed(b"empty-key", b""),
+        AuthenticityHash::compute_keyed(b"empty-key", b"\0")
     );
 }

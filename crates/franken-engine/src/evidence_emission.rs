@@ -91,6 +91,44 @@ impl fmt::Display for ActionCategory {
 }
 
 // ---------------------------------------------------------------------------
+// EvidenceEmissionPolicy — policy for handling emission failures
+// ---------------------------------------------------------------------------
+
+/// Policy for handling evidence emission failures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EvidenceEmissionPolicy {
+    /// Fail-closed: emission failure blocks execution.
+    FailClosed,
+    /// Fail-open: emission failure logs warning but continues execution.
+    FailOpen {
+        /// Whether to log emission failures.
+        log: bool,
+    },
+}
+
+impl Default for EvidenceEmissionPolicy {
+    fn default() -> Self {
+        // Default to fail-closed for security-critical evidence
+        Self::FailClosed
+    }
+}
+
+impl EvidenceEmissionPolicy {
+    /// Returns true if emission failure should block execution.
+    pub fn should_block_on_failure(&self) -> bool {
+        matches!(self, EvidenceEmissionPolicy::FailClosed)
+    }
+
+    /// Returns true if emission failure should be logged.
+    pub fn should_log_failure(&self) -> bool {
+        match self {
+            EvidenceEmissionPolicy::FailClosed => true,
+            EvidenceEmissionPolicy::FailOpen { log } => *log,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EvidenceEntryId — unique identifier for each entry
 // ---------------------------------------------------------------------------
 
@@ -1705,5 +1743,76 @@ mod tests {
             .collect();
         let set: BTreeSet<_> = ids.iter().collect();
         assert_eq!(set.len(), 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // EvidenceEmissionPolicy tests (bd-2zef1.2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evidence_emission_policy_default_is_fail_closed() {
+        let policy = EvidenceEmissionPolicy::default();
+        assert_eq!(policy, EvidenceEmissionPolicy::FailClosed);
+        assert!(policy.should_block_on_failure());
+        assert!(policy.should_log_failure());
+    }
+
+    #[test]
+    fn evidence_emission_policy_fail_closed_behavior() {
+        let policy = EvidenceEmissionPolicy::FailClosed;
+        assert!(policy.should_block_on_failure());
+        assert!(policy.should_log_failure());
+    }
+
+    #[test]
+    fn evidence_emission_policy_fail_open_with_logging() {
+        let policy = EvidenceEmissionPolicy::FailOpen { log: true };
+        assert!(!policy.should_block_on_failure());
+        assert!(policy.should_log_failure());
+    }
+
+    #[test]
+    fn evidence_emission_policy_fail_open_without_logging() {
+        let policy = EvidenceEmissionPolicy::FailOpen { log: false };
+        assert!(!policy.should_block_on_failure());
+        assert!(!policy.should_log_failure());
+    }
+
+    #[test]
+    fn evidence_emission_policy_serde_roundtrip() {
+        let policies = vec![
+            EvidenceEmissionPolicy::FailClosed,
+            EvidenceEmissionPolicy::FailOpen { log: true },
+            EvidenceEmissionPolicy::FailOpen { log: false },
+        ];
+
+        for policy in policies {
+            let json = serde_json::to_string(&policy).unwrap();
+            let decoded: EvidenceEmissionPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(policy, decoded);
+        }
+    }
+
+    #[test]
+    fn evidence_emission_policy_debug_format() {
+        let fail_closed = EvidenceEmissionPolicy::FailClosed;
+        let fail_open_log = EvidenceEmissionPolicy::FailOpen { log: true };
+        let fail_open_no_log = EvidenceEmissionPolicy::FailOpen { log: false };
+
+        let debug_fail_closed = format!("{:?}", fail_closed);
+        let debug_fail_open_log = format!("{:?}", fail_open_log);
+        let debug_fail_open_no_log = format!("{:?}", fail_open_no_log);
+
+        assert!(debug_fail_closed.contains("FailClosed"));
+        assert!(debug_fail_open_log.contains("FailOpen"));
+        assert!(debug_fail_open_log.contains("log: true"));
+        assert!(debug_fail_open_no_log.contains("log: false"));
+    }
+
+    #[test]
+    fn evidence_emission_policy_clone_equality() {
+        let original = EvidenceEmissionPolicy::FailOpen { log: true };
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
     }
 }

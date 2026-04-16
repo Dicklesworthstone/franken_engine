@@ -2329,6 +2329,233 @@ pub fn write_benchmark_comparison_artifacts(
     })
 }
 
+/// Configuration for the comparison benchmark runner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComparisonBenchmarkRunnerConfig {
+    /// Number of repetitions per engine per benchmark (default: 30).
+    pub repetitions: u32,
+    /// Whether to include statistical confidence intervals.
+    pub include_confidence_intervals: bool,
+    /// Whether to compute p-values for performance comparisons.
+    pub compute_p_values: bool,
+}
+
+impl Default for ComparisonBenchmarkRunnerConfig {
+    fn default() -> Self {
+        Self {
+            repetitions: 30,
+            include_confidence_intervals: true,
+            compute_p_values: true,
+        }
+    }
+}
+
+/// Input for a comparison benchmark run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComparisonBenchmarkInput {
+    /// The benchmark comparison manifest describing the cases to run.
+    pub manifest: BenchmarkComparisonManifest,
+    /// Root directory for resolving relative paths in the manifest.
+    pub manifest_root: PathBuf,
+    /// Unique identifier for this benchmark run.
+    pub run_id: String,
+    /// Date of the benchmark run.
+    pub run_date: String,
+}
+
+/// Output of a comparison benchmark run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComparisonBenchmarkOutput {
+    /// The complete benchmark comparison suite result.
+    pub suite_result: BenchmarkComparisonSuiteResult,
+    /// Summary statistics across all benchmarks.
+    pub summary_stats: ComparisonBenchmarkSummary,
+}
+
+/// Summary statistics for a comparison benchmark run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ComparisonBenchmarkSummary {
+    /// Total number of benchmark cases executed.
+    pub total_cases: usize,
+    /// Total number of samples collected across all runtimes.
+    pub total_samples: usize,
+    /// Number of cases where FrankenEngine was fastest.
+    pub franken_wins: usize,
+    /// Number of cases where Node.js was fastest.
+    pub node_wins: usize,
+    /// Number of cases where Bun was fastest.
+    pub bun_wins: usize,
+    /// Overall geometric mean speedup vs Node.js (>1.0 = faster, <1.0 = slower).
+    pub geometric_mean_vs_node: f64,
+    /// Overall geometric mean speedup vs Bun (>1.0 = faster, <1.0 = slower).
+    pub geometric_mean_vs_bun: f64,
+}
+
+/// Comparison benchmark runner that executes JavaScript files across multiple engines.
+///
+/// This runner wraps the existing benchmark comparison infrastructure to provide
+/// a cleaner API for running multi-engine performance comparisons. It executes
+/// the same JavaScript files through frankenctl, node, and bun, measuring
+/// wall-clock time and peak RSS memory usage with statistical analysis.
+#[derive(Debug, Clone)]
+pub struct ComparisonBenchmarkRunner {
+    /// Configuration for this runner.
+    pub config: ComparisonBenchmarkRunnerConfig,
+}
+
+impl ComparisonBenchmarkRunner {
+    /// Create a new comparison benchmark runner with the given configuration.
+    pub fn new(config: ComparisonBenchmarkRunnerConfig) -> Self {
+        Self { config }
+    }
+
+    /// Create a new comparison benchmark runner with default configuration.
+    pub fn with_defaults() -> Self {
+        Self::new(ComparisonBenchmarkRunnerConfig::default())
+    }
+
+    /// Run a comparison benchmark suite.
+    ///
+    /// This method executes all benchmark cases defined in the input manifest,
+    /// running each case through frankenctl, node, and bun with the configured
+    /// number of repetitions. It measures wall-clock time and peak RSS memory
+    /// usage, computes statistical summaries, and returns comprehensive results.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The benchmark input containing the manifest and run metadata
+    ///
+    /// # Returns
+    ///
+    /// A result containing the benchmark output with detailed results and summary
+    /// statistics, or an error if the benchmark run fails.
+    ///
+    /// # Errors
+    ///
+    /// This method can fail if:
+    /// - The manifest is invalid or contains malformed benchmark cases
+    /// - External runtime commands (frankenctl, node, bun) are not available
+    /// - JavaScript files specified in the manifest cannot be read
+    /// - Individual benchmark executions timeout or fail
+    pub fn run(
+        &self,
+        input: ComparisonBenchmarkInput,
+    ) -> Result<ComparisonBenchmarkOutput, BenchmarkComparisonError> {
+        // Validate that the repetitions match the fairness policy
+        let mut manifest = input.manifest;
+        manifest.fairness_policy.sample_count = self.config.repetitions;
+
+        // Run the benchmark comparison suite
+        let suite_result = run_benchmark_comparison_suite(
+            &manifest,
+            &input.manifest_root,
+            input.run_id,
+            input.run_date,
+        )?;
+
+        // Compute summary statistics
+        let summary_stats = self.compute_summary_statistics(&suite_result);
+
+        Ok(ComparisonBenchmarkOutput {
+            suite_result,
+            summary_stats,
+        })
+    }
+
+    /// Compute summary statistics from the suite results.
+    fn compute_summary_statistics(
+        &self,
+        suite_result: &BenchmarkComparisonSuiteResult,
+    ) -> ComparisonBenchmarkSummary {
+        let total_cases = suite_result.manifest.cases.len();
+        let total_samples = suite_result.results.len();
+
+        // Group results by benchmark ID to find winners
+        let mut benchmark_results: BTreeMap<String, Vec<&BenchmarkComparisonRuntimeResult>> =
+            BTreeMap::new();
+        for result in &suite_result.results {
+            benchmark_results
+                .entry(result.benchmark_id.clone())
+                .or_default()
+                .push(result);
+        }
+
+        let mut franken_wins = 0;
+        let mut node_wins = 0;
+        let mut bun_wins = 0;
+        let mut node_speedups = Vec::new();
+        let mut bun_speedups = Vec::new();
+
+        for (_, results) in benchmark_results {
+            // Find the fastest runtime for this benchmark (lowest median)
+            if let Some(fastest) = results.iter().min_by_key(|r| r.statistics.median_ns) {
+                match fastest.runtime {
+                    RuntimeId::FrankenEngine => franken_wins += 1,
+                    RuntimeId::NodeLts => node_wins += 1,
+                    RuntimeId::BunStable => bun_wins += 1,
+                }
+            }
+
+            // Compute speedups relative to FrankenEngine
+            let franken_median = results
+                .iter()
+                .find(|r| r.runtime == RuntimeId::FrankenEngine)
+                .map(|r| r.statistics.median_ns);
+
+            if let Some(franken_median) = franken_median {
+                if let Some(node_result) = results.iter().find(|r| r.runtime == RuntimeId::NodeLts)
+                {
+                    if franken_median > 0 {
+                        let speedup =
+                            node_result.statistics.median_ns as f64 / franken_median as f64;
+                        node_speedups.push(speedup);
+                    }
+                }
+
+                if let Some(bun_result) = results.iter().find(|r| r.runtime == RuntimeId::BunStable)
+                {
+                    if franken_median > 0 {
+                        let speedup =
+                            bun_result.statistics.median_ns as f64 / franken_median as f64;
+                        bun_speedups.push(speedup);
+                    }
+                }
+            }
+        }
+
+        // Compute geometric means of speedups
+        let geometric_mean_vs_node = if node_speedups.is_empty() {
+            1.0
+        } else {
+            let log_sum: f64 = node_speedups.iter().map(|x| x.ln()).sum();
+            (log_sum / node_speedups.len() as f64).exp()
+        };
+
+        let geometric_mean_vs_bun = if bun_speedups.is_empty() {
+            1.0
+        } else {
+            let log_sum: f64 = bun_speedups.iter().map(|x| x.ln()).sum();
+            (log_sum / bun_speedups.len() as f64).exp()
+        };
+
+        ComparisonBenchmarkSummary {
+            total_cases,
+            total_samples,
+            franken_wins,
+            node_wins,
+            bun_wins,
+            geometric_mean_vs_node,
+            geometric_mean_vs_bun,
+        }
+    }
+}
+
+impl Default for ComparisonBenchmarkRunner {
+    fn default() -> Self {
+        Self::with_defaults()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

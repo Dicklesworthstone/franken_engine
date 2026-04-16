@@ -379,14 +379,12 @@ impl ReplayEngine {
 
             match self.mode {
                 ReplayMode::Strict => {
-                    if severity == DivergenceSeverity::Critical {
-                        self.divergences.push(divergence);
-                        return Err(ReplayError::CriticalDivergence {
-                            sequence: event.sequence,
-                            source,
-                        });
-                    }
+                    // Strict mode rejects ALL divergences for true bit-stable replay
                     self.divergences.push(divergence);
+                    return Err(ReplayError::CriticalDivergence {
+                        sequence: event.sequence,
+                        source,
+                    });
                 }
                 ReplayMode::BestEffort | ReplayMode::Validate => {
                     self.divergences.push(divergence);
@@ -1194,14 +1192,13 @@ mod tests {
         trace.finalise(200);
 
         let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
-        // Timer divergence is benign
-        let result = engine
-            .replay_next(NondeterminismSource::TimerRead, &[2])
-            .unwrap();
-        // Returns traced value in strict mode
-        assert_eq!(result, vec![1]);
+        // Timer divergence is benign, but Strict mode now rejects ALL divergences
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[2]);
+        assert!(matches!(
+            result,
+            Err(ReplayError::CriticalDivergence { .. })
+        ));
         assert_eq!(engine.divergence_count(), 1);
-        assert_eq!(engine.critical_divergences(), 0);
     }
 
     #[test]
@@ -3257,5 +3254,102 @@ mod tests {
         // But divergence is recorded
         assert!(!engine.divergences.is_empty());
         assert_eq!(engine.divergences[0].severity, DivergenceSeverity::Critical);
+    }
+
+    // -- Strict mode comprehensive divergence tests --
+
+    #[test]
+    fn strict_mode_rejects_critical_divergence() {
+        let mut trace = NondeterminismTrace::new("strict-critical");
+        trace.capture(
+            NondeterminismSource::LaneSelectionRandom,
+            vec![42],
+            100,
+            "lane",
+        );
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Critical divergence should fail
+        let result = engine.replay_next(NondeterminismSource::LaneSelectionRandom, &[99]);
+        assert!(matches!(
+            result,
+            Err(ReplayError::CriticalDivergence { .. })
+        ));
+        assert_eq!(engine.divergence_count(), 1);
+    }
+
+    #[test]
+    fn strict_mode_rejects_benign_divergence() {
+        let mut trace = NondeterminismTrace::new("strict-benign");
+        trace.capture(NondeterminismSource::TimerRead, vec![10], 100, "timer");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Benign divergence (timer) should now fail in Strict mode
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[20]);
+        assert!(matches!(
+            result,
+            Err(ReplayError::CriticalDivergence { .. })
+        ));
+        assert_eq!(engine.divergence_count(), 1);
+    }
+
+    #[test]
+    fn strict_mode_rejects_warning_divergence() {
+        let mut trace = NondeterminismTrace::new("strict-warning");
+        trace.capture(NondeterminismSource::ThreadSchedule, vec![1], 100, "thread");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Warning divergence (thread schedule) should fail in Strict mode
+        let result = engine.replay_next(NondeterminismSource::ThreadSchedule, &[2]);
+        assert!(matches!(
+            result,
+            Err(ReplayError::CriticalDivergence { .. })
+        ));
+        assert_eq!(engine.divergence_count(), 1);
+    }
+
+    #[test]
+    fn strict_mode_allows_exact_matches() {
+        let mut trace = NondeterminismTrace::new("strict-match");
+        trace.capture(NondeterminismSource::TimerRead, vec![42], 100, "timer");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        // Exact match should succeed
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[42]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![42]);
+        assert_eq!(engine.divergence_count(), 0);
+    }
+
+    #[test]
+    fn best_effort_mode_allows_benign_divergences() {
+        let mut trace = NondeterminismTrace::new("best-effort-benign");
+        trace.capture(NondeterminismSource::TimerRead, vec![10], 100, "timer");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::BestEffort);
+        // Benign divergence should succeed in BestEffort mode
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[20]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![10]); // Returns traced value
+        assert_eq!(engine.divergence_count(), 1);
+    }
+
+    #[test]
+    fn validate_mode_returns_live_values() {
+        let mut trace = NondeterminismTrace::new("validate-mode");
+        trace.capture(NondeterminismSource::TimerRead, vec![10], 100, "timer");
+        trace.finalise(200);
+
+        let mut engine = ReplayEngine::new(trace, ReplayMode::Validate);
+        // Validate mode should return live value, not traced value
+        let result = engine.replay_next(NondeterminismSource::TimerRead, &[20]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), vec![20]); // Returns live value
+        assert_eq!(engine.divergence_count(), 1);
     }
 }

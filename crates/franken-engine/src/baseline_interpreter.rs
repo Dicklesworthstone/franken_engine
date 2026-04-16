@@ -268,6 +268,10 @@ pub enum Value {
     AsyncFunction(u32),
     /// Live async function object reference (index into async function store).
     AsyncFunctionObject(u32),
+    /// Async generator function reference (calling creates a suspended AsyncGeneratorObject).
+    AsyncGeneratorFunction(u32),
+    /// Live async generator object reference (index into async generator store).
+    AsyncGeneratorObject(u32),
     /// Promise handle (index into the promise store).
     Promise(u32),
     /// Builtin callable bound into the runtime environment.
@@ -323,6 +327,8 @@ impl Value {
             | Self::Generator(_)
             | Self::AsyncFunction(_)
             | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorFunction(_)
+            | Self::AsyncGeneratorObject(_)
             | Self::Promise(_)
             | Self::BuiltinFunction(_) => true,
         }
@@ -345,6 +351,7 @@ impl Value {
             | Self::Closure(_)
             | Self::GeneratorFunction(_)
             | Self::AsyncFunction(_)
+            | Self::AsyncGeneratorFunction(_)
             | Self::BuiltinFunction(_) => "function",
             Self::Iterator(_)
             | Self::Generator(_)
@@ -531,6 +538,21 @@ enum AsyncFunctionPhase {
     Completed,
 }
 
+/// Execution phases for async generator objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AsyncGeneratorPhase {
+    /// Created but not yet started (initial .next() call).
+    SuspendedStart,
+    /// Suspended at a yield point.
+    SuspendedYield,
+    /// Suspended at an await point.
+    SuspendedAwait,
+    /// Currently executing.
+    Executing,
+    /// Completed (returned or threw).
+    Completed,
+}
+
 /// An async function object holds the suspended state of an async function
 /// and its result Promise.
 #[derive(Debug, Clone)]
@@ -549,6 +571,24 @@ struct AsyncFunctionObject {
     phase: AsyncFunctionPhase,
     /// Promise that will be resolved/rejected when the async function completes.
     result_promise: u32,
+}
+
+/// An async generator object combines generator suspension with promise wrapping.
+/// Each yield creates a promise-wrapped value, and can use await inside the body.
+#[derive(Debug, Clone)]
+struct AsyncGeneratorObject {
+    /// Function index in the function table.
+    function_index: u32,
+    /// Closure index (captures from the enclosing scope).
+    closure_index: Option<u32>,
+    /// Saved instruction pointer (resume point after yield/await).
+    saved_ip: usize,
+    /// Saved register file snapshot at suspension.
+    saved_registers: Vec<Value>,
+    /// Saved register base offset.
+    saved_register_base: usize,
+    /// Current phase of the async generator.
+    phase: AsyncGeneratorPhase,
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1661,8 @@ pub struct InterpreterCore {
     generators: Vec<GeneratorObject>,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
+    /// Async generator object store.
+    async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
@@ -1640,6 +1682,8 @@ pub struct InterpreterCore {
     current_module_specifier: Option<String>,
     /// Console output captured for deterministic replay.
     console_output: Vec<ConsoleEntry>,
+    /// Profiling data collection (optional for performance measurements).
+    profiling_data: Option<crate::profiling::ProfilingData>,
     /// Next timer ID for setTimeout/setInterval (monotonic for determinism).
     next_timer_id: u32,
     /// Active timers for clearTimeout/clearInterval tracking.
@@ -1691,6 +1735,7 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             generators: Vec::new(),
             async_functions: Vec::new(),
+            async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_combinators: BTreeMap::new(),
@@ -1700,6 +1745,7 @@ impl InterpreterCore {
             active_cjs_context: None,
             current_module_specifier: None,
             console_output: Vec::new(),
+            profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
             suspended: false,
@@ -3146,6 +3192,20 @@ impl InterpreterCore {
                     }
                 }
             }
+
+            // Start profiling timing for this instruction
+            let profile_start = if self.profiling_data.is_some() {
+                Some(std::time::Instant::now())
+            } else {
+                None
+            };
+
+            // Get instruction name for profiling
+            let instruction_name = if self.profiling_data.is_some() {
+                Some(crate::profiling::instruction_name(&instr))
+            } else {
+                None
+            };
 
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
@@ -4698,6 +4758,12 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
+            }
+
+            // Record profiling data for this instruction
+            if let (Some(start_time), Some(name)) = (profile_start, instruction_name) {
+                let execution_time = start_time.elapsed();
+                self.profile_instruction(&name, execution_time);
             }
         }
     }
@@ -7052,8 +7118,18 @@ impl InterpreterCore {
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
+
+        // Record GC pressure point if memory usage is high
+        if requested_bytes > self.config.max_total_memory_bytes * 80 / 100 {
+            self.profile_gc_pressure();
+        }
         self.heap.push(object);
         self.estimated_memory_bytes = requested_bytes;
+
+        // Record allocation for profiling
+        let object_size = Self::estimate_heap_object_bytes(&self.heap[id.0 as usize]);
+        self.profile_memory_allocation("object", object_size);
+
         Ok(id)
     }
 
@@ -7601,6 +7677,72 @@ impl LaneRouter {
 
         // Default: deterministic profile.
         (LaneChoice::QuickJs, LaneReason::DefaultFallback)
+    }
+
+    /// Enable profiling with the specified configuration.
+    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
+        self.profiling_data = Some(crate::profiling::ProfilingData::new(config));
+    }
+
+    /// Disable profiling and return collected data.
+    pub fn disable_profiling(&mut self) -> Option<crate::profiling::ProfilingData> {
+        if let Some(mut data) = self.profiling_data.take() {
+            data.finalize();
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    /// Get reference to current profiling data.
+    pub fn profiling_data(&self) -> Option<&crate::profiling::ProfilingData> {
+        self.profiling_data.as_ref()
+    }
+
+    /// Record instruction execution for profiling.
+    fn profile_instruction(&mut self, instruction_name: &str, execution_time: std::time::Duration) {
+        if let Some(ref mut data) = self.profiling_data {
+            data.total_instructions += 1;
+            data.total_execution_time_ns += execution_time.as_nanos() as u64;
+
+            let stats = data.instruction_stats
+                .entry(instruction_name.to_string())
+                .or_insert_with(|| crate::profiling::InstructionStats::new());
+            stats.record_execution(execution_time);
+
+            // Sample call stack if enabled
+            if data.config.enable_call_stack_profiling
+                && data.total_instructions % data.config.hotspot_sampling_interval == 0 {
+                data.call_stack_samples.push(crate::profiling::CallStackSample {
+                    ip: self.ip,
+                    call_depth: self.call_stack.len(),
+                    instruction_name: instruction_name.to_string(),
+                    timestamp_ns: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64,
+                });
+            }
+        }
+    }
+
+    /// Record memory allocation for profiling.
+    pub fn profile_memory_allocation(&mut self, allocation_type: &str, size_estimate: u64) {
+        if let Some(ref mut data) = self.profiling_data {
+            match allocation_type {
+                "string" => data.memory_stats.record_string_allocation(size_estimate as usize),
+                "array" => data.memory_stats.record_array_allocation(size_estimate as usize),
+                "function" => data.memory_stats.record_function_allocation(),
+                _ => data.memory_stats.record_object_allocation(size_estimate),
+            }
+        }
+    }
+
+    /// Record GC pressure point for profiling.
+    pub fn profile_gc_pressure(&mut self) {
+        if let Some(ref mut data) = self.profiling_data {
+            data.memory_stats.record_gc_pressure();
+        }
     }
 }
 

@@ -2548,6 +2548,8 @@ pub enum WitnessEventKind {
     FlowLabelChecked,
     /// A declassification was requested.
     DeclassificationRequested,
+    /// A containment action was triggered by the guardplane.
+    ContainmentAction,
 }
 
 impl WitnessEventKind {
@@ -2560,6 +2562,7 @@ impl WitnessEventKind {
             Self::ExecutionCompleted => "execution_completed",
             Self::FlowLabelChecked => "flow_label_checked",
             Self::DeclassificationRequested => "declassification_requested",
+            Self::ContainmentAction => "containment_action",
         }
     }
 }

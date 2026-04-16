@@ -32,7 +32,7 @@ impl Default for ProfilingConfig {
             enable_hotspot_profiling: true,
             enable_memory_profiling: true,
             enable_call_stack_profiling: false, // Can be expensive
-            hotspot_sampling_interval: 1000, // Sample every 1000 instructions
+            hotspot_sampling_interval: 1000,    // Sample every 1000 instructions
         }
     }
 }
@@ -187,15 +187,22 @@ impl Profiler {
         // Convert instruction counts and times to stats
         let mut instruction_stats = BTreeMap::new();
         for (name, &count) in &self.instruction_counts {
-            let total_time = self.instruction_times.get(name).copied().unwrap_or(Duration::ZERO);
+            let total_time = self
+                .instruction_times
+                .get(name)
+                .copied()
+                .unwrap_or(Duration::ZERO);
             let total_time_ns = total_time.as_nanos() as u64;
             let average_time_ns = if count > 0 { total_time_ns / count } else { 0 };
 
-            instruction_stats.insert(name.clone(), InstructionStats {
-                count,
-                total_time_ns,
-                average_time_ns,
-            });
+            instruction_stats.insert(
+                name.clone(),
+                InstructionStats {
+                    count,
+                    total_time_ns,
+                    average_time_ns,
+                },
+            );
         }
 
         // Generate hotspots (top 10 by total time)
@@ -264,8 +271,15 @@ mod tests {
         let config = ProfilingConfig::default();
         let mut profiler = Profiler::new(config);
 
-        let load_int = Ir3Instruction::LoadInt { dst: Reg(0), value: 42 };
-        let add = Ir3Instruction::Add { dst: Reg(0), lhs: Reg(1), rhs: Reg(2) };
+        let load_int = Ir3Instruction::LoadInt {
+            dst: Reg(0),
+            value: 42,
+        };
+        let add = Ir3Instruction::Add {
+            dst: Reg(0),
+            lhs: Reg(1),
+            rhs: Reg(2),
+        };
 
         profiler.record_instruction(&load_int);
         profiler.record_instruction(&add);
@@ -294,10 +308,17 @@ mod tests {
 
     #[test]
     fn test_instruction_name_extraction() {
-        let load_int = Ir3Instruction::LoadInt { dst: Reg(0), value: 42 };
+        let load_int = Ir3Instruction::LoadInt {
+            dst: Reg(0),
+            value: 42,
+        };
         assert_eq!(instruction_name(&load_int), "LoadInt");
 
-        let add = Ir3Instruction::Add { dst: Reg(0), lhs: Reg(1), rhs: Reg(2) };
+        let add = Ir3Instruction::Add {
+            dst: Reg(0),
+            lhs: Reg(1),
+            rhs: Reg(2),
+        };
         assert_eq!(instruction_name(&add), "Add");
     }
 }

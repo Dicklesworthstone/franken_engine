@@ -122,6 +122,56 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Capability-typed extension contract | Native IR contract | Not native to runtime | Not native to runtime |
 | Cross-runtime lockstep oracle | Built in Node/Bun differential harness | N/A | N/A |
 
+## Build Modes
+
+FrankenEngine supports two build modes to accommodate different development and deployment environments:
+
+### Standalone Mode
+For developers working without the full asupersync repository layout:
+
+```bash
+# Build without external dependencies
+cargo check --no-default-features
+cargo build --no-default-features --release
+
+# Test standalone functionality
+cargo test --no-default-features
+```
+
+In standalone mode:
+- Core interpreter functionality available
+- Governance modules compile with fallback behavior
+- External policy integration disabled
+- Suitable for development and testing
+
+### Full Integration Mode
+For production deployments with the complete asupersync ecosystem:
+
+```bash
+# Build with all external dependencies
+cargo check --all-features
+cargo build --all-features --release
+
+# Test full integration
+cargo test --all-features
+```
+
+In full integration mode:
+- Complete governance and policy enforcement
+- Cross-repository coordination enabled
+- TEE attestation and fleet quarantine available
+- Cryptographic decision receipts with audit trails
+
+### Verifying Build Modes
+
+Use the provided verification script to test both modes:
+
+```bash
+./scripts/verify_build_modes.sh
+```
+
+See [`docs/DEPENDENCY_AUDIT.md`](./docs/DEPENDENCY_AUDIT.md) for detailed dependency information.
+
 ## Installation
 
 ### Option 1: One-Line Installer

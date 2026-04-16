@@ -1412,10 +1412,28 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
 
-                // Store the initializer value to the primary binding so we can
-                // reload it for each destructured property.
+                // For simple identifier patterns, store to the primary binding.
+                // For destructuring patterns, use a dedicated internal source binding.
+                let source_binding_id = if matches!(d.pattern, BindingPattern::Identifier(_)) {
+                    primary_bid
+                } else {
+                    // Allocate a dedicated internal binding to avoid source-overwrite bugs
+                    let source_name =
+                        make_internal_binding_name("destructure_source", *binding_index);
+                    alloc_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        &source_name,
+                        BindingKind::Let,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?
+                };
+
+                // Store the initializer value to the source binding.
                 ops.push(Ir1Op::StoreBinding {
-                    binding_id: primary_bid,
+                    binding_id: source_binding_id,
                 });
                 ops.push(Ir1Op::Pop);
 
@@ -1424,7 +1442,7 @@ fn lower_statement_to_ir1_with_flow(
                 if !matches!(d.pattern, BindingPattern::Identifier(_)) {
                     lower_destructuring_to_ir1(
                         &d.pattern,
-                        primary_bid,
+                        source_binding_id,
                         ops,
                         bindings,
                         binding_lookup,
@@ -1603,12 +1621,33 @@ fn lower_statement_to_ir1_with_flow(
                 binding_kind,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
-            ops.push(Ir1Op::StoreBinding { binding_id: bid });
+            // For simple identifier patterns, store to the primary binding.
+            // For destructuring patterns, use a dedicated internal source binding.
+            let source_binding_id = if matches!(for_in_stmt.binding, BindingPattern::Identifier(_))
+            {
+                bid
+            } else {
+                // Allocate a dedicated internal binding to avoid source-overwrite bugs
+                let source_name = make_internal_binding_name("for_in_source", *binding_index);
+                alloc_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &source_name,
+                    BindingKind::Let,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?
+            };
+
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: source_binding_id,
+            });
             ops.push(Ir1Op::Pop);
             if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
                     &for_in_stmt.binding,
-                    bid,
+                    source_binding_id,
                     ops,
                     bindings,
                     binding_lookup,
@@ -1684,12 +1723,33 @@ fn lower_statement_to_ir1_with_flow(
                 binding_kind,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
-            ops.push(Ir1Op::StoreBinding { binding_id: bid });
+            // For simple identifier patterns, store to the primary binding.
+            // For destructuring patterns, use a dedicated internal source binding.
+            let source_binding_id = if matches!(for_of_stmt.binding, BindingPattern::Identifier(_))
+            {
+                bid
+            } else {
+                // Allocate a dedicated internal binding to avoid source-overwrite bugs
+                let source_name = make_internal_binding_name("for_of_source", *binding_index);
+                alloc_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    &source_name,
+                    BindingKind::Let,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?
+            };
+
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: source_binding_id,
+            });
             ops.push(Ir1Op::Pop);
             if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
                 lower_destructuring_to_ir1(
                     &for_of_stmt.binding,
-                    bid,
+                    source_binding_id,
                     ops,
                     bindings,
                     binding_lookup,
@@ -6225,10 +6285,14 @@ fn lower_expression_to_ir1(
                 quasi_count: quasis.len() as u32,
             });
         }
-        Expression::ClassExpression { name, super_class, body } => {
+        Expression::ClassExpression {
+            name,
+            super_class: _,
+            body: _,
+        } => {
             // Lower class expression similar to class declaration
             // but as an expression that returns a constructor function
-            let class_name = name.as_ref().map(String::as_str).unwrap_or("anonymous");
+            let _class_name = name.as_ref().map(String::as_str).unwrap_or("anonymous");
 
             // For now, treat class expressions like function expressions
             // TODO: Implement full class expression lowering

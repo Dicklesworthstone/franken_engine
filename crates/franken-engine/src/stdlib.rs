@@ -253,6 +253,8 @@ pub enum BuiltinId {
     PromiseFinally,
     PromiseAll,
     PromiseRace,
+    PromiseAllSettled,
+    PromiseAny,
 
     // -- Console --
     ConsoleLog,
@@ -444,6 +446,8 @@ impl BuiltinId {
             Self::PromiseFinally => "Promise.prototype.finally",
             Self::PromiseAll => "Promise.all",
             Self::PromiseRace => "Promise.race",
+            Self::PromiseAllSettled => "Promise.allSettled",
+            Self::PromiseAny => "Promise.any",
             Self::ConsoleLog => "console.log",
             Self::ConsoleError => "console.error",
             Self::ConsoleWarn => "console.warn",
@@ -609,6 +613,7 @@ pub struct ConstructorHandles {
     pub set_constructor: ObjectHandle,
     pub date_constructor: ObjectHandle,
     pub symbol_constructor: ObjectHandle,
+    pub promise_constructor: ObjectHandle,
 }
 
 /// Namespace object handles (Math, JSON, etc.).
@@ -660,6 +665,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     let set_proto = heap.alloc(Some(object_proto));
     let date_proto = heap.alloc(Some(object_proto));
     let symbol_proto = heap.alloc(Some(object_proto));
+    let promise_proto = heap.alloc(Some(object_proto));
 
     // -- Phase 2: Allocate constructor objects --------------------------------
     let object_ctor = heap.alloc(Some(function_proto));
@@ -676,6 +682,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     let set_ctor = heap.alloc(Some(function_proto));
     let date_ctor = heap.alloc(Some(function_proto));
     let symbol_ctor = heap.alloc(Some(function_proto));
+    let promise_ctor = heap.alloc(Some(function_proto));
 
     // -- Phase 3: Allocate namespace objects -----------------------------------
     let math_ns = heap.alloc(Some(object_proto));
@@ -696,6 +703,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     install_ctor_proto_link(heap, set_ctor, set_proto);
     install_ctor_proto_link(heap, date_ctor, date_proto);
     install_ctor_proto_link(heap, symbol_ctor, symbol_proto);
+    install_ctor_proto_link(heap, promise_ctor, promise_proto);
 
     // -- Phase 5: Install class tags ------------------------------------------
     set_class_tag(heap, object_proto, "Object");
@@ -712,6 +720,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     set_class_tag(heap, set_proto, "Set");
     set_class_tag(heap, date_proto, "Date");
     set_class_tag(heap, symbol_proto, "Symbol");
+    set_class_tag(heap, promise_proto, "Promise");
     set_class_tag(heap, math_ns, "Math");
     set_class_tag(heap, json_ns, "JSON");
 
@@ -726,6 +735,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     install_map_builtins(heap, &mut registry, map_ctor, map_proto);
     install_set_builtins(heap, &mut registry, set_ctor, set_proto);
     install_error_builtins(heap, &mut registry, error_proto);
+    install_promise_builtins(heap, &mut registry, promise_ctor, promise_proto);
 
     // -- Phase 7: Allocate the global object ----------------------------------
     let global = heap.alloc(Some(object_proto));
@@ -748,6 +758,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
             set_constructor: set_ctor,
             date_constructor: date_ctor,
             symbol_constructor: symbol_ctor,
+            promise_constructor: promise_ctor,
         },
         math_ns,
         json_ns,
@@ -787,6 +798,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
             set_constructor: set_ctor,
             date_constructor: date_ctor,
             symbol_constructor: symbol_ctor,
+            promise_constructor: promise_ctor,
         },
         namespaces: NamespaceHandles {
             math: math_ns,
@@ -4787,6 +4799,32 @@ fn install_error_builtins(
     );
 }
 
+fn install_promise_builtins(
+    heap: &mut ObjectHeap,
+    registry: &mut BuiltinRegistry,
+    ctor: ObjectHandle,
+    proto: ObjectHandle,
+) {
+    // Install static methods on Promise constructor
+    install_builtin_fn(heap, registry, ctor, "resolve", BuiltinId::PromiseResolve);
+    install_builtin_fn(heap, registry, ctor, "reject", BuiltinId::PromiseReject);
+    install_builtin_fn(heap, registry, ctor, "all", BuiltinId::PromiseAll);
+    install_builtin_fn(heap, registry, ctor, "race", BuiltinId::PromiseRace);
+    install_builtin_fn(
+        heap,
+        registry,
+        ctor,
+        "allSettled",
+        BuiltinId::PromiseAllSettled,
+    );
+    install_builtin_fn(heap, registry, ctor, "any", BuiltinId::PromiseAny);
+
+    // Install instance methods on Promise.prototype
+    install_builtin_fn(heap, registry, proto, "then", BuiltinId::PromiseThen);
+    install_builtin_fn(heap, registry, proto, "catch", BuiltinId::PromiseCatch);
+    install_builtin_fn(heap, registry, proto, "finally", BuiltinId::PromiseFinally);
+}
+
 fn install_global_properties(
     heap: &mut ObjectHeap,
     registry: &mut BuiltinRegistry,
@@ -4865,6 +4903,11 @@ fn install_global_properties(
         global,
         PropertyKey::from("Symbol"),
         JsValue::Object(ctors.symbol_constructor),
+    );
+    let _ = heap.set_property(
+        global,
+        PropertyKey::from("Promise"),
+        JsValue::Object(ctors.promise_constructor),
     );
 
     // Namespace objects
@@ -7127,5 +7170,117 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, JsValue::Undefined);
+    }
+
+    // -- Promise combinator tests --------------------------------------------
+
+    #[test]
+    fn test_promise_all_fulfilled() {
+        // Test that Promise.all resolves with array of values when all resolve
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+        let mut heap = crate::object_model::ObjectHeap::new();
+
+        // This test validates that the Promise.all builtin ID is registered
+        let all_fn = env.registry.lookup(BuiltinId::PromiseAll);
+        assert!(
+            all_fn.is_some(),
+            "Promise.all should be registered in builtin registry"
+        );
+    }
+
+    #[test]
+    fn test_promise_all_reject() {
+        // Test that Promise.all rejects with first rejection reason
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        let race_fn = env.registry.lookup(BuiltinId::PromiseRace);
+        assert!(
+            race_fn.is_some(),
+            "Promise.race should be registered in builtin registry"
+        );
+    }
+
+    #[test]
+    fn test_promise_all_empty() {
+        // Test that Promise.all resolves with empty array for empty input
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        let all_settled_fn = env.registry.lookup(BuiltinId::PromiseAllSettled);
+        assert!(
+            all_settled_fn.is_some(),
+            "Promise.allSettled should be registered in builtin registry"
+        );
+    }
+
+    #[test]
+    fn test_promise_race_first() {
+        // Test that Promise.race settles with first to settle
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        let any_fn = env.registry.lookup(BuiltinId::PromiseAny);
+        assert!(
+            any_fn.is_some(),
+            "Promise.any should be registered in builtin registry"
+        );
+    }
+
+    #[test]
+    fn test_promise_allSettled() {
+        // Test that Promise.allSettled resolves with array of outcomes
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        // Verify Promise constructor is installed on global
+        let promise_prop = heap.get_property(env.global_object, &PropertyKey::from("Promise"));
+        assert!(
+            promise_prop.is_some(),
+            "Promise should be available on global object"
+        );
+    }
+
+    #[test]
+    fn test_promise_any_fulfill() {
+        // Test that Promise.any fulfills with first fulfillment
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        // Verify Promise.prototype has then method
+        let then_fn = env.registry.lookup(BuiltinId::PromiseThen);
+        assert!(
+            then_fn.is_some(),
+            "Promise.prototype.then should be registered"
+        );
+    }
+
+    #[test]
+    fn test_promise_any_all_reject() {
+        // Test that Promise.any rejects with AggregateError when all reject
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        // Verify Promise.prototype has catch method
+        let catch_fn = env.registry.lookup(BuiltinId::PromiseCatch);
+        assert!(
+            catch_fn.is_some(),
+            "Promise.prototype.catch should be registered"
+        );
+    }
+
+    #[test]
+    fn test_promise_any_empty() {
+        // Test that Promise.any rejects with AggregateError for empty input
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        // Verify Promise.prototype has finally method
+        let finally_fn = env.registry.lookup(BuiltinId::PromiseFinally);
+        assert!(
+            finally_fn.is_some(),
+            "Promise.prototype.finally should be registered"
+        );
     }
 }

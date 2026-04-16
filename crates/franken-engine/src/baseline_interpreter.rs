@@ -109,6 +109,17 @@ pub const LEGACY_V8_PROFILE_LABEL: &str = "v8_inspired_native";
 // Float64 — Deterministic f64 wrapper with total ordering
 // ---------------------------------------------------------------------------
 
+/// Active timer record for setTimeout/setInterval tracking and cancellation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveTimer {
+    /// The handler to invoke when the timer fires.
+    pub handler: Option<u32>,
+    /// The delay in milliseconds.
+    pub delay_ms: u64,
+    /// For setInterval, whether this timer repeats.
+    pub repeating: bool,
+}
+
 /// Wrapper around f64 that provides Eq/Ord using total_cmp for determinism.
 /// NaN values are equal to each other and greater than all other values.
 /// -0.0 is less than +0.0 in the total ordering.
@@ -1332,6 +1343,8 @@ impl InterpreterCore {
             active_cjs_context: None,
             current_module_specifier: None,
             console_output: Vec::new(),
+            next_timer_id: 0,
+            active_timers: BTreeMap::new(),
         }
     }
 
@@ -5723,6 +5736,135 @@ impl InterpreterCore {
         );
 
         Ok(Value::Undefined)
+    }
+
+    fn dispatch_timer_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        match cap {
+            "timer:setTimeout" => {
+                // args[0] = handler (function/closure), args[1] = delay_ms
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let handler_reg = args.start;
+                let delay_reg =
+                    args.start
+                        .checked_add(1)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+
+                let handler_val = self.read_reg(handler_reg)?;
+                let delay_val = self.read_reg(delay_reg)?;
+
+                // Extract numeric delay
+                let delay_ms = match delay_val {
+                    Value::Int(i) => i.max(0) as u64,
+                    Value::Float(f) => f.0.max(0.0) as u64,
+                    _ => 0,
+                };
+
+                // Store active timer
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+                let handler_id = match handler_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: false,
+                    },
+                );
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("timer:setTimeout:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
+            }
+            "timer:setInterval" => {
+                // Similar to setTimeout but repeating
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let handler_reg = args.start;
+                let delay_reg =
+                    args.start
+                        .checked_add(1)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+
+                let handler_val = self.read_reg(handler_reg)?;
+                let delay_val = self.read_reg(delay_reg)?;
+
+                let delay_ms = match delay_val {
+                    Value::Int(i) => i.max(0) as u64,
+                    Value::Float(f) => f.0.max(0.0) as u64,
+                    _ => 0,
+                };
+
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+                let handler_id = match handler_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: true,
+                    },
+                );
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("timer:setInterval:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
+            }
+            "timer:clearTimeout" | "timer:clearInterval" => {
+                // args[0] = timer_id to clear
+                if args.count < 1 {
+                    return Ok(Value::Undefined);
+                }
+
+                let timer_id_val = self.read_reg(args.start)?;
+                let timer_id = match timer_id_val {
+                    Value::Int(i) => i as u32,
+                    _ => return Ok(Value::Undefined),
+                };
+
+                self.active_timers.remove(&timer_id);
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("{}:{}", cap, timer_id)),
+                );
+
+                Ok(Value::Undefined)
+            }
+            _ => Ok(Value::Undefined), // Unknown timer method
+        }
     }
 
     /// Convert a Value to a string representation for console output.

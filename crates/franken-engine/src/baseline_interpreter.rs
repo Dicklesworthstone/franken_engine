@@ -251,6 +251,40 @@ pub enum Value {
     Generator(u32),
     /// Promise handle (index into the promise store).
     Promise(u32),
+    /// Builtin callable bound into the runtime environment.
+    BuiltinFunction(BuiltinFunction),
+}
+
+/// Small set of builtin callable kinds the baseline interpreter exposes as
+/// first-class values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinFunctionKind {
+    Require,
+}
+
+/// First-class builtin callable value with the module provenance needed for
+/// deterministic CommonJS resolution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BuiltinFunction {
+    pub kind: BuiltinFunctionKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module_specifier: String,
+}
+
+impl BuiltinFunction {
+    fn require(module_specifier: impl Into<String>) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::Require,
+            module_specifier: module_specifier.into(),
+        }
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self.kind {
+            BuiltinFunctionKind::Require => "require",
+        }
+    }
 }
 
 impl Value {
@@ -268,7 +302,8 @@ impl Value {
             | Self::Iterator(_)
             | Self::GeneratorFunction(_)
             | Self::Generator(_)
-            | Self::Promise(_) => true,
+            | Self::Promise(_)
+            | Self::BuiltinFunction(_) => true,
         }
     }
 
@@ -285,7 +320,10 @@ impl Value {
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
-            Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
+            Self::Function(_)
+            | Self::Closure(_)
+            | Self::GeneratorFunction(_)
+            | Self::BuiltinFunction(_) => "function",
             Self::Iterator(_) | Self::Generator(_) | Self::Promise(_) => "object",
         }
     }
@@ -297,7 +335,10 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
-            Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
+            Self::Function(_)
+            | Self::Closure(_)
+            | Self::GeneratorFunction(_)
+            | Self::BuiltinFunction(_) => "function",
             Self::Iterator(_) | Self::Generator(_) | Self::Promise(_) => "object",
         }
     }
@@ -319,6 +360,7 @@ impl fmt::Display for Value {
             Self::GeneratorFunction(idx) => write!(f, "[generatorfunction#{idx}]"),
             Self::Generator(idx) => write!(f, "[generator#{idx}]"),
             Self::Promise(idx) => write!(f, "[promise#{idx}]"),
+            Self::BuiltinFunction(builtin) => write!(f, "[builtin:{}]", builtin.display_name()),
         }
     }
 }
@@ -1472,11 +1514,15 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let (filename_value, dirname_value) = self
             .cjs_filename_dirname(module_specifier.or(self.current_module_specifier.as_deref()));
+        let require_value = Value::BuiltinFunction(BuiltinFunction::require(
+            module_specifier.unwrap_or_default(),
+        ));
 
-        let mut replaced = Vec::with_capacity(4);
+        let mut replaced = Vec::with_capacity(5);
         {
             let frame = self.scope_chain.current_mut();
             for (name, value) in [
+                ("require", require_value),
                 ("exports", Value::Object(exports_object)),
                 ("module", Value::Object(module_object)),
                 ("__filename", filename_value),
@@ -1740,6 +1786,11 @@ impl InterpreterCore {
             .unwrap_or(Value::Null);
         self.set_object_property(module_object, "parent".to_string(), parent_value)?;
         self.set_object_property(module_object, "loaded".to_string(), Value::Bool(false))?;
+        self.set_object_property(
+            module_object,
+            "require".to_string(),
+            Value::BuiltinFunction(BuiltinFunction::require(module_specifier)),
+        )?;
         let context = CjsModuleContext {
             module_object,
             exports_object,
@@ -1891,6 +1942,38 @@ impl InterpreterCore {
         };
         let default_value = self.prototype_chain_get(namespace_object, "default")?;
         Ok(default_value)
+    }
+
+    fn dispatch_builtin_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        match builtin.kind {
+            BuiltinFunctionKind::Require => {
+                let spec_val = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let specifier = match spec_val {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(InterpreterError::RequireSpecifierNotString {
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                };
+                let previous_module_specifier = self.current_module_specifier.clone();
+                if !builtin.module_specifier.is_empty() {
+                    self.current_module_specifier = Some(builtin.module_specifier.clone());
+                }
+                let result = self.require_module(module, &specifier);
+                self.current_module_specifier = previous_module_specifier;
+                result
+            }
+        }
     }
 
     fn evaluate_module_ir3(
@@ -2595,6 +2678,13 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    if let Value::BuiltinFunction(builtin) = &callee_val {
+                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env) = match &callee_val {
                         Value::Function(idx) => (*idx, None),
@@ -2766,6 +2856,13 @@ impl InterpreterCore {
                 } => {
                     let receiver_val = self.read_reg(receiver)?;
                     let callee_val = self.read_reg(callee)?;
+
+                    if let Value::BuiltinFunction(builtin) = &callee_val {
+                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
 
                     let (func_idx, captured_env) = match &callee_val {
                         Value::Function(idx) => (*idx, None),
@@ -3426,7 +3523,8 @@ impl InterpreterCore {
                             Value::Promise(_) => "[object Promise]".to_string(),
                             Value::Function(_)
                             | Value::Closure(_)
-                            | Value::GeneratorFunction(_) => "function".to_string(),
+                            | Value::GeneratorFunction(_)
+                            | Value::BuiltinFunction(_) => "function".to_string(),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result.push_str(&part_str);
@@ -3832,9 +3930,10 @@ impl InterpreterCore {
                         "[object Object]".to_string()
                     }
                     Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::Function(_) | Value::Closure(_) | Value::GeneratorFunction(_) => {
-                        "function".to_string()
-                    }
+                    Value::Function(_)
+                    | Value::Closure(_)
+                    | Value::GeneratorFunction(_)
+                    | Value::BuiltinFunction(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
@@ -3846,9 +3945,10 @@ impl InterpreterCore {
                         "[object Object]".to_string()
                     }
                     Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::Function(_) | Value::Closure(_) | Value::GeneratorFunction(_) => {
-                        "function".to_string()
-                    }
+                    Value::Function(_)
+                    | Value::Closure(_)
+                    | Value::GeneratorFunction(_)
+                    | Value::BuiltinFunction(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
@@ -4489,9 +4589,9 @@ impl InterpreterCore {
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
             Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
             Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
-            Value::Object(id) => crate::object_model::JsValue::Object(
-                crate::object_model::ObjectHandle(id.0),
-            ),
+            Value::Object(id) => {
+                crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
+            }
             Value::Function(idx) => crate::object_model::JsValue::Function(*idx),
             _ => crate::object_model::JsValue::Str(val.to_string()),
         }
@@ -4511,9 +4611,7 @@ impl InterpreterCore {
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => {
-                Value::Str(format!("Symbol({})", sym.0))
-            }
+            crate::object_model::JsValue::Symbol(sym) => Value::Str(format!("Symbol({})", sym.0)),
         }
     }
 
@@ -4533,7 +4631,14 @@ impl InterpreterCore {
         }
         let mut values = Vec::with_capacity(args.count as usize);
         for i in 0..args.count {
-            values.push(self.read_reg(args.start + i)?);
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+            values.push(self.read_reg(reg)?);
         }
         Ok(values)
     }
@@ -4553,10 +4658,7 @@ impl InterpreterCore {
             .unwrap_or_default()
     }
 
-    fn alloc_array_from_values(
-        &mut self,
-        values: &[Value],
-    ) -> Result<ObjectId, InterpreterError> {
+    fn alloc_array_from_values(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
         let id = self.alloc_object_with_prototype(None)?;
         for (index, value) in values.iter().cloned().enumerate() {
             self.set_object_property(id, index.to_string(), value)?;
@@ -4592,13 +4694,14 @@ impl InterpreterCore {
     ) -> Result<crate::object_model::JsValue, InterpreterError> {
         let mut items = Vec::with_capacity(total as usize);
         for index in 0..total {
-            let outcome = outcomes
-                .get(&index)
-                .cloned()
-                .unwrap_or(crate::promise_model::SettledOutcome {
-                    status: "fulfilled".into(),
-                    value: crate::object_model::JsValue::Undefined,
-                });
+            let outcome =
+                outcomes
+                    .get(&index)
+                    .cloned()
+                    .unwrap_or(crate::promise_model::SettledOutcome {
+                        status: "fulfilled".into(),
+                        value: crate::object_model::JsValue::Undefined,
+                    });
             let value = Self::js_value_to_value(&outcome.value);
             let mut props = vec![("status", Value::Str(outcome.status.clone()))];
             if outcome.status == "fulfilled" {
@@ -4652,7 +4755,12 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         self.promise_store
-            .fulfill(handle, value.clone(), label.clone(), &mut self.event_loop.microtasks)
+            .fulfill(
+                handle,
+                value.clone(),
+                label.clone(),
+                &mut self.event_loop.microtasks,
+            )
             .map_err(|e| InterpreterError::TypeError {
                 expected: "pending promise".to_string(),
                 got: e.to_string(),
@@ -4668,7 +4776,12 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         self.promise_store
-            .reject(handle, reason.clone(), label.clone(), &mut self.event_loop.microtasks)
+            .reject(
+                handle,
+                reason.clone(),
+                label.clone(),
+                &mut self.event_loop.microtasks,
+            )
             .map_err(|e| InterpreterError::TypeError {
                 expected: "pending promise".to_string(),
                 got: e.to_string(),
@@ -4689,13 +4802,12 @@ impl InterpreterCore {
         };
         for watcher in watchers {
             match &settlement {
-                PromiseSettlement::Fulfilled(value) => self
-                    .update_combinator_fulfillment(
-                        watcher.combinator_id,
-                        watcher.index,
-                        value.clone(),
-                        label.clone(),
-                    )?,
+                PromiseSettlement::Fulfilled(value) => self.update_combinator_fulfillment(
+                    watcher.combinator_id,
+                    watcher.index,
+                    value.clone(),
+                    label.clone(),
+                )?,
                 PromiseSettlement::Rejected(reason) => self.update_combinator_rejection(
                     watcher.combinator_id,
                     watcher.index,
@@ -4715,8 +4827,14 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         enum ResolutionData {
-            Fulfill(crate::promise_model::PromiseHandle, crate::object_model::JsValue),
-            FulfillAll(crate::promise_model::PromiseHandle, Vec<crate::object_model::JsValue>),
+            Fulfill(
+                crate::promise_model::PromiseHandle,
+                crate::object_model::JsValue,
+            ),
+            FulfillAll(
+                crate::promise_model::PromiseHandle,
+                Vec<crate::object_model::JsValue>,
+            ),
             FulfillAllSettled(
                 crate::promise_model::PromiseHandle,
                 BTreeMap<u32, crate::promise_model::SettledOutcome>,
@@ -4734,8 +4852,10 @@ impl InterpreterCore {
                     if tracker.record_fulfillment(index, value) {
                         tracker.mark_settled();
                         let collected = tracker.collect_values();
-                        resolution =
-                            Some(ResolutionData::FulfillAll(tracker.result_promise, collected));
+                        resolution = Some(ResolutionData::FulfillAll(
+                            tracker.result_promise,
+                            collected,
+                        ));
                     }
                 }
                 PromiseCombinatorState::AllSettled(tracker) => {
@@ -4749,8 +4869,7 @@ impl InterpreterCore {
                 }
                 PromiseCombinatorState::Race(tracker) => {
                     if tracker.try_settle() {
-                        resolution =
-                            Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                        resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
                     }
                 }
                 PromiseCombinatorState::Any(tracker) => {
@@ -4794,8 +4913,14 @@ impl InterpreterCore {
                 BTreeMap<u32, crate::promise_model::SettledOutcome>,
                 u32,
             ),
-            Reject(crate::promise_model::PromiseHandle, crate::object_model::JsValue),
-            RejectAny(crate::promise_model::PromiseHandle, Vec<crate::object_model::JsValue>),
+            Reject(
+                crate::promise_model::PromiseHandle,
+                crate::object_model::JsValue,
+            ),
+            RejectAny(
+                crate::promise_model::PromiseHandle,
+                Vec<crate::object_model::JsValue>,
+            ),
         }
 
         let mut resolution: Option<ResolutionData> = None;
@@ -4829,7 +4954,8 @@ impl InterpreterCore {
                     if tracker.record_rejection(index, reason) {
                         tracker.mark_settled();
                         let errors = tracker.collect_errors();
-                        resolution = Some(ResolutionData::RejectAny(tracker.result_promise, errors));
+                        resolution =
+                            Some(ResolutionData::RejectAny(tracker.result_promise, errors));
                     }
                 }
             }
@@ -4866,8 +4992,7 @@ impl InterpreterCore {
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
-                let empty =
-                    self.build_promise_all_result(Vec::new())?;
+                let empty = self.build_promise_all_result(Vec::new())?;
                 self.fulfill_promise(result_promise, empty, label)?;
                 return Ok(Value::Promise(result_promise.0));
             }
@@ -4883,38 +5008,38 @@ impl InterpreterCore {
         }
 
         let state = match kind {
-            PromiseCombinatorKind::All => PromiseCombinatorState::All(
-                crate::promise_model::PromiseAllTracker {
+            PromiseCombinatorKind::All => {
+                PromiseCombinatorState::All(crate::promise_model::PromiseAllTracker {
                     result_promise,
                     values: BTreeMap::new(),
                     total,
                     resolved_count: 0,
                     settled: false,
-                },
-            ),
-            PromiseCombinatorKind::AllSettled => PromiseCombinatorState::AllSettled(
-                crate::promise_model::PromiseAllSettledTracker {
+                })
+            }
+            PromiseCombinatorKind::AllSettled => {
+                PromiseCombinatorState::AllSettled(crate::promise_model::PromiseAllSettledTracker {
                     result_promise,
                     outcomes: BTreeMap::new(),
                     total,
                     settled_count: 0,
-                },
-            ),
-            PromiseCombinatorKind::Race => PromiseCombinatorState::Race(
-                crate::promise_model::PromiseRaceTracker {
+                })
+            }
+            PromiseCombinatorKind::Race => {
+                PromiseCombinatorState::Race(crate::promise_model::PromiseRaceTracker {
                     result_promise,
                     settled: false,
-                },
-            ),
-            PromiseCombinatorKind::Any => PromiseCombinatorState::Any(
-                crate::promise_model::PromiseAnyTracker {
+                })
+            }
+            PromiseCombinatorKind::Any => {
+                PromiseCombinatorState::Any(crate::promise_model::PromiseAnyTracker {
                     result_promise,
                     errors: BTreeMap::new(),
                     total,
                     rejected_count: 0,
                     settled: false,
-                },
-            ),
+                })
+            }
         };
 
         let combinator_id = self.register_combinator(state);
@@ -4927,13 +5052,12 @@ impl InterpreterCore {
             match input {
                 Value::Promise(handle) => {
                     let promise_handle = crate::promise_model::PromiseHandle(handle);
-                    let record = self
-                        .promise_store
-                        .get(promise_handle)
-                        .map_err(|e| InterpreterError::TypeError {
+                    let record = self.promise_store.get(promise_handle).map_err(|e| {
+                        InterpreterError::TypeError {
                             expected: "promise".to_string(),
                             got: e.to_string(),
-                        })?;
+                        }
+                    })?;
                     match &record.state {
                         crate::promise_model::PromiseState::Pending => {
                             self.add_combinator_watcher(
@@ -4977,7 +5101,6 @@ impl InterpreterCore {
         Ok(Value::Promise(result_promise.0))
     }
 
-
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
     ///
     /// Supported capabilities:
@@ -5020,7 +5143,13 @@ impl InterpreterCore {
                     Value::Promise(h) => {
                         // Resolve the existing promise with the given value.
                         let val = if args.count > 1 {
-                            self.read_reg(args.start + 1)?
+                            let reg = args.start.checked_add(1).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            self.read_reg(reg)?
                         } else {
                             Value::Undefined
                         };
@@ -5047,7 +5176,13 @@ impl InterpreterCore {
                 match arg0 {
                     Value::Promise(h) => {
                         let reason = if args.count > 1 {
-                            self.read_reg(args.start + 1)?
+                            let reg = args.start.checked_add(1).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            self.read_reg(reg)?
                         } else {
                             Value::Undefined
                         };
@@ -5250,7 +5385,8 @@ impl InterpreterCore {
             | Value::Iterator(_)
             | Value::GeneratorFunction(_)
             | Value::Generator(_)
-            | Value::Promise(_) => None,
+            | Value::Promise(_)
+            | Value::BuiltinFunction(_) => None,
         }
     }
 
@@ -5282,7 +5418,8 @@ impl InterpreterCore {
             | Value::Iterator(_)
             | Value::GeneratorFunction(_)
             | Value::Generator(_)
-            | Value::Promise(_) => Some(f64::NAN),
+            | Value::Promise(_)
+            | Value::BuiltinFunction(_) => Some(f64::NAN),
         }
     }
 
@@ -5299,7 +5436,8 @@ impl InterpreterCore {
             | (Value::Iterator(_), Value::Iterator(_))
             | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
             | (Value::Generator(_), Value::Generator(_))
-            | (Value::Promise(_), Value::Promise(_)) => a == b,
+            | (Value::Promise(_), Value::Promise(_))
+            | (Value::BuiltinFunction(_), Value::BuiltinFunction(_)) => a == b,
             // Float == Float: NaN !== NaN, but -0 == +0
             (Value::Float(fa), Value::Float(fb)) => {
                 let va = fa.inner();
@@ -5442,12 +5580,13 @@ impl InterpreterCore {
         // Collect arguments as strings
         let mut parts = Vec::new();
         for i in 0..args.count {
-            let reg = args.start.checked_add(i).ok_or(
-                InterpreterError::RegisterOutOfBounds {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
                     register: args.start,
                     max: self.config.max_registers,
-                },
-            )?;
+                })?;
             let val = self.read_reg(reg)?;
             parts.push(self.value_to_string(&val));
         }
@@ -5462,11 +5601,14 @@ impl InterpreterCore {
 
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,
-            Some(&format!("console:{}", match level {
-                ConsoleLevel::Log => "log",
-                ConsoleLevel::Error => "error",
-                ConsoleLevel::Warn => "warn",
-            })),
+            Some(&format!(
+                "console:{}",
+                match level {
+                    ConsoleLevel::Log => "log",
+                    ConsoleLevel::Error => "error",
+                    ConsoleLevel::Warn => "warn",
+                }
+            )),
         );
 
         Ok(Value::Undefined)
@@ -5514,6 +5656,9 @@ impl InterpreterCore {
             Value::GeneratorFunction(idx) => format!("[GeneratorFunction: gen{}]", idx),
             Value::Generator(idx) => format!("[object Generator#{}]", idx),
             Value::Promise(idx) => format!("[object Promise#{}]", idx),
+            Value::BuiltinFunction(builtin) => {
+                format!("[Function: builtin {}]", builtin.display_name())
+            }
         }
     }
 
@@ -7902,6 +8047,10 @@ mod tests {
         assert_eq!(Value::Str(String::new()).type_name(), "string");
         assert_eq!(Value::Object(ObjectId(0)).type_name(), "object");
         assert_eq!(Value::Function(0).type_name(), "function");
+        assert_eq!(
+            Value::BuiltinFunction(BuiltinFunction::require("/tmp/entry.cjs")).type_name(),
+            "function"
+        );
     }
 
     #[test]
@@ -7917,6 +8066,7 @@ mod tests {
         assert!(Value::Str("x".to_string()).is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
+        assert!(Value::BuiltinFunction(BuiltinFunction::require("/tmp/entry.cjs")).is_truthy());
     }
 
     #[test]

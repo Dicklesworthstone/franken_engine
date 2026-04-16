@@ -788,6 +788,7 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::Function { .. } => "function_expression",
         Expression::Raw(_) => "raw",
         Expression::RegExpLiteral { .. } => "regexp_literal",
+        Expression::Super => "super",
     }
 }
 

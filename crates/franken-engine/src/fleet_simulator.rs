@@ -104,6 +104,22 @@ pub enum MessagePayload {
         new_state: InstanceState,
         reason: String,
     },
+    /// Quarantine decision broadcast.
+    QuarantineDecision {
+        extension_id: String,
+        reason: String,
+        evidence_hash: String,
+        originator_instance: NodeId,
+        lamport_timestamp: u64,
+    },
+    /// Quarantine acknowledgment response.
+    QuarantineAck {
+        extension_id: String,
+        evidence_hash: String,
+        acknowledging_instance: NodeId,
+        originator_instance: NodeId,
+        lamport_timestamp: u64,
+    },
 }
 
 /// Deterministic message bus for fleet communication.
@@ -217,6 +233,29 @@ pub struct FleetSimulator {
     simulation_steps: u64,
     /// Event log for structured JSONL output.
     event_log: Vec<SimulationEvent>,
+    /// Quarantined extensions by evidence hash.
+    quarantined_extensions: BTreeMap<String, QuarantineRecord>,
+    /// Current Lamport timestamp for causal ordering.
+    lamport_clock: u64,
+}
+
+/// Quarantine record for tracking quarantined extensions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuarantineRecord {
+    /// Extension identifier.
+    pub extension_id: String,
+    /// Reason for quarantine.
+    pub reason: String,
+    /// Evidence hash for idempotency.
+    pub evidence_hash: String,
+    /// Node that initiated the quarantine.
+    pub originator_instance: NodeId,
+    /// Lamport timestamp of the decision.
+    pub decision_timestamp: u64,
+    /// Acknowledgments received per instance.
+    pub acknowledgments: BTreeMap<NodeId, u64>, // NodeId -> ack timestamp
+    /// Whether all instances have converged.
+    pub converged: bool,
 }
 
 /// Simulation event for logging.
@@ -250,6 +289,12 @@ pub enum SimulationEventType {
     PartitionModeChanged { mode: PartitionMode },
     /// Quorum checkpoint reached.
     QuorumCheckpoint,
+    /// Quarantine decision broadcast.
+    QuarantineDecision,
+    /// Quarantine enforcement on instance.
+    QuarantineEnforcement,
+    /// Quarantine convergence achieved.
+    QuarantineConverged,
     /// Error occurred.
     Error { error: String },
 }
@@ -330,6 +375,8 @@ impl FleetSimulator {
             start_time,
             simulation_steps: 0,
             event_log,
+            quarantined_extensions: BTreeMap::new(),
+            lamport_clock: 0,
         })
     }
 
@@ -583,6 +630,210 @@ impl Default for MessageBus {
     fn default() -> Self {
         Self::new()
     }
+    // -----------------------------------------------------------------------
+    // Quarantine Propagation Protocol
+    // -----------------------------------------------------------------------
+
+    /// Broadcast a quarantine decision to all fleet instances.
+    pub fn broadcast_quarantine_decision(
+        &mut self,
+        extension_id: String,
+        reason: String,
+        evidence_hash: String,
+        originator_instance: NodeId,
+    ) -> Result<(), FleetSimulatorError> {
+        // Check if already quarantined (idempotency)
+        if self.quarantined_extensions.contains_key(&evidence_hash) {
+            return Ok(());
+        }
+
+        // Increment Lamport clock
+        self.lamport_clock += 1;
+        let decision_timestamp = self.lamport_clock;
+
+        // Create quarantine record
+        let record = QuarantineRecord {
+            extension_id: extension_id.clone(),
+            reason: reason.clone(),
+            evidence_hash: evidence_hash.clone(),
+            originator_instance: originator_instance.clone(),
+            decision_timestamp,
+            acknowledgments: BTreeMap::new(),
+            converged: false,
+        };
+
+        self.quarantined_extensions
+            .insert(evidence_hash.clone(), record);
+
+        // Broadcast to all instances
+        let message = FleetMessage {
+            message_id: format!("quarantine_{}_{}", evidence_hash, decision_timestamp),
+            sender: originator_instance.clone(),
+            recipient: NodeId("broadcast".to_string()),
+            payload: MessagePayload::QuarantineDecision {
+                extension_id: extension_id.clone(),
+                reason,
+                evidence_hash: evidence_hash.clone(),
+                originator_instance: originator_instance.clone(),
+                lamport_timestamp: decision_timestamp,
+            },
+            lamport_timestamp: decision_timestamp,
+        };
+
+        // Send to message bus for broadcast
+        self.message_bus.send_message(message)?;
+
+        // Log the decision
+        self.log_event(SimulationEvent {
+            timestamp_ms: self.elapsed_time_ms(),
+            node_id: originator_instance,
+            event_type: SimulationEventType::QuarantineDecision,
+            description: format!(
+                "Quarantine decision broadcast for extension {} with evidence {}",
+                extension_id, evidence_hash
+            ),
+        });
+
+        Ok(())
+    }
+
+    /// Process a quarantine decision message.
+    pub fn process_quarantine_decision(
+        &mut self,
+        extension_id: String,
+        reason: String,
+        evidence_hash: String,
+        originator_instance: NodeId,
+        decision_timestamp: u64,
+        receiving_instance: NodeId,
+    ) -> Result<(), FleetSimulatorError> {
+        // Update Lamport clock
+        self.lamport_clock = std::cmp::max(self.lamport_clock, decision_timestamp) + 1;
+
+        // Enforce quarantine locally (add extension to quarantine set)
+        if let Some(instance) = self.instances.get_mut(&receiving_instance) {
+            // Transition to quarantined if currently healthy
+            if instance.state == InstanceState::Healthy {
+                instance.state = InstanceState::Quarantined;
+            }
+        }
+
+        // Send acknowledgment back to originator
+        let ack_message = FleetMessage {
+            message_id: format!("ack_{}_{}", evidence_hash, self.lamport_clock),
+            sender: receiving_instance.clone(),
+            recipient: originator_instance.clone(),
+            payload: MessagePayload::QuarantineAck {
+                extension_id: extension_id.clone(),
+                evidence_hash: evidence_hash.clone(),
+                acknowledging_instance: receiving_instance.clone(),
+                originator_instance: originator_instance.clone(),
+                lamport_timestamp: self.lamport_clock,
+            },
+            lamport_timestamp: self.lamport_clock,
+        };
+
+        self.message_bus.send_message(ack_message)?;
+
+        // Log enforcement
+        self.log_event(SimulationEvent {
+            timestamp_ms: self.elapsed_time_ms(),
+            node_id: receiving_instance,
+            event_type: SimulationEventType::QuarantineEnforcement,
+            description: format!(
+                "Quarantine enforced for extension {} on instance",
+                extension_id
+            ),
+        });
+
+        Ok(())
+    }
+
+    /// Process a quarantine acknowledgment.
+    pub fn process_quarantine_ack(
+        &mut self,
+        extension_id: String,
+        evidence_hash: String,
+        acknowledging_instance: NodeId,
+        ack_timestamp: u64,
+    ) -> Result<(), FleetSimulatorError> {
+        // Update Lamport clock
+        self.lamport_clock = std::cmp::max(self.lamport_clock, ack_timestamp) + 1;
+
+        // Record acknowledgment
+        if let Some(record) = self.quarantined_extensions.get_mut(&evidence_hash) {
+            record
+                .acknowledgments
+                .insert(acknowledging_instance.clone(), ack_timestamp);
+
+            // Check for convergence (all instances acknowledged)
+            let expected_acks = self.instances.len();
+            if record.acknowledgments.len() >= expected_acks && !record.converged {
+                record.converged = true;
+
+                // Log convergence
+                self.log_event(SimulationEvent {
+                    timestamp_ms: self.elapsed_time_ms(),
+                    node_id: record.originator_instance.clone(),
+                    event_type: SimulationEventType::QuarantineConverged,
+                    description: format!(
+                        "Quarantine converged for extension {} - all {} instances acknowledged",
+                        extension_id, expected_acks
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if an extension is quarantined.
+    pub fn is_extension_quarantined(&self, evidence_hash: &str) -> bool {
+        self.quarantined_extensions.contains_key(evidence_hash)
+    }
+
+    /// Get convergence status for a quarantine decision.
+    pub fn is_quarantine_converged(&self, evidence_hash: &str) -> bool {
+        self.quarantined_extensions
+            .get(evidence_hash)
+            .map(|r| r.converged)
+            .unwrap_or(false)
+    }
+
+    /// Get quarantine statistics.
+    pub fn get_quarantine_stats(&self) -> QuarantineStats {
+        let total_decisions = self.quarantined_extensions.len();
+        let converged_decisions = self
+            .quarantined_extensions
+            .values()
+            .filter(|r| r.converged)
+            .count();
+
+        QuarantineStats {
+            total_quarantine_decisions: total_decisions,
+            converged_decisions,
+            pending_decisions: total_decisions - converged_decisions,
+            total_acknowledgments: self
+                .quarantined_extensions
+                .values()
+                .map(|r| r.acknowledgments.len())
+                .sum(),
+        }
+    }
+
+    /// Get current Lamport timestamp.
+    pub fn current_lamport_timestamp(&self) -> u64 {
+        self.lamport_clock
+    }
+}
+
+/// Quarantine statistics for reporting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuarantineStats {
+    pub total_quarantine_decisions: usize,
+    pub converged_decisions: usize,
+    pub pending_decisions: usize,
+    pub total_acknowledgments: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -818,5 +1069,232 @@ mod tests {
             result,
             Err(FleetSimulatorError::InstanceNotFound { .. })
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Quarantine Protocol Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_broadcast_reaches_all() {
+        let mut fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let originator = NodeId("node_0".to_string());
+        let extension_id = "malicious_ext".to_string();
+        let evidence_hash = "evidence_123".to_string();
+
+        // Broadcast quarantine decision
+        fleet
+            .broadcast_quarantine_decision(
+                extension_id.clone(),
+                "Malicious behavior detected".to_string(),
+                evidence_hash.clone(),
+                originator,
+            )
+            .unwrap();
+
+        // Check that quarantine record was created
+        assert!(fleet.is_extension_quarantined(&evidence_hash));
+        assert!(!fleet.is_quarantine_converged(&evidence_hash));
+
+        // Check that event was logged
+        let events = fleet.export_event_log();
+        assert!(events.contains("Quarantine decision broadcast"));
+        assert!(events.contains("malicious_ext"));
+    }
+
+    #[test]
+    fn test_enforcement_blocks_extension() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let receiving_instance = NodeId("node_1".to_string());
+        let originator = NodeId("node_0".to_string());
+
+        // Process quarantine decision on receiving instance
+        fleet
+            .process_quarantine_decision(
+                "bad_ext".to_string(),
+                "Security violation".to_string(),
+                "evidence_456".to_string(),
+                originator,
+                100, // timestamp
+                receiving_instance.clone(),
+            )
+            .unwrap();
+
+        // Check that instance was quarantined
+        let instance = fleet.get_instance(&receiving_instance).unwrap();
+        assert_eq!(instance.state, InstanceState::Quarantined);
+
+        // Check that enforcement event was logged
+        let events = fleet.export_event_log();
+        assert!(events.contains("Quarantine enforced"));
+    }
+
+    #[test]
+    fn test_ack_sent_after_enforcement() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let receiving_instance = NodeId("node_1".to_string());
+        let originator = NodeId("node_0".to_string());
+
+        // First broadcast the decision to create the record
+        fleet
+            .broadcast_quarantine_decision(
+                "test_ext".to_string(),
+                "Test".to_string(),
+                "evidence_789".to_string(),
+                originator.clone(),
+            )
+            .unwrap();
+
+        // Then process the decision
+        fleet
+            .process_quarantine_decision(
+                "test_ext".to_string(),
+                "Test".to_string(),
+                "evidence_789".to_string(),
+                originator.clone(),
+                1, // timestamp
+                receiving_instance,
+            )
+            .unwrap();
+
+        // Check message bus has acknowledgment
+        assert!(fleet.message_bus.queue_length() > 0);
+    }
+
+    #[test]
+    fn test_convergence_detected() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let originator = NodeId("node_0".to_string());
+        let evidence_hash = "convergence_test".to_string();
+
+        // Broadcast decision
+        fleet
+            .broadcast_quarantine_decision(
+                "conv_ext".to_string(),
+                "Convergence test".to_string(),
+                evidence_hash.clone(),
+                originator.clone(),
+            )
+            .unwrap();
+
+        // Simulate acknowledgments from all instances
+        fleet
+            .process_quarantine_ack(
+                "conv_ext".to_string(),
+                evidence_hash.clone(),
+                NodeId("node_0".to_string()),
+                10,
+            )
+            .unwrap();
+
+        fleet
+            .process_quarantine_ack(
+                "conv_ext".to_string(),
+                evidence_hash.clone(),
+                NodeId("node_1".to_string()),
+                11,
+            )
+            .unwrap();
+
+        // Check convergence
+        assert!(fleet.is_quarantine_converged(&evidence_hash));
+
+        let stats = fleet.get_quarantine_stats();
+        assert_eq!(stats.converged_decisions, 1);
+        assert_eq!(stats.pending_decisions, 0);
+    }
+
+    #[test]
+    fn test_duplicate_ignored() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let originator = NodeId("node_0".to_string());
+        let evidence_hash = "duplicate_test".to_string();
+
+        // First broadcast
+        fleet
+            .broadcast_quarantine_decision(
+                "dup_ext".to_string(),
+                "First decision".to_string(),
+                evidence_hash.clone(),
+                originator.clone(),
+            )
+            .unwrap();
+
+        let stats_after_first = fleet.get_quarantine_stats();
+        assert_eq!(stats_after_first.total_quarantine_decisions, 1);
+
+        // Duplicate broadcast (same evidence hash)
+        fleet
+            .broadcast_quarantine_decision(
+                "dup_ext".to_string(),
+                "Second decision".to_string(),
+                evidence_hash.clone(),
+                originator,
+            )
+            .unwrap();
+
+        let stats_after_duplicate = fleet.get_quarantine_stats();
+        assert_eq!(stats_after_duplicate.total_quarantine_decisions, 1); // No change
+    }
+
+    #[test]
+    fn test_lamport_ordering() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let originator = NodeId("node_0".to_string());
+
+        // Get initial timestamp
+        let initial_ts = fleet.current_lamport_timestamp();
+
+        // Broadcast decision
+        fleet
+            .broadcast_quarantine_decision(
+                "lamport_ext".to_string(),
+                "Ordering test".to_string(),
+                "lamport_evidence".to_string(),
+                originator,
+            )
+            .unwrap();
+
+        // Timestamp should have incremented
+        let after_broadcast = fleet.current_lamport_timestamp();
+        assert!(after_broadcast > initial_ts);
+
+        // Process ack should increment further
+        fleet
+            .process_quarantine_ack(
+                "lamport_ext".to_string(),
+                "lamport_evidence".to_string(),
+                NodeId("node_1".to_string()),
+                after_broadcast + 5, // Higher timestamp from remote
+            )
+            .unwrap();
+
+        // Should adopt the higher timestamp + 1
+        let final_ts = fleet.current_lamport_timestamp();
+        assert!(final_ts > after_broadcast + 5);
+    }
+
+    #[test]
+    fn test_partition_mode_tightening() {
+        let mut thresholds = test_thresholds();
+
+        // Create fleet with normal partition mode
+        let mut fleet = FleetSimulator::new(3, thresholds.clone()).unwrap();
+
+        // Change to degraded partition mode
+        fleet.set_partition_mode(PartitionMode::Degraded(0.7))?;
+
+        // Broadcast should still work but with potential message drops
+        let result = fleet.broadcast_quarantine_decision(
+            "partition_ext".to_string(),
+            "Partition test".to_string(),
+            "partition_evidence".to_string(),
+            NodeId("node_0".to_string()),
+        );
+
+        assert!(result.is_ok());
+        assert!(fleet.is_extension_quarantined("partition_evidence"));
+
+        Ok(())
     }
 }

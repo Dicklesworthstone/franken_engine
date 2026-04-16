@@ -254,6 +254,23 @@ impl Default for ExceptionPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// SecurityReviewAttestation — proof of security review for exceptions
+// ---------------------------------------------------------------------------
+
+/// Attestation that a security review was performed for a release gate exception.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityReviewAttestation {
+    /// Identity of the reviewer who performed the security review.
+    pub reviewer_identity: String,
+    /// Timestamp when the review was completed (ISO 8601 format).
+    pub review_timestamp: String,
+    /// Signed hash of the release artifact and exception justification.
+    pub signed_hash: String,
+    /// Digital signature of the reviewer.
+    pub reviewer_signature: String,
+}
+
+// ---------------------------------------------------------------------------
 // ReleaseGate — the gate runner
 // ---------------------------------------------------------------------------
 
@@ -355,12 +372,16 @@ impl ReleaseGate {
         result: &mut ReleaseGateResult,
         justification: &str,
         adr_reference: Option<&str>,
+        security_review: Option<SecurityReviewAttestation>,
     ) -> Result<(), String> {
         if !self.exception_policy.allow_exceptions {
             return Err("exception policy does not allow overrides".to_string());
         }
         if self.exception_policy.requires_adr_reference && adr_reference.is_none() {
             return Err("ADR reference required for exception".to_string());
+        }
+        if self.exception_policy.requires_security_review && security_review.is_none() {
+            return Err("security review attestation required for exception".to_string());
         }
         if justification.is_empty() {
             return Err("justification required for exception".to_string());
@@ -371,7 +392,9 @@ impl ReleaseGate {
 
         result.exception_applied = true;
         result.exception_justification = justification.to_string();
-        result.verdict = Verdict::Pass;
+        result.verdict = Verdict::PassWithException {
+            justification: justification.to_string(),
+        };
         // Recompute digest after exception override.
         result.result_digest = Self::compute_result_digest(result);
         Ok(())
@@ -787,6 +810,10 @@ fn append_verdict(buf: &mut Vec<u8>, verdict: &Verdict) {
             buf.push(1);
             append_len_prefixed(buf, reason.as_bytes());
         }
+        Verdict::PassWithException { justification } => {
+            buf.push(2);
+            append_len_prefixed(buf, justification.as_bytes());
+        }
     }
 }
 
@@ -990,7 +1017,7 @@ mod tests {
         };
 
         let err = gate
-            .apply_exception(&mut result, "need to ship", Some("ADR-001"))
+            .apply_exception(&mut result, "need to ship", Some("ADR-001"), None)
             .unwrap_err();
         assert!(err.contains("does not allow"));
         assert!(!result.exception_applied);
@@ -1020,7 +1047,7 @@ mod tests {
         };
 
         let err = gate
-            .apply_exception(&mut result, "need to ship", None)
+            .apply_exception(&mut result, "need to ship", None, None)
             .unwrap_err();
         assert!(err.contains("ADR reference"));
     }
@@ -1048,7 +1075,9 @@ mod tests {
             result_digest: String::new(),
         };
 
-        let err = gate.apply_exception(&mut result, "", None).unwrap_err();
+        let err = gate
+            .apply_exception(&mut result, "", None, None)
+            .unwrap_err();
         assert!(err.contains("justification"));
     }
 
@@ -1075,10 +1104,20 @@ mod tests {
             result_digest: String::new(),
         };
 
-        gate.apply_exception(&mut result, "Critical hotfix needed", Some("ADR-2026-002"))
-            .unwrap();
+        gate.apply_exception(
+            &mut result,
+            "Critical hotfix needed",
+            Some("ADR-2026-002"),
+            None,
+        )
+        .unwrap();
         assert!(result.exception_applied);
-        assert_eq!(result.verdict, Verdict::Pass);
+        assert_eq!(
+            result.verdict,
+            Verdict::PassWithException {
+                justification: "Critical hotfix needed".to_string()
+            }
+        );
         assert_eq!(result.exception_justification, "Critical hotfix needed");
     }
 
@@ -1729,7 +1768,8 @@ mod tests {
         };
 
         let digest_before = result.result_digest.clone();
-        gate.apply_exception(&mut result, "hotfix", None).unwrap();
+        gate.apply_exception(&mut result, "hotfix", None, None)
+            .unwrap();
         assert_ne!(result.result_digest, digest_before);
     }
 
@@ -1969,7 +2009,7 @@ mod tests {
         };
         // Security review is required but the exception still applies
         // (the requires_security_review flag is advisory in the current impl).
-        gate.apply_exception(&mut result, "critical hotfix", None)
+        gate.apply_exception(&mut result, "critical hotfix", None, None)
             .unwrap();
         assert!(result.exception_applied);
     }
@@ -2078,7 +2118,7 @@ mod tests {
             gate_events: Vec::new(),
             result_digest: "orig".into(),
         };
-        gate.apply_exception(&mut result, "not needed", None)
+        gate.apply_exception(&mut result, "not needed", None, None)
             .unwrap();
         // Exception on a passing result is a true noop — no state mutated.
         assert!(!result.exception_applied);
@@ -2362,7 +2402,7 @@ mod tests {
             gate_events: Vec::new(),
             result_digest: String::new(),
         };
-        gate.apply_exception(&mut result, "critical CVE fix", None)
+        gate.apply_exception(&mut result, "critical CVE fix", None, None)
             .unwrap();
         assert!(result.exception_applied);
         let json = serde_json::to_string(&result).unwrap();
@@ -2477,8 +2517,145 @@ mod tests {
             result_digest: "original-digest".to_string(),
         };
         let original_digest = result.result_digest.clone();
-        gate.apply_exception(&mut result, "test", None).unwrap();
+        gate.apply_exception(&mut result, "test", None, None)
+            .unwrap();
         assert_eq!(result.result_digest, original_digest);
         assert!(!result.exception_applied);
+    }
+
+    #[test]
+    fn exception_requires_security_review_no_attestation_fails() {
+        let policy = ExceptionPolicy {
+            allow_exceptions: true,
+            requires_adr_reference: false,
+            requires_security_review: true,
+            max_exception_hours: 72,
+        };
+        let gate = ReleaseGate::with_exception_policy(42, policy);
+        let mut result = ReleaseGateResult {
+            seed: 42,
+            checks: Vec::new(),
+            verdict: Verdict::Fail {
+                reason: "test failure".to_string(),
+            },
+            total_checks: 1,
+            passed_checks: 0,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: Vec::new(),
+            result_digest: String::new(),
+        };
+
+        let err = gate
+            .apply_exception(&mut result, "critical hotfix", None, None)
+            .unwrap_err();
+        assert!(err.contains("security review attestation required"));
+        assert!(!result.exception_applied);
+    }
+
+    #[test]
+    fn exception_requires_security_review_with_attestation_succeeds() {
+        let policy = ExceptionPolicy {
+            allow_exceptions: true,
+            requires_adr_reference: false,
+            requires_security_review: true,
+            max_exception_hours: 72,
+        };
+        let gate = ReleaseGate::with_exception_policy(42, policy);
+        let mut result = ReleaseGateResult {
+            seed: 42,
+            checks: Vec::new(),
+            verdict: Verdict::Fail {
+                reason: "test failure".to_string(),
+            },
+            total_checks: 1,
+            passed_checks: 0,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: Vec::new(),
+            result_digest: String::new(),
+        };
+
+        let attestation = SecurityReviewAttestation {
+            reviewer_identity: "security-team@example.com".to_string(),
+            review_timestamp: "2026-04-16T12:00:00Z".to_string(),
+            signed_hash: "sha256:abc123...".to_string(),
+            reviewer_signature: "sig:def456...".to_string(),
+        };
+
+        gate.apply_exception(&mut result, "critical CVE fix", None, Some(attestation))
+            .unwrap();
+        assert!(result.exception_applied);
+        assert_eq!(
+            result.verdict,
+            Verdict::PassWithException {
+                justification: "critical CVE fix".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exception_no_security_review_required_succeeds_without_attestation() {
+        let policy = ExceptionPolicy {
+            allow_exceptions: true,
+            requires_adr_reference: false,
+            requires_security_review: false,
+            max_exception_hours: 72,
+        };
+        let gate = ReleaseGate::with_exception_policy(42, policy);
+        let mut result = ReleaseGateResult {
+            seed: 42,
+            checks: Vec::new(),
+            verdict: Verdict::Fail {
+                reason: "test failure".to_string(),
+            },
+            total_checks: 1,
+            passed_checks: 0,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: Vec::new(),
+            result_digest: String::new(),
+        };
+
+        gate.apply_exception(&mut result, "urgent hotfix", None, None)
+            .unwrap();
+        assert!(result.exception_applied);
+        assert_eq!(
+            result.verdict,
+            Verdict::PassWithException {
+                justification: "urgent hotfix".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn pass_with_exception_verdict_display() {
+        let verdict = Verdict::PassWithException {
+            justification: "emergency fix".to_string(),
+        };
+        assert_eq!(verdict.to_string(), "PASS (exception: emergency fix)");
+    }
+
+    #[test]
+    fn pass_with_exception_verdict_serialization() {
+        let verdict = Verdict::PassWithException {
+            justification: "test exception".to_string(),
+        };
+        let json = serde_json::to_string(&verdict).unwrap();
+        let back: Verdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(verdict, back);
+    }
+
+    #[test]
+    fn security_review_attestation_serde_roundtrip() {
+        let attestation = SecurityReviewAttestation {
+            reviewer_identity: "reviewer@example.com".to_string(),
+            review_timestamp: "2026-04-16T12:00:00Z".to_string(),
+            signed_hash: "sha256:abc123".to_string(),
+            reviewer_signature: "sig:def456".to_string(),
+        };
+        let json = serde_json::to_string(&attestation).unwrap();
+        let back: SecurityReviewAttestation = serde_json::from_str(&json).unwrap();
+        assert_eq!(attestation, back);
     }
 }

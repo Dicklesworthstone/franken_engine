@@ -201,6 +201,7 @@ pub struct LabEvent {
 pub enum Verdict {
     Pass,
     Fail { reason: String },
+    PassWithException { justification: String },
 }
 
 impl fmt::Display for Verdict {
@@ -208,6 +209,9 @@ impl fmt::Display for Verdict {
         match self {
             Self::Pass => write!(f, "PASS"),
             Self::Fail { reason } => write!(f, "FAIL: {reason}"),
+            Self::PassWithException { justification } => {
+                write!(f, "PASS (exception: {justification})")
+            }
         }
     }
 }

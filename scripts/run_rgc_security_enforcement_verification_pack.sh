@@ -306,10 +306,10 @@ write_trace_ids() {
 {
   "schema_version": "franken-engine.rgc-security-enforcement-verification-pack.trace-ids.v1",
   "bead_id": "bd-1lsy.11.9",
-  "component": "${component}",
-  "policy_id": "${policy_id}",
-  "trace_ids": ["${trace_id}"],
-  "decision_ids": ["${decision_id}"]
+  "component": "$(parser_frontier_json_escape "${component}")",
+  "policy_id": "$(parser_frontier_json_escape "${policy_id}")",
+  "trace_ids": ["$(parser_frontier_json_escape "${trace_id}")"],
+  "decision_ids": ["$(parser_frontier_json_escape "${decision_id}")"]
 }
 EOF_TRACE
 }
@@ -344,26 +344,26 @@ write_manifest() {
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
   {
-    echo "{\"schema_version\":\"franken-engine.rgc-security-enforcement-verification-pack.event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"gate_completed\",\"scenario_id\":\"${scenario_id}\",\"attack_class\":\"matrix\",\"path_type\":\"golden\",\"replay_command\":\"${replay_command}\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
+    echo "{\"schema_version\":\"franken-engine.rgc-security-enforcement-verification-pack.event.v1\",\"trace_id\":\"$(parser_frontier_json_escape "${trace_id}")\",\"decision_id\":\"$(parser_frontier_json_escape "${decision_id}")\",\"policy_id\":\"$(parser_frontier_json_escape "${policy_id}")\",\"component\":\"$(parser_frontier_json_escape "${component}")\",\"event\":\"gate_completed\",\"scenario_id\":\"$(parser_frontier_json_escape "${scenario_id}")\",\"attack_class\":\"matrix\",\"path_type\":\"golden\",\"replay_command\":\"$(parser_frontier_json_escape "${replay_command}")\",\"outcome\":\"$(parser_frontier_json_escape "${outcome}")\",\"error_code\":${error_code_json}}"
   } >"$events_path"
 
   {
     echo "{"
     echo '  "schema_version": "franken-engine.rgc-security-enforcement-verification-pack.run-manifest.v1",'
     echo '  "bead_id": "bd-1lsy.11.9",'
-    echo "  \"component\": \"${component}\"," 
-    echo "  \"scenario_id\": \"${scenario_id}\"," 
-    echo "  \"mode\": \"${mode}\"," 
-    echo "  \"toolchain\": \"${toolchain}\"," 
-    echo "  \"cargo_target_dir\": \"${target_dir}\"," 
+    echo "  \"component\": \"$(parser_frontier_json_escape "${component}")\","
+    echo "  \"scenario_id\": \"$(parser_frontier_json_escape "${scenario_id}")\","
+    echo "  \"mode\": \"$(parser_frontier_json_escape "${mode}")\","
+    echo "  \"toolchain\": \"$(parser_frontier_json_escape "${toolchain}")\","
+    echo "  \"cargo_target_dir\": \"$(parser_frontier_json_escape "${target_dir}")\","
     echo "  \"rch_exec_timeout_seconds\": ${rch_timeout_seconds},"
-    echo "  \"trace_id\": \"${trace_id}\"," 
-    echo "  \"decision_id\": \"${decision_id}\"," 
-    echo "  \"policy_id\": \"${policy_id}\"," 
-    echo "  \"git_commit\": \"${git_commit}\"," 
+    echo "  \"trace_id\": \"$(parser_frontier_json_escape "${trace_id}")\","
+    echo "  \"decision_id\": \"$(parser_frontier_json_escape "${decision_id}")\","
+    echo "  \"policy_id\": \"$(parser_frontier_json_escape "${policy_id}")\","
+    echo "  \"git_commit\": \"$(parser_frontier_json_escape "${git_commit}")\","
     echo "  \"dirty_worktree\": ${dirty_worktree},"
-    echo "  \"generated_at_utc\": \"${timestamp}\"," 
-    echo "  \"outcome\": \"${outcome}\"," 
+    echo "  \"generated_at_utc\": \"$(parser_frontier_json_escape "${timestamp}")\","
+    echo "  \"outcome\": \"$(parser_frontier_json_escape "${outcome}")\","
     if [[ -n "$failed_command" ]]; then
       echo "  \"failed_command\": \"$(parser_frontier_json_escape "${failed_command}")\"," 
     fi
@@ -390,28 +390,28 @@ write_manifest() {
     done
     echo '  ],'
     echo '  "artifacts": {'
-    echo "    \"manifest\": \"${manifest_path}\","
-    echo '    "trace_ids": "'"${trace_ids_path}"'",'
-    echo "    \"events\": \"${events_path}\","
-    echo "    \"commands\": \"${commands_path}\","
-    echo "    \"step_logs_dir\": \"${step_logs_dir}\","
-    echo "    \"report\": \"${report_path}\","
+    echo "    \"manifest\": \"$(parser_frontier_json_escape "${manifest_path}")\","
+    echo "    \"trace_ids\": \"$(parser_frontier_json_escape "${trace_ids_path}")\","
+    echo "    \"events\": \"$(parser_frontier_json_escape "${events_path}")\","
+    echo "    \"commands\": \"$(parser_frontier_json_escape "${commands_path}")\","
+    echo "    \"step_logs_dir\": \"$(parser_frontier_json_escape "${step_logs_dir}")\","
+    echo "    \"report\": \"$(parser_frontier_json_escape "${report_path}")\","
     echo '    "contract_doc": "docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md",'
     echo '    "contract_json": "docs/rgc_security_enforcement_verification_pack_v1.json",'
     echo '    "vectors_json": "docs/rgc_security_enforcement_verification_vectors_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/rgc_security_enforcement_verification_pack.rs"'
     echo '  },'
     echo '  "operator_verification": ['
-    echo "    \"cat ${manifest_path}\"," 
-    echo "    \"cat ${trace_ids_path}\","
-    echo "    \"cat ${events_path}\"," 
-    echo "    \"cat ${commands_path}\"," 
-    echo "    \"cat ${step_logs_dir}/step_000.log\","
-    echo "    \"cat ${report_path}\"," 
+    echo "    \"$(parser_frontier_json_escape "cat ${manifest_path}")\","
+    echo "    \"$(parser_frontier_json_escape "cat ${trace_ids_path}")\","
+    echo "    \"$(parser_frontier_json_escape "cat ${events_path}")\","
+    echo "    \"$(parser_frontier_json_escape "cat ${commands_path}")\","
+    echo "    \"$(parser_frontier_json_escape "cat ${step_logs_dir}/step_000.log")\","
+    echo "    \"$(parser_frontier_json_escape "cat ${report_path}")\","
     echo '    "jq empty docs/rgc_security_enforcement_verification_pack_v1.json",'
     echo '    "jq empty docs/rgc_security_enforcement_verification_vectors_v1.json",'
     echo '    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_rgc_security_enforcement_verification_pack_verify\" cargo test -p frankenengine-engine --test rgc_security_enforcement_verification_pack",'
-    echo "    \"${replay_command}\""
+    echo "    \"$(parser_frontier_json_escape "${replay_command}")\""
     echo '  ]'
     echo "}"
   } >"$manifest_path"

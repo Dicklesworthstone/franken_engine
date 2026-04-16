@@ -454,13 +454,52 @@ fn rgc_059_gate_script_emits_trace_ids_and_manifest_references_it() {
         "gate script must emit a trace_ids artifact"
     );
     assert!(
-        script.contains("\"trace_ids\": \"${trace_ids_path}\""),
-        "run manifest must publish the trace_ids artifact path"
+        script.contains(r#"parser_frontier_json_escape "${trace_ids_path}""#),
+        "run manifest must publish the trace_ids artifact path with JSON escaping"
     );
     assert!(
         script.contains("cat ${trace_ids_path}"),
         "operator verification must surface the trace_ids artifact"
     );
+}
+
+#[test]
+fn rgc_059_gate_script_escapes_manifest_and_event_strings() {
+    let script = read_gate_script();
+
+    for escaped_value in [
+        r#"parser_frontier_json_escape "${component}""#,
+        r#"parser_frontier_json_escape "${policy_id}""#,
+        r#"parser_frontier_json_escape "${trace_id}""#,
+        r#"parser_frontier_json_escape "${decision_id}""#,
+        r#"parser_frontier_json_escape "${scenario_id}""#,
+        r#"parser_frontier_json_escape "${target_dir}""#,
+        r#"parser_frontier_json_escape "${manifest_path}""#,
+        r#"parser_frontier_json_escape "${events_path}""#,
+        r#"parser_frontier_json_escape "${commands_path}""#,
+        r#"parser_frontier_json_escape "${step_logs_dir}""#,
+        r#"parser_frontier_json_escape "${report_path}""#,
+        r#"parser_frontier_json_escape "${replay_command}""#,
+    ] {
+        assert!(
+            script.contains(escaped_value),
+            "gate script should JSON-escape manifest/event field: {escaped_value}"
+        );
+    }
+
+    for escaped_operator_command in [
+        r#"parser_frontier_json_escape "cat ${manifest_path}""#,
+        r#"parser_frontier_json_escape "cat ${trace_ids_path}""#,
+        r#"parser_frontier_json_escape "cat ${events_path}""#,
+        r#"parser_frontier_json_escape "cat ${commands_path}""#,
+        r#"parser_frontier_json_escape "cat ${step_logs_dir}/step_000.log""#,
+        r#"parser_frontier_json_escape "cat ${report_path}""#,
+    ] {
+        assert!(
+            script.contains(escaped_operator_command),
+            "operator verification commands should be JSON-escaped: {escaped_operator_command}"
+        );
+    }
 }
 
 #[test]

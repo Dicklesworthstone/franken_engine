@@ -889,6 +889,47 @@ fn observe_conditional_exports_condition_order_behavior(mode: CompatibilityMode)
     "resolve_condition_import_require_default".to_string()
 }
 
+fn observe_exports_fallback_target_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("fallback-pkg").with_export(
+            ".",
+            ExternalPackageExportTarget {
+                condition_targets: BTreeMap::new(),
+                fallback_target: Some("./dist/index.js".to_string()),
+            },
+        ))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "fallback-pkg/dist/index.js",
+            cjs_def("module.exports = 'fallback';"),
+        )
+        .unwrap();
+
+    for style in [ImportStyle::Import, ImportStyle::Require] {
+        let outcome = resolver
+            .resolve(
+                &ModuleRequest::new("fallback-pkg", style).with_compatibility_mode(mode),
+                &resolver_ctx(),
+                &allow_all(),
+            )
+            .unwrap_or_else(|error| {
+                panic!("exports fallback_target should resolve for style {style:?}: {error}")
+            });
+        assert_eq!(
+            outcome.module.canonical_specifier,
+            "fallback-pkg/dist/index.js"
+        );
+        assert_eq!(
+            outcome.module.probe_sequence,
+            vec!["fallback-pkg", "fallback-pkg/dist/index.js"]
+        );
+    }
+
+    "resolve_exports_via_fallback_target".to_string()
+}
+
 fn observe_dual_mode_exports_map_behavior(mode: CompatibilityMode) -> String {
     let mut resolver = DeterministicModuleResolver::default();
     resolver
@@ -960,21 +1001,42 @@ fn observe_exports_exact_over_wildcard_precedence_behavior(mode: CompatibilityMo
                 .with_export(".", export_target(&[("default", "./root.js")], None))
                 .with_export(
                     "./feature/*",
-                    export_target(&[("default", "./wild/*.js")], None),
+                    export_target(
+                        &[("import", "./wild/*.mjs"), ("require", "./wild/*.cjs")],
+                        None,
+                    ),
                 )
                 .with_export(
                     "./feature/exact",
-                    export_target(&[("default", "./exact/index.js")], None),
+                    export_target(
+                        &[
+                            ("import", "./exact/index.mjs"),
+                            ("require", "./exact/index.cjs"),
+                        ],
+                        None,
+                    ),
                 ),
         )
         .unwrap();
     resolver
-        .register_external_module("wild-pkg/wild/other.js", esm_def("export default 'wild';"))
+        .register_external_module("wild-pkg/wild/other.mjs", esm_def("export default 'wild';"))
         .unwrap();
     resolver
         .register_external_module(
-            "wild-pkg/exact/index.js",
+            "wild-pkg/wild/other.cjs",
+            cjs_def("module.exports = 'wild';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.mjs",
             esm_def("export default 'exact';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.cjs",
+            cjs_def("module.exports = 'exact';"),
         )
         .unwrap();
 
@@ -988,11 +1050,11 @@ fn observe_exports_exact_over_wildcard_precedence_behavior(mode: CompatibilityMo
         .expect("exact export entry should win over wildcard exports");
     assert_eq!(
         exact_outcome.module.canonical_specifier,
-        "wild-pkg/exact/index.js"
+        "wild-pkg/exact/index.mjs"
     );
     assert_eq!(
         exact_outcome.module.probe_sequence,
-        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.js"]
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.mjs"]
     );
 
     let wildcard_outcome = resolver
@@ -1005,11 +1067,45 @@ fn observe_exports_exact_over_wildcard_precedence_behavior(mode: CompatibilityMo
         .expect("wildcard export should still handle non-exact subpaths");
     assert_eq!(
         wildcard_outcome.module.canonical_specifier,
-        "wild-pkg/wild/other.js"
+        "wild-pkg/wild/other.mjs"
     );
     assert_eq!(
         wildcard_outcome.module.probe_sequence,
-        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.js"]
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.mjs"]
+    );
+
+    let exact_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/exact", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("exact export entry should also win for require()");
+    assert_eq!(
+        exact_require_outcome.module.canonical_specifier,
+        "wild-pkg/exact/index.cjs"
+    );
+    assert_eq!(
+        exact_require_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.cjs"]
+    );
+
+    let wildcard_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/other", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("wildcard export should still handle non-exact require() subpaths");
+    assert_eq!(
+        wildcard_require_outcome.module.canonical_specifier,
+        "wild-pkg/wild/other.cjs"
+    );
+    assert_eq!(
+        wildcard_require_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.cjs"]
     );
 
     "prefer_exact_exports_over_wildcard".to_string()
@@ -1024,17 +1120,29 @@ fn observe_scoped_exports_more_specific_wildcard_precedence_behavior(
             ExternalPackageDefinition::new("@scope/wild-pkg")
                 .with_export(
                     "./feature/*",
-                    export_target(&[("default", "./general/*.js")], None),
+                    export_target(
+                        &[
+                            ("import", "./general/*.mjs"),
+                            ("require", "./general/*.cjs"),
+                        ],
+                        None,
+                    ),
                 )
                 .with_export(
                     "./feature/internal/*",
-                    export_target(&[("default", "./internal/*.mjs")], None),
+                    export_target(
+                        &[
+                            ("import", "./internal/*.mjs"),
+                            ("require", "./internal/*.cjs"),
+                        ],
+                        None,
+                    ),
                 ),
         )
         .unwrap();
     resolver
         .register_external_module(
-            "@scope/wild-pkg/general/button.js",
+            "@scope/wild-pkg/general/button.mjs",
             esm_def("export default 'general';"),
         )
         .unwrap();
@@ -1042,6 +1150,18 @@ fn observe_scoped_exports_more_specific_wildcard_precedence_behavior(
         .register_external_module(
             "@scope/wild-pkg/internal/secret.mjs",
             esm_def("export default 'internal';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/general/button.cjs",
+            cjs_def("module.exports = 'general';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/internal/secret.cjs",
+            cjs_def("module.exports = 'internal';"),
         )
         .unwrap();
 
@@ -1078,13 +1198,56 @@ fn observe_scoped_exports_more_specific_wildcard_precedence_behavior(
         .expect("general scoped wildcard export should still resolve unmatched subpaths");
     assert_eq!(
         general_outcome.module.canonical_specifier,
-        "@scope/wild-pkg/general/button.js"
+        "@scope/wild-pkg/general/button.mjs"
     );
     assert_eq!(
         general_outcome.module.probe_sequence,
         vec![
             "@scope/wild-pkg/feature/button",
-            "@scope/wild-pkg/general/button.js",
+            "@scope/wild-pkg/general/button.mjs",
+        ]
+    );
+
+    let internal_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new(
+                "@scope/wild-pkg/feature/internal/secret",
+                ImportStyle::Require,
+            )
+            .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("more specific scoped wildcard export should also win for require()");
+    assert_eq!(
+        internal_require_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/internal/secret.cjs"
+    );
+    assert_eq!(
+        internal_require_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/internal/secret",
+            "@scope/wild-pkg/internal/secret.cjs",
+        ]
+    );
+
+    let general_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("@scope/wild-pkg/feature/button", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("general scoped wildcard export should still resolve unmatched require() subpaths");
+    assert_eq!(
+        general_require_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/general/button.cjs"
+    );
+    assert_eq!(
+        general_require_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/button",
+            "@scope/wild-pkg/general/button.cjs",
         ]
     );
 
@@ -2659,6 +2822,29 @@ fn default_matrix_pins_exports_map_contracts() {
             .contains(&"lockstep/module/conditional-exports-condition-order".to_string())
     );
 
+    let fallback_target = m
+        .entry("exports-fallback-target")
+        .expect("default matrix should include exports fallback target case");
+    assert_eq!(fallback_target.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        fallback_target.node_behavior,
+        "resolve_exports_via_fallback_target"
+    );
+    assert_eq!(
+        fallback_target.franken_native_behavior,
+        "resolve_exports_via_fallback_target"
+    );
+    assert_eq!(
+        fallback_target.franken_bun_compat_behavior,
+        "resolve_exports_via_fallback_target"
+    );
+    assert!(fallback_target.explicit_shims.is_empty());
+    assert!(
+        fallback_target
+            .lockstep_case_refs
+            .contains(&"lockstep/module/exports-fallback-target".to_string())
+    );
+
     let dual_mode = m
         .entry("dual-mode-exports-map")
         .expect("default matrix should include dual-mode exports map case");
@@ -3687,6 +3873,35 @@ fn conditional_exports_condition_order_behavior_matches_matrix_contract_across_m
             .expect(
                 "conditional exports condition-order behavior should match the matrix contract",
             );
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn exports_fallback_target_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_exports_fallback_target_behavior(mode);
+        assert_eq!(observed_behavior, "resolve_exports_via_fallback_target");
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-fallback-target",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .expect("exports fallback_target behavior should match the matrix contract");
         assert!(outcome.matched);
     }
 }

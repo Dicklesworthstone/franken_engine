@@ -176,6 +176,24 @@
       "divergence": null
     },
     {
+      "case_id": "exports-fallback-target",
+      "feature": "conditional_exports",
+      "scenario": "A package exports entry with no matching condition keys must resolve through its explicit fallback target for both import and require.",
+      "node_behavior": "resolve_exports_via_fallback_target",
+      "bun_behavior": "resolve_exports_via_fallback_target",
+      "franken_native_behavior": "resolve_exports_via_fallback_target",
+      "franken_node_compat_behavior": "resolve_exports_via_fallback_target",
+      "franken_bun_compat_behavior": "resolve_exports_via_fallback_target",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/exports-fallback-target"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
+      ],
+      "divergence": null
+    },
+    {
       "case_id": "dual-mode-exports-map",
       "feature": "dual_mode",
       "scenario": "A dual-mode package defines both import and require targets via exports map.",

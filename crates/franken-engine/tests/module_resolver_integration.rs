@@ -1474,21 +1474,42 @@ fn external_package_exact_export_precedes_wildcard_export() {
                 .with_export(".", export_target(&[("default", "./root.js")], None))
                 .with_export(
                     "./feature/*",
-                    export_target(&[("default", "./wild/*.js")], None),
+                    export_target(
+                        &[("import", "./wild/*.mjs"), ("require", "./wild/*.cjs")],
+                        None,
+                    ),
                 )
                 .with_export(
                     "./feature/exact",
-                    export_target(&[("default", "./exact/index.js")], None),
+                    export_target(
+                        &[
+                            ("import", "./exact/index.mjs"),
+                            ("require", "./exact/index.cjs"),
+                        ],
+                        None,
+                    ),
                 ),
         )
         .unwrap();
     resolver
-        .register_external_module("wild-pkg/wild/other.js", esm_def("export default 'wild';"))
+        .register_external_module("wild-pkg/wild/other.mjs", esm_def("export default 'wild';"))
         .unwrap();
     resolver
         .register_external_module(
-            "wild-pkg/exact/index.js",
+            "wild-pkg/wild/other.cjs",
+            cjs_def("module.exports = 'wild';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.mjs",
             esm_def("export default 'exact';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.cjs",
+            cjs_def("module.exports = 'exact';"),
         )
         .unwrap();
 
@@ -1501,12 +1522,13 @@ fn external_package_exact_export_precedes_wildcard_export() {
         .expect("exact export entry should win over wildcard exports");
     assert_eq!(
         exact_outcome.module.canonical_specifier,
-        "wild-pkg/exact/index.js"
+        "wild-pkg/exact/index.mjs"
     );
     assert_eq!(
         exact_outcome.module.probe_sequence,
-        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.js"]
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.mjs"]
     );
+    assert_eq!(exact_outcome.module.record.syntax, ModuleSyntax::EsModule);
 
     let wildcard_outcome = resolver
         .resolve(
@@ -1517,11 +1539,55 @@ fn external_package_exact_export_precedes_wildcard_export() {
         .expect("wildcard export should still handle non-exact subpaths");
     assert_eq!(
         wildcard_outcome.module.canonical_specifier,
-        "wild-pkg/wild/other.js"
+        "wild-pkg/wild/other.mjs"
     );
     assert_eq!(
         wildcard_outcome.module.probe_sequence,
-        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.js"]
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.mjs"]
+    );
+    assert_eq!(
+        wildcard_outcome.module.record.syntax,
+        ModuleSyntax::EsModule
+    );
+
+    let exact_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/exact", ImportStyle::Require),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("exact export entry should also win for require()");
+    assert_eq!(
+        exact_require_outcome.module.canonical_specifier,
+        "wild-pkg/exact/index.cjs"
+    );
+    assert_eq!(
+        exact_require_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.cjs"]
+    );
+    assert_eq!(
+        exact_require_outcome.module.record.syntax,
+        ModuleSyntax::CommonJs
+    );
+
+    let wildcard_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/other", ImportStyle::Require),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("wildcard export should still handle non-exact require() subpaths");
+    assert_eq!(
+        wildcard_require_outcome.module.canonical_specifier,
+        "wild-pkg/wild/other.cjs"
+    );
+    assert_eq!(
+        wildcard_require_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.cjs"]
+    );
+    assert_eq!(
+        wildcard_require_outcome.module.record.syntax,
+        ModuleSyntax::CommonJs
     );
 }
 
@@ -1533,17 +1599,29 @@ fn scoped_external_package_more_specific_wildcard_export_wins() {
             ExternalPackageDefinition::new("@scope/wild-pkg")
                 .with_export(
                     "./feature/*",
-                    export_target(&[("default", "./general/*.js")], None),
+                    export_target(
+                        &[
+                            ("import", "./general/*.mjs"),
+                            ("require", "./general/*.cjs"),
+                        ],
+                        None,
+                    ),
                 )
                 .with_export(
                     "./feature/internal/*",
-                    export_target(&[("default", "./internal/*.mjs")], None),
+                    export_target(
+                        &[
+                            ("import", "./internal/*.mjs"),
+                            ("require", "./internal/*.cjs"),
+                        ],
+                        None,
+                    ),
                 ),
         )
         .unwrap();
     resolver
         .register_external_module(
-            "@scope/wild-pkg/general/button.js",
+            "@scope/wild-pkg/general/button.mjs",
             esm_def("export default 'general';"),
         )
         .unwrap();
@@ -1551,6 +1629,18 @@ fn scoped_external_package_more_specific_wildcard_export_wins() {
         .register_external_module(
             "@scope/wild-pkg/internal/secret.mjs",
             esm_def("export default 'internal';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/general/button.cjs",
+            cjs_def("module.exports = 'general';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/internal/secret.cjs",
+            cjs_def("module.exports = 'internal';"),
         )
         .unwrap();
 
@@ -1575,6 +1665,10 @@ fn scoped_external_package_more_specific_wildcard_export_wins() {
             "@scope/wild-pkg/internal/secret.mjs",
         ]
     );
+    assert_eq!(
+        internal_outcome.module.record.syntax,
+        ModuleSyntax::EsModule
+    );
 
     let general_outcome = resolver
         .resolve(
@@ -1585,14 +1679,64 @@ fn scoped_external_package_more_specific_wildcard_export_wins() {
         .expect("general scoped wildcard export should still resolve unmatched subpaths");
     assert_eq!(
         general_outcome.module.canonical_specifier,
-        "@scope/wild-pkg/general/button.js"
+        "@scope/wild-pkg/general/button.mjs"
     );
     assert_eq!(
         general_outcome.module.probe_sequence,
         vec![
             "@scope/wild-pkg/feature/button",
-            "@scope/wild-pkg/general/button.js",
+            "@scope/wild-pkg/general/button.mjs",
         ]
+    );
+    assert_eq!(general_outcome.module.record.syntax, ModuleSyntax::EsModule);
+
+    let internal_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new(
+                "@scope/wild-pkg/feature/internal/secret",
+                ImportStyle::Require,
+            ),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("more specific scoped wildcard export should also win for require()");
+    assert_eq!(
+        internal_require_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/internal/secret.cjs"
+    );
+    assert_eq!(
+        internal_require_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/internal/secret",
+            "@scope/wild-pkg/internal/secret.cjs",
+        ]
+    );
+    assert_eq!(
+        internal_require_outcome.module.record.syntax,
+        ModuleSyntax::CommonJs
+    );
+
+    let general_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("@scope/wild-pkg/feature/button", ImportStyle::Require),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("general scoped wildcard export should still resolve unmatched require() subpaths");
+    assert_eq!(
+        general_require_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/general/button.cjs"
+    );
+    assert_eq!(
+        general_require_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/button",
+            "@scope/wild-pkg/general/button.cjs",
+        ]
+    );
+    assert_eq!(
+        general_require_outcome.module.record.syntax,
+        ModuleSyntax::CommonJs
     );
 }
 

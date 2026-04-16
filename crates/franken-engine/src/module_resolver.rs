@@ -2705,6 +2705,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn package_exports_fallback_target_resolves_when_no_condition_matches() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_package(ExternalPackageDefinition::new("fallback-pkg").with_export(
+                ".",
+                ExternalPackageExportTarget {
+                    condition_targets: BTreeMap::new(),
+                    fallback_target: Some("./dist/index.js".to_string()),
+                },
+            ))
+            .unwrap();
+        resolver
+            .register_external_module(
+                "fallback-pkg/dist/index.js",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 'fallback';"),
+            )
+            .unwrap();
+
+        for style in [ImportStyle::Import, ImportStyle::Require] {
+            let outcome = resolver
+                .resolve(
+                    &ModuleRequest::new("fallback-pkg", style),
+                    &context(),
+                    &AllowAllPolicy,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "fallback_target exports entry should resolve for style {style:?}: {error}"
+                    )
+                });
+            assert_eq!(
+                outcome.module.canonical_specifier,
+                "fallback-pkg/dist/index.js"
+            );
+            assert_eq!(
+                outcome.module.record.id,
+                "external:fallback-pkg/dist/index.js"
+            );
+            assert_eq!(
+                outcome.module.probe_sequence,
+                vec!["fallback-pkg", "fallback-pkg/dist/index.js"]
+            );
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Module not found
     // -----------------------------------------------------------------------

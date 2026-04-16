@@ -1056,18 +1056,26 @@ impl EvidenceLog {
             let value_hash = match value {
                 Value::Undefined => 0,
                 Value::Null => 1,
-                Value::Boolean(b) => 2 + (*b as u64),
-                Value::Number(n) => 4 + n.to_bits(),
-                Value::String(s) => {
+                Value::Bool(b) => 2 + (*b as u64),
+                Value::Int(i) => 4 + (*i as u64),
+                Value::Float(f) => 4 + f.0.to_bits(),
+                Value::Str(s) => {
                     let mut string_hash = 5u64;
                     for byte in s.bytes() {
                         string_hash = string_hash.wrapping_mul(31).wrapping_add(byte as u64);
                     }
                     string_hash
                 }
-                Value::Object(id) => 6 + (*id as u64),
+                Value::Object(id) => 6 + (id.0 as u64),
                 Value::Function(id) => 7 + (*id as u64),
                 Value::Closure(id) => 8 + (*id as u64),
+                Value::Iterator(id) => 9 + (*id as u64),
+                Value::GeneratorFunction(id) => 10 + (*id as u64),
+                Value::Generator(id) => 11 + (*id as u64),
+                Value::AsyncFunction(id) => 12 + (*id as u64),
+                Value::AsyncFunctionObject(id) => 13 + (*id as u64),
+                Value::Promise(id) => 14 + (*id as u64),
+                Value::BuiltinFunction(bf) => 15 + (bf.kind as u64),
             };
             hasher_state = hasher_state.wrapping_mul(31).wrapping_add(value_hash);
         }
@@ -2726,13 +2734,13 @@ impl InterpreterCore {
     fn handle_containment_action(&mut self, action: HookAction) -> Result<(), InterpreterError> {
         match action {
             HookAction::Allow => Ok(()),
-            HookAction::Challenge(token) => {
+            HookAction::Challenge(ref token) => {
                 // Pause execution, emit challenge token, require resolution before continuing
                 self.pending_challenges.push(token.clone());
                 self.emit_containment_evidence(&action);
                 Err(InterpreterError::ContainmentActionRequested {
                     action: "challenge".to_string(),
-                    reason: Some(token.token),
+                    reason: Some(token.token.clone()),
                 })
             }
             HookAction::Sandbox => {
@@ -2748,16 +2756,16 @@ impl InterpreterCore {
                 self.emit_containment_evidence(&action);
                 Ok(())
             }
-            HookAction::Terminate(reason) => {
+            HookAction::Terminate(ref reason) => {
                 // Abort extension execution, clean up resources, emit termination receipt
                 self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated { reason })
+                Err(InterpreterError::Terminated { reason: reason.clone() })
             }
-            HookAction::Quarantine(reason) => {
+            HookAction::Quarantine(ref reason) => {
                 // Terminate + mark extension for fleet-wide quarantine propagation
                 self.quarantined = true;
                 self.emit_containment_evidence(&action);
-                Err(InterpreterError::Terminated { reason })
+                Err(InterpreterError::Terminated { reason: reason.clone() })
             }
         }
     }
@@ -2797,35 +2805,36 @@ impl InterpreterCore {
             &self.registers,
         );
 
-        // Create traditional witness event for backward compatibility
+        // Create witness event with current structure
+        let payload_data = serde_json::json!({
+            "action": match action {
+                HookAction::Allow => "allow",
+                HookAction::Challenge(_) => "challenge",
+                HookAction::Sandbox => "sandbox",
+                HookAction::Suspend => "suspend",
+                HookAction::Terminate(_) => "terminate",
+                HookAction::Quarantine(_) => "quarantine",
+            },
+            "reason": match action {
+                HookAction::Challenge(token) => Some(token.token.clone()),
+                HookAction::Terminate(reason) => Some(reason.clone()),
+                HookAction::Quarantine(reason) => Some(reason.clone()),
+                _ => None,
+            },
+            "suspended": self.suspended,
+            "sandboxed": self.sandboxed,
+            "quarantined": self.quarantined,
+        });
+        let payload_bytes = serde_json::to_vec(&payload_data).unwrap_or_default();
         let evidence = WitnessEvent {
+            seq: self.witness_seq,
             kind: WitnessEventKind::ContainmentAction,
-            sequence: self.witness_seq,
-            ip: self.ip,
-            register_base: self.register_base,
-            data: serde_json::json!({
-                "action": match action {
-                    HookAction::Allow => "allow",
-                    HookAction::Challenge(_) => "challenge",
-                    HookAction::Sandbox => "sandbox",
-                    HookAction::Suspend => "suspend",
-                    HookAction::Terminate(_) => "terminate",
-                    HookAction::Quarantine(_) => "quarantine",
-                },
-                "reason": match action {
-                    HookAction::Challenge(token) => Some(token.token.clone()),
-                    HookAction::Terminate(reason) => Some(reason.clone()),
-                    HookAction::Quarantine(reason) => Some(reason.clone()),
-                    _ => None,
-                },
-                "timestamp": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                "suspended": self.suspended,
-                "sandboxed": self.sandboxed,
-                "quarantined": self.quarantined,
-            }),
+            instruction_index: self.ip as u32,
+            payload_hash: ContentHash::compute(&payload_bytes),
+            timestamp_tick: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         };
 
         self.containment_evidence.push(evidence.clone());
@@ -4453,40 +4462,92 @@ impl InterpreterCore {
                     return Ok(Value::Object(result_id));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
-                    let _awaited_promise = self.read_reg(promise_reg)?;
+                    let awaited_value = self.read_reg(promise_reg)?;
 
-                    // TODO: Implement proper async suspension and promise handling
-                    // For now, return a placeholder to get compilation working
-                    // This needs to:
-                    // 1. Save the current execution state
-                    // 2. Register continuation with the promise
-                    // 3. Yield control to the event loop
+                    // Convert the awaited value to a Promise if it's not already one
+                    let promise_handle = match awaited_value {
+                        Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                        _ => {
+                            // await non-promise: create a resolved promise with the value
+                            let js_val = Self::value_to_js_value(&awaited_value);
+                            let handle = self.promise_store.create();
+                            let label = crate::ifc_artifacts::Label::Public; // TODO: proper label propagation
+                            self.fulfill_promise(handle, js_val, label)?;
+                            handle
+                        }
+                    };
 
-                    return Err(InterpreterError::TypeError {
-                        expected: "complete async implementation".to_string(),
-                        got: "await instruction (not implemented yet)".to_string(),
-                    });
+                    // Check if the promise is already settled
+                    let promise_record = self.promise_store.get(promise_handle).map_err(|e| {
+                        InterpreterError::TypeError {
+                            expected: "valid promise".to_string(),
+                            got: e.to_string(),
+                        }
+                    })?;
+
+                    if promise_record.state.is_settled() {
+                        // Promise already settled - continue execution synchronously
+                        match &promise_record.state {
+                            crate::promise_model::PromiseState::Fulfilled(js_val) => {
+                                let result_value = Self::js_value_to_value(js_val);
+                                // Store result in a temporary register or continue with the value
+                                // For now, we'll need to figure out where to store the resolved value
+                                // This might need to be handled by the lowering pipeline
+                                self.ip += 1;
+                                return Ok(Value::Undefined); // Placeholder
+                            }
+                            crate::promise_model::PromiseState::Rejected(js_reason) => {
+                                let error_value = Self::js_value_to_value(js_reason);
+                                return Err(InterpreterError::UnhandledException {
+                                    value: error_value,
+                                });
+                            }
+                            crate::promise_model::PromiseState::Pending => {
+                                unreachable!("is_settled() returned true but state is Pending")
+                            }
+                        }
+                    } else {
+                        // Promise is pending - suspend execution
+                        // TODO: Implement async function suspension and microtask registration
+                        // This requires identifying which async function we're in and saving its state
+                        return Err(InterpreterError::TypeError {
+                            expected: "async function suspension".to_string(),
+                            got: "await pending promise (not fully implemented)".to_string(),
+                        });
+                    }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
-                    let _return_value = self.read_reg(value_reg)?;
+                    let return_value = self.read_reg(value_reg)?;
 
-                    // TODO: Implement async function return
-                    // This needs to resolve the result promise with the return value
+                    // Find the currently executing async function to get its result promise
+                    // TODO: We need a way to track which async function is currently executing
+                    // For now, we'll implement a basic version that assumes we're in an async context
 
+                    // This is a simplified implementation - in a full implementation, we'd need
+                    // to track the current async function context and resolve its result promise
+                    let js_val = Self::value_to_js_value(&return_value);
+
+                    // For now, return an error indicating this needs more context tracking
                     return Err(InterpreterError::TypeError {
-                        expected: "complete async implementation".to_string(),
-                        got: "async return instruction (not implemented yet)".to_string(),
+                        expected: "async function context tracking".to_string(),
+                        got: "async return without context (partially implemented)".to_string(),
                     });
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
-                    let _error_value = self.read_reg(error_reg)?;
+                    let error_value = self.read_reg(error_reg)?;
 
-                    // TODO: Implement async function throw
-                    // This needs to reject the result promise with the error value
+                    // Find the currently executing async function to get its result promise
+                    // TODO: We need a way to track which async function is currently executing
+                    // For now, we'll implement a basic version that assumes we're in an async context
 
+                    // This is a simplified implementation - in a full implementation, we'd need
+                    // to track the current async function context and reject its result promise
+                    let js_reason = Self::value_to_js_value(&error_value);
+
+                    // For now, return an error indicating this needs more context tracking
                     return Err(InterpreterError::TypeError {
-                        expected: "complete async implementation".to_string(),
-                        got: "async throw instruction (not implemented yet)".to_string(),
+                        expected: "async function context tracking".to_string(),
+                        got: "async throw without context (partially implemented)".to_string(),
                     });
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {

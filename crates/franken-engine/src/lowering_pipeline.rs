@@ -10360,7 +10360,7 @@ mod tests {
         let has_load_str_outer = ir3_result.instructions.iter().any(|instr| {
             if let Ir3Instruction::LoadStr { pool_index, .. } = instr {
                 if let Some(constant) = ir3_result.constant_pool.get(*pool_index as usize) {
-                    if let crate::ir_contract::CanonicalValue::String(s) = constant {
+                    if let CanonicalValue::String(s) = constant {
                         return s == "outer";
                     }
                 }

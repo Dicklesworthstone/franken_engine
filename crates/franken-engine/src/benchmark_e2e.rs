@@ -2502,20 +2502,20 @@ impl ComparisonBenchmarkRunner {
                 .find(|r| r.runtime == RuntimeId::FrankenEngine)
                 .map(|r| r.statistics.median_ns);
 
-            if let Some(franken_median) = franken_median {
+            if let Some(franken_median) = franken_median
+                && franken_median > 0
+            {
                 if let Some(node_result) = results.iter().find(|r| r.runtime == RuntimeId::NodeLts)
-                    && franken_median > 0 {
-                        let speedup =
-                            node_result.statistics.median_ns as f64 / franken_median as f64;
-                        node_speedups.push(speedup);
-                    }
+                {
+                    let speedup = node_result.statistics.median_ns as f64 / franken_median as f64;
+                    node_speedups.push(speedup);
+                }
 
                 if let Some(bun_result) = results.iter().find(|r| r.runtime == RuntimeId::BunStable)
-                    && franken_median > 0 {
-                        let speedup =
-                            bun_result.statistics.median_ns as f64 / franken_median as f64;
-                        bun_speedups.push(speedup);
-                    }
+                {
+                    let speedup = bun_result.statistics.median_ns as f64 / franken_median as f64;
+                    bun_speedups.push(speedup);
+                }
             }
         }
 

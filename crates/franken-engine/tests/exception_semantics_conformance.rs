@@ -15,7 +15,10 @@ use frankenengine_engine::ast::{
     BlockStatement, CatchClause, Expression, ExpressionStatement, ParseGoal, ReturnStatement,
     SourceSpan, Statement, SyntaxTree, ThrowStatement, TryCatchStatement,
 };
-use frankenengine_engine::baseline_interpreter::{InterpreterError, QuickJsLane, Value};
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterConfig, InterpreterError, QuickJsLane, Value,
+};
+use frankenengine_engine::capability::CapabilityProfile;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{
@@ -68,8 +71,14 @@ fn lower_source_to_ir3(source: &str) -> Ir3Module {
 }
 
 fn eval_source(source: &str) -> String {
-    let mut engine = QuickJsInspiredNativeEngine;
-    engine.eval(source).expect("source should eval").value
+    let ir3 = lower_source_to_ir3(source);
+    let result = engine_core_lane().execute(&ir3, "eval-test").expect("source should eval");
+    match result.value {
+        Value::Str(s) => s,
+        Value::Int(n) => n.to_string(),
+        Value::Undefined => "undefined".to_string(),
+        other => format!("{:?}", other),
+    }
 }
 
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
@@ -83,6 +92,12 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
         is_generator: false,
     });
     m
+}
+
+fn engine_core_lane() -> QuickJsLane {
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = CapabilityProfile::engine_core().capabilities;
+    QuickJsLane::with_config(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +245,7 @@ fn conformance_runtime_throw_without_catch_is_uncaught() {
         Ir3Instruction::Throw { value: 0 },
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new().execute(&m, "conformance");
+    let result = engine_core_lane().execute(&m, "conformance");
     assert!(
         matches!(result, Err(InterpreterError::UncaughtException { .. })),
         "throw without catch must produce UncaughtException, got {result:?}"
@@ -258,7 +273,7 @@ fn conformance_runtime_try_catch_catches_exception() {
         Ir3Instruction::Return { value: 1 },
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&m, "conformance")
         .expect("try/catch should not error");
     assert_eq!(result.value, Value::Int(42));
@@ -287,7 +302,7 @@ fn conformance_runtime_try_catch_normal_path() {
         // 6: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&m, "conformance")
         .expect("normal try should not error");
     assert_eq!(result.value, Value::Int(10));
@@ -318,7 +333,7 @@ fn conformance_runtime_finally_executes_on_normal_path() {
         // 6: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&m, "conformance")
         .expect("finally on normal path should succeed");
     // r0 should be 20 because finally body executed
@@ -350,7 +365,7 @@ fn conformance_runtime_try_finally_rethrows_on_exception_path() {
         // 7: Halt (never reached)
         Ir3Instruction::Halt,
     ]);
-    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    let err = engine_core_lane().execute(&m, "conformance").unwrap_err();
     assert!(
         matches!(err, InterpreterError::UncaughtException { .. }),
         "try/finally with throw must re-throw from EndFinally: {err:?}"
@@ -379,7 +394,7 @@ fn conformance_runtime_caught_nested_throw_inside_finally_preserves_outer_except
         Ir3Instruction::EndFinally,
         Ir3Instruction::Halt,
     ]);
-    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    let err = engine_core_lane().execute(&m, "conformance").unwrap_err();
     match err {
         InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
         other => {
@@ -416,7 +431,7 @@ fn conformance_runtime_throw_routed_through_intermediary_finally_preserves_outer
         Ir3Instruction::Halt,
     ]);
 
-    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    let err = engine_core_lane().execute(&m, "conformance").unwrap_err();
     match err {
         InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
         other => panic!(
@@ -455,7 +470,7 @@ fn conformance_lowered_try_catch_finally_runs_finally_on_rethrow_from_catch() {
         }),
         span: span(),
     })]);
-    let err = QuickJsLane::new().execute(&ir3, "conformance").unwrap_err();
+    let err = engine_core_lane().execute(&ir3, "conformance").unwrap_err();
     match err {
         InterpreterError::UncaughtException { value } => assert_eq!(value, "99"),
         other => panic!("expected finalizer throw to override rethrow, got {other:?}"),
@@ -482,7 +497,7 @@ fn conformance_lowered_try_finally_return_in_finally_overrides_try_return() {
         }),
         span: span(),
     })]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&ir3, "conformance")
         .expect("finally return should override try return");
     assert_eq!(result.value, Value::Int(2));
@@ -518,7 +533,7 @@ fn conformance_lowered_try_catch_finally_return_in_finally_overrides_catch_retur
         }),
         span: span(),
     })]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&ir3, "conformance")
         .expect("finally return should override catch return");
     assert_eq!(result.value, Value::Int(2));
@@ -644,7 +659,7 @@ fn conformance_throw_string_value_survives_unwinding() {
         Ir3Instruction::Move { dst: 0, src: 3 },
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new()
+    let result = engine_core_lane()
         .execute(&m, "conformance")
         .expect("catch should succeed");
     assert_eq!(result.value, Value::Int(42));
@@ -659,7 +674,7 @@ fn conformance_uncaught_throw_reports_value_type() {
         },
         Ir3Instruction::Throw { value: 0 },
     ]);
-    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    let err = engine_core_lane().execute(&m, "conformance").unwrap_err();
     match err {
         InterpreterError::UncaughtException { value } => {
             assert_eq!(value, "true");

@@ -726,8 +726,7 @@ pub fn lower_ir0_to_ir1(
                                     "reexport_namespace",
                                     synthetic_export_index,
                                 );
-                                synthetic_export_index =
-                                    synthetic_export_index.saturating_add(1);
+                                synthetic_export_index = synthetic_export_index.saturating_add(1);
                                 alloc_binding(
                                     &mut bindings,
                                     &mut binding_lookup,
@@ -757,8 +756,7 @@ pub fn lower_ir0_to_ir1(
                                     "reexport_binding",
                                     synthetic_export_index,
                                 );
-                                synthetic_export_index =
-                                    synthetic_export_index.saturating_add(1);
+                                synthetic_export_index = synthetic_export_index.saturating_add(1);
                                 let export_binding_id = alloc_binding(
                                     &mut bindings,
                                     &mut binding_lookup,
@@ -789,12 +787,12 @@ pub fn lower_ir0_to_ir1(
                                     ),
                                 ));
                             }
-                            let binding_id =
-                                binding_lookup.get(local_name.as_str()).copied().ok_or(
-                                    LoweringPipelineError::InvariantViolation {
-                                        detail: "reserved root binding missing from binding lookup",
-                                    },
-                                )?;
+                            let binding_id = binding_lookup
+                                .get(local_name.as_str())
+                                .copied()
+                                .ok_or(LoweringPipelineError::InvariantViolation {
+                                    detail: "reserved root binding missing from binding lookup",
+                                })?;
                             ir1.ops.push(Ir1Op::LoadBinding { binding_id });
                             ir1.ops.push(Ir1Op::ExportBinding {
                                 name: exported_name,
@@ -7945,11 +7943,10 @@ mod tests {
         let ir0 = Ir0Module::from_syntax_tree(tree, "named_reexport.mjs");
         let result = lower_ir0_to_ir1(&ir0).expect("re-export should lower");
 
-        let has_import = result
-            .module
-            .ops
-            .iter()
-            .any(|op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js"));
+        let has_import =
+            result.module.ops.iter().any(
+                |op| matches!(op, Ir1Op::ImportModule { specifier } if specifier == "./dep.js"),
+            );
         assert!(has_import);
         let has_export = result
             .module

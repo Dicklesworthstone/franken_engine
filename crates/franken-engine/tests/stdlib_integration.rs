@@ -3316,13 +3316,8 @@ fn heap_array_entries_keys_values_return_arrays() {
     )
     .unwrap();
 
-    let keys = exec_heap_collection_method(
-        &mut heap,
-        BuiltinId::ArrayPrototypeKeys,
-        array,
-        &[],
-    )
-    .unwrap();
+    let keys =
+        exec_heap_collection_method(&mut heap, BuiltinId::ArrayPrototypeKeys, array, &[]).unwrap();
     let keys_handle = match keys.value {
         JsValue::Object(handle) => handle,
         other => panic!("expected keys array handle, got {other:?}"),
@@ -3333,13 +3328,9 @@ fn heap_array_entries_keys_values_return_arrays() {
     );
     assert!(keys.trace.mutated_keys.is_empty());
 
-    let values = exec_heap_collection_method(
-        &mut heap,
-        BuiltinId::ArrayPrototypeValues,
-        array,
-        &[],
-    )
-    .unwrap();
+    let values =
+        exec_heap_collection_method(&mut heap, BuiltinId::ArrayPrototypeValues, array, &[])
+            .unwrap();
     let values_handle = match values.value {
         JsValue::Object(handle) => handle,
         other => panic!("expected values array handle, got {other:?}"),
@@ -3350,13 +3341,9 @@ fn heap_array_entries_keys_values_return_arrays() {
     );
     assert!(values.trace.mutated_keys.is_empty());
 
-    let entries = exec_heap_collection_method(
-        &mut heap,
-        BuiltinId::ArrayPrototypeEntries,
-        array,
-        &[],
-    )
-    .unwrap();
+    let entries =
+        exec_heap_collection_method(&mut heap, BuiltinId::ArrayPrototypeEntries, array, &[])
+            .unwrap();
     let entries_handle = match entries.value {
         JsValue::Object(handle) => handle,
         other => panic!("expected entries array handle, got {other:?}"),

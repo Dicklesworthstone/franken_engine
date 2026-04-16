@@ -14,8 +14,8 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
@@ -301,8 +301,7 @@ fn collision_resistant_hash(input: &[u8]) -> [u8; 32] {
 /// Keyed hash: HMAC-SHA256 over the data.
 fn keyed_hash(key: &[u8], data: &[u8]) -> [u8; 32] {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(key)
-        .expect("HMAC-SHA256 accepts keys of any size");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC-SHA256 accepts keys of any size");
     mac.update(data);
     let digest = mac.finalize().into_bytes();
     let mut output = [0u8; 32];

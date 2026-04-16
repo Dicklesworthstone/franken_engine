@@ -114,7 +114,7 @@ fn base_config(extension_id: &str, seed: u64) -> ShadowAblationConfig {
 }
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x2Au8; 32])
+    SigningKey::from_bytes([0x2Au8; 32]).unwrap()
 }
 
 #[test]

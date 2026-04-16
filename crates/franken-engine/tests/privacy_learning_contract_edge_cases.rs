@@ -35,7 +35,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 const TEST_ZONE: &str = "integration-test-zone";
 
 fn governance_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x01; 32])
+    SigningKey::from_bytes([0x01; 32]).unwrap()
 }
 
 fn governance_vk() -> frankenengine_engine::signature_preimage::VerificationKey {

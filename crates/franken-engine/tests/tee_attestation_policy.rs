@@ -216,7 +216,7 @@ fn temporary_override_enables_new_root_for_quote_validation() {
         .load_policy(sample_policy(20), "trace-load-ovr", "decision-load-ovr")
         .expect("load epoch 20");
 
-    let signer = SigningKey::from_bytes([19u8; 32]);
+    let signer = SigningKey::from_bytes([19u8; 32]).unwrap();
     let verifier = signer.verification_key();
     let artifact = SignedTrustRootOverrideArtifact::create_signed(
         &signer,
@@ -637,7 +637,7 @@ fn override_with_expired_artifact_is_rejected() {
         .load_policy(sample_policy(30), "trace-load", "decision-load")
         .expect("load policy");
 
-    let signer = SigningKey::from_bytes([77u8; 32]);
+    let signer = SigningKey::from_bytes([77u8; 32]).unwrap();
     let verifier = signer.verification_key();
     let artifact = SignedTrustRootOverrideArtifact::create_signed(
         &signer,
@@ -691,7 +691,7 @@ fn override_target_mismatch_is_rejected() {
         .load_policy(sample_policy(20), "trace-load", "decision-load")
         .expect("load policy");
 
-    let signer = SigningKey::from_bytes([88u8; 32]);
+    let signer = SigningKey::from_bytes([88u8; 32]).unwrap();
     let verifier = signer.verification_key();
     let artifact = SignedTrustRootOverrideArtifact::create_signed(
         &signer,

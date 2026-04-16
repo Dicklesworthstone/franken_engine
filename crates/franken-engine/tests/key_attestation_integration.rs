@@ -37,7 +37,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 const TEST_ZONE: &str = "test-zone";
 
 fn owner_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x01; 32])
+    SigningKey::from_bytes([0x01; 32]).unwrap()
 }
 
 fn owner_vk() -> VerificationKey {
@@ -45,7 +45,7 @@ fn owner_vk() -> VerificationKey {
 }
 
 fn attested_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x02; 32])
+    SigningKey::from_bytes([0x02; 32]).unwrap()
 }
 
 fn attested_vk() -> VerificationKey {
@@ -462,7 +462,7 @@ fn verify_owner_signature_succeeds() {
 #[test]
 fn verify_owner_signature_wrong_key_fails() {
     let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-    let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+    let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let wrong_vk = wrong_sk.verification_key();
     let result = att.verify_owner_signature(&wrong_vk);
     assert!(matches!(
@@ -740,7 +740,7 @@ fn store_register_zone_mismatch_rejected() {
 fn store_register_wrong_signature_rejected() {
     let mut store = AttestationStore::new(TEST_ZONE);
     let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-    let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+    let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let wrong_vk = wrong_sk.verification_key();
     let result = store.register(att, &wrong_vk, DeterministicTimestamp(150), "t-sig");
     assert!(matches!(
@@ -1426,7 +1426,7 @@ fn full_lifecycle_create_verify_rotate_revoke() {
     assert_eq!(active.len(), 1);
 
     // Rotate: new attestation with different key, higher nonce
-    let new_key_sk = SigningKey::from_bytes([0x03; 32]);
+    let new_key_sk = SigningKey::from_bytes([0x03; 32]).unwrap();
     let new_key_vk = new_key_sk.verification_key();
     let att2 = KeyAttestation::create_signed(
         &owner_signing_key(),
@@ -1469,10 +1469,10 @@ fn multi_principal_isolation() {
         .unwrap();
 
     // Principal 2
-    let p2_owner_sk = SigningKey::from_bytes([0x10; 32]);
+    let p2_owner_sk = SigningKey::from_bytes([0x10; 32]).unwrap();
     let p2_owner_vk = p2_owner_sk.verification_key();
     let p2_principal = PrincipalId::from_verification_key(&p2_owner_vk);
-    let p2_attested_sk = SigningKey::from_bytes([0x20; 32]);
+    let p2_attested_sk = SigningKey::from_bytes([0x20; 32]).unwrap();
     let p2_attested_vk = p2_attested_sk.verification_key();
 
     let att2 = KeyAttestation::create_signed(
@@ -1602,7 +1602,7 @@ fn multiple_attestations_same_principal_different_keys() {
         .unwrap();
 
     // Second with different attested key
-    let new_key_sk = SigningKey::from_bytes([0x03; 32]);
+    let new_key_sk = SigningKey::from_bytes([0x03; 32]).unwrap();
     let new_key_vk = new_key_sk.verification_key();
     let att2 = KeyAttestation::create_signed(
         &owner_signing_key(),

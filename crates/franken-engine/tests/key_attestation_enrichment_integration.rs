@@ -27,7 +27,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 const TEST_ZONE: &str = "integ-zone";
 
 fn owner_sk() -> SigningKey {
-    SigningKey::from_bytes([0x11; 32])
+    SigningKey::from_bytes([0x11; 32]).unwrap()
 }
 
 fn owner_vk() -> VerificationKey {
@@ -35,7 +35,7 @@ fn owner_vk() -> VerificationKey {
 }
 
 fn attested_sk() -> SigningKey {
-    SigningKey::from_bytes([0x22; 32])
+    SigningKey::from_bytes([0x22; 32]).unwrap()
 }
 
 fn attested_vk() -> VerificationKey {
@@ -264,7 +264,7 @@ fn integ_verify_owner_signature_succeeds() {
 #[test]
 fn integ_verify_wrong_key_fails() {
     let att = make_att(KeyRole::Signing, 1, 100, 500);
-    let wrong_sk = SigningKey::from_bytes([0xCC; 32]);
+    let wrong_sk = SigningKey::from_bytes([0xCC; 32]).unwrap();
     let wrong_vk = wrong_sk.verification_key();
     let result = att.verify_owner_signature(&wrong_vk);
     assert!(matches!(
@@ -790,7 +790,7 @@ fn integ_full_lifecycle_create_verify_rotate_revoke() {
     assert_eq!(store.total_count(), 1);
 
     // Rotate with different key and higher nonce
-    let new_sk = SigningKey::from_bytes([0x33; 32]);
+    let new_sk = SigningKey::from_bytes([0x33; 32]).unwrap();
     let new_vk = new_sk.verification_key();
     let att2 = KeyAttestation::create_signed(
         &owner_sk(),

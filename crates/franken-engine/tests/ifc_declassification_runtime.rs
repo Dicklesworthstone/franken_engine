@@ -159,7 +159,7 @@ fn runtime_lattice_emits_receipt_linkage_for_authorized_declassification() {
     );
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([5u8; 32]);
+    let signing_key = SigningKey::from_bytes([5u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -230,7 +230,7 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
     ));
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([6u8; 32]);
+    let signing_key = SigningKey::from_bytes([6u8; 32]).unwrap();
     let denied_receipt = pipeline
         .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("pipeline returns deny receipt");
@@ -283,7 +283,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([7u8; 32]);
+    let signing_key = SigningKey::from_bytes([7u8; 32]).unwrap();
     let mut tampered_receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -332,7 +332,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
 #[test]
 fn pipeline_allows_declassification_when_loss_below_threshold() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([8u8; 32]);
+    let signing_key = SigningKey::from_bytes([8u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("should allow");
@@ -343,7 +343,7 @@ fn pipeline_allows_declassification_when_loss_below_threshold() {
 #[test]
 fn pipeline_denies_declassification_when_loss_above_threshold() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([9u8; 32]);
+    let signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
         .expect("should deny");
@@ -353,7 +353,7 @@ fn pipeline_denies_declassification_when_loss_above_threshold() {
 #[test]
 fn pipeline_tracks_stats_across_decisions() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([10u8; 32]);
+    let signing_key = SigningKey::from_bytes([10u8; 32]).unwrap();
 
     let _allow = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
@@ -371,7 +371,7 @@ fn pipeline_tracks_stats_across_decisions() {
 #[test]
 fn pipeline_emits_events_for_allow_decision() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([11u8; 32]);
+    let signing_key = SigningKey::from_bytes([11u8; 32]).unwrap();
 
     let _receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
@@ -390,7 +390,7 @@ fn pipeline_emits_events_for_allow_decision() {
 #[test]
 fn pipeline_receipts_accumulate() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([12u8; 32]);
+    let signing_key = SigningKey::from_bytes([12u8; 32]).unwrap();
 
     for _ in 0..3 {
         let _receipt = pipeline
@@ -446,7 +446,7 @@ fn obligation_max_uses_enforced_after_exhaustion() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([13u8; 32]);
+    let signing_key = SigningKey::from_bytes([13u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -494,7 +494,7 @@ fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([21u8; 32]);
+    let signing_key = SigningKey::from_bytes([21u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -544,7 +544,7 @@ fn runtime_lattice_rejects_authorizer_trusted_for_other_contract() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([31u8; 32]);
+    let signing_key = SigningKey::from_bytes([31u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -599,7 +599,7 @@ fn runtime_lattice_rejects_receipt_for_other_contract_even_with_same_signer() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([32u8; 32]);
+    let signing_key = SigningKey::from_bytes([32u8; 32]).unwrap();
     let receipt = pipeline
         .process(
             &make_request_for_contract("decision-contract-other"),
@@ -659,7 +659,7 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
         .expect("register obligation");
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([22u8; 32]);
+    let signing_key = SigningKey::from_bytes([22u8; 32]).unwrap();
     let request = make_request();
     let receipt = pipeline
         .process(&request, &make_policy(), &low_loss(), &signing_key)
@@ -724,7 +724,7 @@ fn runtime_lattice_accepts_receipt_with_matching_route_binding() {
     ));
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([34u8; 32]);
+    let signing_key = SigningKey::from_bytes([34u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -791,7 +791,7 @@ fn runtime_lattice_rejects_receipt_with_route_mismatch() {
     request.requested_route_id = "declass-secret-public-alt".to_string();
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([33u8; 32]);
+    let signing_key = SigningKey::from_bytes([33u8; 32]).unwrap();
     let receipt = pipeline
         .process(&request, &mismatch_policy, &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -853,7 +853,7 @@ fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
     request.sink_clearance = Label::Internal;
 
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([23u8; 32]);
+    let signing_key = SigningKey::from_bytes([23u8; 32]).unwrap();
     let receipt = pipeline
         .process(&request, &mismatch_policy, &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -916,7 +916,7 @@ fn pipeline_with_custom_threshold_allows_high_loss() {
         ..PipelineConfig::default()
     };
     let mut pipeline = DeclassificationPipeline::new(config);
-    let signing_key = SigningKey::from_bytes([14u8; 32]);
+    let signing_key = SigningKey::from_bytes([14u8; 32]).unwrap();
 
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &high_loss(), &signing_key)
@@ -929,7 +929,7 @@ fn pipeline_with_custom_threshold_allows_high_loss() {
 #[test]
 fn receipt_contains_replay_command() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([15u8; 32]);
+    let signing_key = SigningKey::from_bytes([15u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -947,7 +947,7 @@ fn receipt_contains_replay_command() {
 #[test]
 fn receipt_policy_evaluation_summary_is_nonempty() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([16u8; 32]);
+    let signing_key = SigningKey::from_bytes([16u8; 32]).unwrap();
     let receipt = pipeline
         .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
@@ -1246,7 +1246,7 @@ fn duplicate_obligation_registration_rejected() {
 #[test]
 fn pipeline_emergency_request_creates_grant() {
     let mut pipeline = DeclassificationPipeline::default();
-    let signing_key = SigningKey::from_bytes([20u8; 32]);
+    let signing_key = SigningKey::from_bytes([20u8; 32]).unwrap();
     let mut req = make_request();
     req.is_emergency = true;
 

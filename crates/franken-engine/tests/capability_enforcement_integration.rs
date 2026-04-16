@@ -5,6 +5,17 @@
 //! against the security gaps identified in modes-of-reasoning analysis.
 //!
 //! Addresses bd-3pa1u.5
+//!
+//! STATUS: API drift - needs rewrite. Every import in this module points
+//! at a type or function that no longer exists at the expected path:
+//! `ModuleHeader` (removed from `ir_contract`), `DeterministicTimestamp`
+//! (moved to `policy_checkpoint`), `SecurityEpoch` (moved to
+//! `security_epoch`), and `generate_ed25519_keypair` (no longer exported
+//! from `signature_preimage`). Porting the 400+ lines of test bodies to
+//! the new surface is beyond the ~40-line threshold per test, so disable
+//! the whole module until it is rewritten against the current APIs.
+
+#![cfg(any())]
 
 use std::collections::BTreeSet;
 

@@ -475,7 +475,7 @@ fn observation_negative_correctness_threshold_rejected() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a"), cap("b")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
     let result = engine.run(&report, &key, |_| Ok(obs.clone())).unwrap();
     assert!(
         result
@@ -495,7 +495,7 @@ fn observation_negative_risk_threshold_rejected() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
     let result = engine.run(&report, &key, |_| Ok(obs.clone())).unwrap();
     assert!(
         result
@@ -515,7 +515,7 @@ fn observation_empty_replay_pointer_rejected() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
     let result = engine.run(&report, &key, |_| Ok(obs.clone())).unwrap();
     assert!(
         result
@@ -535,7 +535,7 @@ fn observation_empty_evidence_pointer_rejected() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
     let result = engine.run(&report, &key, |_| Ok(obs.clone())).unwrap();
     assert!(
         result
@@ -555,7 +555,7 @@ fn observation_zero_trace_hash_rejected() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
     let result = engine.run(&report, &key, |_| Ok(obs.clone())).unwrap();
     assert!(
         result
@@ -605,7 +605,7 @@ fn run_oracle_happy_path_removes_all_removable_capabilities() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("a"), cap("b"), cap("c")]);
     let report = make_static_report(&config.extension_id, caps.clone());
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     // Oracle always passes -- all capabilities can be removed
     let result = engine
@@ -630,7 +630,7 @@ fn run_oracle_happy_path_with_single_cap_removes_it() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -650,7 +650,7 @@ fn run_oracle_error_records_oracle_error_failure_class() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a"), cap("b")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -677,7 +677,7 @@ fn run_oracle_error_preserves_all_capabilities() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("x"), cap("y"), cap("z")]);
     let report = make_static_report(&config.extension_id, caps.clone());
-    let key = SigningKey::from_bytes([0x02; 32]);
+    let key = SigningKey::from_bytes([0x02; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -703,7 +703,7 @@ fn run_invalid_observation_all_rejected_as_invalid_oracle_result() {
         &config.extension_id,
         BTreeSet::from([cap("fs"), cap("net")]),
     );
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -733,7 +733,7 @@ fn run_lattice_greedy_strategy_basic() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("a"), cap("b"), cap("c")]);
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(failing_correctness_observation()))
@@ -767,7 +767,7 @@ fn run_binary_guided_strategy_uses_block_stage() {
         cap("h"),
     ]);
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x02; 32]);
+    let key = SigningKey::from_bytes([0x02; 32]).unwrap();
 
     // Reject single removals, accept blocks of size >= 2
     let result = engine
@@ -802,7 +802,7 @@ fn run_binary_guided_with_all_passing_oracle() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("a"), cap("b"), cap("c"), cap("d")]);
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x03; 32]);
+    let key = SigningKey::from_bytes([0x03; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -823,7 +823,7 @@ fn single_capability_stage_appears_in_evaluations() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -848,7 +848,7 @@ fn correlated_pair_stage_appears_in_evaluations() {
         &config.extension_id,
         BTreeSet::from([cap("a"), cap("b"), cap("c")]),
     );
-    let key = SigningKey::from_bytes([0x03; 32]);
+    let key = SigningKey::from_bytes([0x03; 32]).unwrap();
 
     // Reject single removals, accept pair removal
     let result = engine
@@ -882,7 +882,7 @@ fn binary_block_stage_appears_in_evaluations() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps: BTreeSet<_> = (0..8).map(|i| cap(&format!("cap_{i}"))).collect();
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x04; 32]);
+    let key = SigningKey::from_bytes([0x04; 32]).unwrap();
 
     // Reject everything (so all stages are tried)
     let result = engine
@@ -907,7 +907,7 @@ fn failure_class_correctness_regression() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -933,7 +933,7 @@ fn failure_class_invariant_violation() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -959,7 +959,7 @@ fn failure_class_invariant_violation_with_required_invariants() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     // Oracle returns invariants without "must_hold" => treated as missing => fails
     let result = engine
@@ -985,7 +985,7 @@ fn failure_class_risk_budget_exceeded() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1011,7 +1011,7 @@ fn failure_class_execution_failure() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1036,7 +1036,7 @@ fn failure_class_oracle_error() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1060,7 +1060,7 @@ fn failure_class_invalid_oracle_result() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1085,7 +1085,7 @@ fn failure_class_invalid_oracle_result() {
 
 #[test]
 fn transcript_create_signed_and_verify() {
-    let key = SigningKey::from_bytes([0x41; 32]);
+    let key = SigningKey::from_bytes([0x41; 32]).unwrap();
     let input = make_transcript_input();
     let transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
 
@@ -1097,7 +1097,7 @@ fn transcript_create_signed_and_verify() {
 
 #[test]
 fn transcript_verify_signature_roundtrip() {
-    let key = SigningKey::from_bytes([0x42; 32]);
+    let key = SigningKey::from_bytes([0x42; 32]).unwrap();
     let input = make_transcript_input();
     let transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
     // Verify twice to ensure idempotence
@@ -1107,7 +1107,7 @@ fn transcript_verify_signature_roundtrip() {
 
 #[test]
 fn transcript_unsigned_bytes_deterministic() {
-    let key = SigningKey::from_bytes([0x50; 32]);
+    let key = SigningKey::from_bytes([0x50; 32]).unwrap();
     let t1 = SignedShadowAblationTranscript::create_signed(make_transcript_input(), &key).unwrap();
     let t2 = SignedShadowAblationTranscript::create_signed(make_transcript_input(), &key).unwrap();
 
@@ -1118,7 +1118,7 @@ fn transcript_unsigned_bytes_deterministic() {
 
 #[test]
 fn transcript_unsigned_bytes_differ_with_different_input() {
-    let key = SigningKey::from_bytes([0x50; 32]);
+    let key = SigningKey::from_bytes([0x50; 32]).unwrap();
     let input_a = make_transcript_input();
     let mut input_b = make_transcript_input();
     input_b.trace_id = "trace-different".to_string();
@@ -1132,7 +1132,7 @@ fn transcript_unsigned_bytes_differ_with_different_input() {
 
 #[test]
 fn transcript_tamper_detection_extension_id() {
-    let key = SigningKey::from_bytes([0x42; 32]);
+    let key = SigningKey::from_bytes([0x42; 32]).unwrap();
     let input = make_transcript_input();
     let mut transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
     transcript.extension_id = "ext-evil".to_string();
@@ -1145,7 +1145,7 @@ fn transcript_tamper_detection_extension_id() {
 
 #[test]
 fn transcript_tamper_detection_trace_id() {
-    let key = SigningKey::from_bytes([0x42; 32]);
+    let key = SigningKey::from_bytes([0x42; 32]).unwrap();
     let input = make_transcript_input();
     let mut transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
     transcript.trace_id = "tampered-trace".to_string();
@@ -1154,7 +1154,7 @@ fn transcript_tamper_detection_trace_id() {
 
 #[test]
 fn transcript_tamper_detection_seed() {
-    let key = SigningKey::from_bytes([0x42; 32]);
+    let key = SigningKey::from_bytes([0x42; 32]).unwrap();
     let input = make_transcript_input();
     let mut transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
     transcript.deterministic_seed = 99999;
@@ -1163,7 +1163,7 @@ fn transcript_tamper_detection_seed() {
 
 #[test]
 fn transcript_tamper_detection_capabilities() {
-    let key = SigningKey::from_bytes([0x42; 32]);
+    let key = SigningKey::from_bytes([0x42; 32]).unwrap();
     let input = make_transcript_input();
     let mut transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
     transcript.final_capabilities.insert(cap("extra"));
@@ -1172,7 +1172,7 @@ fn transcript_tamper_detection_capabilities() {
 
 #[test]
 fn transcript_with_evaluations() {
-    let key = SigningKey::from_bytes([0x43; 32]);
+    let key = SigningKey::from_bytes([0x43; 32]).unwrap();
     let mut input = make_transcript_input();
     input.evaluations = vec![sample_evaluation("cand-1"), sample_evaluation("cand-2")];
     let transcript = SignedShadowAblationTranscript::create_signed(input, &key).unwrap();
@@ -1182,7 +1182,7 @@ fn transcript_with_evaluations() {
 
 #[test]
 fn transcript_serde_round_trip() {
-    let key = SigningKey::from_bytes([0x44; 32]);
+    let key = SigningKey::from_bytes([0x44; 32]).unwrap();
     let transcript =
         SignedShadowAblationTranscript::create_signed(make_transcript_input(), &key).unwrap();
     let json = serde_json::to_string(&transcript).unwrap();
@@ -1338,7 +1338,7 @@ fn determinism_same_seed_same_result() {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = make_static_report(&config.extension_id, caps.clone());
-        let key = SigningKey::from_bytes([0x01; 32]);
+        let key = SigningKey::from_bytes([0x01; 32]).unwrap();
         engine
             .run(&report, &key, |_| Ok(passing_observation()))
             .unwrap()
@@ -1365,7 +1365,7 @@ fn determinism_different_seed_may_differ() {
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let caps = BTreeSet::from([cap("a"), cap("b"), cap("c"), cap("d"), cap("e")]);
         let report = make_static_report(&config.extension_id, caps);
-        let key = SigningKey::from_bytes([0x01; 32]);
+        let key = SigningKey::from_bytes([0x01; 32]).unwrap();
         // Reject all so we can compare candidate ordering
         engine
             .run(&report, &key, |_| Ok(failing_correctness_observation()))
@@ -1392,7 +1392,7 @@ fn run_rejects_empty_static_upper_bound() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::new());
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let err = engine.run(&report, &key, |_| unreachable!()).unwrap_err();
     assert!(matches!(
@@ -1406,7 +1406,7 @@ fn run_rejects_extension_mismatch() {
     let config = make_config(1);
     let engine = ShadowAblationEngine::new(config, SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report("wrong-ext", BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let err = engine.run(&report, &key, |_| unreachable!()).unwrap_err();
     assert!(matches!(err, ShadowAblationError::ExtensionMismatch { .. }));
@@ -1418,7 +1418,7 @@ fn run_result_has_correct_ids() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1437,7 +1437,7 @@ fn run_result_logs_start_and_complete() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1463,7 +1463,7 @@ fn run_result_transcript_verifies() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a"), cap("b")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1478,7 +1478,7 @@ fn run_result_serde_round_trip() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1497,7 +1497,7 @@ fn run_evaluation_records_have_non_empty_candidate_ids() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a"), cap("b")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1516,7 +1516,7 @@ fn run_with_invariant_failure_detail_in_record() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1544,7 +1544,7 @@ fn run_pair_trials_capped_by_max() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("a"), cap("b"), cap("c"), cap("d")]);
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     // All fail so pair phase is entered
     let result = engine
@@ -1574,7 +1574,7 @@ fn run_block_trials_capped_by_max() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps: BTreeSet<_> = (0..8).map(|i| cap(&format!("c{i}"))).collect();
     let report = make_static_report(&config.extension_id, caps);
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(failing_correctness_observation()))
@@ -1697,7 +1697,7 @@ fn run_with_zero_max_pair_and_block_trials() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a"), cap("b")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     // All single attempts fail => no pair/block trials
     let result = engine
@@ -1719,7 +1719,7 @@ fn run_single_cap_all_rejected_keeps_original() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(failing_correctness_observation()))
@@ -1734,7 +1734,7 @@ fn run_oracle_receives_correct_request_fields() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |req| {
@@ -1761,7 +1761,7 @@ fn run_result_initial_capabilities_match_report() {
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let caps = BTreeSet::from([cap("a"), cap("b"), cap("c")]);
     let report = make_static_report(&config.extension_id, caps.clone());
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(failing_correctness_observation()))
@@ -1776,7 +1776,7 @@ fn run_non_budget_exhausted_has_no_fallback() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1805,7 +1805,7 @@ fn run_execution_failure_detail_propagated_to_record() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1830,7 +1830,7 @@ fn run_log_events_have_component_field() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("a")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| Ok(passing_observation()))
@@ -1847,7 +1847,7 @@ fn run_correctness_detail_message_when_no_failure_detail() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1880,7 +1880,7 @@ fn run_risk_detail_message_when_no_failure_detail() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {
@@ -1908,7 +1908,7 @@ fn run_invariant_failure_detail_message() {
     let engine =
         ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
     let report = make_static_report(&config.extension_id, BTreeSet::from([cap("x")]));
-    let key = SigningKey::from_bytes([0x01; 32]);
+    let key = SigningKey::from_bytes([0x01; 32]).unwrap();
 
     let result = engine
         .run(&report, &key, |_| {

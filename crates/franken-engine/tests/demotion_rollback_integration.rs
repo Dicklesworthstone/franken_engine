@@ -44,7 +44,7 @@ fn slot() -> SlotId {
 }
 
 fn sk() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn promotion_receipt() -> ReplacementReceipt {
@@ -262,7 +262,7 @@ fn demotion_receipt_create_and_verify_signature() {
 #[test]
 fn demotion_receipt_verify_fails_with_wrong_key() {
     let key = sk();
-    let wrong_key = SigningKey::from_bytes([99u8; 32]);
+    let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
 
     let receipt = DemotionReceipt::create_signed(
         &key,

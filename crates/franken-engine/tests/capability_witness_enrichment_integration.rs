@@ -593,7 +593,7 @@ fn witness_store_new_empty() {
 
 #[test]
 fn witness_builder_empty_required_set_fails() {
-    let key = SigningKey::from_bytes([0xAA; 32]);
+    let key = SigningKey::from_bytes([0xAA; 32]).unwrap();
     let result = WitnessBuilder::new(oid(1), oid(2), SecurityEpoch::from_raw(1), 1000, key).build();
     assert!(result.is_err());
 }
@@ -1192,7 +1192,7 @@ fn promotion_theorem_kind_btreeset_ordering() {
 // ===========================================================================
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x42u8; 32])
+    SigningKey::from_bytes([0x42u8; 32]).unwrap()
 }
 
 fn test_extension_id() -> EngineObjectId {
@@ -1575,7 +1575,7 @@ fn verify_synthesizer_signature_correct_key() {
 #[test]
 fn verify_synthesizer_signature_wrong_key() {
     let witness = build_minimal_witness();
-    let wrong_vk = SigningKey::from_bytes([0xAA; 32]).verification_key();
+    let wrong_vk = SigningKey::from_bytes([0xAA; 32]).unwrap().verification_key();
     assert!(witness.verify_synthesizer_signature(&wrong_vk).is_err());
 }
 

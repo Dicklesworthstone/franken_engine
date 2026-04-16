@@ -184,7 +184,7 @@ fn sgx_quote(age: u64) -> AttestationQuote {
 }
 
 fn make_signing_key(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_override_artifact(

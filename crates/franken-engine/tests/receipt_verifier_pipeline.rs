@@ -229,7 +229,7 @@ fn build_cli_input(wrong_signature_key: bool) -> ReceiptVerifierCliInput {
     let consistency_proof = mmr.consistency_proof(2).expect("consistency");
     let current_root = mmr.root_hash().expect("root");
 
-    let operator_signing_key = SigningKey::from_bytes([9u8; 32]);
+    let operator_signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
     let operator_verification_key = operator_signing_key.verification_key();
     let checkpoint_stub = SignedLogCheckpoint {
         checkpoint_seq: 1,
@@ -481,7 +481,7 @@ fn build_valid_request() -> (String, UnifiedReceiptVerificationRequest) {
     let inclusion_proof = mmr.inclusion_proof(2).expect("inclusion");
     let consistency_proof = mmr.consistency_proof(2).expect("consistency");
 
-    let operator_signing_key = SigningKey::from_bytes([9u8; 32]);
+    let operator_signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
     let operator_verification_key = operator_signing_key.verification_key();
     let checkpoint_stub = SignedLogCheckpoint {
         checkpoint_seq: 1,
@@ -1338,7 +1338,7 @@ fn signer_revocation_cache_serde_roundtrip() {
 fn log_operator_key_serde_roundtrip() {
     let key = LogOperatorKey {
         key_id: "op-key-1".to_string(),
-        verification_key: SigningKey::from_bytes([3u8; 32]).verification_key(),
+        verification_key: SigningKey::from_bytes([3u8; 32]).unwrap().verification_key(),
         revoked: false,
     };
     let json = serde_json::to_string(&key).unwrap();
@@ -1405,7 +1405,7 @@ fn signer_revocation_cache_clone_independence() {
 fn log_operator_key_clone_independence() {
     let original = LogOperatorKey {
         key_id: "op-1".to_string(),
-        verification_key: SigningKey::from_bytes([3u8; 32]).verification_key(),
+        verification_key: SigningKey::from_bytes([3u8; 32]).unwrap().verification_key(),
         revoked: false,
     };
     let mut cloned = original.clone();

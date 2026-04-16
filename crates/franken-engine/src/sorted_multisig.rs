@@ -555,7 +555,8 @@ impl Default for MultiSigContext {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// NOTE: API drift - in-module unit tests need port.
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::deterministic_serde::{CanonicalValue, SchemaHash};

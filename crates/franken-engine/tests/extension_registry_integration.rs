@@ -39,7 +39,7 @@ fn signing_key(seed: u8) -> SigningKey {
     for (i, b) in bytes.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(seed).wrapping_add(seed);
     }
-    SigningKey(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn vk_from(sk: &SigningKey) -> VerificationKey {
@@ -937,7 +937,7 @@ fn error_display_all_variants() {
 fn publish_to_nonexistent_publisher_fails() {
     let (mut reg, _, sk, _) = setup();
     let fake_pub = EngineObjectId([55; 32]);
-    let fake_vk = VerificationKey([66; 32]);
+    let fake_vk = VerificationKey::from_bytes([66; 32]).unwrap();
     let v = PackageVersion::new(1, 0, 0);
     let m = manifest("testorg", "ext", v, &fake_pub, &fake_vk);
     let result = publish(&mut reg, &m, &sk);

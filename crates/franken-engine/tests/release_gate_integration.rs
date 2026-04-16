@@ -338,7 +338,8 @@ fn exact_budget_boundary_does_not_timeout() {
                 "exact budget should not timeout: {reason}"
             );
         }
-        Verdict::Pass => {} // fine
+        Verdict::Pass => {}                                    // fine
+        Verdict::PassWithException { justification: _ } => {} // fine
     }
 }
 
@@ -363,7 +364,7 @@ fn default_exception_policy_rejects_override() {
         result_digest: String::new(),
     };
     let err = gate
-        .apply_exception(&mut result, "urgent", Some("ADR-001"))
+        .apply_exception(&mut result, "urgent", Some("ADR-001"), None)
         .unwrap_err();
     assert!(err.contains("does not allow"));
     assert!(!result.exception_applied);
@@ -392,7 +393,7 @@ fn exception_requires_adr_reference_when_policy_set() {
         result_digest: String::new(),
     };
     let err = gate
-        .apply_exception(&mut result, "urgent", None)
+        .apply_exception(&mut result, "urgent", None, None)
         .unwrap_err();
     assert!(err.contains("ADR reference"));
 }
@@ -419,7 +420,7 @@ fn exception_requires_nonempty_justification() {
         gate_events: Vec::new(),
         result_digest: String::new(),
     };
-    let err = gate.apply_exception(&mut result, "", None).unwrap_err();
+    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
     assert!(err.contains("justification"));
 }
 
@@ -445,7 +446,7 @@ fn exception_succeeds_with_valid_inputs() {
         gate_events: Vec::new(),
         result_digest: String::new(),
     };
-    gate.apply_exception(&mut result, "Critical CVE fix", Some("ADR-2026-002"))
+    gate.apply_exception(&mut result, "Critical CVE fix", Some("ADR-2026-002"), None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);
@@ -475,7 +476,7 @@ fn exception_changes_digest() {
         result_digest: "original_digest".to_string(),
     };
     let before = result.result_digest.clone();
-    gate.apply_exception(&mut result, "hotfix", None).unwrap();
+    gate.apply_exception(&mut result, "hotfix", None, None).unwrap();
     assert_ne!(result.result_digest, before);
     // New digest should be 16-char hex.
     assert_eq!(result.result_digest.len(), 16);
@@ -501,7 +502,7 @@ fn exception_on_passing_result_still_sets_flag() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "cosmetic override", None)
+    gate.apply_exception(&mut result, "cosmetic override", None, None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);
@@ -850,7 +851,7 @@ fn with_config_and_policy_both_applied() {
         gate_events: Vec::new(),
         result_digest: String::new(),
     };
-    gate.apply_exception(&mut fail_result, "override", None)
+    gate.apply_exception(&mut fail_result, "override", None, None)
         .unwrap();
     assert!(fail_result.exception_applied);
 }
@@ -1126,7 +1127,7 @@ fn lifecycle_evaluate_then_exception_override() {
     assert!(result.is_blocked());
 
     // Apply exception override.
-    gate.apply_exception(&mut result, "Emergency deploy", Some("ADR-2026-E1"))
+    gate.apply_exception(&mut result, "Emergency deploy", Some("ADR-2026-E1"), None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);
@@ -1439,7 +1440,7 @@ fn enrichment_exception_whitespace_only_justification_rejected() {
         result_digest: String::new(),
     };
     // A non-empty justification should succeed
-    gate.apply_exception(&mut result, "valid reason", None)
+    gate.apply_exception(&mut result, "valid reason", None, None)
         .unwrap();
     assert!(result.exception_applied);
 }
@@ -1479,7 +1480,7 @@ fn enrichment_exception_does_not_modify_checks() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "override", None).unwrap();
+    gate.apply_exception(&mut result, "override", None, None).unwrap();
     // Checks should be unchanged
     assert_eq!(result.checks.len(), 1);
     assert!(!result.checks[0].passed);
@@ -1508,9 +1509,9 @@ fn enrichment_exception_multiple_applications_idempotent() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "first", None).unwrap();
+    gate.apply_exception(&mut result, "first", None, None).unwrap();
     let digest_after_first = result.result_digest.clone();
-    gate.apply_exception(&mut result, "second", None).unwrap();
+    gate.apply_exception(&mut result, "second", None, None).unwrap();
     // After first apply verdict is Pass; second apply is a no-op (already passing).
     assert_eq!(result.exception_justification, "first");
     assert!(result.exception_applied);
@@ -1543,7 +1544,7 @@ fn enrichment_exception_with_adr_ref_sets_pass() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "critical deploy", Some("ADR-2026-099"))
+    gate.apply_exception(&mut result, "critical deploy", Some("ADR-2026-099"), None)
         .unwrap();
     assert_eq!(result.verdict, Verdict::Pass);
     assert!(!result.is_blocked());
@@ -1565,7 +1566,7 @@ fn enrichment_exception_err_does_not_mutate_result() {
         gate_events: Vec::new(),
         result_digest: "original".to_string(),
     };
-    let _ = gate.apply_exception(&mut result, "reason", Some("ADR-1"));
+    let _ = gate.apply_exception(&mut result, "reason", Some("ADR-1"), None);
     assert!(!result.exception_applied);
     assert!(result.exception_justification.is_empty());
     assert_eq!(result.result_digest, "original");
@@ -2190,7 +2191,7 @@ fn enrichment_with_exception_policy_custom_hours() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "quick fix", None)
+    gate.apply_exception(&mut result, "quick fix", None, None)
         .unwrap();
     assert!(result.exception_applied);
 }
@@ -2211,7 +2212,7 @@ fn enrichment_with_config_and_policy_exception_after_evaluate() {
     let mut cx = mock_cx(200_000);
     let mut result = gate.evaluate(&mut cx);
     assert!(result.is_blocked());
-    gate.apply_exception(&mut result, "emergency", None)
+    gate.apply_exception(&mut result, "emergency", None, None)
         .unwrap();
     assert!(!result.is_blocked());
     assert!(result.exception_applied);
@@ -2332,7 +2333,7 @@ fn enrichment_lifecycle_timeout_then_exception_then_report() {
     let mut result = gate.evaluate(&mut cx);
     assert!(result.is_blocked());
 
-    gate.apply_exception(&mut result, "deploy anyway", None)
+    gate.apply_exception(&mut result, "deploy anyway", None, None)
         .unwrap();
     assert!(!result.is_blocked());
 
@@ -2493,7 +2494,7 @@ fn enrichment_result_verdict_fail_to_pass_via_exception() {
         result_digest: "before".to_string(),
     };
     assert!(result.is_blocked());
-    gate.apply_exception(&mut result, "override", None).unwrap();
+    gate.apply_exception(&mut result, "override", None, None).unwrap();
     assert!(!result.is_blocked());
     // total_checks and passed_checks unchanged
     assert_eq!(result.total_checks, 4);

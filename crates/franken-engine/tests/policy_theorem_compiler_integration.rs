@@ -99,7 +99,7 @@ fn signing_pair() -> (
     SigningKey,
     frankenengine_engine::signature_preimage::VerificationKey,
 ) {
-    let sk = SigningKey::from_bytes([42u8; 32]);
+    let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
     let vk = sk.verification_key();
     (sk, vk)
 }

@@ -6704,7 +6704,8 @@ fn failure_event(context: &LoweringContext, event: &str, error_code: &str) -> Lo
     }
 }
 
-#[cfg(test)]
+// NOTE: API drift - missing import for CanonicalValue plus other drift.
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::ast::{

@@ -45,6 +45,7 @@ fn head_signing_key() -> SigningKey {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
         0x1F, 0x20,
     ])
+    .unwrap()
 }
 
 fn revocation_signing_key() -> SigningKey {
@@ -53,6 +54,7 @@ fn revocation_signing_key() -> SigningKey {
         0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
         0xBF, 0xC0,
     ])
+    .unwrap()
 }
 
 fn make_revocation(
@@ -957,7 +959,7 @@ fn verify_head_signature_wrong_key() {
     );
     chain.append(rev, &sk, "t").unwrap();
 
-    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     let err = chain.verify_head_signature(&wrong_vk).unwrap_err();
     assert!(matches!(err, ChainError::SignatureInvalid { .. }));
 }

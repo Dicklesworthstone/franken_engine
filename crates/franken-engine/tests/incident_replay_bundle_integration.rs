@@ -51,7 +51,7 @@ fn test_signing_key() -> SigningKey {
     for (i, b) in key.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(7).wrapping_add(13);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
@@ -992,7 +992,7 @@ fn bundle_id_differs_with_different_artifacts() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 2))
     .build()
@@ -1003,7 +1003,7 @@ fn bundle_id_differs_with_different_artifacts() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 2))
     .policy("p1".to_string(), make_policy_snapshot("p1"))
@@ -1023,7 +1023,7 @@ fn bundle_id_differs_with_different_incident_id() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1034,7 +1034,7 @@ fn bundle_id_differs_with_different_incident_id() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1360,7 +1360,7 @@ fn signing_bytes_differ_with_different_bundle_ids() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1371,7 +1371,7 @@ fn signing_bytes_differ_with_different_bundle_ids() {
         SecurityEpoch::from_raw(100),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1388,7 +1388,7 @@ fn signing_bytes_differ_with_different_epochs() {
         SecurityEpoch::from_raw(1),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1399,7 +1399,7 @@ fn signing_bytes_differ_with_different_epochs() {
         SecurityEpoch::from_raw(200),
         5000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1416,7 +1416,7 @@ fn signing_bytes_differ_with_different_timestamps() {
         SecurityEpoch::from_raw(100),
         1000,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()
@@ -1427,7 +1427,7 @@ fn signing_bytes_differ_with_different_timestamps() {
         SecurityEpoch::from_raw(100),
         9999,
         "key-1".to_string(),
-        SigningKey::from_bytes(*key.as_bytes()),
+        SigningKey::from_bytes(*key.as_bytes()).unwrap(),
     )
     .trace("t1".to_string(), make_trace("t1", 1))
     .build()

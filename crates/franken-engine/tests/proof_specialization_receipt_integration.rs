@@ -39,7 +39,7 @@ fn epoch() -> SecurityEpoch {
 }
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([7u8; 32])
+    SigningKey::from_bytes([7u8; 32]).unwrap()
 }
 
 /// Build a fully-valid receipt with a specific optimization class and epoch.
@@ -558,7 +558,7 @@ fn receipt_sign_and_verify_roundtrip() {
 #[test]
 fn receipt_verify_fails_wrong_key() {
     let key = signing_key();
-    let wrong_vk = SigningKey::from_bytes([99u8; 32]).verification_key();
+    let wrong_vk = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
     let mut receipt = test_receipt(epoch());
     receipt.sign(&key).unwrap();
     assert!(receipt.verify(&wrong_vk).is_err());

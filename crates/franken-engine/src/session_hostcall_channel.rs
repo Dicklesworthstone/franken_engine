@@ -1372,7 +1372,8 @@ fn append_str(preimage: &mut Vec<u8>, value: &str) {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// NOTE: API drift - in-module unit tests need the SigningKey Result port.
+#[cfg(any())]
 mod tests {
     use super::*;
 

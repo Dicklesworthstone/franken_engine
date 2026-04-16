@@ -1100,7 +1100,7 @@ fn exception_rejected_by_default_policy() {
     let gate = ReleaseGate::new(42);
     let mut result = make_failed_result();
     let err = gate
-        .apply_exception(&mut result, "justification", Some("ADR-001"))
+        .apply_exception(&mut result, "justification", Some("ADR-001"), None)
         .unwrap_err();
     assert!(err.contains("does not allow"));
     assert!(!result.exception_applied);
@@ -1117,7 +1117,7 @@ fn exception_rejected_missing_adr_when_required() {
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
     let err = gate
-        .apply_exception(&mut result, "need to ship", None)
+        .apply_exception(&mut result, "need to ship", None, None)
         .unwrap_err();
     assert!(err.contains("ADR reference"));
     assert!(!result.exception_applied);
@@ -1133,7 +1133,7 @@ fn exception_rejected_empty_justification() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    let err = gate.apply_exception(&mut result, "", None).unwrap_err();
+    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
     assert!(err.contains("justification"));
     assert!(!result.exception_applied);
 }
@@ -1148,7 +1148,7 @@ fn exception_succeeds_with_valid_inputs() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    gate.apply_exception(&mut result, "Critical hotfix", Some("ADR-2026-002"))
+    gate.apply_exception(&mut result, "Critical hotfix", Some("ADR-2026-002"), None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);
@@ -1165,7 +1165,7 @@ fn exception_succeeds_without_adr_when_not_required() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    gate.apply_exception(&mut result, "emergency", None)
+    gate.apply_exception(&mut result, "emergency", None, None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);
@@ -1183,7 +1183,7 @@ fn exception_changes_digest() {
     let mut result = make_failed_result();
     result.result_digest = "original_digest".to_string();
     let before = result.result_digest.clone();
-    gate.apply_exception(&mut result, "hotfix", None).unwrap();
+    gate.apply_exception(&mut result, "hotfix", None, None).unwrap();
     assert_ne!(result.result_digest, before);
 }
 
@@ -1199,7 +1199,7 @@ fn exception_validation_order_allow_first() {
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
     let err = gate
-        .apply_exception(&mut result, "valid justification", Some("ADR-001"))
+        .apply_exception(&mut result, "valid justification", Some("ADR-001"), None)
         .unwrap_err();
     assert!(err.contains("does not allow"));
 }
@@ -1215,7 +1215,7 @@ fn exception_validation_order_adr_before_justification() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    let err = gate.apply_exception(&mut result, "", None).unwrap_err();
+    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
     // ADR check comes before justification check.
     assert!(err.contains("ADR reference"));
 }
@@ -1567,7 +1567,7 @@ fn exception_on_passing_result_still_sets_fields() {
         gate_events: Vec::new(),
         result_digest: "pre".to_string(),
     };
-    gate.apply_exception(&mut result, "preemptive", None)
+    gate.apply_exception(&mut result, "preemptive", None, None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.exception_justification, "preemptive");
@@ -1615,7 +1615,7 @@ fn integration_infra_failure_then_exception_rejected() {
 
     let gate2 = ReleaseGate::new(42);
     let err = gate2
-        .apply_exception(&mut result, "override", Some("ADR-001"))
+        .apply_exception(&mut result, "override", Some("ADR-001"), None)
         .unwrap_err();
     assert!(err.contains("does not allow"));
 }
@@ -1635,7 +1635,7 @@ fn integration_exception_overrides_failure() {
     assert!(result.is_blocked());
 
     // Apply exception.
-    gate.apply_exception(&mut result, "Critical hotfix P0", Some("ADR-2026-003"))
+    gate.apply_exception(&mut result, "Critical hotfix P0", Some("ADR-2026-003"), None)
         .unwrap();
     assert!(!result.is_blocked());
     assert!(result.exception_applied);

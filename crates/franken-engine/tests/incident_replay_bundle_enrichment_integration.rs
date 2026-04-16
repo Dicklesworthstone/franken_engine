@@ -639,7 +639,7 @@ fn enr_signing_key() -> SigningKey {
     for (i, b) in key.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(7).wrapping_add(13);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn enr_make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {

@@ -761,7 +761,7 @@ fn json_fields_signed_log_checkpoint() {
 fn json_fields_log_operator_key() {
     let key = LogOperatorKey {
         key_id: "operator-alpha".into(),
-        verification_key: VerificationKey::from_bytes([0xAA; 32]),
+        verification_key: VerificationKey::from_bytes([0xAA; 32]).unwrap(),
         revoked: false,
     };
     let v: serde_json::Value = serde_json::to_value(&key).unwrap();

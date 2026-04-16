@@ -40,7 +40,7 @@ fn slot() -> SlotId {
 }
 
 fn sk() -> SigningKey {
-    SigningKey::from_bytes([55u8; 32])
+    SigningKey::from_bytes([55u8; 32]).unwrap()
 }
 
 fn promotion_receipt() -> ReplacementReceipt {

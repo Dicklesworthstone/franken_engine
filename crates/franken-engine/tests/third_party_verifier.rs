@@ -131,7 +131,7 @@ fn make_signing_key(seed: u8) -> SigningKey {
     for (index, byte) in key.iter_mut().enumerate() {
         *byte = seed.wrapping_add(index as u8).wrapping_mul(7);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn make_trace(trace_id: &str) -> TraceRecord {

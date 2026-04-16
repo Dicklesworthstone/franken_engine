@@ -157,7 +157,7 @@ fn sgx_quote() -> AttestationQuote {
 }
 
 fn sk() -> SigningKey {
-    SigningKey::from_bytes([7u8; 32])
+    SigningKey::from_bytes([7u8; 32]).unwrap()
 }
 
 fn loaded_store(epoch: u64) -> TeeAttestationPolicyStore {
@@ -2377,7 +2377,7 @@ fn enrichment_override_verify_tampered_target_root_id_rejected() {
 #[test]
 fn enrichment_override_verify_wrong_key_rejected() {
     let signer = sk();
-    let wrong_signer = SigningKey::from_bytes([99u8; 32]);
+    let wrong_signer = SigningKey::from_bytes([99u8; 32]).unwrap();
     let wrong_verifier = wrong_signer.verification_key();
     let artifact = SignedTrustRootOverrideArtifact::create_signed(
         &signer,

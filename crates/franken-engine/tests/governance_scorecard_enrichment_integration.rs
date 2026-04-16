@@ -147,7 +147,7 @@ fn test_request() -> GovernanceScorecardRequest {
 }
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn test_ledger() -> GovernanceAuditLedger {

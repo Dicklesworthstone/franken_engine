@@ -636,7 +636,7 @@ fn receipt_sign_and_verify() {
     let compiler = PolicyTheoremCompiler::new();
     let ir = valid_policy();
     let result = compiler.compile(&ir).expect("compile");
-    let key = SigningKey::from_bytes([42u8; 32]);
+    let key = SigningKey::from_bytes([42u8; 32]).unwrap();
     let vk = key.verification_key();
     let mut receipt = PolicyValidationReceipt::from_compilation(
         &result,
@@ -655,7 +655,7 @@ fn receipt_fields_populated() {
     let compiler = PolicyTheoremCompiler::new();
     let ir = valid_policy();
     let result = compiler.compile(&ir).expect("compile");
-    let key = SigningKey::from_bytes([42u8; 32]);
+    let key = SigningKey::from_bytes([42u8; 32]).unwrap();
     let vk = key.verification_key();
     let receipt = PolicyValidationReceipt::from_compilation(
         &result,

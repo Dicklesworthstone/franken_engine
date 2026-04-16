@@ -1532,6 +1532,9 @@ fn benchmark_environment_manifest_serde_roundtrip() {
         timezone: "UTC".to_string(),
         os: "linux".to_string(),
         arch: "x86_64".to_string(),
+        cpu_model: "test-cpu".to_string(),
+        memory_bytes: 16 * 1024 * 1024 * 1024,
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_pins: BenchmarkRuntimePins::default(),
         fairness_policy: BenchmarkFairnessPolicy::default(),
     };
@@ -1552,6 +1555,9 @@ fn benchmark_environment_manifest_fields() {
         timezone: "America/New_York".to_string(),
         os: "linux".to_string(),
         arch: "aarch64".to_string(),
+        cpu_model: "test-cpu".to_string(),
+        memory_bytes: 16 * 1024 * 1024 * 1024,
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_pins: BenchmarkRuntimePins::default(),
         fairness_policy: BenchmarkFairnessPolicy::default(),
     };
@@ -2072,6 +2078,9 @@ fn serde_roundtrip_benchmark_environment_manifest() {
         timezone: "UTC".to_string(),
         os: "linux".to_string(),
         arch: "x86_64".to_string(),
+        cpu_model: "test-cpu".to_string(),
+        memory_bytes: 16 * 1024 * 1024 * 1024,
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
         runtime_pins: BenchmarkRuntimePins::default(),
         fairness_policy: BenchmarkFairnessPolicy::default(),
     };

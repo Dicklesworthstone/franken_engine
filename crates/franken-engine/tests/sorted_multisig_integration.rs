@@ -46,7 +46,7 @@ use frankenengine_engine::sorted_multisig::{
 // ---------------------------------------------------------------------------
 
 fn make_signing_key(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; SIGNING_KEY_LEN])
+    SigningKey::from_bytes([seed; SIGNING_KEY_LEN]).unwrap()
 }
 
 fn make_sig_pair(seed: u8) -> (SigningKey, VerificationKey) {
@@ -112,7 +112,7 @@ fn signer_signature_ord_by_key_bytes() {
     let ss1 = SignerSignature::new(vk1.clone(), sig.clone());
     let ss2 = SignerSignature::new(vk2.clone(), sig);
     // Ordering is purely by verification key bytes.
-    if vk1.0 < vk2.0 {
+    if vk1.as_bytes() < vk2.as_bytes() {
         assert!(ss1 < ss2);
     } else {
         assert!(ss2 < ss1);
@@ -148,7 +148,7 @@ fn sorted_array_from_presorted_entries() {
     assert_eq!(arr.len(), 2);
     assert!(!arr.is_empty());
     // Verify invariant: sorted ascending by key bytes.
-    assert!(arr.entries()[0].signer.0 < arr.entries()[1].signer.0);
+    assert!(arr.entries()[0].signer.as_bytes() < arr.entries()[1].signer.as_bytes());
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn from_unsorted_sorts_and_deduplicates_order() {
     let arr = SortedSignatureArray::from_unsorted(entries).unwrap();
     assert_eq!(arr.len(), 3);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 
@@ -208,7 +208,7 @@ fn unsorted_entries_rejected_by_new() {
         SignerSignature::new(vk2.clone(), sign_with(&sk2, &obj)),
     ];
     // Force descending order.
-    if entries[0].signer.0 < entries[1].signer.0 {
+    if entries[0].signer.as_bytes() < entries[1].signer.as_bytes() {
         entries.swap(0, 1);
     }
 
@@ -302,7 +302,7 @@ fn insert_at_beginning() {
 
     assert_eq!(arr.len(), 3);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 
@@ -323,7 +323,7 @@ fn insert_at_end() {
 
     assert_eq!(arr.len(), 3);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 
@@ -344,7 +344,7 @@ fn insert_in_middle() {
 
     assert_eq!(arr.len(), 3);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 
@@ -388,7 +388,7 @@ fn signer_keys_returns_sorted_list() {
 
     let keys = arr.signer_keys();
     assert_eq!(keys.len(), 2);
-    assert!(keys[0].0 < keys[1].0);
+    assert!(keys[0].as_bytes() < keys[1].as_bytes());
 }
 
 // =========================================================================
@@ -961,7 +961,7 @@ fn sorted_signature_array_serde_round_trip() {
 
     // Verify still sorted after deserialization.
     for i in 1..restored.entries().len() {
-        assert!(restored.entries()[i - 1].signer.0 < restored.entries()[i].signer.0);
+        assert!(restored.entries()[i - 1].signer.as_bytes() < restored.entries()[i].signer.as_bytes());
     }
 }
 
@@ -1154,7 +1154,7 @@ fn end_to_end_multisig_workflow() {
 
     // 4. Verify sorting invariant.
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 
     // 5. All five signers authorized, require 3-of-5 quorum.
@@ -1204,7 +1204,7 @@ fn incremental_build_via_insert() {
 
     assert_eq!(arr.len(), 4);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 
     // All present.
@@ -1233,7 +1233,7 @@ fn many_signers_stress_test() {
 
     // Verify sorted.
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 

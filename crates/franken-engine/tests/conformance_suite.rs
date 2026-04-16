@@ -245,7 +245,7 @@ fn test_signing_key(seed: u8) -> SigningKey {
     let mut bytes = [0u8; 32];
     bytes[0] = seed;
     bytes[31] = seed.wrapping_add(1);
-    SigningKey::from_bytes(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 #[test]
@@ -2039,8 +2039,8 @@ fn conformance_meta_schema_id_derivation_stable() {
 
 #[test]
 fn conformance_meta_signing_key_zero_rejected() {
-    let zero_sk = SigningKey::from_bytes([0u8; 32]);
-    let result = sign_preimage(&zero_sk, b"test");
+    // Zero-byte keys are now rejected at construction time.
+    let result = SigningKey::from_bytes([0u8; 32]);
     assert!(
         matches!(result, Err(SignatureError::InvalidSigningKey)),
         "all-zero signing key must be rejected"
@@ -2049,10 +2049,8 @@ fn conformance_meta_signing_key_zero_rejected() {
 
 #[test]
 fn conformance_meta_verification_key_zero_rejected() {
-    let sk = test_signing_key(99);
-    let sig = sign_preimage(&sk, b"test").expect("sign");
-    let zero_vk = VerificationKey::from_bytes([0u8; 32]);
-    let result = verify_signature(&zero_vk, b"test", &sig);
+    // Zero-byte keys are now rejected at construction time.
+    let result = VerificationKey::from_bytes([0u8; 32]);
     assert!(
         matches!(result, Err(SignatureError::InvalidVerificationKey)),
         "all-zero verification key must be rejected"

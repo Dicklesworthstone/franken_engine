@@ -52,7 +52,7 @@ fn slot(name: &str) -> SlotId {
 }
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([5u8; 32])
+    SigningKey::from_bytes([5u8; 32]).unwrap()
 }
 
 fn validation_artifacts() -> Vec<ValidationArtifactRef> {

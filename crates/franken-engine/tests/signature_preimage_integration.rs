@@ -74,10 +74,11 @@ fn test_signing_key() -> SigningKey {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
         0x1F, 0x20,
     ])
+    .unwrap()
 }
 
 fn alt_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0xAA; SIGNING_KEY_LEN])
+    SigningKey::from_bytes([0xAA; SIGNING_KEY_LEN]).unwrap()
 }
 
 fn test_object() -> TestSignable {
@@ -128,7 +129,7 @@ fn signature_sentinel_is_all_zeros() {
 #[test]
 fn signing_key_from_bytes_and_as_bytes_roundtrip() {
     let bytes = [0x42u8; SIGNING_KEY_LEN];
-    let sk = SigningKey::from_bytes(bytes);
+    let sk = SigningKey::from_bytes(bytes).unwrap();
     assert_eq!(*sk.as_bytes(), bytes);
 }
 
@@ -142,9 +143,9 @@ fn verification_key_derivation_is_deterministic() {
 
 #[test]
 fn different_signing_keys_produce_different_verification_keys() {
-    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
-    let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]);
+    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
+    let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]).unwrap();
     let vks: BTreeSet<[u8; VERIFICATION_KEY_LEN]> = [sk1, sk2, sk3]
         .iter()
         .map(|sk| *sk.verification_key().as_bytes())
@@ -174,7 +175,7 @@ fn signing_key_clone_eq() {
 #[test]
 fn verification_key_from_bytes_and_as_bytes_roundtrip() {
     let bytes = [0xBE; VERIFICATION_KEY_LEN];
-    let vk = VerificationKey::from_bytes(bytes);
+    let vk = VerificationKey::from_bytes(bytes).unwrap();
     assert_eq!(*vk.as_bytes(), bytes);
 }
 
@@ -202,8 +203,8 @@ fn verification_key_serde_roundtrip() {
 
 #[test]
 fn verification_key_ord() {
-    let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]);
-    let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]);
+    let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]).unwrap();
+    let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]).unwrap();
     assert!(vk_a < vk_b);
 }
 
@@ -291,7 +292,7 @@ fn signature_lower_upper_halves() {
 
 #[test]
 fn error_display_verification_failed() {
-    let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
     let err = SignatureError::VerificationFailed {
         signer: vk,
         reason: "bad signature".to_string(),
@@ -343,7 +344,7 @@ fn error_is_std_error() {
 
 #[test]
 fn error_serde_roundtrip_all_variants() {
-    let vk = VerificationKey::from_bytes([0x42; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([0x42; VERIFICATION_KEY_LEN]).unwrap();
     let errors = vec![
         SignatureError::VerificationFailed {
             signer: vk,
@@ -510,7 +511,7 @@ fn sign_preimage_different_data_different_signatures() {
 #[test]
 fn verify_fails_with_wrong_key() {
     let sk = test_signing_key();
-    let wrong_vk = VerificationKey::from_bytes([0xFF; VERIFICATION_KEY_LEN]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; VERIFICATION_KEY_LEN]).unwrap();
     let preimage = b"test data";
     let sig = sign_preimage(&sk, preimage).unwrap();
     let err = verify_signature(&wrong_vk, preimage, &sig).unwrap_err();
@@ -573,7 +574,7 @@ fn sign_object_is_deterministic() {
 #[test]
 fn verify_object_fails_with_wrong_key() {
     let sk = test_signing_key();
-    let wrong_vk = VerificationKey::from_bytes([0xBB; VERIFICATION_KEY_LEN]);
+    let wrong_vk = VerificationKey::from_bytes([0xBB; VERIFICATION_KEY_LEN]).unwrap();
     let obj = test_object();
     let sig = sign_object(&obj, &sk).unwrap();
     let err = verify_object(&obj, &wrong_vk, &sig).unwrap_err();
@@ -597,16 +598,15 @@ fn verify_object_fails_with_different_object() {
 
 #[test]
 fn zero_signing_key_rejected() {
-    let zero_sk = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]);
-    let err = sign_preimage(&zero_sk, b"test").unwrap_err();
+    // Rejection now happens at construction time.
+    let err = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]).unwrap_err();
     assert_eq!(err, SignatureError::InvalidSigningKey);
 }
 
 #[test]
 fn zero_verification_key_rejected() {
-    let zero_vk = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]);
-    let sig = Signature::from_bytes([1u8; SIGNATURE_LEN]);
-    let err = verify_signature(&zero_vk, b"test", &sig).unwrap_err();
+    // Rejection now happens at construction time.
+    let err = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]).unwrap_err();
     assert_eq!(err, SignatureError::InvalidVerificationKey);
 }
 
@@ -777,8 +777,8 @@ fn context_sign_is_deterministic() {
 #[test]
 fn context_different_keys_produce_different_signatures() {
     let mut ctx = SignatureContext::new();
-    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
+    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
     let obj = test_object();
 
     let sig1 = ctx.sign(&obj, &sk1, "t1").unwrap();
@@ -802,7 +802,7 @@ fn context_different_data_produces_different_signatures() {
 fn context_tracks_verification_failure() {
     let mut ctx = SignatureContext::new();
     let sk = test_signing_key();
-    let wrong_vk = VerificationKey::from_bytes([0xEE; VERIFICATION_KEY_LEN]);
+    let wrong_vk = VerificationKey::from_bytes([0xEE; VERIFICATION_KEY_LEN]).unwrap();
     let obj = test_object();
 
     let sig = ctx.sign(&obj, &sk, "t-fail").unwrap();
@@ -816,7 +816,7 @@ fn context_event_counts_by_type() {
     let mut ctx = SignatureContext::new();
     let sk = test_signing_key();
     let vk = sk.verification_key();
-    let wrong_vk = VerificationKey::from_bytes([0xCC; VERIFICATION_KEY_LEN]);
+    let wrong_vk = VerificationKey::from_bytes([0xCC; VERIFICATION_KEY_LEN]).unwrap();
     let obj = test_object();
 
     // Sign twice
@@ -882,7 +882,7 @@ fn context_multiple_operations_accumulate_events() {
     ctx.sign(&obj, &sk, "s3").unwrap();
     ctx.verify(&obj, &vk, &sig, "v1").unwrap();
     ctx.verify(&obj, &vk, &sig, "v2").unwrap();
-    let wrong_vk = VerificationKey::from_bytes([0xDD; VERIFICATION_KEY_LEN]);
+    let wrong_vk = VerificationKey::from_bytes([0xDD; VERIFICATION_KEY_LEN]).unwrap();
     let _ = ctx.verify(&obj, &wrong_vk, &sig, "v3");
 
     assert_eq!(ctx.sign_count(), 3);
@@ -896,9 +896,9 @@ fn context_multiple_operations_accumulate_events() {
 
 #[test]
 fn multi_sig_same_preimage_different_signatures() {
-    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
-    let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]);
+    let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+    let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
+    let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]).unwrap();
     let obj = test_object();
 
     let sig1 = sign_object(&obj, &sk1).unwrap();
@@ -940,7 +940,7 @@ fn signature_event_serde_roundtrip() {
 
 #[test]
 fn signature_event_type_verified_serde_roundtrip() {
-    let vk = VerificationKey::from_bytes([0x11; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([0x11; VERIFICATION_KEY_LEN]).unwrap();
     let event = SignatureEvent {
         event_type: SignatureEventType::Verified { signer: vk },
         domain: ObjectDomain::EvidenceRecord,
@@ -953,7 +953,7 @@ fn signature_event_type_verified_serde_roundtrip() {
 
 #[test]
 fn signature_event_type_verification_failed_serde_roundtrip() {
-    let vk = VerificationKey::from_bytes([0x22; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([0x22; VERIFICATION_KEY_LEN]).unwrap();
     let event = SignatureEvent {
         event_type: SignatureEventType::VerificationFailed {
             signer: vk,
@@ -983,21 +983,21 @@ fn signature_event_type_canonicality_failed_serde_roundtrip() {
 
 #[test]
 fn event_type_display_signed() {
-    let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
     let evt = SignatureEventType::Signed { signer: vk };
     assert!(evt.to_string().contains("signed by"));
 }
 
 #[test]
 fn event_type_display_verified() {
-    let vk = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]).unwrap();
     let evt = SignatureEventType::Verified { signer: vk };
     assert!(evt.to_string().contains("verified for"));
 }
 
 #[test]
 fn event_type_display_verification_failed() {
-    let vk = VerificationKey::from_bytes([3u8; VERIFICATION_KEY_LEN]);
+    let vk = VerificationKey::from_bytes([3u8; VERIFICATION_KEY_LEN]).unwrap();
     let evt = SignatureEventType::VerificationFailed {
         signer: vk,
         reason: "mismatch".to_string(),

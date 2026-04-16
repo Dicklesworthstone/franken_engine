@@ -44,9 +44,9 @@ mod asupersync_contracts {
         // This catches breaking changes in external crate APIs
 
         // Mock data structures that would use external types
-        let _governance_config = BTreeMap::new();
-        let _policy_decisions = Vec::new();
-        let _evidence_records = Vec::new();
+        let _governance_config: BTreeMap<String, String> = BTreeMap::new();
+        let _policy_decisions: Vec<String> = Vec::new();
+        let _evidence_records: Vec<String> = Vec::new();
 
         // This test passes if compilation succeeds
         assert!(true, "Integration contract compilation check passed");

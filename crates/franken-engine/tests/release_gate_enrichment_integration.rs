@@ -413,7 +413,7 @@ fn enrichment_exception_denied_when_not_allowed() {
         result_digest: "orig".to_string(),
     };
     let err = gate
-        .apply_exception(&mut result, "override reason", Some("ADR-001"))
+        .apply_exception(&mut result, "override reason", Some("ADR-001"), None)
         .unwrap_err();
     assert!(err.contains("does not allow"));
 }
@@ -441,7 +441,7 @@ fn enrichment_exception_denied_without_adr_when_required() {
         result_digest: "orig".to_string(),
     };
     let err = gate
-        .apply_exception(&mut result, "reason", None)
+        .apply_exception(&mut result, "reason", None, None)
         .unwrap_err();
     assert!(err.contains("ADR reference"));
 }
@@ -468,7 +468,7 @@ fn enrichment_exception_denied_with_empty_justification() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    let err = gate.apply_exception(&mut result, "", None).unwrap_err();
+    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
     assert!(err.contains("justification"));
 }
 
@@ -494,7 +494,7 @@ fn enrichment_exception_succeeds_when_policy_allows() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "emergency hotfix", None)
+    gate.apply_exception(&mut result, "emergency hotfix", None, None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.exception_justification, "emergency hotfix");
@@ -839,7 +839,7 @@ fn enrichment_exception_succeeds_with_adr_when_required() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "critical hotfix", Some("ADR-042"))
+    gate.apply_exception(&mut result, "critical hotfix", Some("ADR-042"), None)
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.exception_justification, "critical hotfix");

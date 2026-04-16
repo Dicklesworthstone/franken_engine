@@ -93,7 +93,7 @@ fn valid_policy() -> PolicyIr {
 }
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 // ===========================================================================
@@ -1626,7 +1626,7 @@ fn receipt_wrong_signer_key_fails_verify() {
     assert!(receipt.verify());
 
     // Replace the signer key with a different one.
-    let other_sk = SigningKey::from_bytes([99u8; 32]);
+    let other_sk = SigningKey::from_bytes([99u8; 32]).unwrap();
     receipt.signer = other_sk.verification_key();
     assert!(!receipt.verify());
 }

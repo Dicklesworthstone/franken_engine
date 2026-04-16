@@ -28,7 +28,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 fn make_sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_principal(seed: u8) -> PrincipalId {

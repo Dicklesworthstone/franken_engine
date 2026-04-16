@@ -44,7 +44,7 @@ fn test_signing_key() -> SigningKey {
     for (i, b) in key.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(7).wrapping_add(13);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
@@ -1150,7 +1150,7 @@ fn signature_valid_with_correct_key() {
 #[test]
 fn signature_invalid_with_different_key() {
     let bundle = build_test_bundle();
-    let wrong_key = SigningKey::from_bytes([0xFFu8; 32]).verification_key();
+    let wrong_key = SigningKey::from_bytes([0xFFu8; 32]).unwrap().verification_key();
     let verifier = BundleVerifier::new();
     let report = verifier.verify_signature(&bundle, &wrong_key, 6000);
     assert!(!report.passed);

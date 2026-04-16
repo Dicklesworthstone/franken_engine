@@ -27,7 +27,7 @@ use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, Si
 // ── helpers ──────────────────────────────────────────────────────────────
 
 fn test_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn sentinel_sig() -> Signature {
@@ -557,7 +557,7 @@ fn flow_proof_content_hash_changes_on_mutation() {
 #[test]
 fn flow_proof_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong_key = SigningKey::from_bytes([99u8; 32]);
+    let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
     let mut proof = make_flow_proof();
     proof.sign(&key).unwrap();
     assert!(proof.verify(&wrong_key.verification_key()).is_err());
@@ -587,7 +587,7 @@ fn receipt_content_hash_changes_on_mutation() {
 #[test]
 fn receipt_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong_key = SigningKey::from_bytes([99u8; 32]);
+    let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
     let mut receipt = make_receipt();
     receipt.sign(&key).unwrap();
     assert!(receipt.verify(&wrong_key.verification_key()).is_err());
@@ -634,7 +634,7 @@ fn claim_content_hash_changes_on_mutation() {
 #[test]
 fn claim_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong_key = SigningKey::from_bytes([99u8; 32]);
+    let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
     let mut claim = make_claim(ClaimStrength::Full);
     claim.sign(&key).unwrap();
     assert!(claim.verify(&wrong_key.verification_key()).is_err());

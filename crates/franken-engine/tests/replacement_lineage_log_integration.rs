@@ -45,7 +45,7 @@ fn test_slot_id() -> SlotId {
 }
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([5u8; 32])
+    SigningKey::from_bytes([5u8; 32]).unwrap()
 }
 
 fn test_validation_artifacts() -> Vec<ValidationArtifactRef> {

@@ -42,11 +42,11 @@ fn test_slot_id() -> SlotId {
 }
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([1u8; 32])
+    SigningKey::from_bytes([1u8; 32]).unwrap()
 }
 
 fn test_signing_key_2() -> SigningKey {
-    SigningKey::from_bytes([2u8; 32])
+    SigningKey::from_bytes([2u8; 32]).unwrap()
 }
 
 fn test_behavior_hash() -> [u8; 32] {
@@ -527,7 +527,7 @@ fn manifest_verify_signature() {
 #[test]
 fn manifest_verify_signature_wrong_key() {
     let manifest = create_test_manifest();
-    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     assert!(manifest.verify_signature(&wrong_vk).is_err());
 }
 

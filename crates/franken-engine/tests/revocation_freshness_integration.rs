@@ -41,6 +41,7 @@ fn operator_signing_key() -> SigningKey {
         0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
         0xBF, 0xC0,
     ])
+    .unwrap()
 }
 
 fn operator_verification_key() -> VerificationKey {
@@ -570,7 +571,7 @@ fn override_invalid_signature() {
     drive_to_degraded(&mut ctrl);
 
     let token = make_override_token(OperationType::ExtensionActivation, 2000);
-    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
 
     let result = ctrl.evaluate_with_override(
         OperationType::ExtensionActivation,

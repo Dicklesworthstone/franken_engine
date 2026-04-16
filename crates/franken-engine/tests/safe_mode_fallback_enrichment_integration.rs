@@ -62,7 +62,7 @@ fn attest_mgr_cfg(cfg: AttestationFallbackConfig) -> AttestationFallbackManager 
 fn attest_mgr_key(key: [u8; 32]) -> AttestationFallbackManager {
     AttestationFallbackManager::new(
         AttestationFallbackConfig::default(),
-        SigningKey::from_bytes(key),
+        SigningKey::from_bytes(key).unwrap(),
     )
 }
 
@@ -1956,7 +1956,7 @@ fn enrichment_integration_with_default_signing_key_produces_valid_receipts() {
 
 #[test]
 fn enrichment_integration_custom_signing_key_produces_valid_receipts() {
-    let key = SigningKey::from_bytes([42u8; 32]);
+    let key = SigningKey::from_bytes([42u8; 32]).unwrap();
     let mut mgr = AttestationFallbackManager::new(AttestationFallbackConfig::default(), key);
     let req = req_hi(AutonomousAction::Quarantine, 100);
     mgr.evaluate_action(req, AttestationHealth::EvidenceExpired)

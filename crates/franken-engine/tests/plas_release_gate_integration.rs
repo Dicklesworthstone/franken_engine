@@ -35,7 +35,7 @@ fn signing_key(seed: u8) -> SigningKey {
     for (idx, byte) in bytes.iter_mut().enumerate() {
         *byte = seed.wrapping_add((idx as u8).wrapping_mul(11));
     }
-    SigningKey::from_bytes(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn extension_id(label: &str) -> EngineObjectId {
@@ -124,7 +124,7 @@ fn promote_witness_with_passing_theorems(
         policy_id,
         SecurityEpoch::from_raw(epoch),
         timestamp_ns,
-        SigningKey::from_bytes(*synthesizer_key.as_bytes()),
+        SigningKey::from_bytes(*synthesizer_key.as_bytes()).unwrap(),
     )
     .require(capability.clone())
     .proof(theorem_proof(&capability, capability.as_str()))
@@ -159,7 +159,7 @@ fn publish_artifact(
 ) -> frankenengine_engine::capability_witness::PublishedWitnessArtifact {
     let mut pipeline = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(900),
-        SigningKey::from_bytes(*tree_head_signing_key.as_bytes()),
+        SigningKey::from_bytes(*tree_head_signing_key.as_bytes()).unwrap(),
         WitnessPublicationConfig::default(),
     )
     .expect("pipeline");

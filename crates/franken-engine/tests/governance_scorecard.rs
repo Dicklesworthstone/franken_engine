@@ -30,7 +30,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 use frankenengine_engine::version_matrix_lane::MatrixHealthSummary;
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x7A; 32])
+    SigningKey::from_bytes([0x7A; 32]).unwrap()
 }
 
 fn baseline_budget_accountant() -> BudgetAccountant {

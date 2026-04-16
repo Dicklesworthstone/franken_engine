@@ -36,7 +36,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 // ---------------------------------------------------------------------------
 
 fn make_sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -804,7 +804,7 @@ fn zones_are_independent() {
 #[test]
 fn quorum_failure_rejects_genesis() {
     let sk = make_sk(1);
-    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     let genesis = build_genesis(slice::from_ref(&sk), "zone-a");
 
     let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
@@ -820,7 +820,7 @@ fn quorum_failure_rejects_genesis() {
 fn quorum_failure_rejects_subsequent_checkpoint() {
     let sk = make_sk(1);
     let vk = sk.verification_key();
-    let wrong_vk = VerificationKey::from_bytes([0xEE; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xEE; 32]).unwrap();
     let genesis = build_genesis(slice::from_ref(&sk), "zone-a");
 
     let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());

@@ -38,7 +38,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 // ---------------------------------------------------------------------------
 
 fn make_sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_principal(seed: u8) -> PrincipalId {
@@ -720,7 +720,7 @@ fn verify_fails_tampered_signature() {
 fn verify_fails_wrong_issuer() {
     let sk = make_sk(1);
     let mut token = build_basic_token(&sk);
-    token.issuer = VerificationKey::from_bytes([0xFF; 32]);
+    token.issuer = VerificationKey::from_bytes([0xFF; 32]).unwrap();
 
     let ctx = basic_ctx();
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();

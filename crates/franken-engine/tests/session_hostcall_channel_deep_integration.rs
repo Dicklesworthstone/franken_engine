@@ -40,7 +40,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ---------------------------------------------------------------------------
 
 fn signing_key(byte: u8) -> SigningKey {
-    SigningKey::from_bytes([byte; 32])
+    SigningKey::from_bytes([byte; 32]).unwrap()
 }
 
 fn handshake(session_id: &str, trace_id: &str, tick: u64) -> SessionHandshake {
@@ -1213,7 +1213,8 @@ fn session_channel_error_from_signature_error() {
     use frankenengine_engine::signature_preimage::SignatureError;
 
     let sig_err = SignatureError::VerificationFailed {
-        signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes([0u8; 32]),
+        signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes([1u8; 32])
+            .unwrap(),
         reason: "test failure".to_string(),
     };
     let channel_err: SessionChannelError = sig_err.into();
@@ -1232,7 +1233,8 @@ fn session_channel_error_display_signature_failure() {
     use frankenengine_engine::signature_preimage::SignatureError;
 
     let err = SessionChannelError::SignatureFailure(SignatureError::VerificationFailed {
-        signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes([0u8; 32]),
+        signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes([1u8; 32])
+            .unwrap(),
         reason: "test".to_string(),
     });
     let s = err.to_string();
@@ -1547,8 +1549,9 @@ fn all_error_display_strings_are_non_empty() {
         SessionChannelError::InvalidHandshake { detail: "d".into() },
         SessionChannelError::SignatureFailure(SignatureError::VerificationFailed {
             signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes(
-                [0u8; 32],
-            ),
+                [1u8; 32],
+            )
+            .unwrap(),
             reason: "test".to_string(),
         }),
         SessionChannelError::SessionAlreadyExists {

@@ -30,11 +30,11 @@ fn synthesizer_signing_key() -> SigningKey {
     for (idx, byte) in bytes.iter_mut().enumerate() {
         *byte = (idx as u8).wrapping_mul(13).wrapping_add(7);
     }
-    SigningKey::from_bytes(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn tree_head_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x44; 32])
+    SigningKey::from_bytes([0x44; 32]).unwrap()
 }
 
 fn extension_id(seed: u64) -> EngineObjectId {
@@ -705,7 +705,7 @@ fn verify_artifact_rejects_wrong_synthesizer_key() {
         .expect("publish");
 
     let artifact = &pipeline.publications()[0];
-    let wrong_key = SigningKey::from_bytes([0xFF; 32]);
+    let wrong_key = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let err = WitnessPublicationPipeline::verify_artifact(
         artifact,
         &wrong_key.verification_key(),

@@ -36,7 +36,7 @@ fn seed_n(n: u8) -> [u8; 32] {
 
 fn make_signing_key(seed: &[u8; 32], ep: SecurityEpoch) -> SigningKey {
     let derived = derive_role_key(seed, KeyRole::Signing, ep);
-    SigningKey::from_bytes(derived)
+    SigningKey::from_bytes(derived).unwrap()
 }
 
 fn make_encryption_private(seed: &[u8; 32], ep: SecurityEpoch) -> EncryptionPrivateKey {
@@ -46,7 +46,7 @@ fn make_encryption_private(seed: &[u8; 32], ep: SecurityEpoch) -> EncryptionPriv
 
 fn make_issuance_key(seed: &[u8; 32], ep: SecurityEpoch) -> SigningKey {
     let derived = derive_role_key(seed, KeyRole::Issuance, ep);
-    SigningKey::from_bytes(derived)
+    SigningKey::from_bytes(derived).unwrap()
 }
 
 fn make_role_entry(
@@ -93,7 +93,7 @@ fn build_full_store(seed: &[u8; 32], ep: SecurityEpoch) -> PrincipalKeyStore {
     store
         .register_key(make_role_entry(
             KeyRole::Encryption,
-            VerificationKey([0u8; 32]),
+            VerificationKey::from_bytes([1u8; 32]).unwrap(),
             Some(enc.public_key()),
             KeyStatus::Active,
             ep,
@@ -537,7 +537,7 @@ fn enrichment_role_key_entry_with_encryption_key_serde() {
     let enc = make_encryption_private(&seed, ep);
     let entry = make_role_entry(
         KeyRole::Encryption,
-        VerificationKey([0u8; 32]),
+        VerificationKey::from_bytes([1u8; 32]).unwrap(),
         Some(enc.public_key()),
         KeyStatus::Active,
         ep,
@@ -636,7 +636,7 @@ fn enrichment_owner_key_bundle_verify_rejects_wrong_key() {
     )
     .unwrap();
 
-    let wrong_vk = VerificationKey([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     assert_eq!(
         bundle.verify(&wrong_vk),
         Err(KeyRoleError::BundleSignatureInvalid)
@@ -1106,7 +1106,7 @@ fn enrichment_enforce_role_mismatch_encryption_vs_issuance() {
     let enc = make_encryption_private(&seed, ep);
     let entry = make_role_entry(
         KeyRole::Encryption,
-        VerificationKey([0u8; 32]),
+        VerificationKey::from_bytes([1u8; 32]).unwrap(),
         Some(enc.public_key()),
         KeyStatus::Active,
         ep,

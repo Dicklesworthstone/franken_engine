@@ -34,7 +34,7 @@ fn test_seed() -> [u8; 32] {
 
 fn make_signing_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
     let derived = principal_key_roles::derive_role_key(seed, KeyRole::Signing, epoch);
-    SigningKey::from_bytes(derived)
+    SigningKey::from_bytes(derived).unwrap()
 }
 
 fn make_encryption_private(seed: &[u8; 32], epoch: SecurityEpoch) -> EncryptionPrivateKey {
@@ -44,7 +44,7 @@ fn make_encryption_private(seed: &[u8; 32], epoch: SecurityEpoch) -> EncryptionP
 
 fn make_issuance_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
     let derived = principal_key_roles::derive_role_key(seed, KeyRole::Issuance, epoch);
-    SigningKey::from_bytes(derived)
+    SigningKey::from_bytes(derived).unwrap()
 }
 
 fn make_role_entry(
@@ -271,7 +271,7 @@ fn role_key_entry_with_encryption_pk_serde_roundtrip() {
     let enc = make_encryption_private(&seed, epoch);
     let entry = make_role_entry(
         KeyRole::Encryption,
-        VerificationKey([0u8; 32]),
+        VerificationKey::from_bytes([1u8; 32]).unwrap(),
         Some(enc.public_key()),
         KeyStatus::Active,
         epoch,
@@ -286,7 +286,7 @@ fn role_key_entry_with_encryption_pk_serde_roundtrip() {
 #[test]
 fn role_key_entry_identity_bytes_differ_by_role() {
     let epoch = SecurityEpoch::from_raw(1);
-    let vk = VerificationKey([0x55; 32]);
+    let vk = VerificationKey::from_bytes([0x55; 32]).unwrap();
     let signing = make_role_entry(
         KeyRole::Signing,
         vk.clone(),
@@ -370,7 +370,7 @@ fn owner_key_bundle_wrong_verifier_rejected() {
     )
     .unwrap();
 
-    let wrong_vk = VerificationKey([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     assert_eq!(
         bundle.verify(&wrong_vk),
         Err(KeyRoleError::BundleSignatureInvalid)
@@ -566,10 +566,10 @@ fn enforce_role_accepts_matching_role() {
 
     for role in KeyRole::ALL {
         let vk = if *role == KeyRole::Encryption {
-            VerificationKey([0u8; 32])
+            VerificationKey::from_bytes([1u8; 32]).unwrap()
         } else {
             let derived = principal_key_roles::derive_role_key(&seed, *role, epoch);
-            SigningKey::from_bytes(derived).verification_key()
+            SigningKey::from_bytes(derived).unwrap().verification_key()
         };
         let entry = make_role_entry(*role, vk, None, KeyStatus::Active, epoch, 0);
         assert!(principal_key_roles::enforce_role(&entry, *role).is_ok());
@@ -579,7 +579,7 @@ fn enforce_role_accepts_matching_role() {
 #[test]
 fn enforce_role_rejects_all_mismatched_pairs() {
     let epoch = SecurityEpoch::from_raw(1);
-    let vk = VerificationKey([0x55; 32]);
+    let vk = VerificationKey::from_bytes([0x55; 32]).unwrap();
 
     for &actual_role in KeyRole::ALL {
         for &expected_role in KeyRole::ALL {
@@ -653,7 +653,7 @@ fn principal_key_store_three_roles_populated() {
     store
         .register_key(make_role_entry(
             KeyRole::Encryption,
-            VerificationKey([0u8; 32]),
+            VerificationKey::from_bytes([1u8; 32]).unwrap(),
             Some(enc.public_key()),
             KeyStatus::Active,
             epoch,
@@ -716,7 +716,7 @@ fn principal_key_store_full_three_role_lifecycle() {
     store
         .register_key(make_role_entry(
             KeyRole::Encryption,
-            VerificationKey([0u8; 32]),
+            VerificationKey::from_bytes([1u8; 32]).unwrap(),
             Some(enc1.public_key()),
             KeyStatus::Active,
             epoch1,
@@ -984,7 +984,7 @@ fn adversarial_cross_role_enforcement_all_pairs() {
     store
         .register_key(make_role_entry(
             KeyRole::Encryption,
-            VerificationKey([0u8; 32]),
+            VerificationKey::from_bytes([1u8; 32]).unwrap(),
             Some(enc.public_key()),
             KeyStatus::Active,
             epoch,
@@ -1142,9 +1142,9 @@ fn stress_many_keys_across_roles() {
             let seed_byte = (role as u8).wrapping_mul(100).wrapping_add(seq as u8);
             let derived = principal_key_roles::derive_role_key(&[seed_byte; 32], role, epoch);
             let vk = if role == KeyRole::Encryption {
-                VerificationKey([0u8; 32])
+                VerificationKey::from_bytes([1u8; 32]).unwrap()
             } else {
-                SigningKey::from_bytes(derived).verification_key()
+                SigningKey::from_bytes(derived).unwrap().verification_key()
             };
             let status = if seq == keys_per_role - 1 {
                 KeyStatus::Active

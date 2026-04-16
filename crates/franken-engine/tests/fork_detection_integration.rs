@@ -42,7 +42,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ---------------------------------------------------------------------------
 
 fn sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn policy_head(version: u64) -> PolicyHead {

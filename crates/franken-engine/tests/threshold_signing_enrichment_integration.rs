@@ -43,7 +43,7 @@ fn keys(count: usize) -> Vec<SigningKey> {
         .map(|i| {
             let mut bytes = [0u8; 32];
             bytes[0] = (i + 1) as u8;
-            SigningKey::from_bytes(bytes)
+            SigningKey::from_bytes(bytes).unwrap()
         })
         .collect()
 }
@@ -854,7 +854,7 @@ fn enrichment_refresh_shares_integration() {
         .map(|i| {
             let mut bytes = [0u8; 32];
             bytes[0] = (i + 100) as u8;
-            SigningKey::from_bytes(bytes)
+            SigningKey::from_bytes(bytes).unwrap()
         })
         .collect::<Vec<_>>();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -912,7 +912,7 @@ fn enrichment_ceremony_unauthorized_emits_event() {
     // Drain init event.
     let _ = ceremony.drain_events();
 
-    let rogue_key = SigningKey::from_bytes([0xFF; 32]);
+    let rogue_key = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let result =
         ceremony.submit_partial(&rogue_key, b"unauthorized-test", DeterministicTimestamp(1));
     assert!(result.is_err());

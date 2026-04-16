@@ -38,7 +38,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 const TEST_ZONE: &str = "test-zone";
 
 fn owner_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x01; 32])
+    SigningKey::from_bytes([0x01; 32]).unwrap()
 }
 
 fn owner_vk() -> frankenengine_engine::signature_preimage::VerificationKey {
@@ -46,7 +46,7 @@ fn owner_vk() -> frankenengine_engine::signature_preimage::VerificationKey {
 }
 
 fn attested_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x02; 32])
+    SigningKey::from_bytes([0x02; 32]).unwrap()
 }
 
 fn attested_vk() -> frankenengine_engine::signature_preimage::VerificationKey {
@@ -371,7 +371,7 @@ fn verify_owner_signature_ok() {
 #[test]
 fn verify_owner_signature_wrong_key() {
     let att = create_attestation(KeyRole::Signing, 1, 100, 200);
-    let wrong = SigningKey::from_bytes([0xFF; 32]);
+    let wrong = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let err = att
         .verify_owner_signature(&wrong.verification_key())
         .unwrap_err();
@@ -575,7 +575,7 @@ fn store_register_nonce_replay() {
 fn store_register_wrong_signature() {
     let mut store = AttestationStore::new(TEST_ZONE);
     let att = create_attestation(KeyRole::Signing, 1, 100, 200);
-    let wrong = SigningKey::from_bytes([0xFF; 32]);
+    let wrong = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let err = store
         .register(
             att,
@@ -1133,7 +1133,7 @@ fn full_lifecycle_create_verify_rotate_revoke() {
     );
 
     // Rotate: new key, higher nonce.
-    let new_key = SigningKey::from_bytes([0x03; 32]);
+    let new_key = SigningKey::from_bytes([0x03; 32]).unwrap();
     let new_vk = new_key.verification_key();
     let att2 = KeyAttestation::create_signed(
         &owner_signing_key(),
@@ -1178,10 +1178,10 @@ fn multiple_principals_isolated() {
         .unwrap();
 
     // Principal 2.
-    let p2_owner = SigningKey::from_bytes([0x10; 32]);
+    let p2_owner = SigningKey::from_bytes([0x10; 32]).unwrap();
     let p2_owner_vk = p2_owner.verification_key();
     let p2_principal = PrincipalId::from_verification_key(&p2_owner_vk);
-    let p2_attested = SigningKey::from_bytes([0x20; 32]);
+    let p2_attested = SigningKey::from_bytes([0x20; 32]).unwrap();
     let att2 = KeyAttestation::create_signed(
         &p2_owner,
         CreateAttestationInput {

@@ -36,15 +36,15 @@ use frankenengine_engine::slot_registry::{AuthorityEnvelope, SlotCapability, Slo
 // ===========================================================================
 
 fn sk1() -> SigningKey {
-    SigningKey::from_bytes([10u8; 32])
+    SigningKey::from_bytes([10u8; 32]).unwrap()
 }
 
 fn sk2() -> SigningKey {
-    SigningKey::from_bytes([20u8; 32])
+    SigningKey::from_bytes([20u8; 32]).unwrap()
 }
 
 fn sk3() -> SigningKey {
-    SigningKey::from_bytes([30u8; 32])
+    SigningKey::from_bytes([30u8; 32]).unwrap()
 }
 
 fn slot(name: &str) -> SlotId {

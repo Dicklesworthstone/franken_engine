@@ -35,7 +35,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ---------------------------------------------------------------------------
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x01; 32])
+    SigningKey::from_bytes([0x01; 32]).unwrap()
 }
 
 fn test_vk() -> frankenengine_engine::signature_preimage::VerificationKey {
@@ -814,7 +814,7 @@ fn contract_creation_deterministic() {
 #[test]
 fn contract_wrong_key_fails_verification() {
     let contract = create_contract();
-    let wrong = SigningKey::from_bytes([0xFF; 32]).verification_key();
+    let wrong = SigningKey::from_bytes([0xFF; 32]).unwrap().verification_key();
     assert!(matches!(
         contract.verify_governance_signature(&wrong),
         Err(ContractError::SignatureInvalid { .. })

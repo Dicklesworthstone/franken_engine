@@ -293,7 +293,7 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
     let inclusion_proof = mmr.inclusion_proof(2).expect("inclusion");
     let consistency_proof = mmr.consistency_proof(2).expect("consistency");
 
-    let operator_signing_key = SigningKey::from_bytes([9u8; 32]);
+    let operator_signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
     let operator_verification_key = operator_signing_key.verification_key();
     let checkpoint_stub = SignedLogCheckpoint {
         checkpoint_seq: 1,

@@ -129,7 +129,7 @@ fn make_attestation_input(
 }
 
 fn signing_key_hex() -> String {
-    let key = SigningKey::from_bytes([55u8; SIGNING_KEY_LEN]);
+    let key = SigningKey::from_bytes([55u8; SIGNING_KEY_LEN]).unwrap();
     hex::encode(key.as_bytes())
 }
 
@@ -2383,8 +2383,8 @@ fn enrichment_e2e_attestation_of_attestation_verification_report() {
 fn enrichment_e2e_different_signing_keys_produce_different_signatures() {
     let report = make_report(VerificationVerdict::Verified);
 
-    let key1 = SigningKey::from_bytes([55u8; SIGNING_KEY_LEN]);
-    let key2 = SigningKey::from_bytes([66u8; SIGNING_KEY_LEN]);
+    let key1 = SigningKey::from_bytes([55u8; SIGNING_KEY_LEN]).unwrap();
+    let key2 = SigningKey::from_bytes([66u8; SIGNING_KEY_LEN]).unwrap();
 
     let a1 = generate_attestation(&make_attestation_input(
         report.clone(),

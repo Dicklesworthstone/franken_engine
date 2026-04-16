@@ -320,7 +320,7 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
         Some(TEST_DECLASS_ROUTE_ID)
     );
 
-    let signing_key = SigningKey::from_bytes([23u8; 32]);
+    let signing_key = SigningKey::from_bytes([23u8; 32]).unwrap();
     let (obligation_id, receipt) =
         approved_receipt_for_prepared_declassification(&mut orch, &pkg, &prepared, &signing_key);
     assert_eq!(
@@ -396,7 +396,7 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
         Some(TEST_DECLASS_ROUTE_ID)
     );
 
-    let signing_key = SigningKey::from_bytes([41u8; 32]);
+    let signing_key = SigningKey::from_bytes([41u8; 32]).unwrap();
     let (obligation_id, receipt) =
         approved_receipt_for_prepared_declassification(&mut orch, &pkg, &prepared, &signing_key);
     let mut wrong_route_receipt = receipt.clone();
@@ -441,7 +441,7 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
         .first()
         .expect("initial preflight should expose a declassification obligation");
 
-    let bad_signing_key = SigningKey::from_bytes([26u8; 32]);
+    let bad_signing_key = SigningKey::from_bytes([26u8; 32]).unwrap();
     let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -477,7 +477,7 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
     assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
     assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
 
-    let good_signing_key = SigningKey::from_bytes([27u8; 32]);
+    let good_signing_key = SigningKey::from_bytes([27u8; 32]).unwrap();
     let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -516,7 +516,7 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
         .first()
         .expect("initial preflight should expose a declassification obligation");
 
-    let bad_signing_key = SigningKey::from_bytes([28u8; 32]);
+    let bad_signing_key = SigningKey::from_bytes([28u8; 32]).unwrap();
     let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -552,7 +552,7 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
     assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
     assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
 
-    let good_signing_key = SigningKey::from_bytes([29u8; 32]);
+    let good_signing_key = SigningKey::from_bytes([29u8; 32]).unwrap();
     let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -591,7 +591,7 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
         .first()
         .expect("initial preflight should expose a declassification obligation");
 
-    let bad_signing_key = SigningKey::from_bytes([30u8; 32]);
+    let bad_signing_key = SigningKey::from_bytes([30u8; 32]).unwrap();
     let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -627,7 +627,7 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
     assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
     assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
 
-    let good_signing_key = SigningKey::from_bytes([31u8; 32]);
+    let good_signing_key = SigningKey::from_bytes([31u8; 32]).unwrap();
     let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -665,7 +665,7 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
         .required_declassifications
         .first()
         .expect("initial preflight should expose a declassification obligation");
-    let bad_signing_key = SigningKey::from_bytes([24u8; 32]);
+    let bad_signing_key = SigningKey::from_bytes([24u8; 32]).unwrap();
     let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,
@@ -701,7 +701,7 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
     assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
     assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
 
-    let good_signing_key = SigningKey::from_bytes([25u8; 32]);
+    let good_signing_key = SigningKey::from_bytes([25u8; 32]).unwrap();
     let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
         &mut orch,
         &pkg,

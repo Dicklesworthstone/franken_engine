@@ -44,7 +44,7 @@ fn make_sk(seed: u8) -> SigningKey {
     for (i, b) in key.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(7).wrapping_add(seed);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn ext_id() -> EngineObjectId {
@@ -234,7 +234,7 @@ fn index_ctx() -> EventContext {
 fn default_pipeline(sk: &SigningKey) -> WitnessPublicationPipeline {
     WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*sk.as_bytes()),
+        SigningKey::from_bytes(*sk.as_bytes()).unwrap(),
         WitnessPublicationConfig::default(),
     )
     .unwrap()
@@ -1438,7 +1438,7 @@ fn pipeline_publish_promoted_witness() {
     let head_sk = make_sk(17);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         governance_config(),
     )
     .unwrap();
@@ -1487,7 +1487,7 @@ fn pipeline_second_publish_has_consistency_chain() {
     let head_sk = make_sk(17);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 1,
             policy_id: "test".to_string(),
@@ -1516,7 +1516,7 @@ fn pipeline_revoke_published_witness() {
     let head_sk = make_sk(17);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         governance_config(),
     )
     .unwrap();
@@ -1646,7 +1646,7 @@ fn pipeline_verify_published_artifact() {
     let witness_sk = make_sk(13);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 1,
             policy_id: "test".to_string(),
@@ -1670,7 +1670,7 @@ fn pipeline_verify_static_artifact() {
     let witness_sk = make_sk(13);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 1,
             policy_id: "test".to_string(),
@@ -1695,7 +1695,7 @@ fn pipeline_verify_revoked_artifact() {
     let witness_sk = make_sk(13);
     let mut p = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(500),
-        SigningKey::from_bytes(*head_sk.as_bytes()),
+        SigningKey::from_bytes(*head_sk.as_bytes()).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 1,
             policy_id: "test".to_string(),

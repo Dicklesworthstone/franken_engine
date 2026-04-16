@@ -1351,6 +1351,8 @@ fn router_with_custom_configs() {
         module_root: None,
         granted_capabilities: BTreeSet::new(),
         extension_id: None,
+        cancellation_token: None,
+        checkpoint_density: 1000,
     };
     let v8_cfg = InterpreterConfig {
         instruction_budget: 500,
@@ -1363,6 +1365,8 @@ fn router_with_custom_configs() {
         module_root: None,
         granted_capabilities: BTreeSet::new(),
         extension_id: None,
+        cancellation_token: None,
+        checkpoint_density: 1000,
     };
     let router = LaneRouter::with_configs(qjs_cfg, v8_cfg);
     let m = test_module(vec![

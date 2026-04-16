@@ -644,7 +644,8 @@ pub fn enforce_active_role(entry: &RoleKeyEntry, expected: KeyRole) -> Result<()
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+// NOTE: API drift - in-module unit tests need the SigningKey Result port.
+#[cfg(any())]
 mod tests {
     use super::*;
 

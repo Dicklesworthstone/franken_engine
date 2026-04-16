@@ -55,7 +55,7 @@ fn signing_key() -> SigningKey {
     let mut bytes = [0u8; 32];
     bytes[0] = 0x42;
     bytes[31] = 0xFF;
-    SigningKey::from_bytes(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn valid_input() -> EnvelopeInput {
@@ -886,7 +886,7 @@ fn verify_fails_with_wrong_key() {
     let key = signing_key();
     let mut envelope = FlowEnvelope::build(valid_input()).unwrap();
     envelope.sign(&key).expect("sign");
-    let wrong = SigningKey::from_bytes([0xBB; 32]);
+    let wrong = SigningKey::from_bytes([0xBB; 32]).unwrap();
     assert!(envelope.verify(&wrong.verification_key()).is_err());
 }
 
@@ -922,7 +922,7 @@ fn double_sign_overwrites_signature() {
 #[test]
 fn sign_with_different_keys_produces_different_signatures() {
     let key1 = signing_key();
-    let key2 = SigningKey::from_bytes([0xCC; 32]);
+    let key2 = SigningKey::from_bytes([0xCC; 32]).unwrap();
     let mut e1 = FlowEnvelope::build(valid_input()).unwrap();
     let mut e2 = FlowEnvelope::build(valid_input()).unwrap();
     e1.sign(&key1).unwrap();

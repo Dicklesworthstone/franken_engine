@@ -42,7 +42,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ===========================================================================
 
 fn sk() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn field(name: &str, ft: FeatureFieldType, prior: bool) -> (String, FeatureField) {

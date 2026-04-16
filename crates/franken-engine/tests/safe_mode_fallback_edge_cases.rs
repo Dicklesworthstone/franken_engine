@@ -1286,8 +1286,8 @@ fn transition_receipt_verify_passes_after_serde() {
 
 #[test]
 fn transition_receipt_different_keys_different_signatures() {
-    let key_a = SigningKey::from_bytes([1u8; 32]);
-    let key_b = SigningKey::from_bytes([2u8; 32]);
+    let key_a = SigningKey::from_bytes([1u8; 32]).unwrap();
+    let key_b = SigningKey::from_bytes([2u8; 32]).unwrap();
 
     let mut mgr_a = AttestationFallbackManager::new(Default::default(), key_a);
     let mut mgr_b = AttestationFallbackManager::new(Default::default(), key_b);

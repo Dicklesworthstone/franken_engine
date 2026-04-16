@@ -34,7 +34,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ===========================================================================
 
 fn sk() -> SigningKey {
-    SigningKey::from_bytes([77u8; 32])
+    SigningKey::from_bytes([77u8; 32]).unwrap()
 }
 
 fn pub_id() -> frankenengine_engine::engine_object_id::EngineObjectId {
@@ -44,7 +44,7 @@ fn pub_id() -> frankenengine_engine::engine_object_id::EngineObjectId {
         &frankenengine_engine::engine_object_id::SchemaId::from_definition(
             b"ExtensionPublisher.v1",
         ),
-        &sk().verification_key().0,
+        sk().verification_key().as_bytes(),
     )
     .unwrap()
 }
@@ -1061,7 +1061,7 @@ fn enrichment_signing_key(seed: u8) -> SigningKey {
     for (i, b) in bytes.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(seed).wrapping_add(seed);
     }
-    SigningKey(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn enrichment_vk_from(sk: &SigningKey) -> VerificationKey {
@@ -1585,7 +1585,7 @@ fn enrichment_publish_to_unowned_scope_rejected() {
 fn enrichment_publish_from_unknown_publisher_rejected() {
     let (mut reg, _, sk, _) = enrichment_setup();
     let fake_pub = EngineObjectId([55; 32]);
-    let fake_vk = VerificationKey([66; 32]);
+    let fake_vk = VerificationKey::from_bytes([66; 32]).unwrap();
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &fake_pub, &fake_vk);
     let result = enrichment_publish(&mut reg, &m, &sk);

@@ -42,7 +42,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 // ---------------------------------------------------------------------------
 
 fn make_sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_principal(seed: u8) -> PrincipalId {
@@ -257,7 +257,7 @@ fn enrichment_chain_error_display_all_variants_unique() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]),
+            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },
@@ -312,7 +312,7 @@ fn enrichment_chain_error_debug_all_variants_unique() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]),
+            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },
@@ -371,7 +371,7 @@ fn enrichment_chain_error_serde_all_variants() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]),
+            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },

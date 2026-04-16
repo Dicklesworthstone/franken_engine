@@ -38,7 +38,7 @@ fn test_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
 
 fn test_signing_keys(n: usize) -> Vec<SigningKey> {
     (0..n)
-        .map(|i| SigningKey::from_bytes([(i as u8).wrapping_add(42); 32]))
+        .map(|i| SigningKey::from_bytes([(i as u8).wrapping_add(42); 32]).unwrap())
         .collect()
 }
 

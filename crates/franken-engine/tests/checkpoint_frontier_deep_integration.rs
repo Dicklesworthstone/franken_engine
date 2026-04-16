@@ -41,7 +41,7 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 // ---------------------------------------------------------------------------
 
 fn make_sk(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -1034,7 +1034,7 @@ fn linkage_verification_on_empty_manager() {
 fn quorum_failure_does_not_emit_accepted_event() {
     let sk = make_sk(1);
     let vk = sk.verification_key();
-    let wrong_vk = VerificationKey::from_bytes([0xAA; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xAA; 32]).unwrap();
     let genesis = build_genesis(slice::from_ref(&sk), "zone-a");
 
     let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
@@ -1069,7 +1069,7 @@ fn quorum_failure_does_not_emit_accepted_event() {
 fn quorum_failure_does_not_advance_frontier() {
     let sk = make_sk(1);
     let vk = sk.verification_key();
-    let wrong_vk = VerificationKey::from_bytes([0xBB; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xBB; 32]).unwrap();
     let genesis = build_genesis(slice::from_ref(&sk), "zone-a");
 
     let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
@@ -1523,7 +1523,7 @@ fn persist_count_not_incremented_on_rejection() {
         slice::from_ref(&sk),
         "zone-a",
     );
-    let wrong_vk = VerificationKey::from_bytes([0xCC; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xCC; 32]).unwrap();
     let _ = mgr.accept_checkpoint("zone-a", &cp1, 1, slice::from_ref(&wrong_vk), "t-bad2");
     assert_eq!(mgr.backend().persist_count, count_after_genesis);
 }

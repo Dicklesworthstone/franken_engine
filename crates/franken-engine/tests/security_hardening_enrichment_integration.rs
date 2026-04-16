@@ -49,7 +49,7 @@ fn signing_key(seed: u8) -> SigningKey {
     for (i, b) in bytes.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(seed).wrapping_add(seed);
     }
-    SigningKey(bytes)
+    SigningKey::from_bytes(bytes).unwrap()
 }
 
 fn vk_from(sk: &SigningKey) -> VerificationKey {

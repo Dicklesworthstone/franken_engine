@@ -3,14 +3,9 @@
 //! These tests verify that the memory budget constraints properly prevent
 //! denial-of-service attacks through unbounded memory allocation.
 
-use frankenengine_engine::ast::{ParseGoal, SourceSpan, SyntaxTree};
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterError, QuickJsLane,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterError, QuickJsLane};
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::{
-    Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, Reg,
-};
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
 
@@ -57,7 +52,7 @@ fn test_module_with_instructions(instructions: Vec<Ir3Instruction>) -> Ir3Module
 fn adversarial_lane() -> QuickJsLane {
     let mut config = adversarial_config();
     config.granted_capabilities = std::collections::BTreeSet::new();
-    QuickJsLane::new(config)
+    QuickJsLane::with_config(config)
 }
 
 #[test]
@@ -76,8 +71,15 @@ fn test_object_allocation_exhaustion() {
 
     // Should fail with MemoryBudgetExceeded due to object count limit
     match result {
-        Err(InterpreterError::MemoryBudgetExceeded { current, limit, .. }) => {
-            assert!(current >= limit, "Should hit object count limit");
+        Err(InterpreterError::MemoryBudgetExceeded {
+            requested_heap_objects,
+            max_heap_objects,
+            ..
+        }) => {
+            assert!(
+                requested_heap_objects >= max_heap_objects,
+                "Should hit object count limit"
+            );
         }
         other => panic!("Expected MemoryBudgetExceeded, got: {:?}", other),
     }
@@ -158,11 +160,11 @@ fn test_scope_depth_exhaustion() {
     // Should fail with ScopeDepthExceeded
     match result {
         Err(InterpreterError::ScopeDepthExceeded {
-            current_depth,
+            requested_depth,
             max_depth,
         }) => {
             assert!(
-                current_depth >= max_depth,
+                requested_depth >= max_depth,
                 "Should exceed scope depth limit"
             );
         }
@@ -305,8 +307,9 @@ fn test_combined_memory_exhaustion() {
 fn test_memory_budget_boundary_conditions() {
     let mut config = adversarial_config();
     config.max_heap_objects = 5; // Exact boundary testing
+    config.granted_capabilities = std::collections::BTreeSet::new();
 
-    let mut interpreter = InterpreterCore::new(config);
+    let lane = QuickJsLane::with_config(config);
 
     // Test: Allocate exactly max_heap_objects - should succeed
     let js_source = r#"
@@ -337,8 +340,8 @@ fn test_memory_budget_boundary_conditions() {
         let obj6 = {}; // This should exceed the limit
     "#;
 
-    let module_overflow = test_module(js_source_overflow);
-    let result_overflow = interpreter.execute(&module_overflow);
+    let module_overflow = lower_source_to_ir3(js_source_overflow);
+    let result_overflow = lane.execute(&module_overflow, "test-overflow");
 
     match result_overflow {
         Err(InterpreterError::MemoryBudgetExceeded { .. }) => {
@@ -362,8 +365,8 @@ fn test_memory_recovery_after_budget_error() {
         }
     "#;
 
-    let module_fail = test_module(js_source_fail);
-    let result_fail = interpreter.execute(&module_fail);
+    let module_fail = lower_source_to_ir3(js_source_fail);
+    let result_fail = lane.execute(&module_fail, "test-fail");
 
     assert!(matches!(
         result_fail,
@@ -375,8 +378,8 @@ fn test_memory_recovery_after_budget_error() {
         let obj = { value: 42 };
     "#;
 
-    let module_succeed = test_module(js_source_succeed);
-    let result_succeed = interpreter.execute(&module_succeed);
+    let module_succeed = lower_source_to_ir3(js_source_succeed);
+    let result_succeed = lane.execute(&module_succeed, "test-succeed");
 
     match result_succeed {
         Ok(_) => {

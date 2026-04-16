@@ -87,7 +87,7 @@ fn replacement_receipt_id_hex(receipt: &ReplacementReceipt) -> String {
 }
 
 fn signing_key(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; 32])
+    SigningKey::from_bytes([seed; 32]).unwrap()
 }
 
 fn test_authority_envelope() -> AuthorityEnvelope {

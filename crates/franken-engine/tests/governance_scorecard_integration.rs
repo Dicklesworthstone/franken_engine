@@ -39,7 +39,7 @@ use frankenengine_engine::version_matrix_lane::MatrixHealthSummary;
 // ── helpers ────────────────────────────────────────────────────────────────
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x42; 32])
+    SigningKey::from_bytes([0x42; 32]).unwrap()
 }
 
 fn mk_accountant(eps_spent: i64, delta_spent: i64) -> BudgetAccountant {
@@ -256,8 +256,8 @@ fn deterministic_artifact_hash_across_runs() {
 #[test]
 fn different_signing_keys_produce_different_signatures() {
     let req = baseline_request();
-    let key_a = SigningKey::from_bytes([0x42; 32]);
-    let key_b = SigningKey::from_bytes([0x99; 32]);
+    let key_a = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let key_b = SigningKey::from_bytes([0x99; 32]).unwrap();
     let mut l1 = ledger();
     let mut l2 = ledger();
     let p1 = publish_governance_scorecard(&req, &key_a, &mut l1, actor()).unwrap();
@@ -2248,8 +2248,8 @@ fn enrichment_request_serde_roundtrip_with_historical() {
 #[test]
 fn enrichment_different_signing_keys_produce_different_signatures() {
     let req = baseline_request();
-    let key_a = SigningKey::from_bytes([0x42; 32]);
-    let key_b = SigningKey::from_bytes([0x99; 32]);
+    let key_a = SigningKey::from_bytes([0x42; 32]).unwrap();
+    let key_b = SigningKey::from_bytes([0x99; 32]).unwrap();
     let mut l_a = ledger();
     let mut l_b = ledger();
     let p_a = publish_governance_scorecard(&req, &key_a, &mut l_a, actor()).expect("a");

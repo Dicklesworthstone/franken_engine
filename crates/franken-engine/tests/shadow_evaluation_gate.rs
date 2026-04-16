@@ -30,7 +30,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 const TEST_ZONE: &str = "shadow-eval-zone";
 
 fn governance_signing_key() -> SigningKey {
-    SigningKey::from_bytes([0x11; 32])
+    SigningKey::from_bytes([0x11; 32]).unwrap()
 }
 
 fn participant_ids() -> BTreeSet<EngineObjectId> {

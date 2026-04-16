@@ -39,7 +39,7 @@ use frankenengine_engine::signature_preimage::SigningKey;
 // ===========================================================================
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn valid_schema() -> FeatureSchema {
@@ -364,7 +364,7 @@ fn verify_governance_signature() {
 #[test]
 fn verify_signature_wrong_key_fails() {
     let sk1 = test_signing_key();
-    let sk2 = SigningKey::from_bytes([43u8; 32]);
+    let sk2 = SigningKey::from_bytes([43u8; 32]).unwrap();
     let vk2 = sk2.verification_key();
     let contract = create_contract(&sk1);
     assert!(contract.verify_governance_signature(&vk2).is_err());

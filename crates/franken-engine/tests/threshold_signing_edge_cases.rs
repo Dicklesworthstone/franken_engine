@@ -42,7 +42,7 @@ fn hash_of<T: Hash>(val: &T) -> u64 {
 
 fn make_keys(count: usize) -> Vec<SigningKey> {
     (0..count)
-        .map(|i| SigningKey::from_bytes([(i + 10) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 10) as u8; 32]).unwrap())
         .collect()
 }
 
@@ -197,7 +197,7 @@ fn scope_all_has_four_variants() {
 
 #[test]
 fn share_holder_id_from_verification_key_deterministic() {
-    let sk = SigningKey::from_bytes([0x42; 32]);
+    let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
     let vk = sk.verification_key();
     let id1 = ShareHolderId::from_verification_key(&vk);
     let id2 = ShareHolderId::from_verification_key(&vk);
@@ -206,8 +206,8 @@ fn share_holder_id_from_verification_key_deterministic() {
 
 #[test]
 fn share_holder_id_different_keys_different_ids() {
-    let sk1 = SigningKey::from_bytes([0x01; 32]);
-    let sk2 = SigningKey::from_bytes([0x02; 32]);
+    let sk1 = SigningKey::from_bytes([0x01; 32]).unwrap();
+    let sk2 = SigningKey::from_bytes([0x02; 32]).unwrap();
     let id1 = ShareHolderId::from_verification_key(&sk1.verification_key());
     let id2 = ShareHolderId::from_verification_key(&sk2.verification_key());
     assert_ne!(id1, id2);
@@ -215,14 +215,14 @@ fn share_holder_id_different_keys_different_ids() {
 
 #[test]
 fn share_holder_id_as_bytes_32() {
-    let sk = SigningKey::from_bytes([0x42; 32]);
+    let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
     let id = ShareHolderId::from_verification_key(&sk.verification_key());
     assert_eq!(id.as_bytes().len(), 32);
 }
 
 #[test]
 fn share_holder_id_to_hex_64_chars() {
-    let sk = SigningKey::from_bytes([0x42; 32]);
+    let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
     let id = ShareHolderId::from_verification_key(&sk.verification_key());
     let hex = id.to_hex();
     assert_eq!(hex.len(), 64); // 32 bytes * 2 hex chars
@@ -231,7 +231,7 @@ fn share_holder_id_to_hex_64_chars() {
 
 #[test]
 fn share_holder_id_display_starts_with_share() {
-    let sk = SigningKey::from_bytes([0x42; 32]);
+    let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
     let id = ShareHolderId::from_verification_key(&sk.verification_key());
     let display = id.to_string();
     assert!(display.starts_with("share:"));
@@ -243,7 +243,7 @@ fn share_holder_id_display_starts_with_share() {
 fn share_holder_id_hash_distinct_for_different_keys() {
     let ids: Vec<ShareHolderId> = (0..5)
         .map(|i| {
-            let sk = SigningKey::from_bytes([(i + 1) as u8; 32]);
+            let sk = SigningKey::from_bytes([(i + 1) as u8; 32]).unwrap();
             ShareHolderId::from_verification_key(&sk.verification_key())
         })
         .collect();
@@ -253,7 +253,7 @@ fn share_holder_id_hash_distinct_for_different_keys() {
 
 #[test]
 fn share_holder_id_serde_roundtrip() {
-    let sk = SigningKey::from_bytes([0x42; 32]);
+    let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
     let id = ShareHolderId::from_verification_key(&sk.verification_key());
     let json = serde_json::to_string(&id).unwrap();
     let restored: ShareHolderId = serde_json::from_str(&json).unwrap();
@@ -470,7 +470,7 @@ fn ceremony_unauthorized_holder_rejected() {
         DeterministicTimestamp(1000),
     )
     .unwrap();
-    let rogue = SigningKey::from_bytes([0xFF; 32]);
+    let rogue = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let result = ceremony.submit_partial(&rogue, TEST_PREIMAGE, DeterministicTimestamp(1001));
     assert!(matches!(
         result,
@@ -696,7 +696,7 @@ fn refresh_shares_produces_new_policy_and_result() {
     let keys = make_keys(3);
     let policy = create_policy(2, &keys, make_scopes_all());
     let new_keys: Vec<SigningKey> = (0..3)
-        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
         .collect();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
     let (new_policy, refresh_result) =
@@ -730,7 +730,7 @@ fn refresh_shares_duplicate_new_keys_rejected() {
     let keys = make_keys(3);
     let policy = create_policy(2, &keys, make_scopes_all());
     // Same key 3 times
-    let same_key = SigningKey::from_bytes([0x50; 32]);
+    let same_key = SigningKey::from_bytes([0x50; 32]).unwrap();
     let new_vks = vec![
         same_key.verification_key(),
         same_key.verification_key(),
@@ -745,7 +745,7 @@ fn refresh_shares_new_keys_can_sign() {
     let keys = make_keys(3);
     let policy = create_policy(2, &keys, make_scopes_all());
     let new_keys: Vec<SigningKey> = (0..3)
-        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
         .collect();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
     let (new_policy, _) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).unwrap();
@@ -764,7 +764,7 @@ fn refresh_shares_old_keys_rejected_in_new_policy() {
     let keys = make_keys(3);
     let policy = create_policy(2, &keys, make_scopes_all());
     let new_keys: Vec<SigningKey> = (0..3)
-        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
         .collect();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
     let (new_policy, _) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).unwrap();
@@ -787,7 +787,7 @@ fn share_refresh_result_serde_roundtrip() {
     let keys = make_keys(3);
     let policy = create_policy(2, &keys, make_scopes_all());
     let new_keys: Vec<SigningKey> = (0..3)
-        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
         .collect();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
     let (_, refresh_result) =
@@ -975,7 +975,7 @@ fn ceremony_events_include_unauthorized() {
         DeterministicTimestamp(1000),
     )
     .unwrap();
-    let rogue = SigningKey::from_bytes([0xFF; 32]);
+    let rogue = SigningKey::from_bytes([0xFF; 32]).unwrap();
     let _ = ceremony.submit_partial(&rogue, TEST_PREIMAGE, DeterministicTimestamp(1001));
     let events = ceremony.drain_events();
     assert!(events.iter().any(|e| matches!(
@@ -1093,7 +1093,7 @@ fn integration_full_lifecycle_with_refresh() {
 
     // Refresh shares
     let new_keys: Vec<SigningKey> = (0..4)
-        .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]))
+        .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]).unwrap())
         .collect();
     let new_vks: Vec<VerificationKey> = new_keys.iter().map(|sk| sk.verification_key()).collect();
     let (new_policy, _refresh) =

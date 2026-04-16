@@ -38,7 +38,7 @@ use frankenengine_engine::signature_preimage::{
 // ---------------------------------------------------------------------------
 
 fn test_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn sentinel_sig() -> Signature {
@@ -915,7 +915,7 @@ fn flow_policy_sign_and_verify() {
 #[test]
 fn flow_policy_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong_key = SigningKey::from_bytes([99u8; 32]);
+    let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
     let mut policy = make_flow_policy();
     policy.sign(&key).unwrap();
     assert!(policy.verify(&wrong_key.verification_key()).is_err());
@@ -1068,7 +1068,7 @@ fn flow_proof_sign_and_verify() {
 #[test]
 fn flow_proof_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong = SigningKey::from_bytes([77u8; 32]);
+    let wrong = SigningKey::from_bytes([77u8; 32]).unwrap();
     let mut proof = make_flow_proof();
     proof.sign(&key).unwrap();
     assert!(proof.verify(&wrong.verification_key()).is_err());
@@ -1135,7 +1135,7 @@ fn receipt_sign_and_verify() {
 #[test]
 fn receipt_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong = SigningKey::from_bytes([88u8; 32]);
+    let wrong = SigningKey::from_bytes([88u8; 32]).unwrap();
     let mut receipt = make_receipt();
     receipt.sign(&key).unwrap();
     assert!(receipt.verify(&wrong.verification_key()).is_err());
@@ -1330,7 +1330,7 @@ fn claim_sign_and_verify() {
 #[test]
 fn claim_verify_fails_wrong_key() {
     let key = test_key();
-    let wrong = SigningKey::from_bytes([66u8; 32]);
+    let wrong = SigningKey::from_bytes([66u8; 32]).unwrap();
     let mut claim = make_claim(ClaimStrength::Full);
     claim.sign(&key).unwrap();
     assert!(claim.verify(&wrong.verification_key()).is_err());
@@ -1765,8 +1765,8 @@ fn claim_partial_with_proofs_and_uncovered() {
 
 #[test]
 fn different_keys_produce_different_signatures() {
-    let key_a = SigningKey::from_bytes([1u8; 32]);
-    let key_b = SigningKey::from_bytes([2u8; 32]);
+    let key_a = SigningKey::from_bytes([1u8; 32]).unwrap();
+    let key_b = SigningKey::from_bytes([2u8; 32]).unwrap();
 
     let mut proof_a = make_flow_proof();
     proof_a.sign(&key_a).unwrap();

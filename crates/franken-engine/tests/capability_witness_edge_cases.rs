@@ -58,7 +58,7 @@ fn test_signing_key() -> SigningKey {
     for (i, b) in key.iter_mut().enumerate() {
         *b = (i as u8).wrapping_mul(7).wrapping_add(13);
     }
-    SigningKey::from_bytes(key)
+    SigningKey::from_bytes(key).unwrap()
 }
 
 fn test_extension_id() -> EngineObjectId {
@@ -208,7 +208,7 @@ fn build_promoted_witness(seed: u64) -> CapabilityWitness {
 }
 
 fn publication_pipeline(epoch: u64, key_seed: u8) -> (WitnessPublicationPipeline, SigningKey) {
-    let head_signing_key = SigningKey::from_bytes([key_seed; 32]);
+    let head_signing_key = SigningKey::from_bytes([key_seed; 32]).unwrap();
     let pipeline = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(epoch),
         head_signing_key.clone(),
@@ -1166,7 +1166,7 @@ fn structured_events_failing_gate_has_error_code() {
 fn pipeline_invalid_config_zero_checkpoint_interval() {
     let err = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(1),
-        SigningKey::from_bytes([1; 32]),
+        SigningKey::from_bytes([1; 32]).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 0,
             policy_id: "ok".to_string(),
@@ -1181,7 +1181,7 @@ fn pipeline_invalid_config_zero_checkpoint_interval() {
 fn pipeline_invalid_config_empty_policy_id() {
     let err = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(1),
-        SigningKey::from_bytes([1; 32]),
+        SigningKey::from_bytes([1; 32]).unwrap(),
         WitnessPublicationConfig {
             checkpoint_interval: 1,
             policy_id: "  ".to_string(),
@@ -1385,7 +1385,7 @@ fn pipeline_events_emitted_for_publish_and_revoke() {
 
 #[test]
 fn pipeline_checkpoints_emitted_at_interval() {
-    let head_key = SigningKey::from_bytes([21; 32]);
+    let head_key = SigningKey::from_bytes([21; 32]).unwrap();
     let mut pipeline = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(1200),
         head_key,
@@ -1429,7 +1429,7 @@ fn pipeline_log_entries_have_sequential_sequences() {
 
 #[test]
 fn pipeline_with_governance_records_entries() {
-    let head_key = SigningKey::from_bytes([23; 32]);
+    let head_key = SigningKey::from_bytes([23; 32]).unwrap();
     let mut pipeline = WitnessPublicationPipeline::new(
         SecurityEpoch::from_raw(1400),
         head_key,

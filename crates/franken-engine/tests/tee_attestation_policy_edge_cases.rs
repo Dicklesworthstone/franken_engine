@@ -160,7 +160,7 @@ fn quote_for_sgx() -> AttestationQuote {
 }
 
 fn make_signing_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn make_override_input(root_id: &str, epoch: u64) -> TrustRootOverrideArtifactInput {
@@ -1266,8 +1266,8 @@ fn override_artifact_tampered_justification_fails_verify() {
 
 #[test]
 fn override_artifact_wrong_key_fails_verify() {
-    let key1 = SigningKey::from_bytes([10u8; 32]);
-    let key2 = SigningKey::from_bytes([20u8; 32]);
+    let key1 = SigningKey::from_bytes([10u8; 32]).unwrap();
+    let key2 = SigningKey::from_bytes([20u8; 32]).unwrap();
     let verifier2 = key2.verification_key();
     let input = make_override_input("r", 1);
     let artifact = SignedTrustRootOverrideArtifact::create_signed(&key1, input).unwrap();

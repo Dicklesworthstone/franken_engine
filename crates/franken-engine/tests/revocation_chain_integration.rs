@@ -18,6 +18,7 @@ fn signing_key() -> SigningKey {
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
         0x1F, 0x20,
     ])
+    .unwrap()
 }
 
 fn alt_signing_key() -> SigningKey {
@@ -26,6 +27,7 @@ fn alt_signing_key() -> SigningKey {
         0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
         0xBF, 0xC0,
     ])
+    .unwrap()
 }
 
 fn make_target_id(seed: u8) -> EngineObjectId {
@@ -444,7 +446,7 @@ fn verify_chain_mut_emits_audit_event() {
 #[test]
 fn verify_head_signature_fails_on_empty_chain() {
     let chain = RevocationChain::new(ZONE);
-    let vk = VerificationKey::from_bytes([1; 32]);
+    let vk = VerificationKey::from_bytes([1; 32]).unwrap();
     let err = chain.verify_head_signature(&vk).unwrap_err();
     assert!(matches!(err, ChainError::EmptyChain));
 }
@@ -462,7 +464,7 @@ fn verify_head_signature_passes_with_correct_key() {
 fn verify_head_signature_fails_with_wrong_key() {
     let mut chain = RevocationChain::new(ZONE);
     append_revocation(&mut chain, RevocationTargetType::Token, [1; 32]);
-    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+    let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
     let err = chain.verify_head_signature(&wrong_vk).unwrap_err();
     assert!(matches!(err, ChainError::SignatureInvalid { .. }));
 }

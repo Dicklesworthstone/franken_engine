@@ -29,7 +29,7 @@ use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, Si
 // ---------------------------------------------------------------------------
 
 fn test_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn make_policy() -> FlowPolicy {

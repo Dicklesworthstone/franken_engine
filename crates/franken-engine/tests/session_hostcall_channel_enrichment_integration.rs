@@ -796,7 +796,7 @@ fn deterministic_nonce_algorithm_produces_correct_lengths() {
 // ===========================================================================
 
 fn make_signing_key(byte: u8) -> SigningKey {
-    SigningKey::from_bytes([byte; 32])
+    SigningKey::from_bytes([byte; 32]).unwrap()
 }
 
 fn make_handshake(session_id: &str, tick: u64) -> SessionHandshake {

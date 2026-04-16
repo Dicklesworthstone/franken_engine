@@ -55,11 +55,11 @@ fn test_monitoring_hooks() -> Vec<MonitoringHook> {
 }
 
 fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes([42u8; 32])
+    SigningKey::from_bytes([42u8; 32]).unwrap()
 }
 
 fn test_signing_key_2() -> SigningKey {
-    SigningKey::from_bytes([99u8; 32])
+    SigningKey::from_bytes([99u8; 32]).unwrap()
 }
 
 fn test_behavior_hash() -> [u8; 32] {
@@ -870,7 +870,7 @@ fn lifecycle_serde_roundtrip() {
 #[test]
 fn manifest_verify_signature_rejects_wrong_key() {
     let manifest = create_test_manifest();
-    let wrong_key = SigningKey::from_bytes([0xFFu8; 32]);
+    let wrong_key = SigningKey::from_bytes([0xFFu8; 32]).unwrap();
     let result = manifest.verify_signature(&wrong_key.verification_key());
     assert!(result.is_err());
 }

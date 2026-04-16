@@ -37,7 +37,7 @@ use frankenengine_engine::sorted_multisig::{
 // ---------------------------------------------------------------------------
 
 fn make_signing_key(seed: u8) -> SigningKey {
-    SigningKey::from_bytes([seed; SIGNING_KEY_LEN])
+    SigningKey::from_bytes([seed; SIGNING_KEY_LEN]).unwrap()
 }
 
 fn make_sig_pair(seed: u8) -> (SigningKey, VerificationKey) {
@@ -96,7 +96,7 @@ fn enrichment_50_signers_sorted_correctly() {
     let arr = SortedSignatureArray::from_unsorted(entries).unwrap();
     assert_eq!(arr.len(), 50);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 
@@ -147,7 +147,7 @@ fn enrichment_insert_maintains_order_after_many_inserts() {
     }
     assert_eq!(arr.len(), 9);
     for i in 1..arr.len() {
-        assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+        assert!(arr.entries()[i - 1].signer.as_bytes() < arr.entries()[i].signer.as_bytes());
     }
 }
 

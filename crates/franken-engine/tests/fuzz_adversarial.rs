@@ -126,8 +126,14 @@ fn run_handshake_program(data: &[u8]) {
     }
 
     let mut channel = SessionHostcallChannel::new();
-    let extension_signing_key = SigningKey::from_bytes(bytes32(data, 0));
-    let host_signing_key = SigningKey::from_bytes(bytes32(data, 17));
+    let extension_signing_key = match SigningKey::from_bytes(bytes32(data, 0)) {
+        Ok(k) => k,
+        Err(_) => return,
+    };
+    let host_signing_key = match SigningKey::from_bytes(bytes32(data, 17)) {
+        Ok(k) => k,
+        Err(_) => return,
+    };
     let config = SessionConfig {
         max_lifetime_ticks: 16 + u64::from(byte(data, 1)),
         max_messages: 8 + u64::from(byte(data, 2)),
@@ -329,7 +335,7 @@ fn run_token_program(data: &[u8]) {
 }
 
 fn build_token(data: &[u8]) -> Option<CapabilityToken> {
-    let sk = SigningKey::from_bytes(bytes32(data, 0));
+    let sk = SigningKey::from_bytes(bytes32(data, 0)).ok()?;
     let presenter = PrincipalId::from_bytes(bytes32(data, 1));
     let nbf = DeterministicTimestamp(u64::from(byte(data, 2)));
     let expiry = DeterministicTimestamp(nbf.0.saturating_add(1 + u64::from(byte(data, 3))));

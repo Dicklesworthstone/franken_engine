@@ -24,7 +24,7 @@ fn epoch() -> SecurityEpoch {
 }
 
 fn signing_key() -> SigningKey {
-    SigningKey::from_bytes([1u8; 32])
+    SigningKey::from_bytes([1u8; 32]).unwrap()
 }
 
 // =========================================================================
@@ -837,7 +837,7 @@ fn enrichment_sign_and_verify_roundtrip() {
 #[test]
 fn enrichment_verify_fails_wrong_key() {
     let key = signing_key();
-    let wrong_vk = SigningKey::from_bytes([2u8; 32]).verification_key();
+    let wrong_vk = SigningKey::from_bytes([2u8; 32]).unwrap().verification_key();
     let mut receipt = test_receipt(epoch());
     receipt.sign(&key).unwrap();
     assert!(receipt.verify(&wrong_vk).is_err());

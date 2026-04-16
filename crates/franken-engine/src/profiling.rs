@@ -203,7 +203,7 @@ impl Profiler {
         let mut instruction_times_vec: Vec<_> = self.instruction_times.iter().collect();
         instruction_times_vec.sort_by(|a, b| b.1.cmp(a.1)); // Sort by time descending
 
-        for (name, &total_time) in instruction_times_vec.iter().take(10) {
+        for (name, total_time) in instruction_times_vec.iter().take(10) {
             let total_time_ns = total_time.as_nanos() as u64;
             let count = self.instruction_counts.get(*name).copied().unwrap_or(0);
             let time_percentage = if total_execution_time_ns > 0 {

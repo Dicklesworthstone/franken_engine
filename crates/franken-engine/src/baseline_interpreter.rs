@@ -356,6 +356,7 @@ impl Value {
             Self::Iterator(_)
             | Self::Generator(_)
             | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorObject(_)
             | Self::Promise(_) => "object",
         }
     }
@@ -375,6 +376,7 @@ impl Value {
             Self::Iterator(_)
             | Self::Generator(_)
             | Self::AsyncFunctionObject(_)
+            | Self::AsyncGeneratorObject(_)
             | Self::Promise(_) => "object",
         }
     }
@@ -397,6 +399,8 @@ impl fmt::Display for Value {
             Self::Generator(idx) => write!(f, "[generator#{idx}]"),
             Self::AsyncFunction(idx) => write!(f, "[asyncfunction#{idx}]"),
             Self::AsyncFunctionObject(idx) => write!(f, "[asyncfunctionobject#{idx}]"),
+            Self::AsyncGeneratorFunction(idx) => write!(f, "[asyncgeneratorfunction#{idx}]"),
+            Self::AsyncGeneratorObject(idx) => write!(f, "[asyncgeneratorobject#{idx}]"),
             Self::Promise(idx) => write!(f, "[promise#{idx}]"),
             Self::BuiltinFunction(builtin) => write!(f, "[builtin:{}]", builtin.display_name()),
         }
@@ -1114,8 +1118,10 @@ impl EvidenceLog {
                 Value::Generator(id) => 11 + (*id as u64),
                 Value::AsyncFunction(id) => 12 + (*id as u64),
                 Value::AsyncFunctionObject(id) => 13 + (*id as u64),
-                Value::Promise(id) => 14 + (*id as u64),
-                Value::BuiltinFunction(bf) => 15 + (bf.kind as u64),
+                Value::AsyncGeneratorFunction(id) => 14 + (*id as u64),
+                Value::AsyncGeneratorObject(id) => 15 + (*id as u64),
+                Value::Promise(id) => 16 + (*id as u64),
+                Value::BuiltinFunction(bf) => 17 + (bf.kind as u64),
             };
             hasher_state = hasher_state.wrapping_mul(31).wrapping_add(value_hash);
         }
@@ -3145,10 +3151,10 @@ impl InterpreterCore {
                     self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
                     self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
                 }
-                let js_val = crate::object_model::JsValue::Object(result_id);
+                let js_val = crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id));
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store
-                    .fulfill(result_promise, js_val, label, &mut self.event_loop.microtasks)
+                    .fulfill(crate::promise_model::PromiseHandle(result_promise), js_val, label, &mut self.event_loop.microtasks)
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "promise fulfillment".into(),
                         got: format!("failed to fulfill promise: {e:?}"),
@@ -3174,10 +3180,10 @@ impl InterpreterCore {
             self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
             self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
         }
-        let js_val = crate::object_model::JsValue::Object(result_id);
+        let js_val = crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id));
         let label = crate::ifc_artifacts::Label::Public;
         self.promise_store
-            .fulfill(result_promise, js_val, label, &mut self.event_loop.microtasks)
+            .fulfill(crate::promise_model::PromiseHandle(result_promise), js_val, label, &mut self.event_loop.microtasks)
             .map_err(|e| InterpreterError::TypeError {
                 expected: "promise fulfillment".into(),
                 got: format!("failed to fulfill promise: {e:?}"),
@@ -6417,7 +6423,9 @@ impl InterpreterCore {
             | Value::Promise(_)
             | Value::BuiltinFunction(_)
             | Value::AsyncFunction(_)
-            | Value::AsyncFunctionObject(_) => None,
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::AsyncGeneratorObject(_) => None,
         }
     }
 
@@ -6452,7 +6460,9 @@ impl InterpreterCore {
             | Value::Promise(_)
             | Value::BuiltinFunction(_)
             | Value::AsyncFunction(_)
-            | Value::AsyncFunctionObject(_) => Some(f64::NAN),
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::AsyncGeneratorObject(_) => Some(f64::NAN),
         }
     }
 
@@ -6920,6 +6930,8 @@ impl InterpreterCore {
             Value::Generator(idx) => format!("[object Generator#{}]", idx),
             Value::AsyncFunction(idx) => format!("[AsyncFunction: async{}]", idx),
             Value::AsyncFunctionObject(idx) => format!("[object AsyncFunction#{}]", idx),
+            Value::AsyncGeneratorFunction(idx) => format!("[AsyncGeneratorFunction: async_gen{}]", idx),
+            Value::AsyncGeneratorObject(idx) => format!("[object AsyncGenerator#{}]", idx),
             Value::Promise(idx) => format!("[object Promise#{}]", idx),
             Value::BuiltinFunction(builtin) => {
                 format!("[Function: builtin {}]", builtin.display_name())

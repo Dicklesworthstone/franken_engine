@@ -81,13 +81,11 @@ commands cannot corrupt the replay bundle schema.
 
 By default, the replay wrapper reruns the lane and then prints the latest complete artifact bundle.
 The bundle includes `run_manifest.json`, `trace_ids.json`, `events.jsonl`, `commands.txt`, `step_logs/step_000.log`, and `security_verification_report.json`.
-If the newest artifact directory is
-incomplete, it warns and falls back to the latest complete directory; if no
+If the newest artifact directory is incomplete, it warns and falls back to the latest complete directory; if no
 complete bundle exists, it fails non-zero instead of presenting a partial run
 as trustworthy. If the rerun itself fails, the wrapper states whether the
-printed bundle came from the current failed invocation or from an older
-complete directory, so operators do not mistake stale evidence for the failed
-run's output.
+printed bundle came from the current failed invocation or from an older complete directory,
+so operators do not mistake stale evidence for the failed run's output.
 
 To replay a specific preserved bundle without rerunning the lane, point the
 wrapper at an exact complete run directory:

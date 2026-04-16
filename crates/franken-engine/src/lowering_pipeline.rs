@@ -3399,6 +3399,11 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::LoadThis { dst });
                 value_stack.push(dst);
             }
+            Ir1Op::LoadSuper => {
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
+                value_stack.push(dst);
+            }
             Ir1Op::DeclareFunction {
                 binding_id,
                 name,
@@ -4253,6 +4258,11 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::LoadSuper => {
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::LoadSuper { dst });
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewArray { count } => {
@@ -5857,6 +5867,9 @@ fn lower_expression_to_ir1(
         }
         Expression::This => {
             ops.push(Ir1Op::LoadThis);
+        }
+        Expression::Super => {
+            ops.push(Ir1Op::LoadSuper);
         }
         Expression::ArrayLiteral(elements) => {
             // Check if any element is a spread

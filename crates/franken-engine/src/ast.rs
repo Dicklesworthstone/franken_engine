@@ -1597,6 +1597,8 @@ pub enum Expression {
         pattern: String,
         flags: String,
     },
+    /// Super keyword for accessing parent class methods and constructor.
+    Super,
 }
 
 impl Expression {
@@ -1915,6 +1917,12 @@ impl Expression {
                 );
                 map.insert("flags".to_string(), CanonicalValue::String(flags.clone()));
             }
+            Self::Super => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("super".to_string()),
+                );
+            }
         }
         CanonicalValue::Map(map)
     }
@@ -1946,6 +1954,7 @@ impl std::fmt::Display for Expression {
             Self::This => write!(f, "this"),
             Self::Raw(value) => write!(f, "{value}"),
             Self::RegExpLiteral { pattern, flags } => write!(f, "/{pattern}/{flags}"),
+            Self::Super => write!(f, "super"),
             _ => write!(f, "{self:?}"),
         }
     }

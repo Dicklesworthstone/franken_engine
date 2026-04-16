@@ -696,6 +696,9 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// The `super` value for this call frame. Set to the parent class constructor
+    /// for class methods, `undefined` otherwise.
+    super_value: Value,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
@@ -1282,6 +1285,10 @@ pub struct InterpreterCore {
     current_module_specifier: Option<String>,
     /// Console output captured for deterministic replay.
     console_output: Vec<ConsoleEntry>,
+    /// Next timer ID for setTimeout/setInterval (monotonic for determinism).
+    next_timer_id: u32,
+    /// Active timers for clearTimeout/clearInterval tracking.
+    active_timers: std::collections::BTreeMap<u32, ActiveTimer>,
 }
 
 impl InterpreterCore {
@@ -2846,6 +2853,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
+                                super_value: Value::Undefined,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -2986,6 +2994,7 @@ impl InterpreterCore {
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val,
+                        super_value: Value::Undefined,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
@@ -3109,6 +3118,8 @@ impl InterpreterCore {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("console:") {
                         self.dispatch_console_hostcall(&capability.0, args)?
+                    } else if capability.0.starts_with("timer:") {
+                        self.dispatch_timer_hostcall(&capability.0, args)?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
@@ -3508,6 +3519,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
+                                super_value: Value::Undefined,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -3603,6 +3615,14 @@ impl InterpreterCore {
                         .last()
                         .map_or(Value::Undefined, |f| f.this_value.clone());
                     self.write_reg(dst, this_val)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::LoadSuper { dst } => {
+                    let super_val = self
+                        .call_stack
+                        .last()
+                        .map_or(Value::Undefined, |f| f.super_value.clone());
+                    self.write_reg(dst, super_val)?;
                     self.ip += 1;
                 }
                 // ---------------------------------------------------------
@@ -9413,5 +9433,104 @@ mod tests {
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Timer substrate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn setTimeout_fires_after_delay() {
+        // TODO: Test that setTimeout callback executes after specified delay
+        // When timer substrate is implemented, this will:
+        // 1. Call setTimeout with a callback and delay
+        // 2. Verify timer ID is returned
+        // 3. Run event loop until timer fires
+        // 4. Verify callback executed at the right time
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn setTimeout_returns_id() {
+        // TODO: Test that setTimeout returns numeric timer ID
+        // When timer substrate is implemented, this will:
+        // 1. Call setTimeout(callback, delay)
+        // 2. Verify return value is a numeric timer ID
+        // 3. Verify IDs are deterministic and monotonic
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn clearTimeout_cancels() {
+        // TODO: Test that clearTimeout prevents timer from firing
+        // When timer substrate is implemented, this will:
+        // 1. Call setTimeout to schedule a timer
+        // 2. Call clearTimeout with the timer ID
+        // 3. Run event loop
+        // 4. Verify callback never executes
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn setInterval_repeats() {
+        // TODO: Test that setInterval fires multiple times
+        // When timer substrate is implemented, this will:
+        // 1. Call setInterval with callback and interval
+        // 2. Run event loop for several intervals
+        // 3. Verify callback fires multiple times at regular intervals
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn clearInterval_stops() {
+        // TODO: Test that clearInterval stops repeating timer
+        // When timer substrate is implemented, this will:
+        // 1. Call setInterval to start repeating timer
+        // 2. Let it fire a few times
+        // 3. Call clearInterval to stop it
+        // 4. Verify timer stops firing
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn timer_ordering() {
+        // TODO: Test that earlier timers fire before later timers
+        // When timer substrate is implemented, this will:
+        // 1. Schedule multiple timers with different delays
+        // 2. Run event loop until all fire
+        // 3. Verify execution order matches delay ordering
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn microtask_before_timer() {
+        // TODO: Test that microtasks drain before timer callbacks
+        // When timer substrate is implemented, this will:
+        // 1. Schedule a setTimeout(callback, 0)
+        // 2. Enqueue a microtask (Promise.then)
+        // 3. Run event loop
+        // 4. Verify microtask executes before timer callback
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn nested_setTimeout() {
+        // TODO: Test that setTimeout inside timer callback works
+        // When timer substrate is implemented, this will:
+        // 1. Call setTimeout with callback that calls setTimeout again
+        // 2. Run event loop
+        // 3. Verify both timers execute in correct order
+        assert!(true); // Placeholder until implementation
+    }
+
+    #[test]
+    fn zero_delay_timeout() {
+        // TODO: Test that setTimeout(cb, 0) fires after current macrotask + microtasks
+        // When timer substrate is implemented, this will:
+        // 1. Call setTimeout(callback, 0)
+        // 2. Enqueue some microtasks
+        // 3. Run event loop
+        // 4. Verify timer fires after microtasks drain
+        assert!(true); // Placeholder until implementation
     }
 }

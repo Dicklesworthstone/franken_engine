@@ -552,6 +552,7 @@ impl ParserArena {
             | Expression::OptionalCall { .. }
             | Expression::OptionalMember { .. }
             | Expression::This
+            | Expression::Super
             | Expression::ArrayLiteral(_)
             | Expression::ObjectLiteral(_)
             | Expression::ArrowFunction { .. }
@@ -779,6 +780,7 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::OptionalCall { .. } => "optional_call",
         Expression::OptionalMember { .. } => "optional_member",
         Expression::This => "this",
+        Expression::Super => "super",
         Expression::ArrayLiteral(_) => "array_literal",
         Expression::ObjectLiteral(_) => "object_literal",
         Expression::ArrowFunction { .. } => "arrow_function",

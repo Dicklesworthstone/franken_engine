@@ -3790,11 +3790,7 @@ fn parse_primary_expression(
         return Ok(Expression::This);
     }
     if expression == "super" {
-        return Err(unsupported_expression_syntax_error(
-            "super expressions are not supported",
-            span,
-            context,
-        ));
+        return Ok(Expression::Super);
     }
 
     if let Some(rest) = expression.strip_prefix("await")
@@ -5228,6 +5224,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::Super
         | Expression::Function { .. }
         | Expression::Raw(_)
         | Expression::RegExpLiteral { .. } => false,

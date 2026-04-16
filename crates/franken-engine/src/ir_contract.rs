@@ -465,6 +465,8 @@ pub enum Ir1Op {
     Throw,
     /// Load `this` binding.
     LoadThis,
+    /// Load `super` binding for accessing parent class.
+    LoadSuper,
     /// Declare a function and bind it.  When `body_ops` is non-empty the
     /// function body is lowered independently with its own register frame.
     DeclareFunction {
@@ -775,6 +777,12 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("load_this".to_string()),
+                );
+            }
+            Self::LoadSuper => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_super".to_string()),
                 );
             }
             Self::DeclareFunction {
@@ -1453,6 +1461,8 @@ pub enum Ir3Instruction {
     Halt,
     /// Load the current `this` binding into a register.
     LoadThis { dst: Reg },
+    /// Load the current `super` binding into a register.
+    LoadSuper { dst: Reg },
 
     // ── Exception handling (unwind-capable IR) ────────────────────────
     /// Push a catch frame onto the exception handler stack.
@@ -1857,6 +1867,13 @@ impl Ir3Instruction {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("load_this".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::LoadSuper { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_super".to_string()),
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }

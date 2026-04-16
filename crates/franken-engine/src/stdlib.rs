@@ -258,6 +258,13 @@ pub enum BuiltinId {
     ConsoleLog,
     ConsoleError,
     ConsoleWarn,
+
+    // -- Timers --
+    SetTimeout,
+    SetInterval,
+    ClearTimeout,
+    ClearInterval,
+    SetImmediate,
 }
 
 impl BuiltinId {
@@ -440,6 +447,11 @@ impl BuiltinId {
             Self::ConsoleLog => "console.log",
             Self::ConsoleError => "console.error",
             Self::ConsoleWarn => "console.warn",
+            Self::SetTimeout => "setTimeout",
+            Self::SetInterval => "setInterval",
+            Self::ClearTimeout => "clearTimeout",
+            Self::ClearInterval => "clearInterval",
+            Self::SetImmediate => "setImmediate",
         }
     }
 }
@@ -4927,6 +4939,37 @@ fn install_global_properties(
         global,
         "decodeURIComponent",
         BuiltinId::GlobalDecodeURIComponent,
+    );
+
+    // Timer functions
+    install_builtin_fn(heap, registry, global, "setTimeout", BuiltinId::SetTimeout);
+    install_builtin_fn(
+        heap,
+        registry,
+        global,
+        "setInterval",
+        BuiltinId::SetInterval,
+    );
+    install_builtin_fn(
+        heap,
+        registry,
+        global,
+        "clearTimeout",
+        BuiltinId::ClearTimeout,
+    );
+    install_builtin_fn(
+        heap,
+        registry,
+        global,
+        "clearInterval",
+        BuiltinId::ClearInterval,
+    );
+    install_builtin_fn(
+        heap,
+        registry,
+        global,
+        "setImmediate",
+        BuiltinId::SetImmediate,
     );
 }
 

@@ -825,6 +825,29 @@ impl Default for MessageBus {
     pub fn current_lamport_timestamp(&self) -> u64 {
         self.lamport_clock
     }
+
+    /// Get instance count.
+    pub fn instance_count(&self) -> usize {
+        self.instances.len()
+    }
+
+    /// Get message bus queue length.
+    pub fn message_bus_queue_length(&self) -> usize {
+        self.message_bus.queue_length()
+    }
+
+    /// Set partition mode for the message bus.
+    pub fn set_partition_mode(&mut self, mode: PartitionMode) -> Result<(), FleetSimulatorError> {
+        // Determine success rate based on partition mode
+        let success_rate = match mode {
+            PartitionMode::Normal => 100,
+            PartitionMode::Degraded(rate) => (rate * 100.0) as u8,
+            PartitionMode::Healing => 85, // Better than degraded but not perfect
+        };
+
+        self.message_bus.set_partition_mode(mode, success_rate);
+        Ok(())
+    }
 }
 
 /// Quarantine statistics for reporting.

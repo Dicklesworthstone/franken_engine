@@ -17,10 +17,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::fleet_convergence::{
-    ConvergenceEngine, ConvergenceEvent, ContainmentThresholds, PartitionInfo, PartitionMode,
+    ContainmentThresholds, ConvergenceEngine, ConvergenceEvent, PartitionInfo, PartitionMode,
 };
 use crate::fleet_immune_protocol::{
-    ContainmentAction, FleetProtocolState, NodeId, ProtocolMessage, QuorumCheckpoint,
+    ContainmentAction, FleetMessage as ProtocolFleetMessage, FleetProtocolState, NodeId,
+    ProtocolVersion, QuorumCheckpoint,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
@@ -92,7 +93,7 @@ pub struct FleetMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessagePayload {
     /// Protocol message from fleet immune protocol.
-    Protocol(ProtocolMessage),
+    Protocol(ProtocolFleetMessage),
     /// Convergence event for state synchronization.
     ConvergenceEvent(ConvergenceEvent),
     /// Quorum checkpoint.
@@ -152,7 +153,7 @@ impl MessageBus {
                 self.message_queue.push_back(message);
                 self.messages_delivered += 1;
             }
-            PartitionMode::Degraded => {
+            PartitionMode::Degraded(_) => {
                 // Simple deterministic "random" based on message hash
                 let hash_bytes = message.message_id.as_bytes();
                 let pseudo_random = hash_bytes[0] % 100;
@@ -237,7 +238,10 @@ pub enum SimulationEventType {
     /// Instance created.
     InstanceCreated,
     /// Instance state changed.
-    StateTransition { from: InstanceState, to: InstanceState },
+    StateTransition {
+        from: InstanceState,
+        to: InstanceState,
+    },
     /// Message sent between instances.
     MessageSent { from: NodeId, to: Option<NodeId> },
     /// Message received by instance.
@@ -463,12 +467,11 @@ impl FleetSimulator {
         new_state: InstanceState,
         reason: String,
     ) -> Result<(), FleetSimulatorError> {
-        let instance = self
-            .instances
-            .get_mut(node_id)
-            .ok_or_else(|| FleetSimulatorError::InstanceNotFound {
+        let instance = self.instances.get_mut(node_id).ok_or_else(|| {
+            FleetSimulatorError::InstanceNotFound {
                 node_id: node_id.clone(),
-            })?;
+            }
+        })?;
 
         let old_state = instance.state;
         instance.state = new_state;
@@ -523,13 +526,13 @@ impl FleetSimulator {
 
     /// Get simulation statistics.
     pub fn simulation_stats(&self) -> SimulationStats {
-        let instance_states: BTreeMap<InstanceState, u32> = self
-            .instances
-            .values()
-            .fold(BTreeMap::new(), |mut acc, instance| {
-                *acc.entry(instance.state).or_insert(0) += 1;
-                acc
-            });
+        let instance_states: BTreeMap<InstanceState, u32> =
+            self.instances
+                .values()
+                .fold(BTreeMap::new(), |mut acc, instance| {
+                    *acc.entry(instance.state).or_insert(0) += 1;
+                    acc
+                });
 
         let (messages_delivered, messages_dropped) = self.message_bus.delivery_stats();
 
@@ -592,9 +595,9 @@ mod tests {
 
     fn test_thresholds() -> ContainmentThresholds {
         ContainmentThresholds {
-            sandbox_threshold: 1_000_000,   // 1.0
-            suspend_threshold: 5_000_000,   // 5.0
-            terminate_threshold: 10_000_000, // 10.0
+            sandbox_threshold: 1_000_000,     // 1.0
+            suspend_threshold: 5_000_000,     // 5.0
+            terminate_threshold: 10_000_000,  // 10.0
             quarantine_threshold: 20_000_000, // 20.0
         }
     }
@@ -779,10 +782,12 @@ mod tests {
 
         // Should have creation events for both instances
         assert_eq!(fleet.event_log.len(), 2);
-        assert!(fleet.event_log.iter().all(|e| matches!(
-            e.event_type,
-            SimulationEventType::InstanceCreated
-        )));
+        assert!(
+            fleet
+                .event_log
+                .iter()
+                .all(|e| matches!(e.event_type, SimulationEventType::InstanceCreated))
+        );
 
         // Export should produce valid JSONL
         let log_json = fleet.export_event_log();

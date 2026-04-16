@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::SourceSpan;
 use crate::hash_tiers::ContentHash;
-use crate::jsx_tsx_parser::{JsxParserConfig, JsxParseResult, parse_jsx};
+use crate::jsx_tsx_parser::{JsxParseResult, JsxParserConfig, parse_jsx};
 use crate::react_jsx_lowering::{
-    ReactLoweringConfig, ReactLoweringResult, lower_parse_result, compute_lowering_receipt
+    ReactLoweringConfig, ReactLoweringResult, compute_lowering_receipt, lower_parse_result,
 };
 
 // ---------------------------------------------------------------------------
@@ -345,7 +345,9 @@ pub fn generate_compilation_evidence(
 // ---------------------------------------------------------------------------
 
 /// Generate JavaScript output from React lowering result.
-fn generate_javascript_output(lowering_result: &ReactLoweringResult) -> Result<String, ReactCompileError> {
+fn generate_javascript_output(
+    lowering_result: &ReactLoweringResult,
+) -> Result<String, ReactCompileError> {
     // For now, generate a simple JavaScript representation
     // In a full implementation, this would integrate with the IR generation pipeline
     let calls = &lowering_result.react_calls;
@@ -360,10 +362,15 @@ fn generate_javascript_output(lowering_result: &ReactLoweringResult) -> Result<S
         if i > 0 {
             output.push('\n');
         }
-        output.push_str(&format!("{}({}, {})",
+        output.push_str(&format!(
+            "{}({}, {})",
             call.function_name,
             call.element_type,
-            if call.props.is_empty() { "null" } else { "{...}" }
+            if call.props.is_empty() {
+                "null"
+            } else {
+                "{...}"
+            }
         ));
     }
 
@@ -381,14 +388,14 @@ fn generate_source_map(original: &str, generated: &str) -> Result<String, ReactC
         "sourcesContent": [original]
     });
 
-    serde_json::to_string(&source_map)
-        .map_err(|e| ReactCompileError::SourceMapError(e.to_string()))
+    serde_json::to_string(&source_map).map_err(|e| ReactCompileError::SourceMapError(e.to_string()))
 }
 
 /// Extract feature families used in the parse result.
 fn extract_feature_families(parse_result: &JsxParseResult) -> Vec<String> {
     // Extract the feature families that were encountered during parsing
-    parse_result.feature_inventory
+    parse_result
+        .feature_inventory
         .iter()
         .map(|f| format!("{:?}", f))
         .collect()
@@ -434,11 +441,17 @@ mod tests {
         let config = ReactCompileConfig::default();
 
         let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-        assert!(result.is_ok(), "Compilation should succeed for simple element");
+        assert!(
+            result.is_ok(),
+            "Compilation should succeed for simple element"
+        );
 
         let result = result.unwrap();
         assert_eq!(result.source, source);
-        assert!(!result.generated_code.is_empty(), "Should generate output code");
+        assert!(
+            !result.generated_code.is_empty(),
+            "Should generate output code"
+        );
     }
 
     #[test]
@@ -454,7 +467,10 @@ mod tests {
         let config = ReactCompileConfig::default();
 
         let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-        assert!(result.is_ok(), "Compilation should succeed for expression children");
+        assert!(
+            result.is_ok(),
+            "Compilation should succeed for expression children"
+        );
     }
 
     #[test]
@@ -466,7 +482,10 @@ mod tests {
         let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
 
         assert_eq!(evidence.output_spec.success, true);
-        assert_eq!(evidence.compile_receipt.component, REACT_COMPILATION_COMPONENT);
+        assert_eq!(
+            evidence.compile_receipt.component,
+            REACT_COMPILATION_COMPONENT
+        );
     }
 
     #[test]

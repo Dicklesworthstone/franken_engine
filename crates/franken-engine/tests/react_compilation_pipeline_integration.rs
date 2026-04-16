@@ -5,7 +5,7 @@
 //! compilation path from React source to executable code.
 
 use frankenengine_engine::react_compilation_pipeline::{
-    ReactCompileConfig, ReactInputLanguage, compile_react_source, generate_compilation_evidence
+    ReactCompileConfig, ReactInputLanguage, compile_react_source, generate_compilation_evidence,
 };
 
 #[test]
@@ -18,8 +18,14 @@ fn test_simple_jsx_compilation() {
 
     let result = result.unwrap();
     assert_eq!(result.source, source);
-    assert!(!result.generated_code.is_empty(), "Should generate output code");
-    assert!(!result.parse_result.feature_inventory.is_empty(), "Should identify JSX features");
+    assert!(
+        !result.generated_code.is_empty(),
+        "Should generate output code"
+    );
+    assert!(
+        !result.parse_result.feature_inventory.is_empty(),
+        "Should identify JSX features"
+    );
 }
 
 #[test]
@@ -28,11 +34,16 @@ fn test_jsx_with_expressions() {
     let config = ReactCompileConfig::default();
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-    assert!(result.is_ok(), "JSX with expressions should compile successfully");
+    assert!(
+        result.is_ok(),
+        "JSX with expressions should compile successfully"
+    );
 
     let result = result.unwrap();
-    assert!(result.generated_code.contains("React") || result.generated_code.contains("jsx"),
-           "Generated code should contain React calls");
+    assert!(
+        result.generated_code.contains("React") || result.generated_code.contains("jsx"),
+        "Generated code should contain React calls"
+    );
 }
 
 #[test]
@@ -50,10 +61,16 @@ fn test_self_closing_element() {
     let config = ReactCompileConfig::default();
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-    assert!(result.is_ok(), "Self-closing element should compile successfully");
+    assert!(
+        result.is_ok(),
+        "Self-closing element should compile successfully"
+    );
 
     let result = result.unwrap();
-    assert!(!result.generated_code.is_empty(), "Should generate code for self-closing element");
+    assert!(
+        !result.generated_code.is_empty(),
+        "Should generate code for self-closing element"
+    );
 }
 
 #[test]
@@ -68,10 +85,16 @@ fn test_nested_elements() {
     let config = ReactCompileConfig::default();
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-    assert!(result.is_ok(), "Nested elements should compile successfully");
+    assert!(
+        result.is_ok(),
+        "Nested elements should compile successfully"
+    );
 
     let result = result.unwrap();
-    assert!(!result.metadata.feature_families.is_empty(), "Should identify multiple feature families");
+    assert!(
+        !result.metadata.feature_families.is_empty(),
+        "Should identify multiple feature families"
+    );
 }
 
 #[test]
@@ -96,7 +119,8 @@ fn test_tsx_language_detection() {
     let result = compile_react_source(source, ReactInputLanguage::Tsx, &config);
     assert!(result.is_ok(), "TSX should compile successfully");
 
-    let evidence = generate_compilation_evidence(&result.unwrap(), &config, ReactInputLanguage::Tsx);
+    let evidence =
+        generate_compilation_evidence(&result.unwrap(), &config, ReactInputLanguage::Tsx);
     assert_eq!(evidence.input_spec.language, ReactInputLanguage::Tsx);
 }
 
@@ -111,7 +135,10 @@ fn test_empty_input_handling() {
 fn test_whitespace_only_input() {
     let config = ReactCompileConfig::default();
     let result = compile_react_source("   \n   ", ReactInputLanguage::Jsx, &config);
-    assert!(result.is_err(), "Whitespace-only input should produce error");
+    assert!(
+        result.is_err(),
+        "Whitespace-only input should produce error"
+    );
 }
 
 #[test]
@@ -130,10 +157,19 @@ fn test_compilation_metadata() {
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
 
-    assert!(!result.metadata.input_hash.as_bytes().is_empty(), "Should have input hash");
-    assert!(!result.metadata.config_hash.as_bytes().is_empty(), "Should have config hash");
+    assert!(
+        !result.metadata.input_hash.as_bytes().is_empty(),
+        "Should have input hash"
+    );
+    assert!(
+        !result.metadata.config_hash.as_bytes().is_empty(),
+        "Should have config hash"
+    );
     assert!(result.metadata.timestamp > 0, "Should have timestamp");
-    assert!(!result.metadata.feature_families.is_empty(), "Should identify feature families");
+    assert!(
+        !result.metadata.feature_families.is_empty(),
+        "Should identify feature families"
+    );
 }
 
 #[test]
@@ -143,10 +179,16 @@ fn test_source_map_generation() {
     config.generate_source_maps = true;
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
-    assert!(result.source_map.is_some(), "Should generate source map when requested");
+    assert!(
+        result.source_map.is_some(),
+        "Should generate source map when requested"
+    );
 
     let source_map = result.source_map.unwrap();
-    assert!(source_map.contains("version"), "Source map should be valid JSON");
+    assert!(
+        source_map.contains("version"),
+        "Source map should be valid JSON"
+    );
 }
 
 #[test]
@@ -166,8 +208,10 @@ fn test_classic_vs_automatic_runtime() {
     let automatic_result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
 
     // Both should succeed but generate different code
-    assert_ne!(classic_result.generated_code, automatic_result.generated_code,
-              "Classic and automatic modes should generate different output");
+    assert_ne!(
+        classic_result.generated_code, automatic_result.generated_code,
+        "Classic and automatic modes should generate different output"
+    );
 }
 
 #[test]
@@ -227,9 +271,18 @@ fn test_large_jsx_component() {
 
     let config = ReactCompileConfig::default();
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config);
-    assert!(result.is_ok(), "Large JSX component should compile successfully");
+    assert!(
+        result.is_ok(),
+        "Large JSX component should compile successfully"
+    );
 
     let result = result.unwrap();
-    assert!(!result.generated_code.is_empty(), "Should generate code for large component");
-    assert!(result.metadata.feature_families.len() >= 3, "Should identify multiple feature families");
+    assert!(
+        !result.generated_code.is_empty(),
+        "Should generate code for large component"
+    );
+    assert!(
+        result.metadata.feature_families.len() >= 3,
+        "Should identify multiple feature families"
+    );
 }

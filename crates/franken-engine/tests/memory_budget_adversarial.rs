@@ -3,43 +3,66 @@
 //! These tests verify that the memory budget constraints properly prevent
 //! denial-of-service attacks through unbounded memory allocation.
 
+use frankenengine_engine::ast::{ParseGoal, SourceSpan, SyntaxTree};
 use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, InterpreterError,
+    InterpreterConfig, InterpreterError, QuickJsLane,
 };
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{
-    Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, Reg,
+    Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module, Reg,
 };
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
 
 /// Create a test configuration with tight memory limits for adversarial testing.
 fn adversarial_config() -> InterpreterConfig {
-    let mut config = InterpreterConfig::default();
-    config.profile = InterpreterProfile::Deterministic;
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.max_heap_objects = 100; // Very low limit for testing
     config.max_total_memory_bytes = 1024 * 16; // 16KB limit
     config.max_scope_depth = 10; // Low depth limit
     config
 }
 
-/// Create a test module with the given JavaScript source.
-fn test_module(js_source: &str) -> Ir3Module {
-    Ir3Module {
-        header: IrHeader {
-            schema_version: IrSchemaVersion::CURRENT,
-            level: IrLevel::Ir3,
-            source_hash: None,
-            source_label: "adversarial_test".to_string(),
-        },
-        instructions: Vec::new(), // Simplified for testing
-        constant_pool: Vec::new(),
-        function_descriptors: Vec::new(),
-        root_function: None,
-        initial_register_count: 10,
-    }
+/// Create a test module from JavaScript source using the lowering pipeline.
+fn lower_source_to_ir3(source: &str) -> Ir3Module {
+    let tree = parse_script(source).expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "memory_adversarial_test.js");
+    lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new(
+            "trace-memory-adversarial",
+            "decision-memory-adversarial",
+            "policy-memory-adversarial",
+        ),
+    )
+    .expect("source should lower")
+    .ir3
+}
+
+/// Create a test module with specific IR3 instructions for direct testing.
+fn test_module_with_instructions(instructions: Vec<Ir3Instruction>) -> Ir3Module {
+    let mut m = Ir3Module::new(ContentHash::compute(b"adversarial-test"), "adversarial.js");
+    m.instructions = instructions;
+    m.function_table.push(Ir3FunctionDesc {
+        entry: 0,
+        arity: 0,
+        frame_size: 16,
+        name: Some("main".to_string()),
+        is_generator: false,
+    });
+    m
+}
+
+/// Create a test lane with adversarial configuration.
+fn adversarial_lane() -> QuickJsLane {
+    let mut config = adversarial_config();
+    config.granted_capabilities = std::collections::BTreeSet::new();
+    QuickJsLane::new(config)
 }
 
 #[test]
 fn test_object_allocation_exhaustion() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Allocate objects within instruction budget but exceeding object count limit
     let js_source = r#"
@@ -48,8 +71,8 @@ fn test_object_allocation_exhaustion() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "object-allocation-test");
 
     // Should fail with MemoryBudgetExceeded due to object count limit
     match result {
@@ -62,7 +85,7 @@ fn test_object_allocation_exhaustion() {
 
 #[test]
 fn test_memory_byte_exhaustion() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Create large string that exceeds memory byte limit
     let js_source = r#"
@@ -72,8 +95,8 @@ fn test_memory_byte_exhaustion() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "memory-byte-test");
 
     // Should fail with MemoryBudgetExceeded due to memory byte limit
     match result {
@@ -86,7 +109,7 @@ fn test_memory_byte_exhaustion() {
 
 #[test]
 fn test_scope_depth_exhaustion() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Deep scope nesting that exceeds scope depth limit
     let js_source = r#"
@@ -129,13 +152,19 @@ fn test_scope_depth_exhaustion() {
         deepNesting();
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     // Should fail with ScopeDepthExceeded
     match result {
-        Err(InterpreterError::ScopeDepthExceeded { current_depth, max_depth }) => {
-            assert!(current_depth >= max_depth, "Should exceed scope depth limit");
+        Err(InterpreterError::ScopeDepthExceeded {
+            current_depth,
+            max_depth,
+        }) => {
+            assert!(
+                current_depth >= max_depth,
+                "Should exceed scope depth limit"
+            );
         }
         other => panic!("Expected ScopeDepthExceeded, got: {:?}", other),
     }
@@ -143,7 +172,7 @@ fn test_scope_depth_exhaustion() {
 
 #[test]
 fn test_closure_memory_amplification() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Create closures that capture large scope chains (O(n^2) amplification)
     let js_source = r#"
@@ -157,8 +186,8 @@ fn test_closure_memory_amplification() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     // Should either succeed within limits or fail with appropriate memory error
     match result {
@@ -174,7 +203,7 @@ fn test_closure_memory_amplification() {
 
 #[test]
 fn test_generator_memory_exhaustion() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Generator that creates objects on each yield
     let js_source = r#"
@@ -193,8 +222,8 @@ fn test_generator_memory_exhaustion() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     // Should fail with MemoryBudgetExceeded, not panic
     match result {
@@ -210,7 +239,7 @@ fn test_generator_memory_exhaustion() {
 
 #[test]
 fn test_iterator_allocation_loop() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Create many iterators to test iterator table bounds
     let js_source = r#"
@@ -222,8 +251,8 @@ fn test_iterator_allocation_loop() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     // Should either succeed or fail gracefully with budget error
     match result {
@@ -239,7 +268,7 @@ fn test_iterator_allocation_loop() {
 
 #[test]
 fn test_combined_memory_exhaustion() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // Test: Combine objects, closures, and strings simultaneously
     let js_source = r#"
@@ -257,8 +286,8 @@ fn test_combined_memory_exhaustion() {
         }
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     // Should fail with MemoryBudgetExceeded due to combined memory pressure
     match result {
@@ -277,7 +306,7 @@ fn test_memory_budget_boundary_conditions() {
     let mut config = adversarial_config();
     config.max_heap_objects = 5; // Exact boundary testing
 
-    let mut interpreter = BaselineInterpreter::new(config);
+    let mut interpreter = InterpreterCore::new(config);
 
     // Test: Allocate exactly max_heap_objects - should succeed
     let js_source = r#"
@@ -288,8 +317,8 @@ fn test_memory_budget_boundary_conditions() {
         let obj5 = {}; // This should be the 5th object
     "#;
 
-    let module = test_module(js_source);
-    let result = interpreter.execute(&module);
+    let module = lower_source_to_ir3(js_source);
+    let result = lane.execute(&module, "test");
 
     match result {
         Ok(_) => {
@@ -315,13 +344,16 @@ fn test_memory_budget_boundary_conditions() {
         Err(InterpreterError::MemoryBudgetExceeded { .. }) => {
             // Expected with 6th object
         }
-        other => panic!("Expected MemoryBudgetExceeded with 6 objects, got: {:?}", other),
+        other => panic!(
+            "Expected MemoryBudgetExceeded with 6 objects, got: {:?}",
+            other
+        ),
     }
 }
 
 #[test]
 fn test_memory_recovery_after_budget_error() {
-    let mut interpreter = BaselineInterpreter::new(adversarial_config());
+    let lane = adversarial_lane();
 
     // First execution: exceed budget
     let js_source_fail = r#"
@@ -333,7 +365,10 @@ fn test_memory_recovery_after_budget_error() {
     let module_fail = test_module(js_source_fail);
     let result_fail = interpreter.execute(&module_fail);
 
-    assert!(matches!(result_fail, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+    assert!(matches!(
+        result_fail,
+        Err(InterpreterError::MemoryBudgetExceeded { .. })
+    ));
 
     // Second execution: should succeed with smaller allocation
     let js_source_succeed = r#"

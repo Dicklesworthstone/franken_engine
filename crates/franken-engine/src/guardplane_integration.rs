@@ -49,10 +49,7 @@ pub trait InterpreterHook {
     ) -> Result<HookAction, GuardplaneError>;
 
     /// Called before function/method calls.
-    fn pre_call(
-        &mut self,
-        context: &CallContext,
-    ) -> Result<HookAction, GuardplaneError>;
+    fn pre_call(&mut self, context: &CallContext) -> Result<HookAction, GuardplaneError>;
 
     /// Called before object allocation (NewObject/NewArray).
     fn pre_allocation(
@@ -61,10 +58,7 @@ pub trait InterpreterHook {
     ) -> Result<HookAction, GuardplaneError>;
 
     /// Called before module imports.
-    fn pre_import(
-        &mut self,
-        context: &ImportContext,
-    ) -> Result<HookAction, GuardplaneError>;
+    fn pre_import(&mut self, context: &ImportContext) -> Result<HookAction, GuardplaneError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -383,10 +377,10 @@ pub struct GuardplaneConfig {
 impl Default for GuardplaneConfig {
     fn default() -> Self {
         Self {
-            challenge_threshold: 200_000,   // 0.2
-            sandbox_threshold: 400_000,     // 0.4
-            suspend_threshold: 600_000,     // 0.6
-            terminate_threshold: 800_000,   // 0.8
+            challenge_threshold: 200_000, // 0.2
+            sandbox_threshold: 400_000,   // 0.4
+            suspend_threshold: 600_000,   // 0.6
+            terminate_threshold: 800_000, // 0.8
             emit_evidence: true,
             bayesian_learning: false, // Conservative default
         }
@@ -410,17 +404,17 @@ impl BasicGuardplaneAdapter {
         let (base_risk, trust_level) = match context {
             OperationContext::PropertyAccess(ctx) => {
                 let base = match ctx.access_type {
-                    PropertyAccessType::Get => 100_000,  // 0.1
-                    PropertyAccessType::Set => 200_000,  // 0.2
-                    PropertyAccessType::Has => 50_000,   // 0.05
+                    PropertyAccessType::Get => 100_000,    // 0.1
+                    PropertyAccessType::Set => 200_000,    // 0.2
+                    PropertyAccessType::Has => 50_000,     // 0.05
                     PropertyAccessType::Delete => 300_000, // 0.3
                 };
                 (base, ctx.trust_level)
             }
             OperationContext::Call(ctx) => {
                 let base = match ctx.call_type {
-                    CallType::Function => 150_000,   // 0.15
-                    CallType::Method => 200_000,     // 0.2
+                    CallType::Function => 150_000,    // 0.15
+                    CallType::Method => 200_000,      // 0.2
                     CallType::Constructor => 250_000, // 0.25
                 };
                 (base, ctx.trust_level)
@@ -535,10 +529,7 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         Ok(action)
     }
 
-    fn pre_call(
-        &mut self,
-        context: &CallContext,
-    ) -> Result<HookAction, GuardplaneError> {
+    fn pre_call(&mut self, context: &CallContext) -> Result<HookAction, GuardplaneError> {
         // Skip guardplane for trusted code
         if context.trust_level == CodeTrustLevel::Trusted {
             return Ok(HookAction::Allow);
@@ -576,10 +567,7 @@ impl InterpreterHook for BasicGuardplaneAdapter {
         Ok(action)
     }
 
-    fn pre_import(
-        &mut self,
-        context: &ImportContext,
-    ) -> Result<HookAction, GuardplaneError> {
+    fn pre_import(&mut self, context: &ImportContext) -> Result<HookAction, GuardplaneError> {
         if context.trust_level == CodeTrustLevel::Trusted {
             return Ok(HookAction::Allow);
         }
@@ -632,7 +620,10 @@ mod tests {
 
         let action = adapter.pre_property_access(&context).unwrap();
         assert_eq!(action, HookAction::Allow);
-        assert!(adapter.decision_history.is_empty(), "No evidence for trusted code");
+        assert!(
+            adapter.decision_history.is_empty(),
+            "No evidence for trusted code"
+        );
     }
 
     #[test]
@@ -651,7 +642,10 @@ mod tests {
 
         let action = adapter.pre_property_access(&context).unwrap();
         assert_ne!(action, HookAction::Allow); // Should be challenged or sandboxed
-        assert!(!adapter.decision_history.is_empty(), "Should generate evidence");
+        assert!(
+            !adapter.decision_history.is_empty(),
+            "Should generate evidence"
+        );
     }
 
     #[test]
@@ -688,8 +682,8 @@ mod tests {
     fn test_action_determination() {
         let mut config = GuardplaneConfig::default();
         config.challenge_threshold = 100_000; // 0.1
-        config.sandbox_threshold = 200_000;   // 0.2
-        config.suspend_threshold = 300_000;   // 0.3
+        config.sandbox_threshold = 200_000; // 0.2
+        config.suspend_threshold = 300_000; // 0.3
 
         let adapter = BasicGuardplaneAdapter::new(config);
 
@@ -711,7 +705,10 @@ mod tests {
             e_process_boundaries: Vec::new(),
             policy_violations: Vec::new(),
         };
-        assert_eq!(adapter.determine_action(&medium_risk), HookAction::Challenge);
+        assert_eq!(
+            adapter.determine_action(&medium_risk),
+            HookAction::Challenge
+        );
 
         // High risk → Sandbox
         let high_risk = RiskAssessment {
@@ -746,7 +743,9 @@ mod tests {
             policy_violations: Vec::new(),
         };
 
-        let evidence = adapter.generate_evidence(&context, &risk, HookAction::Sandbox).unwrap();
+        let evidence = adapter
+            .generate_evidence(&context, &risk, HookAction::Sandbox)
+            .unwrap();
 
         assert!(!evidence.decision_id.is_empty());
         assert!(evidence.timestamp > 0);

@@ -3,13 +3,12 @@
 //! These tests verify that the guardplane hooks correctly assess risk and
 //! enforce containment policies during interpreter execution.
 
-use frankenengine_engine::guardplane_integration::{
-    BasicGuardplaneAdapter, GuardplaneConfig, InterpreterHook,
-    PropertyAccessContext, CallContext, AllocationContext, ImportContext,
-    PropertyAccessType, CallType, AllocationType, ImportType,
-    CodeTrustLevel, HookAction,
-};
 use frankenengine_engine::ast::SourceSpan;
+use frankenengine_engine::guardplane_integration::{
+    AllocationContext, AllocationType, BasicGuardplaneAdapter, CallContext, CallType,
+    CodeTrustLevel, GuardplaneConfig, HookAction, ImportContext, ImportType, InterpreterHook,
+    PropertyAccessContext, PropertyAccessType,
+};
 
 fn create_test_span() -> SourceSpan {
     SourceSpan::new(0, 10, 1, 0, 1, 10)
@@ -32,7 +31,10 @@ fn test_trusted_code_bypasses_guardplane() {
 
     let action = adapter.pre_property_access(&context).unwrap();
     assert_eq!(action, HookAction::Allow);
-    assert!(adapter.decision_history.is_empty(), "No evidence should be generated for trusted code");
+    assert!(
+        adapter.decision_history.is_empty(),
+        "No evidence should be generated for trusted code"
+    );
 }
 
 #[test]
@@ -52,7 +54,11 @@ fn test_untrusted_property_access_triggers_guardplane() {
     let action = adapter.pre_property_access(&context).unwrap();
     // Should allow low-risk Get operation
     assert_eq!(action, HookAction::Allow);
-    assert_eq!(adapter.decision_history.len(), 1, "Should generate evidence");
+    assert_eq!(
+        adapter.decision_history.len(),
+        1,
+        "Should generate evidence"
+    );
 }
 
 #[test]
@@ -106,7 +112,11 @@ fn test_function_call_risk_assessment() {
 
     // Constructor should have higher severity or equal
     assert!(constructor_action.severity_level() >= function_action.severity_level());
-    assert_eq!(adapter.decision_history.len(), 2, "Should record both decisions");
+    assert_eq!(
+        adapter.decision_history.len(),
+        2,
+        "Should record both decisions"
+    );
 }
 
 #[test]
@@ -174,15 +184,18 @@ fn test_evidence_generation_disabled() {
     };
 
     adapter.pre_property_access(&context).unwrap();
-    assert!(adapter.decision_history.is_empty(), "Evidence should be disabled");
+    assert!(
+        adapter.decision_history.is_empty(),
+        "Evidence should be disabled"
+    );
 }
 
 #[test]
 fn test_risk_threshold_configuration() {
     let mut config = GuardplaneConfig::default();
-    config.challenge_threshold = 50_000;  // 0.05 - very sensitive
-    config.sandbox_threshold = 100_000;   // 0.1
-    config.suspend_threshold = 150_000;   // 0.15
+    config.challenge_threshold = 50_000; // 0.05 - very sensitive
+    config.sandbox_threshold = 100_000; // 0.1
+    config.suspend_threshold = 150_000; // 0.15
     config.terminate_threshold = 200_000; // 0.2
 
     let mut adapter = BasicGuardplaneAdapter::new(config);
@@ -272,15 +285,27 @@ fn test_multiple_operations_build_history() {
     adapter.pre_call(&call_context).unwrap();
     adapter.pre_allocation(&alloc_context).unwrap();
 
-    assert_eq!(adapter.decision_history.len(), 3, "Should record all three operations");
+    assert_eq!(
+        adapter.decision_history.len(),
+        3,
+        "Should record all three operations"
+    );
 
     // All decisions should be for the same extension
     for evidence in &adapter.decision_history {
         let extension_id = match &evidence.operation_context {
-            frankenengine_engine::guardplane_integration::OperationContext::PropertyAccess(ctx) => &ctx.extension_id,
-            frankenengine_engine::guardplane_integration::OperationContext::Call(ctx) => &ctx.extension_id,
-            frankenengine_engine::guardplane_integration::OperationContext::Allocation(ctx) => &ctx.extension_id,
-            frankenengine_engine::guardplane_integration::OperationContext::Import(ctx) => &ctx.extension_id,
+            frankenengine_engine::guardplane_integration::OperationContext::PropertyAccess(ctx) => {
+                &ctx.extension_id
+            }
+            frankenengine_engine::guardplane_integration::OperationContext::Call(ctx) => {
+                &ctx.extension_id
+            }
+            frankenengine_engine::guardplane_integration::OperationContext::Allocation(ctx) => {
+                &ctx.extension_id
+            }
+            frankenengine_engine::guardplane_integration::OperationContext::Import(ctx) => {
+                &ctx.extension_id
+            }
         };
         assert_eq!(extension_id, &Some("multi-op-extension".to_string()));
     }
@@ -362,10 +387,10 @@ fn test_hook_action_display() {
 fn test_guardplane_config_defaults() {
     let config = GuardplaneConfig::default();
 
-    assert_eq!(config.challenge_threshold, 200_000);  // 0.2
-    assert_eq!(config.sandbox_threshold, 400_000);    // 0.4
-    assert_eq!(config.suspend_threshold, 600_000);    // 0.6
-    assert_eq!(config.terminate_threshold, 800_000);  // 0.8
+    assert_eq!(config.challenge_threshold, 200_000); // 0.2
+    assert_eq!(config.sandbox_threshold, 400_000); // 0.4
+    assert_eq!(config.suspend_threshold, 600_000); // 0.6
+    assert_eq!(config.terminate_threshold, 800_000); // 0.8
     assert!(config.emit_evidence);
     assert!(!config.bayesian_learning); // Conservative default
 }

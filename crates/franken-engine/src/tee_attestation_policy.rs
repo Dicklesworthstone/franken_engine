@@ -1472,6 +1472,172 @@ fn is_hex_ascii(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Mock TEE Provider for Testing
+// ---------------------------------------------------------------------------
+
+/// Mock TEE provider for testing and simulation.
+/// Generates HMAC-signed attestation quotes conforming to existing policy types.
+#[derive(Debug, Clone)]
+pub struct MockTeeProvider {
+    /// Platform this provider simulates.
+    pub platform: TeePlatform,
+    /// HMAC key for signing mock quotes.
+    signing_key: [u8; 32],
+    /// Mock trust root ID.
+    pub trust_root_id: String,
+    /// Mock measurement that will pass validation.
+    pub approved_measurement: MeasurementDigest,
+    /// Mock measurement that will fail validation (for testing).
+    pub rejected_measurement: MeasurementDigest,
+}
+
+/// Mock attestation quote with HMAC signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MockAttestationQuote {
+    pub measurement_hash: String,
+    pub nonce: String,
+    pub timestamp: u64,
+    pub platform: TeePlatform,
+    pub signature: String, // HMAC-SHA256 hex
+}
+
+impl MockTeeProvider {
+    /// Create a new mock TEE provider for the given platform.
+    pub fn new(platform: TeePlatform) -> Self {
+        let signing_key = b"mock_tee_signing_key_for_testing"; // 32 bytes
+
+        let approved_digest = match platform {
+            TeePlatform::IntelSgx => "a".repeat(64), // SHA256 length
+            TeePlatform::ArmTrustZone => "b".repeat(64),
+            TeePlatform::ArmCca => "c".repeat(96), // SHA384 length
+            TeePlatform::AmdSev => "d".repeat(128), // SHA512 length
+        };
+
+        let rejected_digest = match platform {
+            TeePlatform::IntelSgx => "f".repeat(64),
+            TeePlatform::ArmTrustZone => "e".repeat(64),
+            TeePlatform::ArmCca => "f".repeat(96),
+            TeePlatform::AmdSev => "f".repeat(128),
+        };
+
+        let algorithm = match platform {
+            TeePlatform::IntelSgx | TeePlatform::ArmTrustZone => MeasurementAlgorithm::Sha256,
+            TeePlatform::ArmCca => MeasurementAlgorithm::Sha384,
+            TeePlatform::AmdSev => MeasurementAlgorithm::Sha512,
+        };
+
+        Self {
+            platform,
+            signing_key: *signing_key,
+            trust_root_id: format!("mock-{}-root", platform.canonical_tag()),
+            approved_measurement: MeasurementDigest {
+                algorithm,
+                digest_hex: approved_digest,
+            },
+            rejected_measurement: MeasurementDigest {
+                algorithm,
+                digest_hex: rejected_digest,
+            },
+        }
+    }
+
+    /// Generate a valid mock attestation quote.
+    pub fn generate_valid_quote(&self, nonce: &str) -> MockAttestationQuote {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        self.generate_quote_with_measurement(&self.approved_measurement, nonce, timestamp)
+    }
+
+    /// Generate a quote with a rejected measurement (for testing failure cases).
+    pub fn generate_rejected_quote(&self, nonce: &str) -> MockAttestationQuote {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        self.generate_quote_with_measurement(&self.rejected_measurement, nonce, timestamp)
+    }
+
+    /// Generate an expired quote (for testing freshness checks).
+    pub fn generate_expired_quote(&self, nonce: &str) -> MockAttestationQuote {
+        let old_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 3600; // 1 hour ago
+
+        self.generate_quote_with_measurement(&self.approved_measurement, nonce, old_timestamp)
+    }
+
+    /// Generate a quote with specific measurement and timestamp.
+    fn generate_quote_with_measurement(
+        &self,
+        measurement: &MeasurementDigest,
+        nonce: &str,
+        timestamp: u64,
+    ) -> MockAttestationQuote {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Create deterministic signature using HMAC-like approach
+        let mut hasher = DefaultHasher::new();
+        self.signing_key.hash(&mut hasher);
+        measurement.digest_hex.hash(&mut hasher);
+        nonce.hash(&mut hasher);
+        timestamp.hash(&mut hasher);
+        self.platform.canonical_tag().hash(&mut hasher);
+
+        let signature = format!("{:x}", hasher.finish());
+
+        MockAttestationQuote {
+            measurement_hash: measurement.digest_hex.clone(),
+            nonce: nonce.to_string(),
+            timestamp,
+            platform: self.platform,
+            signature,
+        }
+    }
+
+    /// Verify a mock quote signature.
+    pub fn verify_quote(&self, quote: &MockAttestationQuote) -> bool {
+        // Reconstruct expected quote and compare signatures
+        let expected = self.generate_quote_with_measurement(
+            &MeasurementDigest {
+                algorithm: self.approved_measurement.algorithm,
+                digest_hex: quote.measurement_hash.clone(),
+            },
+            &quote.nonce,
+            quote.timestamp,
+        );
+
+        expected.signature == quote.signature && expected.platform == quote.platform
+    }
+
+    /// Convert mock quote to policy AttestationQuote for evaluation.
+    pub fn to_policy_quote(
+        &self,
+        mock_quote: &MockAttestationQuote,
+        quote_age_secs: u64,
+    ) -> AttestationQuote {
+        use std::collections::BTreeMap;
+
+        AttestationQuote {
+            platform: mock_quote.platform,
+            measurement: MeasurementDigest {
+                algorithm: self.approved_measurement.algorithm,
+                digest_hex: mock_quote.measurement_hash.clone(),
+            },
+            quote_age_secs,
+            trust_root_id: self.trust_root_id.clone(),
+            revocation_observations: BTreeMap::new(), // Empty for mock
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -3738,5 +3904,149 @@ mod tests {
         let json = serde_json::to_string(&digest).unwrap();
         let back: MeasurementDigest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, digest);
+    }
+
+    // ---------------------------------------------------------------------------
+    // MockTeeProvider tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn mock_generates_valid_quote() {
+        let provider = MockTeeProvider::new(TeePlatform::IntelSgx);
+        let nonce = "test-nonce-123";
+        let quote = provider.generate_valid_quote(nonce);
+
+        // Verify basic properties
+        assert_eq!(quote.platform, TeePlatform::IntelSgx);
+        assert_eq!(quote.nonce, nonce);
+        assert_eq!(
+            quote.measurement_hash,
+            provider.approved_measurement.digest_hex
+        );
+        assert!(!quote.signature.is_empty());
+
+        // Verify signature is valid
+        assert!(provider.verify_quote(&quote));
+    }
+
+    #[test]
+    fn expired_quote_rejected() {
+        let provider = MockTeeProvider::new(TeePlatform::ArmTrustZone);
+        let nonce = "expired-nonce";
+        let quote = provider.generate_expired_quote(nonce);
+
+        // Quote should be correctly formed but old
+        assert!(provider.verify_quote(&quote));
+
+        // Convert to policy quote with high age
+        let policy_quote = provider.to_policy_quote(&quote, 3601); // Over 1 hour old
+
+        // Create mock policy that enforces freshness
+        let mut policy = TeeAttestationPolicyDocument::new();
+        policy.min_quote_freshness_seconds = BTreeMap::new();
+        policy
+            .min_quote_freshness_seconds
+            .insert(DecisionImpact::Standard, 3600); // 1 hour max
+
+        let approved_measurements = ApprovedMeasurementSet {
+            platform: TeePlatform::ArmTrustZone,
+            measurements: vec![provider.approved_measurement.clone()],
+        };
+        policy.approved_measurements = vec![approved_measurements];
+
+        // Should fail validation due to staleness
+        assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn tampered_quote_rejected() {
+        let provider = MockTeeProvider::new(TeePlatform::ArmCca);
+        let nonce = "tamper-test";
+        let mut quote = provider.generate_valid_quote(nonce);
+
+        // Tamper with measurement hash
+        quote.measurement_hash = "tampered".to_string();
+
+        // Verification should fail
+        assert!(!provider.verify_quote(&quote));
+    }
+
+    #[test]
+    fn correct_platform_in_quote() {
+        for platform in TeePlatform::ALL {
+            let provider = MockTeeProvider::new(platform);
+            let quote = provider.generate_valid_quote("platform-test");
+
+            assert_eq!(quote.platform, platform);
+            assert_eq!(provider.platform, platform);
+
+            // Trust root ID should include platform
+            assert!(provider.trust_root_id.contains(platform.canonical_tag()));
+        }
+    }
+
+    #[test]
+    fn freshness_check() {
+        let provider = MockTeeProvider::new(TeePlatform::AmdSev);
+        let quote = provider.generate_valid_quote("fresh-test");
+
+        // Fresh quote (age 0) should be valid
+        let fresh_policy_quote = provider.to_policy_quote(&quote, 0);
+        assert_eq!(fresh_policy_quote.quote_age_secs, 0);
+
+        // Old quote should have correct age
+        let old_policy_quote = provider.to_policy_quote(&quote, 7200); // 2 hours
+        assert_eq!(old_policy_quote.quote_age_secs, 7200);
+    }
+
+    #[test]
+    fn high_impact_requires_attestation() {
+        let provider = MockTeeProvider::new(TeePlatform::IntelSgx);
+
+        // Create policy document with different freshness requirements
+        let mut policy = TeeAttestationPolicyDocument::new();
+        policy.min_quote_freshness_seconds = BTreeMap::new();
+        policy
+            .min_quote_freshness_seconds
+            .insert(DecisionImpact::Standard, 3600); // 1 hour
+        policy
+            .min_quote_freshness_seconds
+            .insert(DecisionImpact::HighImpact, 300); // 5 minutes
+
+        let approved_measurements = ApprovedMeasurementSet {
+            platform: TeePlatform::IntelSgx,
+            measurements: vec![provider.approved_measurement.clone()],
+        };
+        policy.approved_measurements = vec![approved_measurements];
+
+        // Add trust root for the mock provider
+        let trust_root = PlatformTrustRoot {
+            root_id: provider.trust_root_id.clone(),
+            platform: TeePlatform::IntelSgx,
+            trust_anchor_pem: "-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----"
+                .to_string(),
+            valid_from_epoch: SecurityEpoch::from_raw(1000),
+            valid_until_epoch: Some(SecurityEpoch::from_raw(9999)),
+            pinning: TrustRootPinning::Pinned,
+            source: TrustRootSource::Policy,
+        };
+        policy.trust_roots = vec![trust_root];
+
+        assert!(policy.validate().is_ok());
+
+        // High-impact decisions should require fresher attestation
+        let standard_freshness = policy
+            .min_quote_freshness_seconds
+            .get(&DecisionImpact::Standard)
+            .unwrap();
+        let high_impact_freshness = policy
+            .min_quote_freshness_seconds
+            .get(&DecisionImpact::HighImpact)
+            .unwrap();
+
+        assert!(
+            high_impact_freshness < standard_freshness,
+            "High-impact decisions should require fresher attestation"
+        );
     }
 }

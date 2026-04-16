@@ -951,7 +951,7 @@ mod tests {
             correlation_id: "corr-001".to_string(),
             decision_impact: DecisionImpact::Standard,
             attestation_bindings: None,
-            signature: AuthenticityHash::compute(b"placeholder"),
+            signature: AuthenticityHash([0u8; 32]),
         }
     }
 
@@ -968,7 +968,7 @@ mod tests {
             activation_stage: ActivationStage::Shadow,
             expiry_epoch: SecurityEpoch::from_raw(10),
             issuer_key_id: test_signer_key_id(),
-            issuer_signature: AuthenticityHash::compute(b"placeholder"),
+            issuer_signature: AuthenticityHash([0u8; 32]),
         }
     }
 

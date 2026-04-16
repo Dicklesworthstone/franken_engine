@@ -66,7 +66,7 @@ fn base_receipt(schema_version: SchemaVersion, impact: DecisionImpact) -> OptRec
         correlation_id: "corr-attested-1".to_string(),
         decision_impact: impact,
         attestation_bindings: None,
-        signature: AuthenticityHash::compute(b"placeholder"),
+        signature: AuthenticityHash([0u8; 32]),
     }
 }
 

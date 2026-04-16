@@ -557,7 +557,7 @@ impl BindingKind {
 }
 
 /// A single binding in a scope environment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeBinding {
     value: Value,
     kind: BindingKind,
@@ -566,7 +566,7 @@ struct ScopeBinding {
 }
 
 /// A single scope frame in the environment chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeFrame {
     bindings: BTreeMap<String, ScopeBinding>,
 }
@@ -715,6 +715,11 @@ struct CallFrame {
     /// the chain with the captured environment. `None` for plain function
     /// calls where the chain is only extended, not replaced.
     saved_scope_chain: Option<Vec<ScopeFrame>>,
+    /// Closure store index for calls that execute captured environments.
+    closure_id: Option<u32>,
+    /// Number of frames from the active scope chain that belong to the
+    /// closure capture. Callee-local frames are not written back.
+    captured_scope_depth: usize,
 }
 
 // ---------------------------------------------------------------------------

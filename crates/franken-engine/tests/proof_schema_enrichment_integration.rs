@@ -99,7 +99,7 @@ fn unsigned_receipt() -> OptReceipt {
         correlation_id: "corr-enr-001".to_string(),
         decision_impact: DecisionImpact::Standard,
         attestation_bindings: None,
-        signature: AuthenticityHash::compute(b"placeholder"),
+        signature: AuthenticityHash([0u8; 32]),
     }
 }
 
@@ -116,7 +116,7 @@ fn unsigned_rollback() -> RollbackToken {
         activation_stage: ActivationStage::Shadow,
         expiry_epoch: epoch(20),
         issuer_key_id: signer_key_id(),
-        issuer_signature: AuthenticityHash::compute(b"placeholder"),
+        issuer_signature: AuthenticityHash([0u8; 32]),
     }
 }
 

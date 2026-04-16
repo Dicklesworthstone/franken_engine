@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::hash_tiers::ContentHash;
 use crate::fleet_immune_protocol::NodeId;
+use crate::hash_tiers::ContentHash;
 use crate::quarantine_propagation::{QuarantineDecision, QuarantineProtocolManager};
 
 // ---------------------------------------------------------------------------
@@ -74,15 +74,20 @@ pub struct ConvergenceMeasurement {
     pub extension_id: String,
     /// Originating instance.
     pub originator_instance: NodeId,
-    /// Decision start time.
+    /// Decision start time. Not serialized — `Instant` is monotonic and
+    /// meaningless across process boundaries.
+    #[serde(skip, default = "Instant::now")]
     pub decision_start_time: Instant,
-    /// Time when all instances acknowledged (convergence).
+    /// Time when all instances acknowledged (convergence). Not serialized —
+    /// monotonic.
+    #[serde(skip)]
     pub convergence_time: Option<Instant>,
     /// Convergence duration in milliseconds.
     pub convergence_duration_ms: Option<u64>,
     /// Whether this event met the SLO.
     pub slo_met: Option<bool>,
-    /// Per-instance acknowledgment times.
+    /// Per-instance acknowledgment times. Not serialized — monotonic.
+    #[serde(skip)]
     pub instance_ack_times: BTreeMap<NodeId, Instant>,
     /// Number of participating instances.
     pub total_instances: usize,
@@ -122,7 +127,9 @@ impl ConvergenceMeasurement {
         if let Some(latest_ack) = self.instance_ack_times.values().max() {
             self.convergence_time = Some(*latest_ack);
             self.convergence_duration_ms = Some(
-                latest_ack.duration_since(self.decision_start_time).as_millis() as u64
+                latest_ack
+                    .duration_since(self.decision_start_time)
+                    .as_millis() as u64,
             );
         }
     }
@@ -141,7 +148,10 @@ impl ConvergenceMeasurement {
 
     /// Get convergence progress (acknowledged_count, total_expected).
     pub fn convergence_progress(&self) -> (usize, usize) {
-        (self.instance_ack_times.len(), self.total_instances.saturating_sub(1))
+        (
+            self.instance_ack_times.len(),
+            self.total_instances.saturating_sub(1),
+        )
     }
 }
 
@@ -202,7 +212,8 @@ impl ConvergenceMeter {
         total_instances: usize,
     ) -> Result<(), ConvergenceError> {
         let measurement = ConvergenceMeasurement::new(decision, total_instances);
-        self.active_measurements.insert(decision.evidence_hash, measurement);
+        self.active_measurements
+            .insert(decision.evidence_hash, measurement);
         Ok(())
     }
 
@@ -213,7 +224,8 @@ impl ConvergenceMeter {
         instance_id: NodeId,
         ack_time: Instant,
     ) -> Result<bool, ConvergenceError> {
-        let measurement = self.active_measurements
+        let measurement = self
+            .active_measurements
             .get_mut(&evidence_hash)
             .ok_or_else(|| ConvergenceError::MeasurementNotFound { evidence_hash })?;
 
@@ -261,7 +273,8 @@ impl ConvergenceMeter {
             });
         }
 
-        let converged_measurements: Vec<_> = self.completed_measurements
+        let converged_measurements: Vec<_> = self
+            .completed_measurements
             .iter()
             .filter(|m| m.is_converged())
             .collect();
@@ -347,7 +360,8 @@ impl ConvergenceMeter {
             })
             .collect();
 
-        instance_averages.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        instance_averages
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let outlier_count = (instance_averages.len() as f64 * 0.1).ceil() as usize;
         instance_averages
@@ -360,21 +374,26 @@ impl ConvergenceMeter {
     /// Publish convergence artifacts to the configured directory.
     pub fn publish_artifacts(&self) -> Result<ArtifactPublicationResult, ConvergenceError> {
         // Create artifacts directory
-        fs::create_dir_all(&self.config.artifacts_directory)
-            .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to create directory: {}", e)
-            })?;
+        fs::create_dir_all(&self.config.artifacts_directory).map_err(|e| {
+            ConvergenceError::ArtifactPublicationFailed {
+                reason: format!("Failed to create directory: {}", e),
+            }
+        })?;
 
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        let convergence_dir = self.config.artifacts_directory.join(format!("convergence_{}", timestamp));
-        fs::create_dir_all(&convergence_dir)
-            .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to create convergence directory: {}", e)
-            })?;
+        let convergence_dir = self
+            .config
+            .artifacts_directory
+            .join(format!("convergence_{}", timestamp));
+        fs::create_dir_all(&convergence_dir).map_err(|e| {
+            ConvergenceError::ArtifactPublicationFailed {
+                reason: format!("Failed to create convergence directory: {}", e),
+            }
+        })?;
 
         let mut published_files = Vec::new();
 
@@ -382,42 +401,47 @@ impl ConvergenceMeter {
         let measurements_file = convergence_dir.join("convergence_measurements.json");
         let measurements_json = serde_json::to_string_pretty(&self.completed_measurements)
             .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to serialize measurements: {}", e)
+                reason: format!("Failed to serialize measurements: {}", e),
             })?;
 
-        fs::write(&measurements_file, measurements_json)
-            .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to write measurements file: {}", e)
-            })?;
+        fs::write(&measurements_file, measurements_json).map_err(|e| {
+            ConvergenceError::ArtifactPublicationFailed {
+                reason: format!("Failed to write measurements file: {}", e),
+            }
+        })?;
         published_files.push(measurements_file);
 
         // Publish statistics if available
         if let Some(ref statistics) = self.latest_statistics {
             let statistics_file = convergence_dir.join("convergence_statistics.json");
-            let statistics_json = serde_json::to_string_pretty(statistics)
-                .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                    reason: format!("Failed to serialize statistics: {}", e)
-                })?;
+            let statistics_json = serde_json::to_string_pretty(statistics).map_err(|e| {
+                ConvergenceError::ArtifactPublicationFailed {
+                    reason: format!("Failed to serialize statistics: {}", e),
+                }
+            })?;
 
-            fs::write(&statistics_file, statistics_json)
-                .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                    reason: format!("Failed to write statistics file: {}", e)
-                })?;
+            fs::write(&statistics_file, statistics_json).map_err(|e| {
+                ConvergenceError::ArtifactPublicationFailed {
+                    reason: format!("Failed to write statistics file: {}", e),
+                }
+            })?;
             published_files.push(statistics_file);
         }
 
         // Publish SLO summary
         let slo_summary_file = convergence_dir.join("slo_summary.json");
         let slo_summary = self.generate_slo_summary();
-        let slo_summary_json = serde_json::to_string_pretty(&slo_summary)
-            .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to serialize SLO summary: {}", e)
-            })?;
+        let slo_summary_json = serde_json::to_string_pretty(&slo_summary).map_err(|e| {
+            ConvergenceError::ArtifactPublicationFailed {
+                reason: format!("Failed to serialize SLO summary: {}", e),
+            }
+        })?;
 
-        fs::write(&slo_summary_file, slo_summary_json)
-            .map_err(|e| ConvergenceError::ArtifactPublicationFailed {
-                reason: format!("Failed to write SLO summary file: {}", e)
-            })?;
+        fs::write(&slo_summary_file, slo_summary_json).map_err(|e| {
+            ConvergenceError::ArtifactPublicationFailed {
+                reason: format!("Failed to write SLO summary file: {}", e),
+            }
+        })?;
         published_files.push(slo_summary_file);
 
         Ok(ArtifactPublicationResult {
@@ -428,9 +452,10 @@ impl ConvergenceMeter {
     }
 
     /// Generate SLO compliance summary.
-    fn generate_slo_summary(&self) -> SloSummary {
+    pub fn generate_slo_summary(&self) -> SloSummary {
         let total_measurements = self.completed_measurements.len();
-        let slo_violations = self.completed_measurements
+        let slo_violations = self
+            .completed_measurements
             .iter()
             .filter(|m| m.slo_met == Some(false))
             .count();
@@ -629,20 +654,24 @@ mod tests {
         let ack_time_2 = ack_time_1 + Duration::from_millis(10);
 
         // First acknowledgment
-        let converged = meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-1".to_string()),
-            ack_time_1,
-        ).unwrap();
+        let converged = meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-1".to_string()),
+                ack_time_1,
+            )
+            .unwrap();
         assert!(!converged);
         assert_eq!(meter.active_measurements.len(), 1);
 
         // Second acknowledgment - should trigger convergence
-        let converged = meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-2".to_string()),
-            ack_time_2,
-        ).unwrap();
+        let converged = meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-2".to_string()),
+                ack_time_2,
+            )
+            .unwrap();
         assert!(converged);
         assert_eq!(meter.active_measurements.len(), 0);
         assert_eq!(meter.completed_measurements.len(), 1);
@@ -700,7 +729,10 @@ mod tests {
             Instant::now(),
         );
 
-        assert!(matches!(result, Err(ConvergenceError::MeasurementNotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(ConvergenceError::MeasurementNotFound { .. })
+        ));
     }
 
     #[test]
@@ -723,7 +755,10 @@ mod tests {
         }
 
         let result = meter.compute_statistics();
-        assert!(matches!(result, Err(ConvergenceError::InsufficientSampleSize { .. })));
+        assert!(matches!(
+            result,
+            Err(ConvergenceError::InsufficientSampleSize { .. })
+        ));
     }
 
     #[test]

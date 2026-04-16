@@ -100,7 +100,7 @@ impl fmt::Display for ProtocolVersion {
 // ---------------------------------------------------------------------------
 
 /// Unique identifier for a fleet node.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub String);
 
 impl NodeId {

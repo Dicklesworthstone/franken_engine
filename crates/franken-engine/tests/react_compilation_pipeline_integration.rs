@@ -23,7 +23,7 @@ fn test_simple_jsx_compilation() {
         "Should generate output code"
     );
     assert!(
-        !result.parse_result.feature_inventory.is_empty(),
+        !result.parse_result.feature_families_used.is_empty(),
         "Should identify JSX features"
     );
 }

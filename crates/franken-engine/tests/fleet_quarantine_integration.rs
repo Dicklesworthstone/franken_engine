@@ -79,12 +79,7 @@ struct ConvergenceMetrics {
 
 /// Test containment thresholds.
 fn test_containment_thresholds() -> ContainmentThresholds {
-    ContainmentThresholds::new(
-        0.1,                        // posterior_threshold
-        0.05,                       // tightening_factor
-        Duration::from_millis(100), // observation_window
-    )
-    .unwrap()
+    ContainmentThresholds::default()
 }
 
 /// Create test artifacts directory.
@@ -280,15 +275,23 @@ fn test_duplicate_quarantine_ignored() {
 
 #[test]
 fn test_minority_partition_tightens() {
+    let instance_count = 10;
+    let partition_info = PartitionInfo {
+        detected_at_ns: 0,
+        unreachable_nodes: std::collections::BTreeSet::new(),
+        local_partition_size: 3,
+        total_fleet_size: instance_count,
+    };
     let config = FleetQuarantineConfig {
-        partition_mode: PartitionMode::Degraded(0.7), // 70% delivery rate
+        instance_count,
+        partition_mode: PartitionMode::Degraded(partition_info),
         ..Default::default()
     };
     let thresholds = test_containment_thresholds();
     let mut fleet = FleetSimulator::new(config.instance_count, thresholds).unwrap();
 
-    // Set degraded partition mode
-    fleet.set_partition_mode(config.partition_mode).unwrap();
+    // Set degraded partition mode with 70% delivery rate
+    fleet.set_partition_mode(config.partition_mode.clone(), 70);
 
     let originator = NodeId("node_0".to_string());
     let extension_id = "partition_test_ext".to_string();

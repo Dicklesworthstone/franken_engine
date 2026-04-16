@@ -65,18 +65,14 @@ fn test_convergence_time_measured() {
     let ack_time_2 = decision_time + Duration::from_millis(100);
 
     // Record acknowledgments
-    let converged_1 = meter.record_acknowledgment(
-        evidence_hash,
-        NodeId("instance-1".to_string()),
-        ack_time_1,
-    ).unwrap();
+    let converged_1 = meter
+        .record_acknowledgment(evidence_hash, NodeId("instance-1".to_string()), ack_time_1)
+        .unwrap();
     assert!(!converged_1);
 
-    let converged_2 = meter.record_acknowledgment(
-        evidence_hash,
-        NodeId("instance-2".to_string()),
-        ack_time_2,
-    ).unwrap();
+    let converged_2 = meter
+        .record_acknowledgment(evidence_hash, NodeId("instance-2".to_string()), ack_time_2)
+        .unwrap();
     assert!(converged_2);
 
     // Verify measurement was completed
@@ -101,7 +97,9 @@ fn test_slo_met() {
 
     // Fast convergence (under threshold)
     let ack_time = Instant::now() + Duration::from_millis(100);
-    meter.record_acknowledgment(evidence_hash, NodeId("instance-1".to_string()), ack_time).unwrap();
+    meter
+        .record_acknowledgment(evidence_hash, NodeId("instance-1".to_string()), ack_time)
+        .unwrap();
 
     let measurement = &meter.completed_measurements[0];
     assert_eq!(measurement.slo_met, Some(true));
@@ -122,7 +120,9 @@ fn test_slo_violated() {
 
     // Slow convergence (over threshold)
     let ack_time = Instant::now() + Duration::from_millis(100);
-    meter.record_acknowledgment(evidence_hash, NodeId("instance-1".to_string()), ack_time).unwrap();
+    meter
+        .record_acknowledgment(evidence_hash, NodeId("instance-1".to_string()), ack_time)
+        .unwrap();
 
     let measurement = &meter.completed_measurements[0];
     assert_eq!(measurement.slo_met, Some(false));
@@ -155,11 +155,13 @@ fn test_statistical_analysis() {
         meter.start_measurement(&decision, 2).unwrap();
 
         let ack_time = decision.decision_timestamp + Duration::from_millis(time_ms);
-        meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-1".to_string()),
-            ack_time,
-        ).unwrap();
+        meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-1".to_string()),
+                ack_time,
+            )
+            .unwrap();
     }
 
     let statistics = meter.compute_statistics().unwrap();
@@ -192,11 +194,13 @@ fn test_artifact_json_valid() {
     let decision = test_decision();
     meter.start_measurement(&decision, 2).unwrap();
     let ack_time = Instant::now() + Duration::from_millis(150);
-    meter.record_acknowledgment(
-        decision.evidence_hash,
-        NodeId("instance-1".to_string()),
-        ack_time,
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            decision.evidence_hash,
+            NodeId("instance-1".to_string()),
+            ack_time,
+        )
+        .unwrap();
 
     // Compute statistics
     meter.compute_statistics().unwrap();
@@ -242,24 +246,32 @@ fn test_slow_instance_detected() {
         let fast_ack = decision.decision_timestamp + Duration::from_millis(50);
         let slow_ack = decision.decision_timestamp + Duration::from_millis(500);
 
-        meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-1".to_string()),
-            fast_ack,
-        ).unwrap();
+        meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-1".to_string()),
+                fast_ack,
+            )
+            .unwrap();
 
-        meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-2".to_string()),
-            slow_ack,
-        ).unwrap();
+        meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-2".to_string()),
+                slow_ack,
+            )
+            .unwrap();
     }
 
     let statistics = meter.compute_statistics().unwrap();
 
     // Should detect instance-2 as an outlier (slowest 10%)
     assert!(!statistics.outlier_instances.is_empty());
-    assert!(statistics.outlier_instances.contains(&NodeId("instance-2".to_string())));
+    assert!(
+        statistics
+            .outlier_instances
+            .contains(&NodeId("instance-2".to_string()))
+    );
 }
 
 #[test]
@@ -278,33 +290,39 @@ fn test_convergence_progress_tracking() {
     assert_eq!(expected, 3); // 4 instances - 1 originator
 
     // Record first acknowledgment
-    meter.record_acknowledgment(
-        evidence_hash,
-        NodeId("instance-1".to_string()),
-        Instant::now(),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            evidence_hash,
+            NodeId("instance-1".to_string()),
+            Instant::now(),
+        )
+        .unwrap();
 
     let (acked, expected) = meter.get_convergence_progress(&evidence_hash).unwrap();
     assert_eq!(acked, 1);
     assert_eq!(expected, 3);
 
     // Record second acknowledgment
-    meter.record_acknowledgment(
-        evidence_hash,
-        NodeId("instance-2".to_string()),
-        Instant::now(),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            evidence_hash,
+            NodeId("instance-2".to_string()),
+            Instant::now(),
+        )
+        .unwrap();
 
     let (acked, expected) = meter.get_convergence_progress(&evidence_hash).unwrap();
     assert_eq!(acked, 2);
     assert_eq!(expected, 3);
 
     // Record final acknowledgment (should trigger convergence)
-    meter.record_acknowledgment(
-        evidence_hash,
-        NodeId("instance-3".to_string()),
-        Instant::now(),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            evidence_hash,
+            NodeId("instance-3".to_string()),
+            Instant::now(),
+        )
+        .unwrap();
 
     // Should no longer be in active measurements
     assert!(meter.get_convergence_progress(&evidence_hash).is_none());
@@ -337,11 +355,13 @@ fn test_measurement_summary() {
         SecurityEpoch::from_raw(1),
     );
 
-    meter.record_acknowledgment(
-        first_decision.evidence_hash,
-        NodeId("instance-1".to_string()),
-        Instant::now(),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            first_decision.evidence_hash,
+            NodeId("instance-1".to_string()),
+            Instant::now(),
+        )
+        .unwrap();
 
     let summary = meter.get_measurement_summary();
     assert_eq!(summary.active_measurements, 2);
@@ -373,11 +393,13 @@ fn test_slo_compliance_summary() {
         meter.start_measurement(&decision, 2).unwrap();
 
         let ack_time = decision.decision_timestamp + Duration::from_millis(time_ms);
-        meter.record_acknowledgment(
-            decision.evidence_hash,
-            NodeId("instance-1".to_string()),
-            ack_time,
-        ).unwrap();
+        meter
+            .record_acknowledgment(
+                decision.evidence_hash,
+                NodeId("instance-1".to_string()),
+                ack_time,
+            )
+            .unwrap();
     }
 
     let slo_summary = meter.generate_slo_summary();
@@ -393,6 +415,7 @@ fn test_end_to_end_workflow() {
     let config = ConvergenceSloConfig {
         max_convergence_time_ms: 300,
         artifacts_directory: temp_dir.path().to_path_buf(),
+        detailed_tracking: true,
         statistical_analysis: StatisticalAnalysisConfig {
             min_sample_size: 2,
             percentiles: vec![50.0, 95.0, 99.0],
@@ -426,28 +449,36 @@ fn test_end_to_end_workflow() {
     let base_time = Instant::now();
 
     // Decision 1: Fast convergence (under SLO)
-    meter.record_acknowledgment(
-        decision1.evidence_hash,
-        NodeId("instance-1".to_string()),
-        base_time + Duration::from_millis(100),
-    ).unwrap();
-    meter.record_acknowledgment(
-        decision1.evidence_hash,
-        NodeId("instance-2".to_string()),
-        base_time + Duration::from_millis(150),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            decision1.evidence_hash,
+            NodeId("instance-1".to_string()),
+            base_time + Duration::from_millis(100),
+        )
+        .unwrap();
+    meter
+        .record_acknowledgment(
+            decision1.evidence_hash,
+            NodeId("instance-2".to_string()),
+            base_time + Duration::from_millis(150),
+        )
+        .unwrap();
 
     // Decision 2: Slow convergence (violates SLO)
-    meter.record_acknowledgment(
-        decision2.evidence_hash,
-        NodeId("instance-1".to_string()),
-        base_time + Duration::from_millis(250),
-    ).unwrap();
-    meter.record_acknowledgment(
-        decision2.evidence_hash,
-        NodeId("instance-2".to_string()),
-        base_time + Duration::from_millis(400),
-    ).unwrap();
+    meter
+        .record_acknowledgment(
+            decision2.evidence_hash,
+            NodeId("instance-1".to_string()),
+            base_time + Duration::from_millis(250),
+        )
+        .unwrap();
+    meter
+        .record_acknowledgment(
+            decision2.evidence_hash,
+            NodeId("instance-2".to_string()),
+            base_time + Duration::from_millis(400),
+        )
+        .unwrap();
 
     // Compute statistics
     let statistics = meter.compute_statistics().unwrap();

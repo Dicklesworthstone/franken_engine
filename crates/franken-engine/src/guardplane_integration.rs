@@ -482,7 +482,7 @@ impl BasicGuardplaneAdapter {
             .unwrap_or_default()
             .as_secs();
 
-        let decision_id = format!("decision_{}_{}", timestamp, fastrand::u64(..));
+        let decision_id = format!("decision_{}_{}", timestamp, rand::random::<u64>());
 
         let reason = format!(
             "Risk score {:.3} (threshold {:.3}) → {}",

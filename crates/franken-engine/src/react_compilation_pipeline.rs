@@ -348,33 +348,11 @@ pub fn generate_compilation_evidence(
 fn generate_javascript_output(
     lowering_result: &ReactLoweringResult,
 ) -> Result<String, ReactCompileError> {
-    // For now, generate a simple JavaScript representation
-    // In a full implementation, this would integrate with the IR generation pipeline
-    let calls = &lowering_result.react_calls;
-
-    if calls.is_empty() {
-        return Ok("".to_string());
-    }
-
-    // Generate simple JavaScript code representation
-    let mut output = String::new();
-    for (i, call) in calls.iter().enumerate() {
-        if i > 0 {
-            output.push('\n');
-        }
-        output.push_str(&format!(
-            "{}({}, {})",
-            call.function_name,
-            call.element_type,
-            if call.props.is_empty() {
-                "null"
-            } else {
-                "{...}"
-            }
-        ));
-    }
-
-    Ok(output)
+    // For now, generate a simple JavaScript representation based on the
+    // lowered element tree. A full implementation would walk the tree and
+    // emit real JavaScript via the IR generation pipeline.
+    let element = &lowering_result.element;
+    Ok(format!("{:?}", element.element_type))
 }
 
 /// Generate a source map for the transformation.
@@ -395,7 +373,7 @@ fn generate_source_map(original: &str, generated: &str) -> Result<String, ReactC
 fn extract_feature_families(parse_result: &JsxParseResult) -> Vec<String> {
     // Extract the feature families that were encountered during parsing
     parse_result
-        .feature_inventory
+        .feature_families_used
         .iter()
         .map(|f| format!("{:?}", f))
         .collect()
@@ -405,9 +383,9 @@ fn extract_feature_families(parse_result: &JsxParseResult) -> Vec<String> {
 fn count_transforms(lowering_result: &ReactLoweringResult) -> BTreeMap<String, u32> {
     let mut counts = BTreeMap::new();
 
-    // Count React function calls by type
-    for call in &lowering_result.react_calls {
-        *counts.entry(call.function_name.clone()).or_insert(0) += 1;
+    // Count transforms based on the feature families exercised during lowering.
+    for family in &lowering_result.feature_families_used {
+        *counts.entry(format!("{:?}", family)).or_insert(0) += 1;
     }
 
     counts

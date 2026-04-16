@@ -36,7 +36,9 @@ pub struct QuarantineDecision {
     pub lamport_timestamp: u64,
     /// Security epoch for version consistency.
     pub security_epoch: SecurityEpoch,
-    /// Decision timestamp for timeout tracking.
+    /// Decision timestamp for timeout tracking. Not serialized — `Instant`
+    /// is monotonic and only meaningful within a single process.
+    #[serde(skip, default = "Instant::now")]
     pub decision_timestamp: Instant,
 }
 
@@ -141,13 +143,13 @@ impl QuarantineState {
             return false; // Duplicate decision
         }
 
-        self.seen_decisions.insert(decision.evidence_hash);
+        let evidence_hash = decision.evidence_hash;
+        self.seen_decisions.insert(evidence_hash);
         self.quarantined_extensions
             .insert(decision.extension_id.clone());
-        self.pending_decisions
-            .insert(decision.evidence_hash, decision);
+        self.pending_decisions.insert(evidence_hash, decision);
         self.acknowledgments
-            .insert(decision.evidence_hash, BTreeSet::new());
+            .insert(evidence_hash, BTreeSet::new());
         true
     }
 
@@ -300,14 +302,29 @@ impl QuarantineProtocolManager {
         originator: &NodeId,
         decision: QuarantineDecision,
     ) -> Result<(), QuarantineProtocolError> {
+        let mut intent_extensions = BTreeMap::new();
+        intent_extensions.insert("reason".to_string(), decision.reason.clone());
         let payload = MessagePayload::Protocol(crate::fleet_immune_protocol::FleetMessage::Intent(
             crate::fleet_immune_protocol::ContainmentIntent {
-                node_id: originator.clone(),
+                intent_id: format!(
+                    "quarantine-{}-{}",
+                    decision.extension_id, decision.lamport_timestamp
+                ),
                 extension_id: decision.extension_id.clone(),
-                reason: decision.reason.clone(),
-                evidence_hash: decision.evidence_hash,
-                timestamp: decision.lamport_timestamp,
-                security_epoch: decision.security_epoch,
+                proposed_action: crate::fleet_immune_protocol::ContainmentAction::Quarantine,
+                confidence_millionths: 1_000_000,
+                supporting_evidence_ids: vec![decision.evidence_hash.to_hex()],
+                policy_version: 1,
+                epoch: decision.security_epoch,
+                node_id: originator.clone(),
+                sequence: decision.lamport_timestamp,
+                timestamp_ns: decision.lamport_timestamp,
+                signature: crate::fleet_immune_protocol::MessageSignature {
+                    signer: originator.clone(),
+                    hash: crate::hash_tiers::AuthenticityHash([0u8; 32]),
+                },
+                protocol_version: crate::fleet_immune_protocol::ProtocolVersion::CURRENT,
+                extensions: intent_extensions,
             },
         ));
 

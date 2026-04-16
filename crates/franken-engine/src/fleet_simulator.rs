@@ -48,7 +48,7 @@ pub struct EngineInstance {
 }
 
 /// Instance lifecycle states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum InstanceState {
     /// Instance is healthy and processing normally.
     Healthy,
@@ -87,6 +87,17 @@ pub struct FleetMessage {
     pub payload: MessagePayload,
     /// Message ID for deduplication.
     pub message_id: ContentHash,
+    /// Alias for `from` used by quarantine broadcast/ack call sites.
+    #[serde(default)]
+    pub sender: NodeId,
+    /// Alias for `to` used by quarantine broadcast/ack call sites.
+    /// Stored as a concrete `NodeId` (never-broadcast is encoded as
+    /// `NodeId("broadcast".into())`).
+    #[serde(default)]
+    pub recipient: NodeId,
+    /// Lamport timestamp at send-time, distinct from the bus timestamp.
+    #[serde(default)]
+    pub lamport_timestamp: u64,
 }
 
 /// Fleet message payload types.
@@ -164,7 +175,7 @@ impl MessageBus {
         message.timestamp = self.current_timestamp;
 
         // Simulate message drops in degraded partition mode
-        match self.partition_mode {
+        match &self.partition_mode {
             PartitionMode::Normal => {
                 self.message_queue.push_back(message);
                 self.messages_delivered += 1;
@@ -180,7 +191,7 @@ impl MessageBus {
                     self.messages_dropped += 1;
                 }
             }
-            PartitionMode::Healing => {
+            PartitionMode::Healing(_) => {
                 // Healing mode has better delivery than degraded
                 let hash_bytes = message.message_id.as_bytes();
                 let pseudo_random = hash_bytes[0] % 100;
@@ -333,20 +344,21 @@ impl FleetSimulator {
         for i in 0..instance_count {
             let node_id = NodeId(format!("instance-{:03}", i));
             let partition_info = PartitionInfo {
-                mode: PartitionMode::Normal,
-                total_nodes: instance_count as u32,
-                reachable_nodes: instance_count as u32,
-                quorum_threshold: (instance_count / 2 + 1) as u32,
-                healing_info: None,
+                detected_at_ns: 0,
+                unreachable_nodes: std::collections::BTreeSet::new(),
+                local_partition_size: instance_count,
+                total_fleet_size: instance_count,
             };
 
-            let convergence_engine = ConvergenceEngine::new(
-                containment_thresholds.clone(),
-                node_id.clone(),
-                partition_info.clone(),
-            );
+            let convergence_config = crate::fleet_convergence::ConvergenceConfig {
+                thresholds: containment_thresholds.clone(),
+                ..Default::default()
+            };
+            let convergence_engine =
+                ConvergenceEngine::new(node_id.clone(), convergence_config);
 
-            let protocol_state = FleetProtocolState::new(node_id.clone());
+            let protocol_state =
+                FleetProtocolState::new(node_id.clone(), Default::default());
 
             let instance = EngineInstance {
                 node_id: node_id.clone(),
@@ -395,6 +407,16 @@ impl FleetSimulator {
         self.instances.keys().cloned().collect()
     }
 
+    /// Append an event to the simulation log.
+    fn log_event(&mut self, event: SimulationEvent) {
+        self.event_log.push(event);
+    }
+
+    /// Get milliseconds elapsed since simulation start.
+    fn elapsed_time_ms(&self) -> u64 {
+        self.start_time.elapsed().as_millis() as u64
+    }
+
     /// Send message from one instance to another.
     pub fn send_message(
         &mut self,
@@ -415,6 +437,9 @@ impl FleetSimulator {
             to: to_clone.clone(),
             payload: payload.clone(),
             message_id,
+            sender: from_clone.clone(),
+            recipient: to_clone.clone().unwrap_or_default(),
+            lamport_timestamp: 0,
         };
 
         self.message_bus.send_message(message)?;
@@ -452,8 +477,8 @@ impl FleetSimulator {
                     continue; // Skip self-messages
                 }
 
-                if let Some(instance) = self.instances.get_mut(&target_id) {
-                    self.handle_message_for_instance(instance, &message)?;
+                if self.instances.contains_key(&target_id) {
+                    self.handle_message_for_node(&target_id, &message)?;
 
                     // Log message received
                     let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
@@ -475,26 +500,28 @@ impl FleetSimulator {
         }
     }
 
-    /// Handle a message for a specific instance.
-    fn handle_message_for_instance(
+    /// Handle a message for a specific instance (by node ID).
+    fn handle_message_for_node(
         &mut self,
-        instance: &mut EngineInstance,
+        target_id: &NodeId,
         message: &FleetMessage,
     ) -> Result<(), FleetSimulatorError> {
         match &message.payload {
             MessagePayload::StateChange {
-                old_state,
+                old_state: _,
                 new_state,
                 reason,
             } => {
-                self.transition_instance_state(
-                    &instance.node_id.clone(),
-                    *new_state,
-                    reason.clone(),
-                )?;
+                self.transition_instance_state(target_id, *new_state, reason.clone())?;
             }
             MessagePayload::Protocol(_protocol_message) => {
                 // Handle protocol message (placeholder for now)
+            }
+            MessagePayload::QuarantineDecision { .. } => {
+                // Quarantine decision dispatch handled by higher-level driver.
+            }
+            MessagePayload::QuarantineAck { .. } => {
+                // Quarantine ack dispatch handled by higher-level driver.
             }
             MessagePayload::ConvergenceEvent(_event) => {
                 // Handle convergence event (placeholder for now)
@@ -543,27 +570,27 @@ impl FleetSimulator {
 
     /// Set partition mode for network simulation.
     pub fn set_partition_mode(&mut self, mode: PartitionMode, success_rate: u8) {
-        self.message_bus.set_partition_mode(mode, success_rate);
-
         // Update partition info for all instances
         let total_nodes = self.instances.len() as u32;
-        let reachable_nodes = match mode {
+        let reachable_nodes = match &mode {
             PartitionMode::Normal => total_nodes,
-            PartitionMode::Degraded => (total_nodes * success_rate as u32) / 100,
-            PartitionMode::Healing => (total_nodes * (success_rate + 100) as u32) / 200,
+            PartitionMode::Degraded(_) => (total_nodes * success_rate as u32) / 100,
+            PartitionMode::Healing(_) => (total_nodes * (success_rate + 100) as u32) / 200,
         };
 
         for instance in self.instances.values_mut() {
-            instance.partition_info.mode = mode;
-            instance.partition_info.reachable_nodes = reachable_nodes;
+            instance.partition_info.local_partition_size = reachable_nodes as usize;
         }
+
+        self.message_bus
+            .set_partition_mode(mode.clone(), success_rate);
 
         // Log partition mode change
         let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
         self.event_log.push(SimulationEvent {
             timestamp_ms,
             node_id: NodeId("simulator".to_string()),
-            event_type: SimulationEventType::PartitionModeChanged { mode },
+            event_type: SimulationEventType::PartitionModeChanged { mode: mode.clone() },
             description: format!(
                 "Partition mode changed to {:?} with {}% success rate",
                 mode, success_rate
@@ -630,6 +657,9 @@ impl Default for MessageBus {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl FleetSimulator {
     // -----------------------------------------------------------------------
     // Quarantine Propagation Protocol
     // -----------------------------------------------------------------------
@@ -666,10 +696,13 @@ impl Default for MessageBus {
             .insert(evidence_hash.clone(), record);
 
         // Broadcast to all instances
+        let message_id = ContentHash::compute(
+            format!("quarantine_{}_{}", evidence_hash, decision_timestamp).as_bytes(),
+        );
         let message = FleetMessage {
-            message_id: format!("quarantine_{}_{}", evidence_hash, decision_timestamp),
-            sender: originator_instance.clone(),
-            recipient: NodeId("broadcast".to_string()),
+            timestamp: decision_timestamp,
+            from: originator_instance.clone(),
+            to: None,
             payload: MessagePayload::QuarantineDecision {
                 extension_id: extension_id.clone(),
                 reason,
@@ -677,6 +710,9 @@ impl Default for MessageBus {
                 originator_instance: originator_instance.clone(),
                 lamport_timestamp: decision_timestamp,
             },
+            message_id,
+            sender: originator_instance.clone(),
+            recipient: NodeId("broadcast".to_string()),
             lamport_timestamp: decision_timestamp,
         };
 
@@ -719,8 +755,14 @@ impl Default for MessageBus {
         }
 
         // Send acknowledgment back to originator
+        let ack_message_id = ContentHash::compute(
+            format!("ack_{}_{}", evidence_hash, self.lamport_clock).as_bytes(),
+        );
         let ack_message = FleetMessage {
-            message_id: format!("ack_{}_{}", evidence_hash, self.lamport_clock),
+            timestamp: self.lamport_clock,
+            from: receiving_instance.clone(),
+            to: Some(originator_instance.clone()),
+            message_id: ack_message_id,
             sender: receiving_instance.clone(),
             recipient: originator_instance.clone(),
             payload: MessagePayload::QuarantineAck {
@@ -761,27 +803,37 @@ impl Default for MessageBus {
         self.lamport_clock = std::cmp::max(self.lamport_clock, ack_timestamp) + 1;
 
         // Record acknowledgment
-        if let Some(record) = self.quarantined_extensions.get_mut(&evidence_hash) {
-            record
-                .acknowledgments
-                .insert(acknowledging_instance.clone(), ack_timestamp);
+        let expected_acks = self.instances.len();
+        let converged_originator: Option<NodeId> = {
+            if let Some(record) = self.quarantined_extensions.get_mut(&evidence_hash) {
+                record
+                    .acknowledgments
+                    .insert(acknowledging_instance.clone(), ack_timestamp);
 
-            // Check for convergence (all instances acknowledged)
-            let expected_acks = self.instances.len();
-            if record.acknowledgments.len() >= expected_acks && !record.converged {
-                record.converged = true;
-
-                // Log convergence
-                self.log_event(SimulationEvent {
-                    timestamp_ms: self.elapsed_time_ms(),
-                    node_id: record.originator_instance.clone(),
-                    event_type: SimulationEventType::QuarantineConverged,
-                    description: format!(
-                        "Quarantine converged for extension {} - all {} instances acknowledged",
-                        extension_id, expected_acks
-                    ),
-                });
+                // Check for convergence (all instances acknowledged)
+                if record.acknowledgments.len() >= expected_acks && !record.converged {
+                    record.converged = true;
+                    Some(record.originator_instance.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
             }
+        };
+
+        if let Some(originator) = converged_originator {
+            // Log convergence after releasing the record borrow.
+            let timestamp_ms = self.elapsed_time_ms();
+            self.log_event(SimulationEvent {
+                timestamp_ms,
+                node_id: originator,
+                event_type: SimulationEventType::QuarantineConverged,
+                description: format!(
+                    "Quarantine converged for extension {} - all {} instances acknowledged",
+                    extension_id, expected_acks
+                ),
+            });
         }
 
         Ok(())
@@ -836,18 +888,6 @@ impl Default for MessageBus {
         self.message_bus.queue_length()
     }
 
-    /// Set partition mode for the message bus.
-    pub fn set_partition_mode(&mut self, mode: PartitionMode) -> Result<(), FleetSimulatorError> {
-        // Determine success rate based on partition mode
-        let success_rate = match mode {
-            PartitionMode::Normal => 100,
-            PartitionMode::Degraded(rate) => (rate * 100.0) as u8,
-            PartitionMode::Healing => 85, // Better than degraded but not perfect
-        };
-
-        self.message_bus.set_partition_mode(mode, success_rate);
-        Ok(())
-    }
 }
 
 /// Quarantine statistics for reporting.
@@ -959,7 +999,13 @@ mod tests {
         let instance_ids = fleet.instance_ids();
 
         // Set degraded partition mode with 50% success rate
-        fleet.set_partition_mode(PartitionMode::Degraded, 50);
+        let degraded_info = crate::fleet_convergence::PartitionInfo {
+            detected_at_ns: 0,
+            unreachable_nodes: std::collections::BTreeSet::new(),
+            local_partition_size: 1,
+            total_fleet_size: 3,
+        };
+        fleet.set_partition_mode(PartitionMode::Degraded(degraded_info), 50);
 
         // Send several messages and count successes
         for i in 0..10 {
@@ -1305,7 +1351,13 @@ mod tests {
         let mut fleet = FleetSimulator::new(3, thresholds.clone()).unwrap();
 
         // Change to degraded partition mode
-        fleet.set_partition_mode(PartitionMode::Degraded(0.7))?;
+        let degraded_info = crate::fleet_convergence::PartitionInfo {
+            detected_at_ns: 0,
+            unreachable_nodes: std::collections::BTreeSet::new(),
+            local_partition_size: 1,
+            total_fleet_size: 3,
+        };
+        fleet.set_partition_mode(PartitionMode::Degraded(degraded_info), 70);
 
         // Broadcast should still work but with potential message drops
         let result = fleet.broadcast_quarantine_decision(
@@ -1317,7 +1369,5 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(fleet.is_extension_quarantined("partition_evidence"));
-
-        Ok(())
     }
 }

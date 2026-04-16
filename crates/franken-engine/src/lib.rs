@@ -168,6 +168,7 @@ pub mod governance_mechanism;
 pub mod governance_scorecard;
 pub mod guardplane_adapter;
 pub mod guardplane_calibration;
+pub mod guardplane_integration;
 pub mod hardware_board_claim_gate;
 pub mod hardware_code_layout_gate;
 pub mod hardware_code_layout_governance;

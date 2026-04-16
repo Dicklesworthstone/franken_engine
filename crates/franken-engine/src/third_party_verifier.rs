@@ -1130,7 +1130,7 @@ fn parse_signing_key_hex(raw_hex: &str) -> Result<SigningKey, String> {
     }
     let mut key = [0u8; SIGNING_KEY_LEN];
     key.copy_from_slice(&bytes);
-    Ok(SigningKey::from_bytes(key))
+    SigningKey::from_bytes(key).map_err(|e| format!("invalid signing key: {e}"))
 }
 
 fn parse_verification_key_hex(raw_hex: &str) -> Result<VerificationKey, String> {
@@ -1145,7 +1145,7 @@ fn parse_verification_key_hex(raw_hex: &str) -> Result<VerificationKey, String> 
     }
     let mut key = [0u8; VERIFICATION_KEY_LEN];
     key.copy_from_slice(&bytes);
-    Ok(VerificationKey::from_bytes(key))
+    VerificationKey::from_bytes(key).map_err(|e| format!("invalid verification key: {e}"))
 }
 
 fn parse_receipt_verification_keys(
@@ -1747,7 +1747,7 @@ mod tests {
     #[test]
     fn generate_attestation_signed() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report.clone(), Some(key_hex));
         let attestation = generate_attestation(&input).unwrap();
@@ -1840,7 +1840,7 @@ mod tests {
     #[test]
     fn verify_attestation_signed_verified() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         let attestation = generate_attestation(&input).unwrap();
@@ -1959,7 +1959,7 @@ mod tests {
     #[test]
     fn verify_attestation_tampered_signature_fails() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         let mut attestation = generate_attestation(&input).unwrap();
@@ -2007,7 +2007,7 @@ mod tests {
     #[test]
     fn render_attestation_summary_signed() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         let attestation = generate_attestation(&input).unwrap();
@@ -2085,7 +2085,7 @@ mod tests {
     #[test]
     fn attestation_signed_serde() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let attestation = generate_attestation(&input).unwrap();
         let json = serde_json::to_string(&attestation).unwrap();
@@ -2137,7 +2137,7 @@ mod tests {
         let bundle = make_containment_bundle(result);
         let report = verify_containment_claim(&bundle);
 
-        let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let attestation = generate_attestation(&input).unwrap();
 
@@ -2473,7 +2473,7 @@ mod tests {
     #[test]
     fn attestation_input_serde_with_signing_key_hex_some() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([7u8; SIGNING_KEY_LEN]);
+        let key = SigningKey::from_bytes([7u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let json = serde_json::to_string(&input).unwrap();
         let back: VerificationAttestationInput = serde_json::from_str(&json).unwrap();

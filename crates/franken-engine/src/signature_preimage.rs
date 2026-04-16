@@ -20,7 +20,30 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 
+use ed25519_dalek::{
+    Signature as Ed25519Signature, Signer, SigningKey as Ed25519SigningKey, Verifier,
+    VerifyingKey as Ed25519VerifyingKey,
+};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+mod serde_bytes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        bytes.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 32], D::Error> {
+        let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom("expected 32 bytes"));
+        }
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&bytes);
+        Ok(array)
+    }
+}
 
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::ObjectDomain;
@@ -30,13 +53,13 @@ use crate::hash_tiers::ContentHash;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Length of a signing key in bytes.
+/// Length of a signing key in bytes (Ed25519 private key).
 pub const SIGNING_KEY_LEN: usize = 32;
 
-/// Length of a verification key in bytes.
+/// Length of a verification key in bytes (Ed25519 public key).
 pub const VERIFICATION_KEY_LEN: usize = 32;
 
-/// Length of a signature in bytes.
+/// Length of a signature in bytes (Ed25519 signature).
 pub const SIGNATURE_LEN: usize = 64;
 
 /// Sentinel bytes used to fill signature fields in the unsigned view.
@@ -47,11 +70,14 @@ pub const SIGNATURE_SENTINEL: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
 // Key types
 // ---------------------------------------------------------------------------
 
-/// A signing key (private).
+/// A signing key (Ed25519 private key).
 ///
 /// Debug output is redacted to prevent key material leakage in logs.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SigningKey(pub [u8; SIGNING_KEY_LEN]);
+pub struct SigningKey {
+    #[serde(with = "serde_bytes")]
+    inner: [u8; SIGNING_KEY_LEN],
+}
 
 impl std::fmt::Debug for SigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,51 +85,77 @@ impl std::fmt::Debug for SigningKey {
     }
 }
 
-/// A verification key (public).
+/// A verification key (Ed25519 public key).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct VerificationKey(pub [u8; VERIFICATION_KEY_LEN]);
+pub struct VerificationKey {
+    #[serde(with = "serde_bytes")]
+    inner: [u8; VERIFICATION_KEY_LEN],
+}
 
 impl SigningKey {
     /// Create from raw bytes.
-    pub fn from_bytes(bytes: [u8; SIGNING_KEY_LEN]) -> Self {
-        Self(bytes)
+    pub fn from_bytes(bytes: [u8; SIGNING_KEY_LEN]) -> Result<Self, SignatureError> {
+        // Ed25519 keys of all zeros are invalid
+        if bytes == [0u8; SIGNING_KEY_LEN] {
+            return Err(SignatureError::InvalidSigningKey);
+        }
+        // Ed25519SigningKey::from_bytes doesn't return a Result in ed25519-dalek 2.0
+        let _ed25519_sk = Ed25519SigningKey::from_bytes(&bytes);
+        Ok(Self { inner: bytes })
     }
 
     /// Derive the corresponding verification key.
     pub fn verification_key(&self) -> VerificationKey {
-        // De novo derivation: hash the signing key with a domain separator
-        // to produce the public verification key.
-        let mut preimage = Vec::with_capacity(b"vk-derive:".len() + SIGNING_KEY_LEN);
-        preimage.extend_from_slice(b"vk-derive:");
-        preimage.extend_from_slice(&self.0);
-        let hash = ContentHash::compute(&preimage);
-        VerificationKey(*hash.as_bytes())
+        let ed25519_sk = Ed25519SigningKey::from_bytes(&self.inner);
+        let ed25519_vk: Ed25519VerifyingKey = ed25519_sk.verifying_key();
+        VerificationKey {
+            inner: ed25519_vk.to_bytes(),
+        }
     }
 
     /// Raw bytes.
     pub fn as_bytes(&self) -> &[u8; SIGNING_KEY_LEN] {
-        &self.0
+        &self.inner
+    }
+
+    /// Create the internal Ed25519 signing key.
+    fn to_ed25519(&self) -> Ed25519SigningKey {
+        Ed25519SigningKey::from_bytes(&self.inner)
     }
 }
 
 impl VerificationKey {
     /// Create from raw bytes.
-    pub fn from_bytes(bytes: [u8; VERIFICATION_KEY_LEN]) -> Self {
-        Self(bytes)
+    pub fn from_bytes(bytes: [u8; VERIFICATION_KEY_LEN]) -> Result<Self, SignatureError> {
+        // Ed25519 keys of all zeros are invalid
+        if bytes == [0u8; VERIFICATION_KEY_LEN] {
+            return Err(SignatureError::InvalidVerificationKey);
+        }
+        // Validate that this is a valid Ed25519 public key
+        match Ed25519VerifyingKey::from_bytes(&bytes) {
+            Ok(_) => Ok(Self { inner: bytes }),
+            Err(_) => Err(SignatureError::InvalidVerificationKey),
+        }
     }
 
     /// Raw bytes.
     pub fn as_bytes(&self) -> &[u8; VERIFICATION_KEY_LEN] {
-        &self.0
+        &self.inner
     }
 
     /// Hex-encoded representation.
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(VERIFICATION_KEY_LEN * 2);
-        for byte in &self.0 {
+        for byte in &self.inner {
             write!(s, "{byte:02x}").unwrap();
         }
         s
+    }
+
+    /// Create the internal Ed25519 verifying key.
+    fn to_ed25519(&self) -> Result<Ed25519VerifyingKey, SignatureError> {
+        Ed25519VerifyingKey::from_bytes(&self.inner)
+            .map_err(|_| SignatureError::InvalidVerificationKey)
     }
 }
 
@@ -256,23 +308,19 @@ pub trait SignaturePreimage {
 
 /// Sign a preimage with the given key.
 ///
-/// The signature is computed as:
-/// `sig = keyed_hash(signing_key || preimage_bytes)`
+/// The signature is computed using Ed25519 signing algorithm
 /// producing a 64-byte deterministic signature.
 pub fn sign_preimage(
     signing_key: &SigningKey,
     preimage: &[u8],
 ) -> Result<Signature, SignatureError> {
-    if signing_key.0 == [0u8; SIGNING_KEY_LEN] {
+    if signing_key.inner == [0u8; SIGNING_KEY_LEN] {
         return Err(SignatureError::InvalidSigningKey);
     }
 
-    // Derive verification key and compute HMAC over preimage using it.
-    // This ensures sign_preimage and verify_signature are paired:
-    // both use the verification key as the HMAC key.
-    let vk = signing_key.verification_key();
-    let sig_bytes = compute_verification_hash(&vk.0, preimage);
-    Ok(Signature::from_bytes(sig_bytes))
+    let ed25519_sk = signing_key.to_ed25519();
+    let ed25519_sig = ed25519_sk.sign(preimage);
+    Ok(Signature::from_bytes(ed25519_sig.to_bytes()))
 }
 
 /// Sign an object that implements `SignaturePreimage`.
@@ -290,25 +338,20 @@ pub fn verify_signature(
     preimage: &[u8],
     signature: &Signature,
 ) -> Result<(), SignatureError> {
-    if verification_key.0 == [0u8; VERIFICATION_KEY_LEN] {
+    if verification_key.inner == [0u8; VERIFICATION_KEY_LEN] {
         return Err(SignatureError::InvalidVerificationKey);
     }
 
-    // Recompute the expected signature from the verification key.
-    // In our de novo scheme, the verification key is derived from the
-    // signing key, so we need to verify by checking the signature
-    // against the verification key's derivation.
-    let expected = compute_verification_hash(&verification_key.0, preimage);
+    let ed25519_vk = verification_key.to_ed25519()?;
     let sig_bytes = signature.to_bytes();
+    let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
 
-    if constant_time_eq_64(&sig_bytes, &expected) {
-        Ok(())
-    } else {
-        Err(SignatureError::VerificationFailed {
+    ed25519_vk
+        .verify(preimage, &ed25519_sig)
+        .map_err(|_| SignatureError::VerificationFailed {
             signer: verification_key.clone(),
-            reason: "signature does not match preimage".to_string(),
+            reason: "Ed25519 signature verification failed".to_string(),
         })
-    }
 }
 
 /// Verify a signature on an object that implements `SignaturePreimage`.
@@ -372,53 +415,33 @@ pub fn check_canonical_for_signing(value: &CanonicalValue) -> Result<(), Signatu
 }
 
 // ---------------------------------------------------------------------------
-// De novo signature computation
+// Keypair generation utilities
 // ---------------------------------------------------------------------------
 
-/// Compute a 64-byte keyed MAC using HMAC-like construction.
-///
-/// Both signing and verification use this function with the verification
-/// key. The signing key derives the verification key; signing computes
-/// `hmac(vk, preimage)`, and verification recomputes the same.
-///
-/// Uses a two-pass keyed hash:
-/// Pass 1: hash(key XOR ipad || preimage) → 32 bytes (lower)
-/// Pass 2: hash(key XOR opad || lower) → 32 bytes (upper)
-/// Output = lower || upper
-fn compute_verification_hash(
-    verification_key: &[u8; VERIFICATION_KEY_LEN],
-    preimage: &[u8],
-) -> [u8; SIGNATURE_LEN] {
-    let mut ipad = [0x36u8; VERIFICATION_KEY_LEN];
-    let mut opad = [0x5Cu8; VERIFICATION_KEY_LEN];
-    for i in 0..VERIFICATION_KEY_LEN {
-        ipad[i] ^= verification_key[i];
-        opad[i] ^= verification_key[i];
+/// Generate a new Ed25519 keypair.
+pub fn generate_keypair() -> (SigningKey, VerificationKey) {
+    // Generate 32 random bytes for the signing key
+    let mut rng = rand::thread_rng();
+    let mut seed = [0u8; 32];
+    for i in 0..32 {
+        seed[i] = rng.r#gen::<u8>();
     }
-
-    let mut inner_input = Vec::with_capacity(VERIFICATION_KEY_LEN + preimage.len());
-    inner_input.extend_from_slice(&ipad);
-    inner_input.extend_from_slice(preimage);
-    let inner_hash = *ContentHash::compute(&inner_input).as_bytes();
-
-    let mut outer_input = Vec::with_capacity(VERIFICATION_KEY_LEN + 32);
-    outer_input.extend_from_slice(&opad);
-    outer_input.extend_from_slice(&inner_hash);
-    let outer_hash = *ContentHash::compute(&outer_input).as_bytes();
-
-    let mut tag = [0u8; SIGNATURE_LEN];
-    tag[..32].copy_from_slice(&inner_hash);
-    tag[32..].copy_from_slice(&outer_hash);
-    tag
+    generate_keypair_from_seed(&seed)
 }
 
-/// Constant-time comparison for 64-byte arrays.
-fn constant_time_eq_64(a: &[u8; SIGNATURE_LEN], b: &[u8; SIGNATURE_LEN]) -> bool {
-    let mut diff: u8 = 0;
-    for i in 0..SIGNATURE_LEN {
-        diff |= a[i] ^ b[i];
-    }
-    diff == 0
+/// Generate a new Ed25519 keypair from a seed (for deterministic key generation).
+pub fn generate_keypair_from_seed(seed: &[u8; 32]) -> (SigningKey, VerificationKey) {
+    let ed25519_sk = Ed25519SigningKey::from_bytes(seed);
+    let ed25519_vk = ed25519_sk.verifying_key();
+
+    let signing_key = SigningKey {
+        inner: ed25519_sk.to_bytes(),
+    };
+    let verification_key = VerificationKey {
+        inner: ed25519_vk.to_bytes(),
+    };
+
+    (signing_key, verification_key)
 }
 
 // ---------------------------------------------------------------------------
@@ -510,10 +533,7 @@ impl SignatureContext {
         }
 
         let vk = signing_key.verification_key();
-        let preimage = object.preimage_bytes();
-        // Sign using the verification key (our paired HMAC scheme).
-        let sig_bytes = compute_verification_hash(&vk.0, &preimage);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = sign_object(object, signing_key)?;
 
         self.sign_count += 1;
         self.events.push(SignatureEvent {
@@ -656,6 +676,7 @@ mod tests {
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
             0x1D, 0x1E, 0x1F, 0x20,
         ])
+        .unwrap()
     }
 
     fn test_object() -> TestObject {
@@ -678,8 +699,8 @@ mod tests {
 
     #[test]
     fn different_signing_keys_produce_different_verification_keys() {
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
         assert_ne!(sk1.verification_key(), sk2.verification_key());
     }
 
@@ -802,8 +823,8 @@ mod tests {
     #[test]
     fn different_keys_produce_different_signatures() {
         let mut ctx = SignatureContext::new();
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
         let obj = test_object();
 
         let sig1 = ctx.sign(&obj, &sk1, "t-diff-1").unwrap();
@@ -837,7 +858,7 @@ mod tests {
     fn verify_fails_with_wrong_key() {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
-        let wrong_vk = VerificationKey::from_bytes([0xFFu8; VERIFICATION_KEY_LEN]);
+        let wrong_vk = VerificationKey::from_bytes([0xFFu8; VERIFICATION_KEY_LEN]).unwrap();
         let obj = test_object();
 
         let sig = ctx.sign(&obj, &sk, "t-wrong-key").unwrap();
@@ -881,9 +902,9 @@ mod tests {
 
     #[test]
     fn multi_sig_same_preimage() {
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]);
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]);
-        let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]);
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
+        let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]).unwrap();
         let obj = test_object();
 
         let preimage = obj.preimage_bytes();
@@ -928,18 +949,117 @@ mod tests {
 
     #[test]
     fn zero_signing_key_rejected() {
-        let zero_sk = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]);
-        let preimage = b"test preimage";
-        let err = sign_preimage(&zero_sk, preimage).unwrap_err();
-        assert!(matches!(err, SignatureError::InvalidSigningKey));
+        let err = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]).unwrap_err();
+        assert_eq!(err, SignatureError::InvalidSigningKey);
+    }
+
+    // -- Ed25519 specific tests --
+
+    #[test]
+    fn ed25519_keypair_generation() {
+        let (sk, vk) = generate_keypair();
+
+        // Verify derived verification key matches generated one
+        assert_eq!(sk.verification_key(), vk);
+
+        // Basic sign/verify works with generated keys
+        let mut ctx = SignatureContext::new();
+        let obj = test_object();
+        let sig = ctx.sign(&obj, &sk, "t-gen").unwrap();
+        assert!(ctx.verify(&obj, &vk, &sig, "t-gen").is_ok());
+    }
+
+    #[test]
+    fn ed25519_keypair_generation_from_seed() {
+        let seed = [42u8; 32];
+        let (sk1, vk1) = generate_keypair_from_seed(&seed);
+        let (sk2, vk2) = generate_keypair_from_seed(&seed);
+
+        // Same seed should produce same keys
+        assert_eq!(sk1, sk2);
+        assert_eq!(vk1, vk2);
+
+        // Different seed should produce different keys
+        let different_seed = [43u8; 32];
+        let (sk3, vk3) = generate_keypair_from_seed(&different_seed);
+        assert_ne!(sk1, sk3);
+        assert_ne!(vk1, vk3);
+    }
+
+    #[test]
+    fn ed25519_non_repudiation() {
+        // Given only a public key, it should be impossible to forge signatures
+        let (sk, vk) = generate_keypair();
+        let obj = test_object();
+
+        // Create a valid signature with the private key
+        let mut ctx = SignatureContext::new();
+        let valid_sig = ctx.sign(&obj, &sk, "t-nonrep").unwrap();
+
+        // Verification with public key succeeds
+        assert!(ctx.verify(&obj, &vk, &valid_sig, "t-nonrep").is_ok());
+
+        // Attempting to "forge" by modifying signature fails
+        let mut forged_sig = valid_sig;
+        forged_sig.lower[0] ^= 1;
+        assert!(ctx.verify(&obj, &vk, &forged_sig, "t-forge").is_err());
+
+        // Attempting to sign with just public key is impossible
+        // (This is enforced by the type system - VerificationKey doesn't have sign method)
+        // The Ed25519 algorithm guarantees non-repudiation by design
+    }
+
+    #[test]
+    fn ed25519_signature_tamper_detection() {
+        let (sk, vk) = generate_keypair();
+        let obj = test_object();
+        let mut ctx = SignatureContext::new();
+
+        let sig = ctx.sign(&obj, &sk, "t-tamper").unwrap();
+
+        // Original signature verifies
+        assert!(ctx.verify(&obj, &vk, &sig, "t-tamper").is_ok());
+
+        // Tampering with any byte of signature causes verification to fail
+        for i in 0..SIGNATURE_LEN {
+            let mut tampered_sig = sig.clone();
+            let sig_bytes = tampered_sig.to_bytes();
+            let mut modified_bytes = sig_bytes;
+            modified_bytes[i] ^= 0xFF;
+            tampered_sig = Signature::from_bytes(modified_bytes);
+
+            let result = ctx.verify(&obj, &vk, &tampered_sig, "t-tamper-byte");
+            assert!(
+                result.is_err(),
+                "Tampering byte {} should cause verification failure",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn ed25519_wrong_public_key_fails() {
+        let (sk1, _vk1) = generate_keypair();
+        let (_sk2, vk2) = generate_keypair();
+        let obj = test_object();
+        let mut ctx = SignatureContext::new();
+
+        // Sign with key 1
+        let sig = ctx.sign(&obj, &sk1, "t-wrong-key").unwrap();
+
+        // Verify with key 2 should fail
+        let result = ctx.verify(&obj, &vk2, &sig, "t-wrong-key");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            SignatureError::VerificationFailed { .. }
+        ));
     }
 
     #[test]
     fn zero_verification_key_rejected() {
-        let zero_vk = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]);
-        let sig = Signature::from_bytes([1u8; SIGNATURE_LEN]);
-        let err = verify_signature(&zero_vk, b"test", &sig).unwrap_err();
-        assert!(matches!(err, SignatureError::InvalidVerificationKey));
+        let err = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]).unwrap_err();
+        assert_eq!(err, SignatureError::InvalidVerificationKey);
     }
 
     // -- Signature sentinel --
@@ -1040,7 +1160,7 @@ mod tests {
     fn context_tracks_failure_events() {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
-        let wrong_vk = VerificationKey::from_bytes([0xAA; VERIFICATION_KEY_LEN]);
+        let wrong_vk = VerificationKey::from_bytes([0xAA; VERIFICATION_KEY_LEN]).unwrap();
         let obj = test_object();
 
         let sig = ctx.sign(&obj, &sk, "t-fail").unwrap();
@@ -1074,7 +1194,7 @@ mod tests {
 
     #[test]
     fn signature_error_display() {
-        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]);
+        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
         let err = SignatureError::VerificationFailed {
             signer: vk,
             reason: "bad sig".to_string(),
@@ -1089,7 +1209,7 @@ mod tests {
 
     #[test]
     fn event_type_display() {
-        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]);
+        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
         let evt = SignatureEventType::Signed { signer: vk };
         assert!(evt.to_string().contains("signed by"));
     }
@@ -1213,8 +1333,8 @@ mod tests {
 
     #[test]
     fn signature_event_type_display_all_unique() {
-        let vk1 = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]);
-        let _vk2 = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]);
+        let vk1 = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
+        let _vk2 = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]).unwrap();
         let types = [
             SignatureEventType::Signed {
                 signer: vk1.clone(),
@@ -1242,14 +1362,14 @@ mod tests {
     #[test]
     fn signing_key_bytes_roundtrip() {
         let bytes = [42u8; SIGNING_KEY_LEN];
-        let sk = SigningKey::from_bytes(bytes);
+        let sk = SigningKey::from_bytes(bytes).unwrap();
         assert_eq!(sk.as_bytes(), &bytes);
     }
 
     #[test]
     fn verification_key_bytes_roundtrip() {
         let bytes = [99u8; VERIFICATION_KEY_LEN];
-        let vk = VerificationKey::from_bytes(bytes);
+        let vk = VerificationKey::from_bytes(bytes).unwrap();
         assert_eq!(vk.as_bytes(), &bytes);
     }
 
@@ -1340,7 +1460,7 @@ mod tests {
     #[test]
     fn enrichment_signature_error_clone_equality() {
         let err = SignatureError::VerificationFailed {
-            signer: VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]),
+            signer: VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap(),
             reason: "tampered".to_string(),
         };
         let err2 = err.clone();
@@ -1395,7 +1515,7 @@ mod tests {
     fn enrichment_signature_event_json_has_all_fields() {
         let event = SignatureEvent {
             event_type: SignatureEventType::Verified {
-                signer: VerificationKey::from_bytes([0x11; VERIFICATION_KEY_LEN]),
+                signer: VerificationKey::from_bytes([0x11; VERIFICATION_KEY_LEN]).unwrap(),
             },
             domain: ObjectDomain::SignedManifest,
             trace_id: "t-json-fields".to_string(),
@@ -1408,8 +1528,8 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_serde_roundtrip_preserves_ordering() {
-        let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]);
-        let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]);
+        let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]).unwrap();
+        let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]).unwrap();
         assert!(vk_a < vk_b, "Ord should order by bytes");
 
         let json_a = serde_json::to_string(&vk_a).unwrap();
@@ -1424,7 +1544,7 @@ mod tests {
 
     #[test]
     fn enrichment_all_signature_error_displays_unique() {
-        let vk = VerificationKey::from_bytes([0x77; VERIFICATION_KEY_LEN]);
+        let vk = VerificationKey::from_bytes([0x77; VERIFICATION_KEY_LEN]).unwrap();
         let variants = [
             SignatureError::VerificationFailed {
                 signer: vk,
@@ -1540,7 +1660,7 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_hex_is_lowercase() {
-        let vk = VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]);
+        let vk = VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap();
         let hex = vk.to_hex();
         assert!(
             hex.chars()
@@ -1586,7 +1706,7 @@ mod tests {
         let sk = test_signing_key();
         let obj = test_object();
         let sig = ctx.sign(&obj, &sk, "t-wrong").unwrap();
-        let wrong_vk = VerificationKey::from_bytes([0xBB; VERIFICATION_KEY_LEN]);
+        let wrong_vk = VerificationKey::from_bytes([0xBB; VERIFICATION_KEY_LEN]).unwrap();
         let err = ctx.verify(&obj, &wrong_vk, &sig, "t-wrong2").unwrap_err();
         assert!(matches!(err, SignatureError::VerificationFailed { .. }));
         assert_eq!(ctx.failure_count(), 1);
@@ -1594,16 +1714,13 @@ mod tests {
 
     #[test]
     fn enrichment_sign_rejects_zero_signing_key() {
-        let zero_sk = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]);
-        let err = sign_preimage(&zero_sk, b"data").unwrap_err();
+        let err = SigningKey::from_bytes([0u8; SIGNING_KEY_LEN]).unwrap_err();
         assert_eq!(err, SignatureError::InvalidSigningKey);
     }
 
     #[test]
     fn enrichment_verify_rejects_zero_verification_key() {
-        let zero_vk = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]);
-        let sig = Signature::from_bytes([1u8; SIGNATURE_LEN]);
-        let err = verify_signature(&zero_vk, b"data", &sig).unwrap_err();
+        let err = VerificationKey::from_bytes([0u8; VERIFICATION_KEY_LEN]).unwrap_err();
         assert_eq!(err, SignatureError::InvalidVerificationKey);
     }
 

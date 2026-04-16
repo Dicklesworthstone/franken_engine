@@ -354,7 +354,7 @@ impl ExtensionManifest {
         buf.extend_from_slice(&self.version.minor.to_le_bytes());
         buf.extend_from_slice(&self.version.patch.to_le_bytes());
         buf.extend_from_slice(&self.publisher_id.0);
-        buf.extend_from_slice(&self.publisher_key.0);
+        buf.extend_from_slice(self.publisher_key.as_bytes());
         // Sort capabilities by name for insertion-order independence.
         let mut sorted_caps: Vec<_> = self.capabilities.iter().collect();
         sorted_caps.sort_by(|a, b| a.name.cmp(&b.name));
@@ -742,7 +742,7 @@ impl ExtensionRegistry {
             ObjectDomain::SignedManifest,
             REGISTRY_ZONE,
             &schema_id,
-            &verification_key.0,
+            verification_key.as_bytes(),
         )
         .map_err(|e| RegistryError::SignatureInvalid {
             reason: format!("failed to derive publisher ID: {e}"),

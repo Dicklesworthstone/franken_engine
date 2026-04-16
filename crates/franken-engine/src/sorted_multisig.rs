@@ -47,7 +47,7 @@ impl PartialOrd for SignerSignature {
 
 impl Ord for SignerSignature {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.signer.0.cmp(&other.signer.0)
+        self.signer.as_bytes().cmp(other.signer.as_bytes())
     }
 }
 
@@ -189,7 +189,7 @@ impl SortedSignatureArray {
         // Find insertion point.
         let pos = self
             .entries
-            .binary_search_by(|e| e.signer.0.cmp(&entry.signer.0))
+            .binary_search_by(|e| e.signer.as_bytes().cmp(entry.signer.as_bytes()))
             .unwrap_or_else(|p| p);
         self.entries.insert(pos, entry);
         Ok(())
@@ -218,7 +218,7 @@ impl SortedSignatureArray {
     /// Check if a specific signer key is present.
     pub fn contains_signer(&self, key: &VerificationKey) -> bool {
         self.entries
-            .binary_search_by(|e| e.signer.0.cmp(&key.0))
+            .binary_search_by(|e| e.signer.as_bytes().cmp(key.as_bytes()))
             .is_ok()
     }
 
@@ -325,8 +325,8 @@ impl fmt::Display for QuorumResult {
 /// Uses a single linear scan (O(n)) rather than re-sorting.
 fn verify_sorted_no_duplicates(entries: &[SignerSignature]) -> Result<(), MultiSigError> {
     for i in 1..entries.len() {
-        let prev = &entries[i - 1].signer.0;
-        let curr = &entries[i].signer.0;
+        let prev = entries[i - 1].signer.as_bytes();
+        let curr = entries[i].signer.as_bytes();
         match prev.cmp(curr) {
             std::cmp::Ordering::Less => {} // correct order
             std::cmp::Ordering::Equal => {
@@ -628,7 +628,7 @@ mod tests {
         let arr = SortedSignatureArray::new(entries).unwrap();
         assert_eq!(arr.len(), 2);
         // Verify sorted order.
-        assert!(arr.entries()[0].signer.0 < arr.entries()[1].signer.0);
+        assert!(arr.entries()[0].signer.inner < arr.entries()[1].signer.inner);
     }
 
     #[test]
@@ -650,7 +650,7 @@ mod tests {
 
         // Verify sorted.
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
         }
     }
 
@@ -710,7 +710,7 @@ mod tests {
         ];
 
         // Force reverse order if needed.
-        if entries[0].signer.0 < entries[1].signer.0 {
+        if entries[0].signer.inner < entries[1].signer.inner {
             entries.swap(0, 1);
         }
 
@@ -740,7 +740,7 @@ mod tests {
 
         assert_eq!(arr.len(), 3);
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
         }
     }
 
@@ -1221,7 +1221,7 @@ mod tests {
         assert_eq!(arr.len(), 3);
         // First entry should have the smallest key.
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
         }
     }
 
@@ -1241,7 +1241,7 @@ mod tests {
             .unwrap();
         assert_eq!(arr.len(), 3);
         for i in 1..arr.len() {
-            assert!(arr.entries()[i - 1].signer.0 < arr.entries()[i].signer.0);
+            assert!(arr.entries()[i - 1].signer.inner < arr.entries()[i].signer.inner);
         }
     }
 

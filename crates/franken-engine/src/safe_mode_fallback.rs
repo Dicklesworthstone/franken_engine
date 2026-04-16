@@ -1000,7 +1000,10 @@ impl AttestationFallbackManager {
 
     /// Create a manager with deterministic default signing key.
     pub fn with_default_signing_key(config: AttestationFallbackConfig) -> Self {
-        Self::new(config, SigningKey::from_bytes([11u8; 32]))
+        Self::new(
+            config,
+            SigningKey::from_bytes([11u8; 32]).expect("valid Ed25519 key"),
+        )
     }
 
     /// Current fallback state.

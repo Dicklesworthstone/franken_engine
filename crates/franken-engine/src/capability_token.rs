@@ -682,7 +682,7 @@ mod tests {
     use super::*;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32])
+        SigningKey::from_bytes([seed; 32]).expect("valid Ed25519 key")
     }
 
     fn make_principal(seed: u8) -> PrincipalId {
@@ -900,7 +900,7 @@ mod tests {
         let sk = make_sk(1);
         let mut token = build_basic_token(&sk);
         // Change issuer to a different key.
-        token.issuer = VerificationKey::from_bytes([0xFF; 32]);
+        token.issuer = VerificationKey::from_bytes([0xFF; 32]).expect("valid Ed25519 key");
 
         let ctx = basic_ctx();
         let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();

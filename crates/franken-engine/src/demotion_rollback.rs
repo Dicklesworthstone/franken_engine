@@ -1291,7 +1291,7 @@ mod tests {
     #[test]
     fn demotion_receipt_signature_fails_with_wrong_key() {
         let key = test_signing_key();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]);
+        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
 
         let receipt = DemotionReceipt::create_signed(
             &key,

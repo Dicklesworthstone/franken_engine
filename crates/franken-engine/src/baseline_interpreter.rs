@@ -2897,9 +2897,12 @@ impl InterpreterCore {
                                 f
                             } else {
                                 // Function not found in module table - check if it's a builtin
-                                if let Some(builtin_cap) = self.map_function_index_to_builtin_capability(func_idx) {
+                                if let Some(builtin_cap) =
+                                    self.map_function_index_to_builtin_capability(func_idx)
+                                {
                                     // Dispatch as a builtin hostcall
-                                    let result = self.dispatch_builtin_hostcall(&builtin_cap, args)?;
+                                    let result =
+                                        self.dispatch_builtin_hostcall(&builtin_cap, args)?;
                                     self.write_reg(dst, result)?;
                                     self.ip += 1;
                                     continue;
@@ -4152,15 +4155,6 @@ impl InterpreterCore {
                         return Err(err);
                     }
                     self.ip += 1;
-                }
-                Ir3Instruction::AwaitValue { .. }
-                | Ir3Instruction::AsyncReturn { .. }
-                | Ir3Instruction::AsyncThrow { .. }
-                | Ir3Instruction::CreateAsyncFunction { .. } => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "complete async implementation".to_string(),
-                        got: "async instructions not supported in this execution path".to_string(),
-                    });
                 }
             }
         }

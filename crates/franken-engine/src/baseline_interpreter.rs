@@ -36,6 +36,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ast::ParseGoal;
 use crate::capability::RuntimeCapability;
+use crate::checkpoint::{
+    CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
+};
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
@@ -932,6 +935,8 @@ pub enum InterpreterError {
         action: String,
         reason: Option<String>,
     },
+    /// Execution cancelled by CheckpointGuard.
+    Cancelled,
 }
 
 impl fmt::Display for InterpreterError {
@@ -1005,6 +1010,7 @@ impl fmt::Display for InterpreterError {
             ),
             Self::IteratorNotFound { handle } => write!(f, "iterator#{handle} not found"),
             Self::Halted => write!(f, "execution halted"),
+            Self::Cancelled => write!(f, "execution cancelled"),
             Self::UncaughtException { value } => {
                 write!(f, "uncaught exception: {value}")
             }
@@ -1057,7 +1063,7 @@ impl fmt::Display for InterpreterError {
 // ---------------------------------------------------------------------------
 
 /// Configuration for an interpreter lane.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterpreterConfig {
     /// Maximum instructions before budget exhaustion.
     pub instruction_budget: u64,
@@ -1079,7 +1085,31 @@ pub struct InterpreterConfig {
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
     /// Optional extension ID for logging and diagnostics.
     pub extension_id: Option<String>,
+    /// Optional cancellation token for checkpoint-based cancellation.
+    #[serde(skip)]
+    pub cancellation_token: Option<CancellationToken>,
+    /// Checkpoint density (default: every 1000 instructions).
+    pub checkpoint_density: u64,
 }
+
+impl PartialEq for InterpreterConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.instruction_budget == other.instruction_budget
+            && self.max_registers == other.max_registers
+            && self.max_call_depth == other.max_call_depth
+            && self.max_string_size == other.max_string_size
+            && self.max_heap_objects == other.max_heap_objects
+            && self.max_total_memory_bytes == other.max_total_memory_bytes
+            && self.max_scope_depth == other.max_scope_depth
+            && self.module_root == other.module_root
+            && self.granted_capabilities == other.granted_capabilities
+            && self.extension_id == other.extension_id
+            && self.checkpoint_density == other.checkpoint_density
+        // Note: cancellation_token is intentionally excluded from comparison
+    }
+}
+
+impl Eq for InterpreterConfig {}
 
 impl InterpreterConfig {
     /// Deterministic profile defaults: conservative budgets.
@@ -1095,6 +1125,8 @@ impl InterpreterConfig {
             module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
+            cancellation_token: None,
+            checkpoint_density: 1000,
         }
     }
 
@@ -1111,6 +1143,8 @@ impl InterpreterConfig {
             module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
+            cancellation_token: None,
+            checkpoint_density: 1000,
         }
     }
 
@@ -1127,6 +1161,8 @@ impl InterpreterConfig {
             module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
+            cancellation_token: None,
+            checkpoint_density: 1000,
         }
     }
 
@@ -1143,6 +1179,8 @@ impl InterpreterConfig {
             module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
+            cancellation_token: None,
+            checkpoint_density: 1000,
         }
     }
 }
@@ -2632,6 +2670,22 @@ impl InterpreterCore {
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        // Initialize CheckpointGuard if cancellation token is provided
+        let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
+            Some(CheckpointGuard::new(
+                LoopSite::BytecodeDispatch,
+                "baseline_interpreter",
+                &self.trace_id,
+                DensityConfig {
+                    max_iterations: self.config.checkpoint_density,
+                    max_total_iterations: self.config.instruction_budget,
+                },
+                token.clone(),
+            ))
+        } else {
+            None
+        };
+
         loop {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
@@ -2661,6 +2715,28 @@ impl InterpreterCore {
                 })?
                 .clone();
             self.instructions_executed += 1;
+
+            // Checkpoint guard integration: tick on each instruction
+            if let Some(ref mut guard) = checkpoint_guard {
+                guard.tick();
+
+                // Check at checkpoint density interval
+                if self.instructions_executed % self.config.checkpoint_density == 0 {
+                    match guard.check() {
+                        CheckpointAction::Continue => {
+                            // Continue execution normally
+                        }
+                        CheckpointAction::Drain => {
+                            // Cancellation requested, return Cancelled error
+                            return Err(InterpreterError::Cancelled);
+                        }
+                        CheckpointAction::Abort => {
+                            // Budget exhausted via checkpoint, defer to existing budget check
+                            // (This will be caught by the budget check above)
+                        }
+                    }
+                }
+            }
 
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
@@ -2860,12 +2936,16 @@ impl InterpreterCore {
                         // Create the result Promise first
                         let result_promise = self.promise_store.create().0;
 
-                        let async_id = u32::try_from(self.async_functions.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "async function table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
-                            }
-                        })?;
+                        let _async_id =
+                            u32::try_from(self.async_functions.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async function table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_functions.len()
+                                    ),
+                                }
+                            })?;
                         self.async_functions.push(AsyncFunctionObject {
                             function_index: func_idx,
                             closure_index: Some(*cid),
@@ -3977,7 +4057,7 @@ impl InterpreterCore {
                     return Ok(Value::Object(result_id));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
-                    let awaited_promise = self.read_reg(promise_reg)?;
+                    let _awaited_promise = self.read_reg(promise_reg)?;
 
                     // TODO: Implement proper async suspension and promise handling
                     // For now, return a placeholder to get compilation working
@@ -3992,7 +4072,7 @@ impl InterpreterCore {
                     });
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
-                    let return_value = self.read_reg(value_reg)?;
+                    let _return_value = self.read_reg(value_reg)?;
 
                     // TODO: Implement async function return
                     // This needs to resolve the result promise with the return value
@@ -4003,7 +4083,7 @@ impl InterpreterCore {
                     });
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
-                    let error_value = self.read_reg(error_reg)?;
+                    let _error_value = self.read_reg(error_reg)?;
 
                     // TODO: Implement async function throw
                     // This needs to reject the result promise with the error value

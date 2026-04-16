@@ -161,8 +161,9 @@ impl Default for DensityConfig {
 // ---------------------------------------------------------------------------
 
 /// Shared cancellation token that loops check at checkpoint sites.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancellationToken {
+    #[serde(skip)]
     cancelled: Arc<AtomicBool>,
 }
 
@@ -195,6 +196,15 @@ impl Default for CancellationToken {
         Self::new()
     }
 }
+
+impl PartialEq for CancellationToken {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare the current cancellation state
+        self.is_cancelled() == other.is_cancelled()
+    }
+}
+
+impl Eq for CancellationToken {}
 
 // ---------------------------------------------------------------------------
 // CheckpointGuard — per-loop checkpoint tracker

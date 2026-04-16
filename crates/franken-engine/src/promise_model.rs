@@ -2639,4 +2639,193 @@ mod tests {
             assert_eq!(v, &back);
         }
     }
+
+    // ----- Event Loop Tests -----
+
+    #[test]
+    fn empty_event_loop_exits() {
+        let event_loop = EventLoop::new();
+        assert!(!event_loop.has_pending_work());
+
+        let mut loop_copy = event_loop;
+        let result = loop_copy.turn();
+        assert!(result.macrotask.is_none());
+        assert!(!result.clock_advanced);
+    }
+
+    #[test]
+    fn timer_fires_after_delay() {
+        let mut event_loop = EventLoop::new();
+        let handler = ClosureHandle(42);
+        let label = Label::Public;
+
+        // Schedule a timer for 100ms
+        let registration_seq = event_loop.set_timeout(handler, 100, label.clone());
+        assert!(event_loop.has_pending_work());
+
+        // At time 0, no timer should be ready
+        let result1 = event_loop.turn();
+        assert!(result1.macrotask.is_none());
+        assert!(result1.clock_advanced); // Clock should advance to next timer
+
+        // After clock advancement, timer should be ready
+        let result2 = event_loop.turn();
+        assert!(result2.macrotask.is_some());
+        let task = result2.macrotask.unwrap();
+        assert_eq!(task.source, MacrotaskSource::Timer);
+        assert_eq!(task.handler, handler);
+        assert_eq!(task.registration_seq, registration_seq);
+    }
+
+    #[test]
+    fn microtask_before_timer() {
+        let mut event_loop = EventLoop::new();
+
+        // Enqueue a microtask
+        let microtask = Microtask::PromiseReaction {
+            handler: None,
+            argument: js_int(42),
+            result_promise: PromiseHandle(0),
+            label: Label::Public,
+        };
+        event_loop.microtasks.enqueue(microtask);
+
+        // Schedule a timer for 0ms delay
+        event_loop.set_timeout(ClosureHandle(1), 0, Label::Public);
+
+        assert!(event_loop.has_pending_work());
+
+        // Drain microtasks first
+        let drained = event_loop.drain_microtasks();
+        assert_eq!(drained, 1);
+
+        // Timer should still be pending
+        assert!(event_loop.has_pending_work());
+        let result = event_loop.turn();
+        assert!(result.macrotask.is_some());
+    }
+
+    #[test]
+    fn multiple_timers_ordered() {
+        let mut event_loop = EventLoop::new();
+        let label = Label::Public;
+
+        // Schedule timers with different delays
+        let seq1 = event_loop.set_timeout(ClosureHandle(1), 200, label.clone());
+        let seq2 = event_loop.set_timeout(ClosureHandle(2), 100, label.clone());
+        let seq3 = event_loop.set_timeout(ClosureHandle(3), 300, label);
+
+        // First turn should advance to 100ms and fire timer 2
+        let result1 = event_loop.turn();
+        assert!(result1.clock_advanced);
+        assert_eq!(event_loop.clock.now_ms(), 100);
+
+        let result2 = event_loop.turn();
+        let task2 = result2.macrotask.unwrap();
+        assert_eq!(task2.handler, ClosureHandle(2));
+        assert_eq!(task2.registration_seq, seq2);
+
+        // Next turn should advance to 200ms and fire timer 1
+        let result3 = event_loop.turn();
+        assert!(result3.clock_advanced);
+        assert_eq!(event_loop.clock.now_ms(), 200);
+
+        let result4 = event_loop.turn();
+        let task1 = result4.macrotask.unwrap();
+        assert_eq!(task1.handler, ClosureHandle(1));
+        assert_eq!(task1.registration_seq, seq1);
+
+        // Last turn should advance to 300ms and fire timer 3
+        let result5 = event_loop.turn();
+        assert!(result5.clock_advanced);
+        assert_eq!(event_loop.clock.now_ms(), 300);
+
+        let result6 = event_loop.turn();
+        let task3 = result6.macrotask.unwrap();
+        assert_eq!(task3.handler, ClosureHandle(3));
+        assert_eq!(task3.registration_seq, seq3);
+    }
+
+    #[test]
+    fn nested_timer() {
+        let mut event_loop = EventLoop::new();
+        let label = Label::Public;
+
+        // Schedule initial timer
+        event_loop.set_timeout(ClosureHandle(1), 100, label.clone());
+
+        // First turn fires the timer
+        event_loop.turn(); // advance clock
+        let result1 = event_loop.turn();
+        assert!(result1.macrotask.is_some());
+
+        // Simulate timer callback scheduling another timer
+        event_loop.set_timeout(ClosureHandle(2), 50, label);
+
+        // Next turn should fire the nested timer
+        event_loop.turn(); // advance clock
+        let result2 = event_loop.turn();
+        assert!(result2.macrotask.is_some());
+        assert_eq!(result2.macrotask.unwrap().handler, ClosureHandle(2));
+    }
+
+    #[test]
+    fn idle_detection() {
+        let mut event_loop = EventLoop::new();
+
+        // Empty loop has no pending work
+        assert!(!event_loop.has_pending_work());
+
+        // Add microtask
+        event_loop.microtasks.enqueue(Microtask::PromiseReaction {
+            handler: None,
+            argument: js_int(1),
+            result_promise: PromiseHandle(0),
+            label: Label::Public,
+        });
+        assert!(event_loop.has_pending_work());
+
+        // Drain microtasks
+        event_loop.drain_microtasks();
+        assert!(!event_loop.has_pending_work());
+
+        // Add timer
+        event_loop.set_timeout(ClosureHandle(1), 100, Label::Public);
+        assert!(event_loop.has_pending_work());
+
+        // Execute timer
+        event_loop.turn(); // advance clock
+        event_loop.turn(); // execute timer
+        assert!(!event_loop.has_pending_work());
+    }
+
+    #[test]
+    fn deterministic_clock() {
+        let mut loop1 = EventLoop::new();
+        let mut loop2 = EventLoop::new();
+        let label = Label::Public;
+
+        // Same operations on both loops
+        loop1.set_timeout(ClosureHandle(1), 100, label.clone());
+        loop1.set_timeout(ClosureHandle(2), 50, label.clone());
+
+        loop2.set_timeout(ClosureHandle(1), 100, label.clone());
+        loop2.set_timeout(ClosureHandle(2), 50, label);
+
+        // Both should produce same results
+        for _ in 0..4 {
+            let result1 = loop1.turn();
+            let result2 = loop2.turn();
+
+            assert_eq!(result1.clock_advanced, result2.clock_advanced);
+            assert_eq!(loop1.clock.now_ms(), loop2.clock.now_ms());
+
+            if let (Some(task1), Some(task2)) = (result1.macrotask, result2.macrotask) {
+                assert_eq!(task1.handler, task2.handler);
+                assert_eq!(task1.source, task2.source);
+                assert_eq!(task1.scheduled_at, task2.scheduled_at);
+                assert_eq!(task1.registration_seq, task2.registration_seq);
+            }
+        }
+    }
 }

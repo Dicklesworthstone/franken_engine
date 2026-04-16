@@ -2208,6 +2208,35 @@ fn lower_statement_to_ir1_with_flow(
             });
             ops.push(Ir1Op::Pop);
 
+            // Set up inheritance if this class extends another
+            if let Some(super_class) = &cls.super_class {
+                // Load child constructor (our class)
+                ops.push(Ir1Op::LoadBinding { binding_id: bid });
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                });
+
+                // Load parent constructor
+                lower_expression_to_ir1(
+                    super_class,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                });
+
+                // Set Child.prototype.__proto__ = Parent.prototype
+                ops.push(Ir1Op::SetProperty {
+                    key: Ir1PropertyKey::Static("__proto__".to_string()),
+                });
+                ops.push(Ir1Op::Pop);
+            }
+
             // Attach non-constructor methods to the constructor's prototype.
             // Static methods go on the constructor itself.
             for method in cls

@@ -72,7 +72,9 @@ fn lower_source_to_ir3(source: &str) -> Ir3Module {
 
 fn eval_source(source: &str) -> String {
     let ir3 = lower_source_to_ir3(source);
-    let result = engine_core_lane().execute(&ir3, "eval-test").expect("source should eval");
+    let result = engine_core_lane()
+        .execute(&ir3, "eval-test")
+        .expect("source should eval");
     match result.value {
         Value::Str(s) => s,
         Value::Int(n) => n.to_string(),

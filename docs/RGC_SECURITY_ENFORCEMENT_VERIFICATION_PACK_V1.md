@@ -79,10 +79,9 @@ The runner JSON-escapes manifest, event, trace-id, and operator-verification
 string fields before writing artifacts, so custom artifact roots and replay
 commands cannot corrupt the replay bundle schema.
 
-By default, the replay wrapper reruns the lane and then prints the latest complete
-artifact bundle (`run_manifest.json`, `trace_ids.json`, `events.jsonl`,
-`commands.txt`, `step_logs/step_000.log`, and
-`security_verification_report.json`). If the newest artifact directory is
+By default, the replay wrapper reruns the lane and then prints the latest complete artifact bundle.
+The bundle includes `run_manifest.json`, `trace_ids.json`, `events.jsonl`, `commands.txt`, `step_logs/step_000.log`, and `security_verification_report.json`.
+If the newest artifact directory is
 incomplete, it warns and falls back to the latest complete directory; if no
 complete bundle exists, it fails non-zero instead of presenting a partial run
 as trustworthy. If the rerun itself fails, the wrapper states whether the

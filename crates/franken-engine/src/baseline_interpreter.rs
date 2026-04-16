@@ -1389,6 +1389,10 @@ impl InterpreterCore {
         // (promise reactions, thenable resolutions, etc.).
         self.drain_microtasks();
 
+        // Run the event loop until all pending work is complete
+        // (macrotasks like timers, with microtask draining after each).
+        self.run_event_loop_until_idle();
+
         if let Some(record) = self.module_state.modules.get_mut(&entry_specifier) {
             record.status = match &result {
                 Ok(_) | Err(InterpreterError::Halted) => ModuleRuntimeStatus::Evaluated,
@@ -5355,6 +5359,35 @@ impl InterpreterCore {
                 // Unknown promise sub-capability — return undefined.
                 Ok(Value::Undefined)
             }
+        }
+    }
+
+    /// Run the event loop until no pending work remains.
+    ///
+    /// Executes the standard event loop cycle:
+    /// 1. Select and execute a macrotask (if any)
+    /// 2. Drain all microtasks
+    /// 3. Repeat until no pending macrotasks or microtasks
+    ///
+    /// This is called after top-level script evaluation to handle any
+    /// pending timers or other async work before the interpreter exits.
+    fn run_event_loop_until_idle(&mut self) {
+        const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
+        let mut turns = 0;
+
+        while self.event_loop.has_pending_work() && turns < MAX_TURNS {
+            turns += 1;
+
+            // Phase 1: Execute one macrotask (if ready)
+            let turn_result = self.event_loop.turn();
+            if let Some(_macrotask) = turn_result.macrotask {
+                // TODO: Execute the macrotask's handler closure
+                // This requires timer callback execution, which comes in RC-2.7
+                // For now, we just mark the task as executed (it's already dequeued)
+            }
+
+            // Phase 2: Drain all microtasks enqueued during macrotask execution
+            self.drain_microtasks();
         }
     }
 

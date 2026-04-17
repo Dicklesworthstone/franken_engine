@@ -43,7 +43,7 @@ pub const MILLIONTHS: u64 = 1_000_000;
 // ---------------------------------------------------------------------------
 
 /// Test execution result classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TestResult {
     /// Test passed successfully.
     Pass,

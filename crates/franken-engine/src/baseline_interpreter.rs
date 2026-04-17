@@ -7600,6 +7600,76 @@ impl InterpreterCore {
                     Ok(Value::Float(Float64::new(f64::NAN)))
                 }
             }
+            "builtin:MathRound" => {
+                // Math.round implementation - returns nearest integer
+                if args.count > 0 {
+                    let arg = self.read_reg(args.start)?;
+                    match arg {
+                        Value::Int(n) => Ok(Value::Int(n)), // Integer is already rounded
+                        Value::Float(f) => {
+                            let val = f.inner().round();
+                            // Check if the result fits in an integer range
+                            if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+                                Ok(Value::Int(val as i64))
+                            } else {
+                                Ok(Value::Float(Float64::new(val)))
+                            }
+                        }
+                        _ => Ok(Value::Float(Float64::new(f64::NAN))),
+                    }
+                } else {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                }
+            }
+            "builtin:MathMax" => {
+                // Math.max implementation - returns largest of given numbers
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
+                }
+
+                let mut max_val = f64::NEG_INFINITY;
+                let mut has_nan = false;
+                let mut is_all_int = true;
+                let mut int_max = i64::MIN;
+
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    match arg {
+                        Value::Int(n) => {
+                            if is_all_int {
+                                int_max = int_max.max(n);
+                            }
+                            max_val = max_val.max(n as f64);
+                        }
+                        Value::Float(f) => {
+                            is_all_int = false;
+                            let val = f.inner();
+                            if val.is_nan() {
+                                has_nan = true;
+                                break;
+                            }
+                            max_val = max_val.max(val);
+                        }
+                        _ => {
+                            // Non-numeric values become NaN in JavaScript
+                            has_nan = true;
+                            break;
+                        }
+                    }
+                }
+
+                if has_nan {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else if is_all_int
+                    && max_val.is_finite()
+                    && max_val >= i64::MIN as f64
+                    && max_val <= i64::MAX as f64
+                {
+                    Ok(Value::Int(int_max))
+                } else {
+                    Ok(Value::Float(Float64::new(max_val)))
+                }
+            }
 
             // JSON methods
             "builtin:JsonStringify" => {
@@ -7851,6 +7921,8 @@ impl InterpreterCore {
             50 => Some("builtin:MathAbs".to_string()),
             51 => Some("builtin:MathCeil".to_string()),
             52 => Some("builtin:MathFloor".to_string()),
+            53 => Some("builtin:MathRound".to_string()),
+            54 => Some("builtin:MathMax".to_string()),
 
             // JSON methods
             70 => Some("builtin:JsonParse".to_string()),

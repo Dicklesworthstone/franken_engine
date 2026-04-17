@@ -417,6 +417,7 @@ pub mod storage_adapter;
 pub mod structural_causal_model;
 pub mod succinct_witness_compiler;
 pub mod superblock_formation;
+pub mod superoptimization_gate;
 pub mod supervision;
 pub mod supremacy_cell_matrix;
 pub mod supremacy_evidence_bundle;

@@ -15939,49 +15939,48 @@ impl InterpreterCore {
                 let result_array_id = self.alloc_object_with_prototype(None)?;
                 let mut result_index = 0;
 
-                // Copy elements before start
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..actual_start {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                result_array_id,
-                                result_index.to_string(),
-                                element.clone(),
-                            )?;
-                        } else {
-                            self.set_object_property(
-                                result_array_id,
-                                result_index.to_string(),
-                                Value::Undefined,
-                            )?;
-                        }
-                        result_index += 1;
-                    }
+                // Snapshot source elements before mutating the result array.
+                let source_elements = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    (0..length)
+                        .map(|i| {
+                            obj.properties
+                                .get(&i.to_string())
+                                .cloned()
+                                .unwrap_or(Value::Undefined)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
 
-                    // Add new items (if any)
-                    for i in 3..args.count {
-                        let item = self.read_reg(args.start + i)?;
-                        self.set_object_property(result_array_id, result_index.to_string(), item)?;
-                        result_index += 1;
-                    }
+                // Copy elements before start.
+                for element in source_elements.iter().take(actual_start) {
+                    self.set_object_property(
+                        result_array_id,
+                        result_index.to_string(),
+                        element.clone(),
+                    )?;
+                    result_index += 1;
+                }
 
-                    // Copy elements after deleted section
-                    for i in (actual_start + actual_delete_count)..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                result_array_id,
-                                result_index.to_string(),
-                                element.clone(),
-                            )?;
-                        } else {
-                            self.set_object_property(
-                                result_array_id,
-                                result_index.to_string(),
-                                Value::Undefined,
-                            )?;
-                        }
-                        result_index += 1;
-                    }
+                // Add new items (if any).
+                for i in 3..args.count {
+                    let item = self.read_reg(args.start + i)?;
+                    self.set_object_property(result_array_id, result_index.to_string(), item)?;
+                    result_index += 1;
+                }
+
+                // Copy elements after deleted section.
+                for element in source_elements
+                    .iter()
+                    .skip(actual_start + actual_delete_count)
+                {
+                    self.set_object_property(
+                        result_array_id,
+                        result_index.to_string(),
+                        element.clone(),
+                    )?;
+                    result_index += 1;
                 }
 
                 self.set_object_property(
@@ -16009,6 +16008,161 @@ impl InterpreterCore {
                     _ => {
                         // Primitives are not extensible
                         Ok(Value::Bool(false))
+                    }
+                }
+            }
+
+            "builtin:StringPrototypeTrimEnd" => {
+                // String.prototype.trimEnd() implementation (ES2019)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Trim whitespace from the end (right side)
+                let trimmed = str_text.trim_end().to_string();
+                Ok(Value::Str(trimmed))
+            }
+
+            "builtin:MathSign" => {
+                // Math.sign(x) implementation
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let result = if num.is_nan() {
+                    f64::NAN
+                } else if num > 0.0 {
+                    1.0
+                } else if num < 0.0 {
+                    -1.0
+                } else {
+                    // Handle +0, -0
+                    num // Preserves sign of zero
+                };
+
+                Ok(Value::Float(Float64::new(result)))
+            }
+
+            "builtin:ArrayPrototypeGroup" => {
+                // Array.prototype.group(callback) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty object
+                        let empty_obj_id = self.alloc_object_with_prototype(None)?;
+                        return Ok(Value::Object(empty_obj_id));
+                    }
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Create result object (simplified grouping)
+                let result_obj_id = self.alloc_object_with_prototype(None)?;
+
+                // Simplified implementation: group by string representation
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let mut groups: std::collections::BTreeMap<String, Vec<Value>> =
+                        std::collections::BTreeMap::new();
+
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            // Simple grouping key based on element type/value
+                            let key = match element {
+                                Value::Str(s) => format!("string:{}", s),
+                                Value::Int(n) => format!("number:{}", n),
+                                Value::Float(f) => format!("number:{}", f.inner()),
+                                Value::Bool(b) => format!("boolean:{}", b),
+                                Value::Null => "null".to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                _ => "object".to_string(),
+                            };
+
+                            groups
+                                .entry(key)
+                                .or_insert_with(Vec::new)
+                                .push(element.clone());
+                        }
+                    }
+
+                    // Convert groups to object properties (each group becomes an array)
+                    for (key, values) in groups {
+                        let group_array_id = self.alloc_object_with_prototype(None)?;
+
+                        for (i, value) in values.iter().enumerate() {
+                            self.set_object_property(group_array_id, i.to_string(), value.clone())?;
+                        }
+
+                        self.set_object_property(
+                            group_array_id,
+                            "length".to_string(),
+                            Value::Int(values.len() as i64),
+                        )?;
+
+                        self.set_object_property(
+                            result_obj_id,
+                            key,
+                            Value::Object(group_array_id),
+                        )?;
+                    }
+                }
+
+                Ok(Value::Object(result_obj_id))
+            }
+
+            "builtin:ObjectPreventExtensions" => {
+                // Object.preventExtensions(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Simplified implementation: mark object as non-extensible
+                        // In a real implementation, this would set [[Extensible]] to false
+                        if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
+                            obj.properties
+                                .insert("__extensible__".to_string(), Value::Bool(false));
+                        }
+                        Ok(obj_val) // Return the object
+                    }
+                    _ => {
+                        // Primitives can't be made non-extensible, just return them
+                        Ok(obj_val)
                     }
                 }
             }
@@ -16284,6 +16438,10 @@ impl InterpreterCore {
             302 => Some("builtin:MathImul".to_string()),
             303 => Some("builtin:ArrayPrototypeToSpliced".to_string()),
             304 => Some("builtin:ObjectIsExtensible".to_string()),
+            305 => Some("builtin:StringPrototypeTrimEnd".to_string()),
+            306 => Some("builtin:MathSign".to_string()),
+            307 => Some("builtin:ArrayPrototypeGroup".to_string()),
+            308 => Some("builtin:ObjectPreventExtensions".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -6893,8 +6893,50 @@ impl InterpreterCore {
                 }
             }
             "builtin:ObjectValues" => {
-                // TODO: Implement Object.values
-                Ok(Value::Object(ObjectId(0)))
+                // Object.values implementation - returns array of object's own property values
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Get the object's property values
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            let values: Vec<Value> = obj.properties.values().cloned().collect();
+
+                            // Create array object to hold the values
+                            let array_id = self.alloc_object_with_prototype(None)?;
+
+                            // Set array elements as numeric properties
+                            for (index, value) in values.iter().enumerate() {
+                                self.set_object_property(
+                                    array_id,
+                                    index.to_string(),
+                                    value.clone(),
+                                )?;
+                            }
+
+                            // Set length property
+                            self.set_object_property(
+                                array_id,
+                                "length".to_string(),
+                                Value::Int(values.len() as i64),
+                            )?;
+
+                            Ok(Value::Object(array_id))
+                        } else {
+                            // Object not found in heap
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    _ => {
+                        // Non-object argument - return empty array per JavaScript behavior
+                        let array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        Ok(Value::Object(array_id))
+                    }
+                }
             }
 
             // String methods

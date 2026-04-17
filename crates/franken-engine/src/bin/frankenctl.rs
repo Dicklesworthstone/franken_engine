@@ -1171,6 +1171,12 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "benchmark" => parse_benchmark_command(&args[1..]),
         "replay" => parse_replay_command(&args[1..]),
         "react" => parse_react_command(&args[1..]),
+        "gates" => parse_gates_command(&args[1..]),
+        "reports" => parse_reports_command(&args[1..]),
+        "test" => parse_test_command(&args[1..]),
+        "synth" => parse_synth_command(&args[1..]),
+        "orchestrate" => parse_orchestrate_command(&args[1..]),
+        "runtime" => parse_runtime_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
     }
 }
@@ -4882,6 +4888,12 @@ fn usage() -> String {
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
         "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl gates <gate-type> [options]  # validation gates",
+        "  frankenctl reports <report-type> [options]  # analysis reports",
+        "  frankenctl test <test-type> [options]  # testing tools",
+        "  frankenctl synth <synth-type> [options]  # synthesis tools",
+        "  frankenctl orchestrate <orchestrate-type> [options]  # orchestration tools",
+        "  frankenctl runtime <runtime-type> [options]  # runtime diagnostics",
         "",
         "benchmark families:",
         "  boot-storm",
@@ -4908,6 +4920,12 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::React(ReactArgs::Build(_)) => "react-build",
         CommandSpec::React(ReactArgs::Doctor(_)) => "react-doctor",
         CommandSpec::React(ReactArgs::Contract(_)) => "react-contract",
+        CommandSpec::Gates(_) => "gates",
+        CommandSpec::Reports(_) => "reports",
+        CommandSpec::Test(_) => "test",
+        CommandSpec::Synth(_) => "synth",
+        CommandSpec::Orchestrate(_) => "orchestrate",
+        CommandSpec::Runtime(_) => "runtime",
     }
 }
 

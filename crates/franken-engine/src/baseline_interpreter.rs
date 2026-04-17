@@ -18498,6 +18498,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 // Simplified regex test: just check if pattern is contained in string
@@ -18520,6 +18521,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 // Simplified URL encoding - encode special characters
@@ -18549,6 +18551,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 // Simplified URL decoding - decode %XX sequences
@@ -18792,6 +18795,110 @@ impl InterpreterCore {
                 };
 
                 Ok(Value::Bool(num.is_finite()))
+            }
+
+            "builtin:ConsoleLog" => {
+                // console.log() implementation - logs values to output
+                let mut output = String::new();
+                for i in 1..args.count {
+                    if i > 1 {
+                        output.push(' ');
+                    }
+                    let value = self.read_reg(args.start + i)?;
+                    let value_str = match value {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
+                    output.push_str(&value_str);
+                }
+
+                // In a real implementation, this would output to console
+                // For now, we just acknowledge the call
+                Ok(Value::Undefined)
+            }
+
+            "builtin:ConsoleError" => {
+                // console.error() implementation - logs error values to output
+                let mut output = String::new();
+                for i in 1..args.count {
+                    if i > 1 {
+                        output.push(' ');
+                    }
+                    let value = self.read_reg(args.start + i)?;
+                    let value_str = match value {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
+                    output.push_str(&value_str);
+                }
+
+                // In a real implementation, this would output to error console
+                // For now, we just acknowledge the call
+                Ok(Value::Undefined)
+            }
+
+            "builtin:ConsoleWarn" => {
+                // console.warn() implementation - logs warning values to output
+                let mut output = String::new();
+                for i in 1..args.count {
+                    if i > 1 {
+                        output.push(' ');
+                    }
+                    let value = self.read_reg(args.start + i)?;
+                    let value_str = match value {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
+                    output.push_str(&value_str);
+                }
+
+                // In a real implementation, this would output to warning console
+                // For now, we just acknowledge the call
+                Ok(Value::Undefined)
+            }
+
+            "builtin:ConsoleInfo" => {
+                // console.info() implementation - logs info values to output
+                let mut output = String::new();
+                for i in 1..args.count {
+                    if i > 1 {
+                        output.push(' ');
+                    }
+                    let value = self.read_reg(args.start + i)?;
+                    let value_str = match value {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
+                    output.push_str(&value_str);
+                }
+
+                // In a real implementation, this would output to info console
+                // For now, we just acknowledge the call
+                Ok(Value::Undefined)
             }
 
             _ => {
@@ -19141,6 +19248,10 @@ impl InterpreterCore {
             378 => Some("builtin:ParseFloat".to_string()),
             379 => Some("builtin:IsNaN".to_string()),
             380 => Some("builtin:IsFinite".to_string()),
+            381 => Some("builtin:ConsoleLog".to_string()),
+            382 => Some("builtin:ConsoleError".to_string()),
+            383 => Some("builtin:ConsoleWarn".to_string()),
+            384 => Some("builtin:ConsoleInfo".to_string()),
 
             _ => None, // Not a recognized builtin
         }

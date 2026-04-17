@@ -1395,8 +1395,8 @@ impl ReplacementProgressDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap(),
-            generated_at_unix_ms: input.generated_at_unix_ms.unwrap(),
+            security_epoch: input.security_epoch.unwrap_or(0),
+            generated_at_unix_ms: input.generated_at_unix_ms.unwrap_or(0),
             slot_status_overview,
             native_coverage,
             blocked_promotions,

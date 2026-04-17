@@ -180,8 +180,9 @@ Each run emits:
 - `artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_*.log`
 
 If the gate fails before any remote step starts, the manifest still emits a
-fail-closed operator verification command that explains no step logs were
-captured, rather than pointing at a nonexistent `step_000.log`.
+fail-closed operator verification command that says no step logs were captured
+before the performance promotion gate failed, rather than pointing at a
+nonexistent `step_000.log`.
 If an operator aborts a hanging run or the shell terminates mid-step, the
 runner still leaves the manifest triad plus `step_000.log`, with
 `failed_command` anchored to the in-flight remote command rather than leaving a

@@ -185,6 +185,29 @@ To verify the artifact contract:
 
 See [`docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md`](./docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md) for the complete contract specification.
 
+## Parser Performance Promotion Gate
+
+The parser performance promotion gate verifies declared Boa/peer wins on fixed
+workloads and quantiles with reproducible artifact bundles. Run the gate through
+the repo-local RCH target namespace so remote builds do not depend on fragile
+temporary directories:
+
+```bash
+CARGO_TARGET_DIR=$PWD/target_rch_parser_performance_promotion_gate_verify \
+  ./scripts/run_parser_performance_promotion_gate.sh ci
+./scripts/e2e/parser_performance_promotion_gate_replay.sh
+```
+
+Gate runs emit `run_manifest.json`, `events.jsonl`, `commands.txt`, and
+`step_logs/step_*.log` under `artifacts/parser_performance_promotion_gate/<timestamp>/`.
+The replay wrapper prints the latest complete artifact bundle and will skip a
+newer incomplete run directory with a warning. If an operator interrupts a
+remote step, the manifest stays anchored to the in-flight command instead of
+leaving step-log-only output; normal runs still surface `step_000.log` in the
+operator verification commands.
+
+See [`docs/PARSER_PERFORMANCE_PROMOTION_GATE.md`](./docs/PARSER_PERFORMANCE_PROMOTION_GATE.md) for the full gate contract.
+
 ## Lowering Gap Truth Invariant
 
 The lowering gap truth invariant defines the authoritative relationship between lowering status fields and execution-readiness flags. This contract ensures that `status`, `parser_ready_syntax`, `execution_ready_semantics`, and prose fields cannot report mutually incompatible states in the lowering gap inventory.

@@ -16550,6 +16550,161 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeAnchor" => {
+                // String.prototype.anchor(name) implementation (deprecated HTML wrapper)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let name = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "[object Object]".to_string(),
+                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                let result = format!("<a name=\"{}\">{}</a>", name, str_text);
+                Ok(Value::Str(result))
+            }
+
+            "builtin:NumberPrototypeToExponential" => {
+                // Number.prototype.toExponential(fractionDigits) implementation
+                let this_val = self.read_reg(args.start)?;
+                let num = match this_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let fraction_digits = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => Some((n as usize).min(20)), // Max 20 digits
+                        Value::Float(f) => Some((f.inner() as usize).min(20)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                if num.is_nan() {
+                    Ok(Value::Str("NaN".to_string()))
+                } else if num.is_infinite() {
+                    if num.is_sign_positive() {
+                        Ok(Value::Str("Infinity".to_string()))
+                    } else {
+                        Ok(Value::Str("-Infinity".to_string()))
+                    }
+                } else {
+                    let formatted = if let Some(digits) = fraction_digits {
+                        format!("{:.precision$e}", num, precision = digits)
+                    } else {
+                        format!("{:e}", num)
+                    };
+                    Ok(Value::Str(formatted))
+                }
+            }
+
+            "builtin:ArrayPrototypeValues" => {
+                // Array.prototype.values() implementation (ES2015 iterator method - simplified)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Simplified implementation: return array of values (instead of iterator)
+                let values_array_id = self.alloc_object_with_prototype(None)?;
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let mut value_index = 0;
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            self.set_object_property(
+                                values_array_id,
+                                value_index.to_string(),
+                                element.clone(),
+                            )?;
+                            value_index += 1;
+                        }
+                    }
+
+                    self.set_object_property(
+                        values_array_id,
+                        "length".to_string(),
+                        Value::Int(value_index as i64),
+                    )?;
+                } else {
+                    self.set_object_property(values_array_id, "length".to_string(), Value::Int(0))?;
+                }
+
+                Ok(Value::Object(values_array_id))
+            }
+
+            "builtin:ObjectIsSealed" => {
+                // Object.isSealed(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Bool(true)); // Default to true for missing argument
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Simplified implementation: check if object has sealed marker
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(Value::Bool(sealed)) = obj.properties.get("__sealed__") {
+                                Ok(Value::Bool(*sealed))
+                            } else {
+                                Ok(Value::Bool(false)) // Not sealed by default
+                            }
+                        } else {
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                    _ => {
+                        // Primitives are considered sealed
+                        Ok(Value::Bool(true))
+                    }
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -16833,6 +16988,10 @@ impl InterpreterCore {
             314 => Some("builtin:NumberPrototypeToFixed".to_string()),
             315 => Some("builtin:ArrayPrototypeCopyWithin".to_string()),
             316 => Some("builtin:ObjectIsFrozen".to_string()),
+            317 => Some("builtin:StringPrototypeAnchor".to_string()),
+            318 => Some("builtin:NumberPrototypeToExponential".to_string()),
+            319 => Some("builtin:ArrayPrototypeValues".to_string()),
+            320 => Some("builtin:ObjectIsSealed".to_string()),
 
             _ => None, // Not a recognized builtin
         }

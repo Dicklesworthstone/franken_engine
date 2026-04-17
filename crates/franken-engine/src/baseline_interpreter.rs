@@ -17749,15 +17749,17 @@ impl InterpreterCore {
                     let mut filtered_index = 0;
                     // Simplified implementation: include all existing elements
                     // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                filtered_array_id,
-                                filtered_index.to_string(),
-                                element.clone(),
-                            )?;
-                            filtered_index += 1;
-                        }
+                    let elements: Vec<_> = (0..length)
+                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
+                        .collect();
+
+                    for element in elements {
+                        self.set_object_property(
+                            filtered_array_id,
+                            filtered_index.to_string(),
+                            element,
+                        )?;
+                        filtered_index += 1;
                     }
 
                     self.set_object_property(
@@ -17968,20 +17970,16 @@ impl InterpreterCore {
 
                     // Simplified implementation: copy all existing elements (identity mapping)
                     // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                mapped_array_id,
-                                i.to_string(),
-                                element.clone(),
-                            )?;
-                        } else {
-                            self.set_object_property(
-                                mapped_array_id,
-                                i.to_string(),
-                                Value::Undefined,
-                            )?;
-                        }
+                    let elements: Vec<_> = (0..length)
+                        .map(|i| (i, obj.properties.get(&i.to_string()).cloned().unwrap_or(Value::Undefined)))
+                        .collect();
+
+                    for (i, element) in elements {
+                        self.set_object_property(
+                            mapped_array_id,
+                            i.to_string(),
+                            element,
+                        )?;
                     }
 
                     self.set_object_property(
@@ -18161,16 +18159,18 @@ impl InterpreterCore {
                     };
 
                     // Copy elements from original array
+                    let elements: Vec<_> = (0..length)
+                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
+                        .collect();
+
                     let mut result_index = 0;
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                result_array_id,
-                                result_index.to_string(),
-                                element.clone(),
-                            )?;
-                            result_index += 1;
-                        }
+                    for element in elements {
+                        self.set_object_property(
+                            result_array_id,
+                            result_index.to_string(),
+                            element,
+                        )?;
+                        result_index += 1;
                     }
 
                     // Concatenate additional arguments
@@ -18592,7 +18592,7 @@ impl InterpreterCore {
                     return Ok(Value::Int(0)); // Callback is not a function
                 }
 
-                let delay = if args.count >= 3 {
+                let _delay = if args.count >= 3 {
                     let delay_val = self.read_reg(args.start + 2)?;
                     match delay_val {
                         Value::Int(n) => n.max(0) as u64,
@@ -18899,6 +18899,113 @@ impl InterpreterCore {
                 // In a real implementation, this would output to info console
                 // For now, we just acknowledge the call
                 Ok(Value::Undefined)
+            }
+
+            "builtin:ArrayPrototypeSort" => {
+                // Array.prototype.sort() implementation - simplified in-place sorting
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(this_val), // Non-objects return as-is
+                };
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length = match length_prop {
+                        Value::Int(n) => n.max(0) as usize,
+                        _ => 0,
+                    };
+
+                    // Collect elements for sorting
+                    let mut elements: Vec<(usize, String)> = Vec::new();
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            let element_str = match element {
+                                Value::Str(s) => s.clone(),
+                                Value::Int(n) => n.to_string(),
+                                Value::Float(f) => f.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                Value::Null => "null".to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                _ => "".to_string(),
+                            };
+                            elements.push((i, element_str));
+                        }
+                    }
+
+                    // Sort elements lexicographically (default JavaScript behavior)
+                    elements.sort_by(|a, b| a.1.cmp(&b.1));
+
+                    // Clear existing elements and reassign sorted ones
+                    if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
+                        for i in 0..length {
+                            obj_mut.properties.remove(&i.to_string());
+                        }
+                    }
+
+                    for (new_index, (_, sorted_value)) in elements.into_iter().enumerate() {
+                        self.set_object_property(array_id, new_index.to_string(), Value::Str(sorted_value))?;
+                    }
+                }
+
+                Ok(this_val) // Return the array itself
+            }
+
+            "builtin:StringPrototypeToLocaleLowerCase" => {
+                // String.prototype.toLocaleLowerCase() implementation - simplified locale-aware lowercase
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified: use standard lowercase (full locale support would require ICU)
+                Ok(Value::Str(str_text.to_lowercase()))
+            }
+
+            "builtin:StringPrototypeToLocaleUpperCase" => {
+                // String.prototype.toLocaleUpperCase() implementation - simplified locale-aware uppercase
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified: use standard uppercase (full locale support would require ICU)
+                Ok(Value::Str(str_text.to_uppercase()))
+            }
+
+            "builtin:MathLog" => {
+                // Math.log() implementation - returns natural logarithm
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                if num < 0.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else if num == 0.0 {
+                    Ok(Value::Float(Float64::new(f64::NEG_INFINITY)))
+                } else {
+                    let result = num.ln();
+                    Ok(Value::Float(Float64::new(result)))
+                }
             }
 
             _ => {
@@ -19252,6 +19359,10 @@ impl InterpreterCore {
             382 => Some("builtin:ConsoleError".to_string()),
             383 => Some("builtin:ConsoleWarn".to_string()),
             384 => Some("builtin:ConsoleInfo".to_string()),
+            385 => Some("builtin:ArrayPrototypeSort".to_string()),
+            386 => Some("builtin:StringPrototypeToLocaleLowerCase".to_string()),
+            387 => Some("builtin:StringPrototypeToLocaleUpperCase".to_string()),
+            388 => Some("builtin:MathLog".to_string()),
 
             _ => None, // Not a recognized builtin
         }

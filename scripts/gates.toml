@@ -1,0 +1,157 @@
+# Gate Runner Configuration
+# Bead: bd-2737p.4 - Consolidate 388 shell scripts into parameterized gate runner
+#
+# This configuration defines parameters for all gate runners, allowing
+# the consolidation of 388+ shell scripts into a single parameterized
+# runner with gate-specific configuration.
+
+[global]
+# Default settings applied to all gates unless overridden
+default_mode = "ci"
+default_rch_timeout_seconds = 900
+default_rch_build_timeout_seconds = 1800
+default_cargo_build_jobs = 2
+default_target_dir_prefix = "/tmp/rch_target_franken_engine"
+
+[gates.adversarial_campaign_gate]
+name = "adversarial_campaign_gate"
+description = "Adversarial campaign detection and mitigation gate"
+artifact_root = "artifacts/adversarial_campaign_gate"
+input_fixture = "crates/franken-engine/tests/fixtures/adversarial_campaign_gate_input_v1.json"
+cargo_command = "cargo test -p frankenengine-engine --lib adversarial_campaign"
+needs_rch = true
+generates_gate_result = true
+
+[gates.ambient_mock_guard]
+name = "ambient_mock_guard"
+description = "Ambient mock guard for production context isolation"
+artifact_root = "artifacts/ambient_mock_guard"
+env_bootstrap = "scripts/e2e/parser_deterministic_env.sh"
+cargo_command = "cargo check -p frankenengine-engine --lib"
+needs_rch = true
+generates_manifest = true
+
+[gates.allocation_elision_gate]
+name = "allocation_elision_gate"
+description = "Allocation elision governance gate"
+artifact_root = "artifacts/allocation_elision_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib allocation_elision"
+needs_rch = true
+rch_timeout_seconds = 1200
+
+[gates.benchmark_coverage_saturation_gate]
+name = "benchmark_coverage_saturation_gate"
+description = "Benchmark coverage saturation and distribution gate"
+artifact_root = "artifacts/benchmark_coverage_saturation_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib benchmark_coverage"
+needs_rch = true
+
+[gates.native_addon_parity_gate]
+name = "native_addon_parity_gate"
+description = "Native addon parity, security, and throughput gate"
+artifact_root = "artifacts/native_addon_parity_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib native_addon_parity"
+needs_rch = true
+
+[gates.test262_conformance_runner]
+name = "test262_conformance_runner"
+description = "Test262 JavaScript conformance testing gate"
+artifact_root = "artifacts/test262_conformance"
+cargo_command = "cargo test -p frankenengine-engine --lib test262_conformance"
+needs_rch = true
+rch_timeout_seconds = 1800
+
+[gates.composable_gate_framework]
+name = "composable_gate_framework"
+description = "Composable gate framework validation"
+artifact_root = "artifacts/composable_gate_framework"
+cargo_command = "cargo test -p frankenengine-engine --lib composable_gate_framework"
+needs_rch = true
+
+# Sample of other gates - in practice this would include all ~53 gates
+[gates.security_epoch_gate]
+name = "security_epoch_gate"
+description = "Security epoch validation and transition gate"
+artifact_root = "artifacts/security_epoch_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib security_epoch"
+needs_rch = true
+
+[gates.evidence_ledger_gate]
+name = "evidence_ledger_gate"
+description = "Evidence ledger integrity and audit trail gate"
+artifact_root = "artifacts/evidence_ledger_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib evidence_ledger"
+needs_rch = true
+
+[gates.capability_witness_gate]
+name = "capability_witness_gate"
+description = "Capability witness validation gate"
+artifact_root = "artifacts/capability_witness_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib capability_witness"
+needs_rch = true
+
+[gates.execution_orchestrator_gate]
+name = "execution_orchestrator_gate"
+description = "Execution orchestrator governance gate"
+artifact_root = "artifacts/execution_orchestrator_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib execution_orchestrator"
+needs_rch = true
+rch_timeout_seconds = 1500
+
+[gates.parser_evidence_gate]
+name = "parser_evidence_gate"
+description = "Parser evidence collection and validation gate"
+artifact_root = "artifacts/parser_evidence_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib parser"
+needs_rch = true
+env_bootstrap = "scripts/e2e/parser_deterministic_env.sh"
+
+[gates.lowering_pipeline_gate]
+name = "lowering_pipeline_gate"
+description = "IR lowering pipeline validation gate"
+artifact_root = "artifacts/lowering_pipeline_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib lowering_pipeline"
+needs_rch = true
+
+[gates.baseline_interpreter_gate]
+name = "baseline_interpreter_gate"
+description = "Baseline interpreter governance gate"
+artifact_root = "artifacts/baseline_interpreter_gate"
+cargo_command = "cargo test -p frankenengine-engine --lib baseline_interpreter"
+needs_rch = true
+rch_timeout_seconds = 2100
+
+# E2E replay gates
+[gates.adversarial_campaign_replay]
+name = "adversarial_campaign_replay"
+description = "Adversarial campaign gate replay validation"
+artifact_root = "artifacts/adversarial_campaign_gate"
+is_replay = true
+replay_source_gate = "adversarial_campaign_gate"
+
+[gates.ambient_mock_guard_replay]
+name = "ambient_mock_guard_replay"
+description = "Ambient mock guard replay validation"
+artifact_root = "artifacts/ambient_mock_guard"
+is_replay = true
+replay_source_gate = "ambient_mock_guard"
+
+# Meta-configuration for script generation
+[meta]
+total_gates = 53
+total_scripts_to_replace = 388
+script_pattern_types = [
+    "run_*_gate.sh",
+    "run_*_suite.sh",
+    "*_replay.sh",
+    "check_*.sh"
+]
+
+# Common file outputs preserved across all gates
+[outputs]
+manifest_file = "run_manifest.json"
+events_file = "events.jsonl"
+commands_file = "commands.txt"
+gate_result_file = "gate_result.json"
+step_logs_dir = "step_logs"
+rch_step_logs_dir = "rch_step_logs"

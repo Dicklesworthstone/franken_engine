@@ -38,7 +38,10 @@ fn tla_basic_variable_declaration_parses() {
 
     // Verify static semantics pass for module context
     let result = analyze(&tree);
-    assert!(result.passed(), "Static semantics should pass for TLA in module");
+    assert!(
+        result.passed(),
+        "Static semantics should pass for TLA in module"
+    );
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn tla_basic_expression_statement_parses() {
 
     // Verify static semantics pass for module context
     let result = analyze(&tree);
-    assert!(result.passed(), "Static semantics should pass for TLA in module");
+    assert!(
+        result.passed(),
+        "Static semantics should pass for TLA in module"
+    );
 }
 
 #[test]
@@ -68,7 +74,10 @@ fn tla_multiple_awaits_in_module() {
 
     // Verify static semantics pass
     let result = analyze(&tree);
-    assert!(result.passed(), "Static semantics should pass for multiple TLA in module");
+    assert!(
+        result.passed(),
+        "Static semantics should pass for multiple TLA in module"
+    );
 }
 
 #[test]
@@ -78,7 +87,10 @@ fn tla_rejected_in_script_context() {
 
     // Static semantics should reject await outside async function in scripts
     let result = analyze(&tree);
-    assert!(!result.passed(), "Static semantics should reject TLA in script context");
+    assert!(
+        !result.passed(),
+        "Static semantics should reject TLA in script context"
+    );
 
     // Check that we have the right error
     let errors = result.errors();
@@ -100,7 +112,10 @@ fn tla_with_complex_expressions() {
 
     // Verify static semantics pass
     let result = analyze(&tree);
-    assert!(result.passed(), "Static semantics should pass for complex TLA with exports");
+    assert!(
+        result.passed(),
+        "Static semantics should pass for complex TLA with exports"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +174,10 @@ fn tla_import_ordering_placeholder() {
     "#;
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
     let result = analyze(&tree);
-    assert!(result.passed(), "Module with imports and TLA should parse and validate");
+    assert!(
+        result.passed(),
+        "Module with imports and TLA should parse and validate"
+    );
 }
 
 #[test]
@@ -178,7 +196,10 @@ fn tla_error_propagation_placeholder() {
     "#;
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
     let result = analyze(&tree);
-    assert!(result.passed(), "Module with TLA error handling should parse and validate");
+    assert!(
+        result.passed(),
+        "Module with TLA error handling should parse and validate"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +240,10 @@ fn tla_nested_in_blocks() {
     "#;
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
     let result = analyze(&tree);
-    assert!(result.passed(), "TLA in blocks should be valid in module context");
+    assert!(
+        result.passed(),
+        "TLA in blocks should be valid in module context"
+    );
 }
 
 #[test]
@@ -236,7 +260,10 @@ fn tla_module_with_only_await() {
     let source = "await initialize();";
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
     let result = analyze(&tree);
-    assert!(result.passed(), "Module with only TLA statement should be valid");
+    assert!(
+        result.passed(),
+        "Module with only TLA statement should be valid"
+    );
 }
 
 // ---------------------------------------------------------------------------

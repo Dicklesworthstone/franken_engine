@@ -2009,10 +2009,7 @@ mod tests {
     fn module_without_await_has_no_top_level_await() {
         let tree = make_tree(
             ParseGoal::Module,
-            vec![expr_stmt(
-                Expression::Identifier("x".to_string()),
-                1,
-            )],
+            vec![expr_stmt(Expression::Identifier("x".to_string()), 1)],
         );
         let result = analyze(&tree);
         assert!(result.passed());

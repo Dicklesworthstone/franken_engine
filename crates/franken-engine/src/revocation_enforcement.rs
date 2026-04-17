@@ -574,7 +574,9 @@ mod tests {
     /// these tests fails with `InvalidVerificationKey`. Deriving a VK from a
     /// `SigningKey` seed (which accepts any 32 bytes) always yields a valid VK.
     fn test_vk(byte: u8) -> VerificationKey {
-        SigningKey::from_bytes([byte; 32]).unwrap().verification_key()
+        SigningKey::from_bytes([byte; 32])
+            .unwrap()
+            .verification_key()
     }
 
     fn make_revocation(
@@ -926,22 +928,14 @@ mod tests {
     fn all_enforcement_points_emit_audit() {
         let mut enforcer = make_enforcer();
 
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-a",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-a");
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
             &test_vk(4),
             HighRiskCategory::PolicyChange,
             "t-b",
         );
-        enforcer.check_extension_activation(
-            &EngineObjectId([5; 32]),
-            &test_vk(6),
-            "t-c",
-        );
+        enforcer.check_extension_activation(&EngineObjectId([5; 32]), &test_vk(6), "t-c");
 
         let events = enforcer.drain_audit_log();
         // 2 checks per enforcement point = 6 events
@@ -975,24 +969,12 @@ mod tests {
         let mut enforcer = make_enforcer();
 
         // 2 cleared token checks
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-s1",
-        );
-        enforcer.check_token_acceptance(
-            &EngineObjectId([3; 32]),
-            &test_vk(4),
-            "t-s2",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-s1");
+        enforcer.check_token_acceptance(&EngineObjectId([3; 32]), &test_vk(4), "t-s2");
 
         // 1 denied token check (direct)
         revoke_target(&mut enforcer, RevocationTargetType::Token, [5; 32]);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([5; 32]),
-            &test_vk(6),
-            "t-s3",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([5; 32]), &test_vk(6), "t-s3");
 
         let stats = enforcer.stats();
         let token_stats = &stats[&EnforcementPoint::TokenAcceptance];
@@ -1025,18 +1007,9 @@ mod tests {
     fn batch_check_all_valid() {
         let mut enforcer = make_enforcer();
         let tokens = vec![
-            (
-                EngineObjectId([1; 32]),
-                test_vk(2),
-            ),
-            (
-                EngineObjectId([3; 32]),
-                test_vk(4),
-            ),
-            (
-                EngineObjectId([5; 32]),
-                test_vk(6),
-            ),
+            (EngineObjectId([1; 32]), test_vk(2)),
+            (EngineObjectId([3; 32]), test_vk(4)),
+            (EngineObjectId([5; 32]), test_vk(6)),
         ];
 
         let result = enforcer.check_token_batch(&tokens, "t-batch-ok");
@@ -1055,18 +1028,9 @@ mod tests {
         revoke_target(&mut enforcer, RevocationTargetType::Token, [3; 32]);
 
         let tokens = vec![
-            (
-                EngineObjectId([1; 32]),
-                test_vk(2),
-            ),
-            (
-                EngineObjectId([3; 32]),
-                test_vk(4),
-            ), // revoked
-            (
-                EngineObjectId([5; 32]),
-                test_vk(6),
-            ),
+            (EngineObjectId([1; 32]), test_vk(2)),
+            (EngineObjectId([3; 32]), test_vk(4)), // revoked
+            (EngineObjectId([5; 32]), test_vk(6)),
         ];
 
         let result = enforcer.check_token_batch(&tokens, "t-batch-deny");
@@ -1281,11 +1245,8 @@ mod tests {
         revoke_target(&mut enforcer, RevocationTargetType::Extension, [30; 32]);
 
         // Token check
-        let r1 = enforcer.check_token_acceptance(
-            &EngineObjectId([10; 32]),
-            &test_vk(11),
-            "t-multi-1",
-        );
+        let r1 =
+            enforcer.check_token_acceptance(&EngineObjectId([10; 32]), &test_vk(11), "t-multi-1");
         assert!(matches!(r1, EnforcementResult::Denied(_)));
 
         // High-risk check
@@ -1333,18 +1294,10 @@ mod tests {
         let mut enforcer = make_enforcer();
 
         enforcer.set_tick(1000);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-tick-1",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-tick-1");
 
         enforcer.set_tick(2000);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([3; 32]),
-            &test_vk(4),
-            "t-tick-2",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([3; 32]), &test_vk(4), "t-tick-2");
 
         let events = enforcer.drain_audit_log();
         assert_eq!(events[0].checked_at, DeterministicTimestamp(1000));
@@ -1364,16 +1317,10 @@ mod tests {
             revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
             enforcer.drain_audit_log();
 
-            let r1 = enforcer.check_token_acceptance(
-                &EngineObjectId([10; 32]),
-                &test_vk(11),
-                "t-det",
-            );
-            let r2 = enforcer.check_token_acceptance(
-                &EngineObjectId([20; 32]),
-                &test_vk(21),
-                "t-det",
-            );
+            let r1 =
+                enforcer.check_token_acceptance(&EngineObjectId([10; 32]), &test_vk(11), "t-det");
+            let r2 =
+                enforcer.check_token_acceptance(&EngineObjectId([20; 32]), &test_vk(21), "t-det");
             let events = enforcer.drain_audit_log();
             (r1, r2, events)
         };
@@ -1606,10 +1553,7 @@ mod tests {
     #[test]
     fn batch_single_token_cleared() {
         let mut enforcer = make_enforcer();
-        let tokens = vec![(
-            EngineObjectId([1; 32]),
-            test_vk(2),
-        )];
+        let tokens = vec![(EngineObjectId([1; 32]), test_vk(2))];
         let result = enforcer.check_token_batch(&tokens, "t-batch-single");
         assert!(result.is_cleared());
         if let EnforcementResult::Cleared {
@@ -1627,14 +1571,8 @@ mod tests {
         enforcer.drain_audit_log();
 
         let tokens = vec![
-            (
-                EngineObjectId([1; 32]),
-                test_vk(2),
-            ), // revoked
-            (
-                EngineObjectId([3; 32]),
-                test_vk(4),
-            ),
+            (EngineObjectId([1; 32]), test_vk(2)), // revoked
+            (EngineObjectId([3; 32]), test_vk(4)),
         ];
 
         let result = enforcer.check_token_batch(&tokens, "t-batch-first");
@@ -1657,18 +1595,9 @@ mod tests {
         enforcer.drain_audit_log();
 
         let tokens = vec![
-            (
-                EngineObjectId([1; 32]),
-                test_vk(2),
-            ),
-            (
-                EngineObjectId([3; 32]),
-                test_vk(4),
-            ),
-            (
-                EngineObjectId([5; 32]),
-                test_vk(6),
-            ), // revoked
+            (EngineObjectId([1; 32]), test_vk(2)),
+            (EngineObjectId([3; 32]), test_vk(4)),
+            (EngineObjectId([5; 32]), test_vk(6)), // revoked
         ];
 
         let result = enforcer.check_token_batch(&tokens, "t-batch-last");
@@ -1714,11 +1643,7 @@ mod tests {
     #[test]
     fn drain_audit_log_returns_empty_on_second_call() {
         let mut enforcer = make_enforcer();
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-drain",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-drain");
         let first = enforcer.drain_audit_log();
         assert_eq!(first.len(), 2);
         let second = enforcer.drain_audit_log();
@@ -1728,11 +1653,7 @@ mod tests {
     #[test]
     fn audit_log_ordering_matches_call_order() {
         let mut enforcer = make_enforcer();
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "trace-A",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "trace-A");
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
             &test_vk(4),
@@ -1809,11 +1730,7 @@ mod tests {
         let mut enforcer = make_enforcer();
 
         // Token acceptance: 1 cleared
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-multi-stats-1",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-multi-stats-1");
 
         // High-risk: 1 cleared
         enforcer.check_high_risk_operation(
@@ -1854,25 +1771,13 @@ mod tests {
         let mut enforcer = make_enforcer();
 
         enforcer.set_tick(100);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-tick-a",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-tick-a");
 
         enforcer.set_tick(200);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([3; 32]),
-            &test_vk(4),
-            "t-tick-b",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([3; 32]), &test_vk(4), "t-tick-b");
 
         enforcer.set_tick(300);
-        enforcer.check_token_acceptance(
-            &EngineObjectId([5; 32]),
-            &test_vk(6),
-            "t-tick-c",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([5; 32]), &test_vk(6), "t-tick-c");
 
         let events = enforcer.drain_audit_log();
         assert_eq!(events.len(), 6);
@@ -1920,22 +1825,15 @@ mod tests {
     fn cleared_checks_performed_is_two_for_each_enforcement_point() {
         let mut enforcer = make_enforcer();
 
-        let r1 = enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-cp-1",
-        );
+        let r1 = enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-cp-1");
         let r2 = enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
             &test_vk(4),
             HighRiskCategory::PolicyChange,
             "t-cp-2",
         );
-        let r3 = enforcer.check_extension_activation(
-            &EngineObjectId([5; 32]),
-            &test_vk(6),
-            "t-cp-3",
-        );
+        let r3 =
+            enforcer.check_extension_activation(&EngineObjectId([5; 32]), &test_vk(6), "t-cp-3");
 
         for (r, point) in [
             (r1, EnforcementPoint::TokenAcceptance),
@@ -2325,11 +2223,7 @@ mod tests {
         let mut enforcer = make_enforcer();
 
         // Token acceptance => target types Token + Key
-        enforcer.check_token_acceptance(
-            &EngineObjectId([1; 32]),
-            &test_vk(2),
-            "t-tt",
-        );
+        enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &test_vk(2), "t-tt");
 
         // High-risk => target types Attestation + Key
         enforcer.check_high_risk_operation(
@@ -2340,11 +2234,7 @@ mod tests {
         );
 
         // Extension => target types Extension + Key
-        enforcer.check_extension_activation(
-            &EngineObjectId([5; 32]),
-            &test_vk(6),
-            "t-ext-tt",
-        );
+        enforcer.check_extension_activation(&EngineObjectId([5; 32]), &test_vk(6), "t-ext-tt");
 
         let events = enforcer.drain_audit_log();
         assert_eq!(events.len(), 6);

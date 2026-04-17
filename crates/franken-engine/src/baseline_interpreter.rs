@@ -7015,6 +7015,79 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ObjectEntries" => {
+                // Object.entries implementation - returns array of [key, value] pairs
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Get the object's property entries as [key, value] pairs
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            let entries: Vec<(String, Value)> = obj
+                                .properties
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+
+                            // Create array object to hold the entries
+                            let array_id = self.alloc_object_with_prototype(None)?;
+
+                            // Set array elements as numeric properties, each containing a [key, value] pair
+                            for (index, (key, value)) in entries.iter().enumerate() {
+                                // Create a sub-array for [key, value]
+                                let entry_array_id = self.alloc_object_with_prototype(None)?;
+
+                                // Set key at index 0, value at index 1
+                                self.set_object_property(
+                                    entry_array_id,
+                                    "0".to_string(),
+                                    Value::Str(key.clone()),
+                                )?;
+                                self.set_object_property(
+                                    entry_array_id,
+                                    "1".to_string(),
+                                    value.clone(),
+                                )?;
+
+                                // Set length property for the entry array
+                                self.set_object_property(
+                                    entry_array_id,
+                                    "length".to_string(),
+                                    Value::Int(2),
+                                )?;
+
+                                // Add the entry array to the main array
+                                self.set_object_property(
+                                    array_id,
+                                    index.to_string(),
+                                    Value::Object(entry_array_id),
+                                )?;
+                            }
+
+                            // Set length property for the main array
+                            self.set_object_property(
+                                array_id,
+                                "length".to_string(),
+                                Value::Int(entries.len() as i64),
+                            )?;
+
+                            Ok(Value::Object(array_id))
+                        } else {
+                            // Object not found in heap
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    _ => {
+                        // Non-object argument - return empty array per JavaScript behavior
+                        let array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        Ok(Value::Object(array_id))
+                    }
+                }
+            }
 
             // String methods
             "builtin:StringPrototypeCharAt" => {

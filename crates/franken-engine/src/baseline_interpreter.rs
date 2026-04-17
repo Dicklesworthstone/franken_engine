@@ -18230,6 +18230,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 if args.count < 2 {
@@ -18245,6 +18246,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 // Simplified implementation: check if pattern exists in string

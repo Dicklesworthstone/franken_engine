@@ -15219,6 +15219,159 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeToWellFormed" => {
+                // String.prototype.toWellFormed() implementation (ES2024)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Simplified implementation: replace invalid Unicode sequences
+                // In a full implementation, this would replace lone surrogates with replacement chars
+                let well_formed = str_text
+                    .chars()
+                    .map(|c| {
+                        // Replace any problematic Unicode characters (simplified)
+                        if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
+                            '\u{FFFD}' // Unicode replacement character
+                        } else {
+                            c
+                        }
+                    })
+                    .collect::<String>();
+
+                Ok(Value::Str(well_formed))
+            }
+
+            "builtin:MathAcosh" => {
+                // Math.acosh(x) implementation (inverse hyperbolic cosine)
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                // acosh is only defined for x >= 1
+                if num < 1.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else {
+                    Ok(Value::Float(Float64::new(num.acosh())))
+                }
+            }
+
+            "builtin:ArrayFromAsync" => {
+                // Array.fromAsync(arrayLike[, mapFn[, thisArg]]) implementation (simplified)
+                if args.count < 2 {
+                    // Create empty array for missing argument
+                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
+                    return Ok(Value::Object(empty_array_id));
+                }
+
+                let array_like_val = self.read_reg(args.start + 1)?;
+
+                // Simplified implementation: treat as regular Array.from for now
+                match array_like_val {
+                    Value::Object(obj_id) => {
+                        // Try to get length property
+                        let length = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            match obj.properties.get("length") {
+                                Some(Value::Int(len)) => *len as usize,
+                                Some(Value::Float(len)) => len.inner() as usize,
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+
+                        // Create result array
+                        let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                        // Copy elements
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            for i in 0..length {
+                                if let Some(element) = obj.properties.get(&i.to_string()) {
+                                    self.set_object_property(
+                                        result_array_id,
+                                        i.to_string(),
+                                        element.clone(),
+                                    )?;
+                                }
+                            }
+                        }
+
+                        self.set_object_property(
+                            result_array_id,
+                            "length".to_string(),
+                            Value::Int(length as i64),
+                        )?;
+
+                        Ok(Value::Object(result_array_id))
+                    }
+                    _ => {
+                        // Non-object, create empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        Ok(Value::Object(empty_array_id))
+                    }
+                }
+            }
+
+            "builtin:ObjectIs" => {
+                // Object.is(value1, value2) implementation
+                if args.count < 3 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let val1 = self.read_reg(args.start + 1)?;
+                let val2 = self.read_reg(args.start + 2)?;
+
+                // Object.is uses SameValue comparison (stricter than ===)
+                let result = match (&val1, &val2) {
+                    (Value::Undefined, Value::Undefined) => true,
+                    (Value::Null, Value::Null) => true,
+                    (Value::Bool(a), Value::Bool(b)) => a == b,
+                    (Value::Int(a), Value::Int(b)) => a == b,
+                    (Value::Float(a), Value::Float(b)) => {
+                        let a_val = a.inner();
+                        let b_val = b.inner();
+                        // Handle NaN and signed zeros properly
+                        if a_val.is_nan() && b_val.is_nan() {
+                            true
+                        } else if a_val == 0.0 && b_val == 0.0 {
+                            // Check for +0 vs -0
+                            a_val.to_bits() == b_val.to_bits()
+                        } else {
+                            a_val == b_val
+                        }
+                    }
+                    (Value::Str(a), Value::Str(b)) => a == b,
+                    (Value::Object(a), Value::Object(b)) => a.0 == b.0,
+                    _ => false,
+                };
+
+                Ok(Value::Bool(result))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -15470,6 +15623,10 @@ impl InterpreterCore {
             282 => Some("builtin:MathFround".to_string()),
             283 => Some("builtin:ArrayPrototypeAt".to_string()),
             284 => Some("builtin:ObjectGetPrototypeOf".to_string()),
+            285 => Some("builtin:StringPrototypeToWellFormed".to_string()),
+            286 => Some("builtin:MathAcosh".to_string()),
+            287 => Some("builtin:ArrayFromAsync".to_string()),
+            288 => Some("builtin:ObjectIs".to_string()),
 
             _ => None, // Not a recognized builtin
         }

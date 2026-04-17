@@ -1128,18 +1128,48 @@ fn derive_scorecard_id(
     }
 
     let mut hasher = Sha256::new();
-    // Length-prefix variable-length strings to prevent delimiter collisions.
+
+    // Hardened encoding: field identifiers + length-prefixed values + delimiters
+    // This prevents collision attacks from variable-length field concatenation
+
+    const FIELD_DELIMITER: &[u8] = b"\x00\xFF\x00"; // Unlikely to appear in string data
+
+    // Hash field identifier and length-prefixed value for each variable-length field
+    hasher.update(b"TRACE_ID:");
     hasher.update((request.trace_id.len() as u64).to_le_bytes());
     hasher.update(request.trace_id.as_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"DECISION_ID:");
     hasher.update((request.decision_id.len() as u64).to_le_bytes());
     hasher.update(request.decision_id.as_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"POLICY_ID:");
     hasher.update((request.policy_id.len() as u64).to_le_bytes());
     hasher.update(request.policy_id.as_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    // Fixed-length numeric fields with identifiers for clarity
+    hasher.update(b"GENERATED_AT:");
     hasher.update(request.generated_at_ns.to_le_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"COVERAGE:");
     hasher.update(attested.coverage_millionths.to_le_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"PRIVACY:");
     hasher.update(privacy.epoch_consumption_millionths.to_le_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"MOONSHOT:");
     hasher.update(moonshot.override_frequency_millionths.to_le_bytes());
+    hasher.update(FIELD_DELIMITER);
+
+    hasher.update(b"CONFORMANCE:");
     hasher.update(conformance.pass_rate_millionths.to_le_bytes());
+    hasher.update(FIELD_DELIMITER);
 
     let digest = hasher.finalize();
     let mut short = String::with_capacity(24);
@@ -2430,5 +2460,272 @@ mod tests {
             outcome: GovernanceScorecardOutcome::Healthy,
         };
         assert!(is_trend_regression(&prev, &current));
+    }
+
+    #[test]
+    fn derive_scorecard_id_collision_resistance() {
+        // Test that variable-length field collisions are prevented by hardened encoding
+
+        // Create requests with overlapping content that could collide without proper encoding
+        let mut req1 = test_request();
+        req1.trace_id = "ab".to_string();
+        req1.decision_id = "cd".to_string();
+        req1.policy_id = "ef".to_string();
+        req1.scorecard_run_id = "".to_string(); // Force ID derivation
+
+        let mut req2 = test_request();
+        req2.trace_id = "a".to_string();
+        req2.decision_id = "bcd".to_string(); // Different field boundary
+        req2.policy_id = "ef".to_string();
+        req2.scorecard_run_id = "".to_string();
+
+        let mut req3 = test_request();
+        req3.trace_id = "abc".to_string();
+        req3.decision_id = "d".to_string(); // Another boundary variation
+        req3.policy_id = "ef".to_string();
+        req3.scorecard_run_id = "".to_string();
+
+        // Use same summary data for all requests
+        let attested = AttestedReceiptCoverageSummary {
+            coverage_millionths: 950_000,
+        };
+        let privacy = PrivacyBudgetHealthSummary {
+            epoch_consumption_millionths: 200_000,
+        };
+        let moonshot = MoonshotGovernorDecisionSummary {
+            override_frequency_millionths: 50_000,
+        };
+        let conformance = CrossRepoConformanceStabilitySummary {
+            pass_rate_millionths: 980_000,
+        };
+
+        // Derive IDs for all variants
+        let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id3 = derive_scorecard_id(&req3, &attested, &privacy, &moonshot, &conformance).unwrap();
+
+        // All IDs should be different despite similar content
+        assert_ne!(id1, id2, "IDs should differ for different field boundaries");
+        assert_ne!(id1, id3, "IDs should differ for different field boundaries");
+        assert_ne!(id2, id3, "IDs should differ for different field boundaries");
+
+        // All should have the correct prefix
+        assert!(id1.starts_with("gov-scorecard-"));
+        assert!(id2.starts_with("gov-scorecard-"));
+        assert!(id3.starts_with("gov-scorecard-"));
+    }
+
+    #[test]
+    fn derive_scorecard_id_field_order_sensitivity() {
+        // Test that field order matters (prevents field swapping attacks)
+
+        let mut req1 = test_request();
+        req1.trace_id = "trace123".to_string();
+        req1.decision_id = "decision456".to_string();
+        req1.scorecard_run_id = "".to_string();
+
+        let mut req2 = test_request();
+        req2.trace_id = "decision456".to_string(); // Swapped values
+        req2.decision_id = "trace123".to_string();
+        req2.scorecard_run_id = "".to_string();
+
+        let attested = AttestedReceiptCoverageSummary {
+            coverage_millionths: 950_000,
+        };
+        let privacy = PrivacyBudgetHealthSummary {
+            epoch_consumption_millionths: 200_000,
+        };
+        let moonshot = MoonshotGovernorDecisionSummary {
+            override_frequency_millionths: 50_000,
+        };
+        let conformance = CrossRepoConformanceStabilitySummary {
+            pass_rate_millionths: 980_000,
+        };
+
+        let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance).unwrap();
+
+        assert_ne!(id1, id2, "IDs should differ when field values are swapped");
+    }
+
+    #[test]
+    fn derive_scorecard_id_deterministic() {
+        // Test that ID derivation is deterministic for identical inputs
+
+        let mut req = test_request();
+        req.scorecard_run_id = "".to_string(); // Force derivation
+
+        let attested = AttestedReceiptCoverageSummary {
+            coverage_millionths: 950_000,
+        };
+        let privacy = PrivacyBudgetHealthSummary {
+            epoch_consumption_millionths: 200_000,
+        };
+        let moonshot = MoonshotGovernorDecisionSummary {
+            override_frequency_millionths: 50_000,
+        };
+        let conformance = CrossRepoConformanceStabilitySummary {
+            pass_rate_millionths: 980_000,
+        };
+
+        // Derive ID multiple times
+        let id1 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id2 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id3 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance).unwrap();
+
+        assert_eq!(id1, id2, "ID derivation should be deterministic");
+        assert_eq!(id2, id3, "ID derivation should be deterministic");
+        assert!(id1.starts_with("gov-scorecard-"));
+        assert!(id1.len() > "gov-scorecard-".len());
+    }
+
+    #[test]
+    fn derive_scorecard_id_special_characters_handling() {
+        // Test that special characters and edge cases are handled safely
+
+        let mut req = test_request();
+        req.trace_id = "trace\x00with\nnewlines\tand\rtabs".to_string();
+        req.decision_id = "decision_with_delimiter_\x00_sequence".to_string();
+        req.policy_id = "policy\u{0000}unicode".to_string();
+        req.scorecard_run_id = "".to_string();
+
+        let attested = AttestedReceiptCoverageSummary {
+            coverage_millionths: 950_000,
+        };
+        let privacy = PrivacyBudgetHealthSummary {
+            epoch_consumption_millionths: 200_000,
+        };
+        let moonshot = MoonshotGovernorDecisionSummary {
+            override_frequency_millionths: 50_000,
+        };
+        let conformance = CrossRepoConformanceStabilitySummary {
+            pass_rate_millionths: 980_000,
+        };
+
+        // Should not panic or fail even with unusual input
+        let id = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert!(id.starts_with("gov-scorecard-"));
+        assert!(id.len() > "gov-scorecard-".len());
+
+        // Should produce different ID than normal input
+        let mut normal_req = test_request();
+        normal_req.scorecard_run_id = "".to_string();
+        let normal_id =
+            derive_scorecard_id(&normal_req, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert_ne!(
+            id, normal_id,
+            "Special characters should produce different ID"
+        );
+    }
+
+    #[test]
+    fn derive_scorecard_id_collision_resistance_comprehensive() {
+        // Test comprehensive collision resistance against various attack vectors
+        let attested = AttestedReceiptCoverageSummary {
+            coverage_millionths: 950_000,
+        };
+        let privacy = PrivacyBudgetHealthSummary {
+            epoch_consumption_millionths: 100_000,
+        };
+        let moonshot = MoonshotGovernorDecisionSummary {
+            override_frequency_millionths: 50_000,
+        };
+        let conformance = CrossRepoConformanceStabilitySummary {
+            pass_rate_millionths: 980_000,
+        };
+
+        // Attack Vector 1: Field boundary confusion
+        // These should produce different hashes even though concatenated fields are same
+        let mut req1 = GovernanceScorecardRequest {
+            trace_id: "abc".to_string(),
+            decision_id: "def".to_string(),
+            policy_id: "ghi".to_string(),
+            scorecard_run_id: "".to_string(),
+            generated_at_ns: 1000000000,
+            attested_receipts: Vec::new(),
+            privacy_budget: PrivacyBudgetHealthInput {
+                current_epoch: SecurityEpoch::from_raw(1),
+                consumed_budget_millionths: 100_000,
+            },
+            moonshot_governor: MoonshotGovernorHealthInput {
+                recent_override_count: 5,
+            },
+            conformance: CrossRepoConformanceInput {
+                total_cells: 100,
+                passed_cells: 98,
+                failed_cells: 2,
+                universal_failures: 0,
+                version_specific_failures: 2,
+            },
+            historical: Vec::new(),
+            thresholds: None,
+        };
+
+        let mut req2 = req1.clone();
+        req2.trace_id = "ab".to_string();
+        req2.decision_id = "cde".to_string();
+        req2.policy_id = "fghi".to_string();
+        // Concatenated: "ab" + "cde" + "fghi" = "abcdefghi" same as req1: "abc" + "def" + "ghi"
+
+        let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert_ne!(
+            id1, id2,
+            "Length-prefixed fields should prevent boundary confusion attacks"
+        );
+
+        // Attack Vector 2: Empty field attacks
+        let mut req3 = req1.clone();
+        req3.trace_id = "".to_string();
+        req3.decision_id = "abcdef".to_string();
+        let mut req4 = req1.clone();
+        req4.trace_id = "ab".to_string();
+        req4.decision_id = "cdef".to_string();
+
+        let id3 = derive_scorecard_id(&req3, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id4 = derive_scorecard_id(&req4, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert_ne!(
+            id3, id4,
+            "Empty fields should not create collisions with non-empty fields"
+        );
+
+        // Attack Vector 3: Delimiter injection attempts
+        let mut req5 = req1.clone();
+        req5.trace_id = "test\x00inject".to_string(); // Attempt to inject null bytes
+        let mut req6 = req1.clone();
+        req6.trace_id = "test".to_string();
+        req6.decision_id = "inject".to_string();
+
+        let id5 = derive_scorecard_id(&req5, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id6 = derive_scorecard_id(&req6, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert_ne!(id5, id6, "Delimiter injection should not cause collisions");
+
+        // Attack Vector 4: Length manipulation
+        let mut req7 = req1.clone();
+        req7.trace_id = "a".repeat(1000); // Very long field
+        let mut req8 = req1.clone();
+        req8.trace_id = "b".repeat(1000); // Different very long field
+
+        let id7 = derive_scorecard_id(&req7, &attested, &privacy, &moonshot, &conformance).unwrap();
+        let id8 = derive_scorecard_id(&req8, &attested, &privacy, &moonshot, &conformance).unwrap();
+        assert_ne!(
+            id7, id8,
+            "Long fields with different content should produce different hashes"
+        );
+
+        // Verify all IDs are properly formatted
+        for id in [&id1, &id2, &id3, &id4, &id5, &id6, &id7, &id8] {
+            assert!(
+                id.starts_with("gov-scorecard-"),
+                "ID should have proper prefix: {}",
+                id
+            );
+            assert_eq!(
+                id.len(),
+                "gov-scorecard-".len() + 24,
+                "ID should have correct length: {}",
+                id
+            );
+        }
     }
 }

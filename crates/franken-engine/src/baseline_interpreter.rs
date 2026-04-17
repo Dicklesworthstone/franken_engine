@@ -9895,6 +9895,230 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ArrayPrototypeSplice" => {
+                // Array.prototype.splice(start[, deleteCount[, ...items]]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let start = if args.count > 1 {
+                    let start_val = self.read_reg(args.start + 1)?;
+                    match start_val {
+                        Value::Int(i) => i as isize,
+                        Value::Float(f) => f.inner() as isize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let delete_count = if args.count > 2 {
+                    let delete_val = self.read_reg(args.start + 2)?;
+                    match delete_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get items to insert (simplified - just first additional item)
+                let insert_item = if args.count > 3 {
+                    Some(self.read_reg(args.start + 3)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Normalize start index
+                    let actual_start = if start < 0 {
+                        (length as isize + start).max(0) as usize
+                    } else {
+                        (start as usize).min(length)
+                    };
+
+                    // Create result array with deleted elements (simplified)
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(delete_count as i64));
+
+                    // Collect existing elements
+                    let mut elements: Vec<Value> = Vec::new();
+                    for i in 0..length {
+                        if let Some(value) = array_obj.properties.get(&i.to_string()) {
+                            elements.push(value.clone());
+                        } else {
+                            elements.push(Value::Undefined);
+                        }
+                    }
+
+                    // Add deleted elements to result (simplified)
+                    for i in 0..delete_count.min(length.saturating_sub(actual_start)) {
+                        if actual_start + i < elements.len() {
+                            result_obj
+                                .properties
+                                .insert(i.to_string(), elements[actual_start + i].clone());
+                        }
+                    }
+
+                    // Modify original array (simplified - just remove deleted count)
+                    if delete_count > 0 {
+                        elements.drain(
+                            actual_start..actual_start + delete_count.min(length - actual_start),
+                        );
+                    }
+
+                    // Insert new item if provided
+                    if let Some(item) = insert_item {
+                        elements.insert(actual_start, item);
+                    }
+
+                    // Update original array
+                    array_obj
+                        .properties
+                        .retain(|k, _| k.parse::<usize>().is_err());
+                    for (i, value) in elements.iter().enumerate() {
+                        array_obj.properties.insert(i.to_string(), value.clone());
+                    }
+                    array_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(elements.len() as i64));
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "builtin:Number" => {
+                // Number(value) constructor/converter implementation
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Int(0)
+                };
+
+                match value {
+                    Value::Int(i) => Ok(Value::Int(i)),
+                    Value::Float(f) => Ok(Value::Float(f)),
+                    Value::Bool(true) => Ok(Value::Int(1)),
+                    Value::Bool(false) => Ok(Value::Int(0)),
+                    Value::Null => Ok(Value::Int(0)),
+                    Value::Undefined => Ok(Value::Float(Float64::new(f64::NAN))),
+                    Value::Str(s) => {
+                        if s.is_empty() {
+                            Ok(Value::Int(0))
+                        } else if let Ok(i) = s.parse::<i64>() {
+                            Ok(Value::Int(i))
+                        } else if let Ok(f) = s.parse::<f64>() {
+                            Ok(Value::Float(Float64::new(f)))
+                        } else {
+                            Ok(Value::Float(Float64::new(f64::NAN)))
+                        }
+                    }
+                    _ => Ok(Value::Float(Float64::new(f64::NAN))),
+                }
+            }
+            "builtin:Boolean" => {
+                // Boolean(value) constructor/converter implementation
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    return Ok(Value::Bool(false));
+                };
+
+                let result = match value {
+                    Value::Bool(b) => b,
+                    Value::Int(i) => i != 0,
+                    Value::Float(f) => {
+                        let v = f.inner();
+                        !v.is_nan() && v != 0.0
+                    }
+                    Value::Str(s) => !s.is_empty(),
+                    Value::Null | Value::Undefined => false,
+                    Value::Object(_) => true, // Objects are truthy
+                    _ => true,
+                };
+
+                Ok(Value::Bool(result))
+            }
+            "builtin:StringPrototypeMatch" => {
+                // String.prototype.match(regexp) implementation (simplified - basic string search)
+                if args.count == 0 {
+                    return Ok(Value::Null);
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Null),
+                };
+
+                // Get pattern (simplified - treat as literal string)
+                let pattern_val = self.read_reg(args.start + 1)?;
+                let pattern_str = match pattern_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Null),
+                };
+
+                // Simple pattern matching - find first occurrence
+                if let Some(index) = this_str.find(&pattern_str) {
+                    // Create result array with match information
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+
+                    // Add the matched string
+                    result_obj
+                        .properties
+                        .insert("0".to_string(), Value::Str(pattern_str.clone()));
+                    result_obj
+                        .properties
+                        .insert("index".to_string(), Value::Int(index as i64));
+                    result_obj
+                        .properties
+                        .insert("input".to_string(), Value::Str(this_str));
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(1));
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -10002,6 +10226,10 @@ impl InterpreterCore {
             26 => Some("builtin:ArrayPrototypeConcat".to_string()),
             27 => Some("builtin:ArrayPrototypeReduce".to_string()),
             28 => Some("builtin:ArrayPrototypeSort".to_string()),
+            29 => Some("builtin:ArrayPrototypeSplice".to_string()),
+
+            // Additional String methods (continued)
+            45 => Some("builtin:StringPrototypeMatch".to_string()),
 
             // Promise methods
             120 => Some("builtin:PromiseResolve".to_string()),
@@ -10011,6 +10239,10 @@ impl InterpreterCore {
 
             // Error constructors
             130 => Some("builtin:Error".to_string()),
+
+            // Type conversion constructors
+            140 => Some("builtin:Number".to_string()),
+            141 => Some("builtin:Boolean".to_string()),
 
             _ => None, // Not a recognized builtin
         }

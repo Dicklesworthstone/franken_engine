@@ -8917,6 +8917,194 @@ impl InterpreterCore {
                     Ok(this_val)
                 }
             }
+            "builtin:MathSqrt" => {
+                // Math.sqrt(x) implementation - returns square root of a number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = num.sqrt();
+
+                // Return as int if it's a whole number within range
+                if result.fract() == 0.0
+                    && result.is_finite()
+                    && result >= i64::MIN as f64
+                    && result <= i64::MAX as f64
+                {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(result)))
+                }
+            }
+            "builtin:StringPrototypeStartsWith" => {
+                // String.prototype.startsWith(searchString[, position]) implementation
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get search string
+                let search_val = self.read_reg(args.start + 1)?;
+                let search_str = match search_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get optional position parameter
+                let position = if args.count > 2 {
+                    let pos_val = self.read_reg(args.start + 2)?;
+                    match pos_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Check if string starts with search string at position
+                let result = if position >= this_str.len() {
+                    search_str.is_empty()
+                } else {
+                    this_str[position..].starts_with(&search_str)
+                };
+
+                Ok(Value::Bool(result))
+            }
+            "builtin:StringPrototypeEndsWith" => {
+                // String.prototype.endsWith(searchString[, length]) implementation
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get search string
+                let search_val = self.read_reg(args.start + 1)?;
+                let search_str = match search_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get optional length parameter
+                let end_pos = if args.count > 2 {
+                    let len_val = self.read_reg(args.start + 2)?;
+                    match len_val {
+                        Value::Int(i) => (i.max(0) as usize).min(this_str.len()),
+                        Value::Float(f) => (f.inner().max(0.0) as usize).min(this_str.len()),
+                        _ => this_str.len(),
+                    }
+                } else {
+                    this_str.len()
+                };
+
+                // Check if string ends with search string at the given end position
+                let result = if end_pos == 0 {
+                    search_str.is_empty()
+                } else {
+                    let check_str = &this_str[..end_pos];
+                    check_str.ends_with(&search_str)
+                };
+
+                Ok(Value::Bool(result))
+            }
+            "builtin:ArrayPrototypeForEach" => {
+                // Array.prototype.forEach(callback[, thisArg]) implementation
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays are ignored
+                };
+
+                let callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Collect all indexed values first to avoid borrow issues
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index to process in order
+                    indexed_values.sort_by_key(|(index, _)| *index);
+
+                    // Process each element (simplified - in full implementation would call callback)
+                    for (_index, _value) in indexed_values {
+                        // TODO: In full implementation, would call the callback function
+                        // with (value, index, array) arguments
+                        // For now, we'll just iterate through the elements
+                    }
+                }
+
+                Ok(Value::Undefined)
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8997,12 +9185,16 @@ impl InterpreterCore {
 
             // Additional Math methods
             57 => Some("builtin:MathPow".to_string()),
+            58 => Some("builtin:MathSqrt".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
+            39 => Some("builtin:StringPrototypeStartsWith".to_string()),
+            40 => Some("builtin:StringPrototypeEndsWith".to_string()),
 
             // Additional Array methods
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
+            22 => Some("builtin:ArrayPrototypeForEach".to_string()),
 
             _ => None, // Not a recognized builtin
         }

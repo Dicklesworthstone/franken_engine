@@ -10321,6 +10321,206 @@ impl InterpreterCore {
                     Ok(Value::Int(-1))
                 }
             }
+            "builtin:ArrayPrototypeSome" => {
+                // Array.prototype.some(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-arrays return false
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Check if any element exists (simplified - just check if array has elements)
+                    // TODO: In full implementation, would call callback and test condition
+                    for i in 0..length {
+                        if array_obj.properties.contains_key(&i.to_string()) {
+                            // Simplified logic - return true if any element exists and is truthy
+                            if let Some(value) = array_obj.properties.get(&i.to_string()) {
+                                let is_truthy = match value {
+                                    Value::Bool(false) | Value::Null | Value::Undefined => false,
+                                    Value::Int(0) => false,
+                                    Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => {
+                                        false
+                                    }
+                                    Value::Str(s) if s.is_empty() => false,
+                                    _ => true,
+                                };
+                                if is_truthy {
+                                    return Ok(Value::Bool(true));
+                                }
+                            }
+                        }
+                    }
+                    Ok(Value::Bool(false))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+            "builtin:ArrayPrototypeEvery" => {
+                // Array.prototype.every(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Bool(true));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(true)), // Non-arrays return true
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Check if all elements pass test (simplified - check if all are truthy)
+                    // TODO: In full implementation, would call callback and test condition
+                    for i in 0..length {
+                        if array_obj.properties.contains_key(&i.to_string()) {
+                            if let Some(value) = array_obj.properties.get(&i.to_string()) {
+                                let is_truthy = match value {
+                                    Value::Bool(false) | Value::Null | Value::Undefined => false,
+                                    Value::Int(0) => false,
+                                    Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => {
+                                        false
+                                    }
+                                    Value::Str(s) if s.is_empty() => false,
+                                    _ => true,
+                                };
+                                if !is_truthy {
+                                    return Ok(Value::Bool(false));
+                                }
+                            }
+                        }
+                    }
+                    Ok(Value::Bool(true))
+                } else {
+                    Ok(Value::Bool(true))
+                }
+            }
+            "builtin:MathSign" => {
+                // Math.sign(x) implementation - returns sign of a number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => {
+                        if i > 0 {
+                            return Ok(Value::Int(1));
+                        } else if i < 0 {
+                            return Ok(Value::Int(-1));
+                        } else {
+                            return Ok(Value::Int(0));
+                        }
+                    }
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                if num.is_nan() {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else if num > 0.0 {
+                    Ok(Value::Int(1))
+                } else if num < 0.0 {
+                    Ok(Value::Int(-1))
+                } else {
+                    // Handle +0 and -0
+                    Ok(Value::Int(0))
+                }
+            }
+            "builtin:ObjectDefineProperty" => {
+                // Object.defineProperty(obj, prop, descriptor) implementation (simplified)
+                if args.count < 3 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                let obj_id = match obj_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't have properties defined
+                };
+
+                // Get property name
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_name = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Undefined),
+                };
+
+                // Get descriptor object (simplified - just use the value directly)
+                let descriptor_val = self.read_reg(args.start + 2)?;
+
+                // In a full implementation, we would parse the descriptor object
+                // For now, simplified approach: just set the property value
+                if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
+                    // Check if descriptor is an object with a 'value' property
+                    if let Value::Object(desc_id) = descriptor_val {
+                        if let Some(desc_obj) = self.heap.get(desc_id.0 as usize) {
+                            if let Some(value) = desc_obj.properties.get("value") {
+                                obj.properties.insert(prop_name, value.clone());
+                            } else {
+                                obj.properties.insert(prop_name, Value::Undefined);
+                            }
+                        } else {
+                            obj.properties.insert(prop_name, Value::Undefined);
+                        }
+                    } else {
+                        // Use descriptor value directly
+                        obj.properties.insert(prop_name, descriptor_val);
+                    }
+                }
+
+                Ok(obj_val) // Return the original object
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -10409,6 +10609,7 @@ impl InterpreterCore {
             63 => Some("builtin:MathTan".to_string()),
             64 => Some("builtin:MathPI".to_string()),
             65 => Some("builtin:MathTrunc".to_string()),
+            66 => Some("builtin:MathSign".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
@@ -10430,6 +10631,8 @@ impl InterpreterCore {
             28 => Some("builtin:ArrayPrototypeSort".to_string()),
             29 => Some("builtin:ArrayPrototypeSplice".to_string()),
             30 => Some("builtin:ArrayPrototypeFlat".to_string()),
+            31 => Some("builtin:ArrayPrototypeSome".to_string()),
+            32 => Some("builtin:ArrayPrototypeEvery".to_string()),
 
             // Additional String methods (continued)
             45 => Some("builtin:StringPrototypeMatch".to_string()),
@@ -10440,6 +10643,7 @@ impl InterpreterCore {
 
             // Additional Object methods
             6 => Some("builtin:ObjectHasOwnProperty".to_string()),
+            7 => Some("builtin:ObjectDefineProperty".to_string()),
 
             // Error constructors
             130 => Some("builtin:Error".to_string()),

@@ -16653,27 +16653,24 @@ impl InterpreterCore {
                 // Simplified implementation: return array of values (instead of iterator)
                 let values_array_id = self.alloc_object_with_prototype(None)?;
 
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let mut value_index = 0;
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            self.set_object_property(
-                                values_array_id,
-                                value_index.to_string(),
-                                element.clone(),
-                            )?;
-                            value_index += 1;
-                        }
-                    }
-
-                    self.set_object_property(
-                        values_array_id,
-                        "length".to_string(),
-                        Value::Int(value_index as i64),
-                    )?;
+                // Snapshot elements under an immutable borrow, then write
+                // them back under &mut self without aliasing.
+                let elements: Vec<Value> = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    (0..length)
+                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
+                        .collect()
                 } else {
-                    self.set_object_property(values_array_id, "length".to_string(), Value::Int(0))?;
+                    Vec::new()
+                };
+                let value_index = elements.len();
+                for (i, element) in elements.into_iter().enumerate() {
+                    self.set_object_property(values_array_id, i.to_string(), element)?;
                 }
+                self.set_object_property(
+                    values_array_id,
+                    "length".to_string(),
+                    Value::Int(value_index as i64),
+                )?;
 
                 Ok(Value::Object(values_array_id))
             }
@@ -16842,6 +16839,165 @@ impl InterpreterCore {
                     Ok(Value::Bool(weakmap_obj.properties.contains_key(&key_str)))
                 } else {
                     Ok(Value::Bool(false))
+                }
+            }
+
+            "builtin:StringPrototypeBlink" => {
+                // String.prototype.blink() implementation (deprecated HTML wrapper)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let result = format!("<blink>{}</blink>", str_text);
+                Ok(Value::Str(result))
+            }
+
+            "builtin:NumberPrototypeValueOf" => {
+                // Number.prototype.valueOf() implementation
+                let this_val = self.read_reg(args.start)?;
+
+                match this_val {
+                    Value::Int(n) => Ok(Value::Int(n)),
+                    Value::Float(f) => Ok(Value::Float(f)),
+                    Value::Object(obj_id) => {
+                        // Check if it's a Number object wrapper
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
+                                if type_val == "Number" {
+                                    if let Some(primitive_val) = obj.properties.get("__value") {
+                                        return Ok(primitive_val.clone());
+                                    }
+                                }
+                            }
+                        }
+                        // Not a Number object, return NaN
+                        Ok(Value::Float(Float64::new(f64::NAN)))
+                    }
+                    _ => {
+                        // Primitive numbers return themselves, others return NaN
+                        Ok(Value::Float(Float64::new(f64::NAN)))
+                    }
+                }
+            }
+
+            "builtin:ArrayPrototypeEntries" => {
+                // Array.prototype.entries() implementation (ES2015 iterator method - simplified)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Simplified implementation: return array of [index, value] pairs
+                let entries_array_id = self.alloc_object_with_prototype(None)?;
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let mut entry_index = 0;
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            // Create [index, value] pair
+                            let pair_array_id = self.alloc_object_with_prototype(None)?;
+                            self.set_object_property(
+                                pair_array_id,
+                                "0".to_string(),
+                                Value::Int(i as i64),
+                            )?;
+                            self.set_object_property(
+                                pair_array_id,
+                                "1".to_string(),
+                                element.clone(),
+                            )?;
+                            self.set_object_property(
+                                pair_array_id,
+                                "length".to_string(),
+                                Value::Int(2),
+                            )?;
+
+                            // Add pair to entries array
+                            self.set_object_property(
+                                entries_array_id,
+                                entry_index.to_string(),
+                                Value::Object(pair_array_id),
+                            )?;
+                            entry_index += 1;
+                        }
+                    }
+
+                    self.set_object_property(
+                        entries_array_id,
+                        "length".to_string(),
+                        Value::Int(entry_index as i64),
+                    )?;
+                } else {
+                    self.set_object_property(
+                        entries_array_id,
+                        "length".to_string(),
+                        Value::Int(0),
+                    )?;
+                }
+
+                Ok(Value::Object(entries_array_id))
+            }
+
+            "builtin:WeakMapPrototypeGet" => {
+                // WeakMap.prototype.get(key) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let weakmap_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be WeakMaps
+                };
+
+                let key = self.read_reg(args.start + 1)?;
+
+                // Simplified implementation: get value from WeakMap-like object
+                if let Some(weakmap_obj) = self.heap.get(weakmap_id.0 as usize) {
+                    // Use a simple string representation of the key for lookup
+                    let key_str = match key {
+                        Value::Object(obj_id) => format!("obj_{}", obj_id.0),
+                        Value::Str(s) => format!("str_{}", s),
+                        Value::Int(n) => format!("int_{}", n),
+                        Value::Float(f) => format!("float_{}", f.inner()),
+                        _ => return Ok(Value::Undefined), // WeakMap only accepts object keys
+                    };
+
+                    Ok(weakmap_obj
+                        .properties
+                        .get(&key_str)
+                        .cloned()
+                        .unwrap_or(Value::Undefined))
+                } else {
+                    Ok(Value::Undefined)
                 }
             }
 
@@ -17136,6 +17292,10 @@ impl InterpreterCore {
             322 => Some("builtin:NumberPrototypeToPrecision".to_string()),
             323 => Some("builtin:ArrayPrototypeKeys".to_string()),
             324 => Some("builtin:WeakMapPrototypeHas".to_string()),
+            325 => Some("builtin:StringPrototypeBlink".to_string()),
+            326 => Some("builtin:NumberPrototypeValueOf".to_string()),
+            327 => Some("builtin:ArrayPrototypeEntries".to_string()),
+            328 => Some("builtin:WeakMapPrototypeGet".to_string()),
 
             _ => None, // Not a recognized builtin
         }

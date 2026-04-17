@@ -7340,121 +7340,121 @@ impl InterpreterCore {
 
                 match array_arg {
                     Value::Object(obj_id) => {
-                        // Get array length
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(length_val) = obj.properties.get("length") {
-                                if let Value::Int(len) = length_val {
-                                    let length = *len as i64;
+                        // Snapshot length + relevant properties under an
+                        // immutable borrow so we can release it before the
+                        // &mut self calls below.
+                        let array_snapshot: Option<i64> = self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .and_then(|o| o.properties.get("length"))
+                            .and_then(|v| match v {
+                                Value::Int(n) => Some(*n),
+                                _ => None,
+                            });
 
-                                    // Get start index (default to 0)
-                                    let start_idx = if args.count > 1 {
-                                        let start_arg = self.read_reg(args.start + 1)?;
-                                        match start_arg {
-                                            Value::Int(n) => {
-                                                if n < 0 {
-                                                    (length + n).max(0) as usize
-                                                } else {
-                                                    (n.min(length) as usize)
-                                                }
-                                            }
-                                            Value::Float(f) => {
-                                                let val = f.inner();
-                                                if val < 0.0 {
-                                                    ((length as f64) + val).max(0.0) as usize
-                                                } else {
-                                                    (val.min(length as f64) as usize)
-                                                }
-                                            }
-                                            _ => 0,
+                        if let Some(length) = array_snapshot {
+                            // Get start index (default to 0)
+                            let start_idx = if args.count > 1 {
+                                let start_arg = self.read_reg(args.start + 1)?;
+                                match start_arg {
+                                    Value::Int(n) => {
+                                        if n < 0 {
+                                            (length + n).max(0) as usize
+                                        } else {
+                                            n.min(length) as usize
                                         }
-                                    } else {
-                                        0
-                                    };
-
-                                    // Get end index (default to array length)
-                                    let end_idx = if args.count > 2 {
-                                        let end_arg = self.read_reg(args.start + 2)?;
-                                        match end_arg {
-                                            Value::Int(n) => {
-                                                if n < 0 {
-                                                    (length + n).max(0) as usize
-                                                } else {
-                                                    (n.min(length) as usize)
-                                                }
-                                            }
-                                            Value::Float(f) => {
-                                                let val = f.inner();
-                                                if val < 0.0 {
-                                                    ((length as f64) + val).max(0.0) as usize
-                                                } else {
-                                                    (val.min(length as f64) as usize)
-                                                }
-                                            }
-                                            _ => length as usize,
-                                        }
-                                    } else {
-                                        length as usize
-                                    };
-
-                                    // Create new array with sliced elements
-                                    let new_array_id = self.alloc_object_with_prototype(None)?;
-
-                                    // Copy elements from start_idx to end_idx
-                                    if start_idx < end_idx {
-                                        let mut new_length = 0;
-                                        for i in start_idx..end_idx {
-                                            let element = obj
-                                                .properties
-                                                .get(&i.to_string())
-                                                .cloned()
-                                                .unwrap_or(Value::Undefined);
-
-                                            self.set_object_property(
-                                                new_array_id,
-                                                new_length.to_string(),
-                                                element,
-                                            )?;
-                                            new_length += 1;
-                                        }
-
-                                        // Set length property
-                                        self.set_object_property(
-                                            new_array_id,
-                                            "length".to_string(),
-                                            Value::Int(new_length as i64),
-                                        )?;
-                                    } else {
-                                        // Empty slice
-                                        self.set_object_property(
-                                            new_array_id,
-                                            "length".to_string(),
-                                            Value::Int(0),
-                                        )?;
                                     }
-
-                                    Ok(Value::Object(new_array_id))
-                                } else {
-                                    // Invalid length, return empty array
-                                    let empty_array_id = self.alloc_object_with_prototype(None)?;
-                                    self.set_object_property(
-                                        empty_array_id,
-                                        "length".to_string(),
-                                        Value::Int(0),
-                                    )?;
-                                    Ok(Value::Object(empty_array_id))
+                                    Value::Float(f) => {
+                                        let val = f.inner();
+                                        if val < 0.0 {
+                                            ((length as f64) + val).max(0.0) as usize
+                                        } else {
+                                            val.min(length as f64) as usize
+                                        }
+                                    }
+                                    _ => 0,
                                 }
                             } else {
-                                // No length property, return empty array
-                                let empty_array_id = self.alloc_object_with_prototype(None)?;
+                                0
+                            };
+
+                            // Get end index (default to array length)
+                            let end_idx = if args.count > 2 {
+                                let end_arg = self.read_reg(args.start + 2)?;
+                                match end_arg {
+                                    Value::Int(n) => {
+                                        if n < 0 {
+                                            (length + n).max(0) as usize
+                                        } else {
+                                            n.min(length) as usize
+                                        }
+                                    }
+                                    Value::Float(f) => {
+                                        let val = f.inner();
+                                        if val < 0.0 {
+                                            ((length as f64) + val).max(0.0) as usize
+                                        } else {
+                                            val.min(length as f64) as usize
+                                        }
+                                    }
+                                    _ => length as usize,
+                                }
+                            } else {
+                                length as usize
+                            };
+
+                            // Snapshot the slice elements under a fresh
+                            // immutable borrow.
+                            let slice_elements: Vec<Value> = if start_idx < end_idx {
+                                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                                    (start_idx..end_idx)
+                                        .map(|i| {
+                                            obj.properties
+                                                .get(&i.to_string())
+                                                .cloned()
+                                                .unwrap_or(Value::Undefined)
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
+
+                            // Create new array with sliced elements
+                            let new_array_id = self.alloc_object_with_prototype(None)?;
+
+                            if !slice_elements.is_empty() {
+                                let mut new_length = 0u64;
+                                for element in slice_elements {
+                                    self.set_object_property(
+                                        new_array_id,
+                                        new_length.to_string(),
+                                        element,
+                                    )?;
+                                    new_length += 1;
+                                }
+
+                                // Set length property
                                 self.set_object_property(
-                                    empty_array_id,
+                                    new_array_id,
+                                    "length".to_string(),
+                                    Value::Int(new_length as i64),
+                                )?;
+                            } else {
+                                // Empty slice
+                                self.set_object_property(
+                                    new_array_id,
                                     "length".to_string(),
                                     Value::Int(0),
                                 )?;
-                                Ok(Value::Object(empty_array_id))
                             }
+
+                            Ok(Value::Object(new_array_id))
                         } else {
-                            // Object not found, return empty array
+                            // Invalid length, no length property, or object
+                            // missing — return empty array.
                             let empty_array_id = self.alloc_object_with_prototype(None)?;
                             self.set_object_property(
                                 empty_array_id,
@@ -8712,6 +8712,26 @@ impl InterpreterCore {
 
                 Ok(Value::Undefined)
             }
+            "builtin:DateNow" => {
+                // Date.now implementation - returns current timestamp in milliseconds
+
+                // For deterministic execution, we should return a fixed value
+                // In a real implementation, this would use the system clock
+                // TODO: Integrate with proper time system for deterministic replay
+
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => {
+                        let millis = duration.as_millis() as f64;
+                        Ok(Value::Float(Float64::new(millis)))
+                    }
+                    Err(_) => {
+                        // Fallback to epoch time if clock is before Unix epoch
+                        Ok(Value::Float(Float64::new(0.0)))
+                    }
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8785,6 +8805,9 @@ impl InterpreterCore {
             100 => Some("builtin:ConsoleLog".to_string()),
             101 => Some("builtin:ConsoleError".to_string()),
             102 => Some("builtin:ConsoleWarn".to_string()),
+
+            // Date methods
+            110 => Some("builtin:DateNow".to_string()),
 
             _ => None, // Not a recognized builtin
         }

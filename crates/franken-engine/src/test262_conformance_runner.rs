@@ -208,11 +208,7 @@ impl TestStatistics {
             .filter(|r| r.result == TestResult::Error)
             .count() as u64;
 
-        let pass_rate_millionths = if total_tests > 0 {
-            (passed * MILLIONTHS) / total_tests
-        } else {
-            0
-        };
+        let pass_rate_millionths = (passed * MILLIONTHS).checked_div(total_tests).unwrap_or(0);
 
         let total_duration_us = records.iter().map(|r| r.duration_us).sum();
 

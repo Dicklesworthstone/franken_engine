@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
@@ -150,6 +151,10 @@ impl GateViolation {
 
 /// Gate evaluation result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "P: GatePolicy, E: GateEvidence",
+    deserialize = "P: GatePolicy, E: GateEvidence"
+))]
 pub struct GateResult<P: GatePolicy, E: GateEvidence> {
     /// Gate verdict.
     pub verdict: GateVerdict,
@@ -221,7 +226,7 @@ impl<P: GatePolicy, E: GateEvidence> GateResult<P, E> {
 
         // Hash core result data
         hasher.update(self.verdict.as_str().as_bytes());
-        hasher.update(&(self.violations.len() as u64).to_le_bytes());
+        hasher.update((self.violations.len() as u64).to_le_bytes());
 
         // Hash violations in deterministic order
         for violation in &self.violations {
@@ -231,7 +236,7 @@ impl<P: GatePolicy, E: GateEvidence> GateResult<P, E> {
         }
 
         // Hash conditions and metadata
-        hasher.update(&(self.conditions.len() as u64).to_le_bytes());
+        hasher.update((self.conditions.len() as u64).to_le_bytes());
         for condition in &self.conditions {
             hasher.update(condition.as_bytes());
         }

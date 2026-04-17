@@ -16167,6 +16167,179 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeSearch" => {
+                // String.prototype.search(regexp) implementation (simplified)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let pattern_val = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    return Ok(Value::Int(-1));
+                };
+
+                // Simplified implementation: treat as string search
+                let pattern = match pattern_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Find first occurrence and return index
+                if let Some(index) = str_text.find(&pattern) {
+                    Ok(Value::Int(index as i64))
+                } else {
+                    Ok(Value::Int(-1))
+                }
+            }
+
+            "builtin:MathTrunc" => {
+                // Math.trunc(x) implementation
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already truncated
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                if num.is_nan() || num.is_infinite() {
+                    Ok(Value::Float(Float64::new(num)))
+                } else {
+                    // Truncate towards zero
+                    Ok(Value::Float(Float64::new(num.trunc())))
+                }
+            }
+
+            "builtin:ArrayPrototypeGroupToMap" => {
+                // Array.prototype.groupToMap(callback) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty map-like object
+                        let empty_obj_id = self.alloc_object_with_prototype(None)?;
+                        return Ok(Value::Object(empty_obj_id));
+                    }
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Create result Map-like object
+                let result_obj_id = self.alloc_object_with_prototype(None)?;
+
+                // Simplified implementation: group by element type
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let mut groups: std::collections::BTreeMap<String, Vec<Value>> =
+                        std::collections::BTreeMap::new();
+
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            // Group by type for simplicity
+                            let type_key = match element {
+                                Value::Str(_) => "string",
+                                Value::Int(_) => "number",
+                                Value::Float(_) => "number",
+                                Value::Bool(_) => "boolean",
+                                Value::Null => "null",
+                                Value::Undefined => "undefined",
+                                _ => "object",
+                            }
+                            .to_string();
+
+                            groups
+                                .entry(type_key)
+                                .or_insert_with(Vec::new)
+                                .push(element.clone());
+                        }
+                    }
+
+                    // Convert groups to Map entries
+                    for (key, values) in groups {
+                        let group_array_id = self.alloc_object_with_prototype(None)?;
+
+                        for (i, value) in values.iter().enumerate() {
+                            self.set_object_property(group_array_id, i.to_string(), value.clone())?;
+                        }
+
+                        self.set_object_property(
+                            group_array_id,
+                            "length".to_string(),
+                            Value::Int(values.len() as i64),
+                        )?;
+
+                        self.set_object_property(
+                            result_obj_id,
+                            key,
+                            Value::Object(group_array_id),
+                        )?;
+                    }
+                }
+
+                Ok(Value::Object(result_obj_id))
+            }
+
+            "builtin:ObjectSeal" => {
+                // Object.seal(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Simplified implementation: mark object as sealed
+                        // In a real implementation, this would prevent property deletion
+                        // and make existing properties non-configurable
+                        if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
+                            obj.properties
+                                .insert("__sealed__".to_string(), Value::Bool(true));
+                            obj.properties
+                                .insert("__extensible__".to_string(), Value::Bool(false));
+                        }
+                        Ok(obj_val) // Return the object
+                    }
+                    _ => {
+                        // Primitives can't be sealed, just return them
+                        Ok(obj_val)
+                    }
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -16442,6 +16615,10 @@ impl InterpreterCore {
             306 => Some("builtin:MathSign".to_string()),
             307 => Some("builtin:ArrayPrototypeGroup".to_string()),
             308 => Some("builtin:ObjectPreventExtensions".to_string()),
+            309 => Some("builtin:StringPrototypeSearch".to_string()),
+            310 => Some("builtin:MathTrunc".to_string()),
+            311 => Some("builtin:ArrayPrototypeGroupToMap".to_string()),
+            312 => Some("builtin:ObjectSeal".to_string()),
 
             _ => None, // Not a recognized builtin
         }

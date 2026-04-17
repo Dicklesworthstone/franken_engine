@@ -17052,6 +17052,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => String::new(),
                 };
 
                 Ok(Value::Str(str_text.to_lowercase()))
@@ -17068,6 +17069,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 Ok(Value::Str(str_text.to_uppercase()))
@@ -17096,6 +17098,8 @@ impl InterpreterCore {
                             "[object Object]".to_string()
                         }
                     }
+                    Value::Function(_) => "[object Function]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 Ok(Value::Str(result))
@@ -17112,6 +17116,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => String::new(),
                 };
 
                 Ok(Value::Str(str_text.trim().to_string()))
@@ -17184,6 +17189,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => String::new(),
                 };
 
                 if args.count < 2 {
@@ -17199,6 +17205,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => String::new(),
                 };
 
                 Ok(Value::Bool(str_text.ends_with(&search_str)))
@@ -17249,6 +17256,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => String::new(),
                 };
 
                 let index = if args.count >= 2 {

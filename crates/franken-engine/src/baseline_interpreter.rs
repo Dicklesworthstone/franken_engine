@@ -13245,7 +13245,9 @@ impl InterpreterCore {
                         break; // Stop at invalid digit for this radix
                     }
 
-                    result = result.saturating_mul(actual_radix as i64).saturating_add(digit_val);
+                    result = result
+                        .saturating_mul(actual_radix as i64)
+                        .saturating_add(digit_val);
                 }
 
                 Ok(Value::Int(sign * result))
@@ -13307,11 +13309,7 @@ impl InterpreterCore {
                 if args.count < 2 {
                     // Return empty array if no callback provided
                     let empty_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        empty_array_id,
-                        "length".to_string(),
-                        Value::Int(0),
-                    )?;
+                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
                     return Ok(Value::Object(empty_array_id));
                 }
 

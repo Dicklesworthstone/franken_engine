@@ -331,14 +331,33 @@ struct GatesArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GatesMode {
-    ZeroPlaceholder { out_dir: PathBuf, waivers: Option<PathBuf> },
-    SignatureDrift { out_dir: PathBuf, config: Option<PathBuf> },
-    AdversarialCampaign { out_dir: PathBuf },
-    AmbientMockGuard { out_dir: PathBuf },
-    IfcConformance { out_dir: PathBuf },
-    SecurityConformance { out_dir: PathBuf },
-    ArtifactValidator { input: PathBuf, out: Option<PathBuf> },
-    PlaceholderScan { out_dir: PathBuf },
+    ZeroPlaceholder {
+        out_dir: PathBuf,
+        waivers: Option<PathBuf>,
+    },
+    SignatureDrift {
+        out_dir: PathBuf,
+        config: Option<PathBuf>,
+    },
+    AdversarialCampaign {
+        out_dir: PathBuf,
+    },
+    AmbientMockGuard {
+        out_dir: PathBuf,
+    },
+    IfcConformance {
+        out_dir: PathBuf,
+    },
+    SecurityConformance {
+        out_dir: PathBuf,
+    },
+    ArtifactValidator {
+        input: PathBuf,
+        out: Option<PathBuf>,
+    },
+    PlaceholderScan {
+        out_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,18 +367,43 @@ struct ReportsArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportsMode {
-    ParserOracle { config: Option<PathBuf>, out: Option<PathBuf> },
-    ParserPhase0 { out: Option<PathBuf> },
-    LoweringGap { out: Option<PathBuf> },
-    ParserGap { out: Option<PathBuf> },
-    ControlPlaneBenchmark { out: Option<PathBuf> },
-    ControlPlaneMock { out: Option<PathBuf> },
-    ControlPlanePolicy { out_dir: PathBuf },
-    EngineBlockerLedger { out_dir: PathBuf },
-    MetadataEvidence { out_dir: PathBuf },
-    NpmCompatibility { out_dir: PathBuf },
-    ObservabilityBundle { out_dir: PathBuf },
-    RgcPlanning { out: Option<PathBuf> },
+    ParserOracle {
+        config: Option<PathBuf>,
+        out: Option<PathBuf>,
+    },
+    ParserPhase0 {
+        out: Option<PathBuf>,
+    },
+    LoweringGap {
+        out: Option<PathBuf>,
+    },
+    ParserGap {
+        out: Option<PathBuf>,
+    },
+    ControlPlaneBenchmark {
+        out: Option<PathBuf>,
+    },
+    ControlPlaneMock {
+        out: Option<PathBuf>,
+    },
+    ControlPlanePolicy {
+        out_dir: PathBuf,
+    },
+    EngineBlockerLedger {
+        out_dir: PathBuf,
+    },
+    MetadataEvidence {
+        out_dir: PathBuf,
+    },
+    NpmCompatibility {
+        out_dir: PathBuf,
+    },
+    ObservabilityBundle {
+        out_dir: PathBuf,
+    },
+    RgcPlanning {
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,16 +413,39 @@ struct TestArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestMode {
-    Test262 { out_dir: PathBuf, suite_path: Option<PathBuf> },
-    Lockstep { config: Option<PathBuf>, out: Option<PathBuf> },
-    MultiEngineParser { out_dir: PathBuf },
-    S3FifoBaseline { out: Option<PathBuf> },
-    FrxOracle { out: Option<PathBuf> },
-    SeqlockCandidate { out: Option<PathBuf> },
-    SeqlockReaderWriter { out: Option<PathBuf> },
-    SeqlockRollout { out: Option<PathBuf> },
-    ShippedPathParity { out_dir: PathBuf },
-    VerifyGeneral { input: PathBuf, out: Option<PathBuf> },
+    Test262 {
+        out_dir: PathBuf,
+        suite_path: Option<PathBuf>,
+    },
+    Lockstep {
+        config: Option<PathBuf>,
+        out: Option<PathBuf>,
+    },
+    MultiEngineParser {
+        out_dir: PathBuf,
+    },
+    S3FifoBaseline {
+        out: Option<PathBuf>,
+    },
+    FrxOracle {
+        out: Option<PathBuf>,
+    },
+    SeqlockCandidate {
+        out: Option<PathBuf>,
+    },
+    SeqlockReaderWriter {
+        out: Option<PathBuf>,
+    },
+    SeqlockRollout {
+        out: Option<PathBuf>,
+    },
+    ShippedPathParity {
+        out_dir: PathBuf,
+    },
+    VerifyGeneral {
+        input: PathBuf,
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -416,7 +483,11 @@ struct RuntimeArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RuntimeMode {
-    Diagnostics { input: PathBuf, out_dir: Option<PathBuf>, summary: bool },
+    Diagnostics {
+        input: PathBuf,
+        out_dir: Option<PathBuf>,
+        summary: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1973,13 +2044,19 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
             // Simplified parsing - in full implementation, parse --out-dir and --waivers
             let out_dir = PathBuf::from("artifacts/gates/zero_placeholder");
             Ok(CommandSpec::Gates(GatesArgs {
-                mode: GatesMode::ZeroPlaceholder { out_dir, waivers: None },
+                mode: GatesMode::ZeroPlaceholder {
+                    out_dir,
+                    waivers: None,
+                },
             }))
         }
         "signature-drift" => {
             let out_dir = PathBuf::from("artifacts/gates/signature_drift");
             Ok(CommandSpec::Gates(GatesArgs {
-                mode: GatesMode::SignatureDrift { out_dir, config: None },
+                mode: GatesMode::SignatureDrift {
+                    out_dir,
+                    config: None,
+                },
             }))
         }
         other => Err(format!("unknown gates subcommand `{other}`")),
@@ -1993,16 +2070,15 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Reports)),
-        "parser-oracle" => {
-            Ok(CommandSpec::Reports(ReportsArgs {
-                mode: ReportsMode::ParserOracle { config: None, out: None },
-            }))
-        }
-        "lowering-gap" => {
-            Ok(CommandSpec::Reports(ReportsArgs {
-                mode: ReportsMode::LoweringGap { out: None },
-            }))
-        }
+        "parser-oracle" => Ok(CommandSpec::Reports(ReportsArgs {
+            mode: ReportsMode::ParserOracle {
+                config: None,
+                out: None,
+            },
+        })),
+        "lowering-gap" => Ok(CommandSpec::Reports(ReportsArgs {
+            mode: ReportsMode::LoweringGap { out: None },
+        })),
         other => Err(format!("unknown reports subcommand `{other}`")),
     }
 }
@@ -2017,14 +2093,18 @@ fn parse_test_command(args: &[String]) -> Result<CommandSpec, String> {
         "test262" => {
             let out_dir = PathBuf::from("artifacts/test/test262");
             Ok(CommandSpec::Test(TestArgs {
-                mode: TestMode::Test262 { out_dir, suite_path: None },
+                mode: TestMode::Test262 {
+                    out_dir,
+                    suite_path: None,
+                },
             }))
         }
-        "lockstep" => {
-            Ok(CommandSpec::Test(TestArgs {
-                mode: TestMode::Lockstep { config: None, out: None },
-            }))
-        }
+        "lockstep" => Ok(CommandSpec::Test(TestArgs {
+            mode: TestMode::Lockstep {
+                config: None,
+                out: None,
+            },
+        })),
         other => Err(format!("unknown test subcommand `{other}`")),
     }
 }
@@ -2042,11 +2122,9 @@ fn parse_synth_command(args: &[String]) -> Result<CommandSpec, String> {
                 mode: SynthMode::KernelContract { out_dir },
             }))
         }
-        "law-mining" => {
-            Ok(CommandSpec::Synth(SynthArgs {
-                mode: SynthMode::LawMining { out: None },
-            }))
-        }
+        "law-mining" => Ok(CommandSpec::Synth(SynthArgs {
+            mode: SynthMode::LawMining { out: None },
+        })),
         other => Err(format!("unknown synth subcommand `{other}`")),
     }
 }
@@ -2058,11 +2136,9 @@ fn parse_orchestrate_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Orchestrate)),
-        "context-refactor" => {
-            Ok(CommandSpec::Orchestrate(OrchestrateArgs {
-                mode: OrchestrateMode::ContextRefactor { out: None },
-            }))
-        }
+        "context-refactor" => Ok(CommandSpec::Orchestrate(OrchestrateArgs {
+            mode: OrchestrateMode::ContextRefactor { out: None },
+        })),
         "tail-latency" => {
             let out_dir = PathBuf::from("artifacts/orchestrate/tail_latency");
             Ok(CommandSpec::Orchestrate(OrchestrateArgs {
@@ -2084,7 +2160,11 @@ fn parse_runtime_command(args: &[String]) -> Result<CommandSpec, String> {
             // Simplified parsing - in full implementation, parse --input, --out-dir, --summary
             let input = PathBuf::from("runtime_input.json");
             Ok(CommandSpec::Runtime(RuntimeArgs {
-                mode: RuntimeMode::Diagnostics { input, out_dir: None, summary: false },
+                mode: RuntimeMode::Diagnostics {
+                    input,
+                    out_dir: None,
+                    summary: false,
+                },
             }))
         }
         other => Err(format!("unknown runtime subcommand `{other}`")),
@@ -4374,7 +4454,10 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
 // New consolidated subcommand execution functions
 fn execute_gates(args: GatesArgs) -> Result<i32, String> {
     match args.mode {
-        GatesMode::ZeroPlaceholder { out_dir, waivers: _ } => {
+        GatesMode::ZeroPlaceholder {
+            out_dir,
+            waivers: _,
+        } => {
             // For now, just create the output directory and return success
             // In full implementation, this would call the original franken_zero_placeholder_gate logic
             std::fs::create_dir_all(&out_dir)
@@ -4421,7 +4504,10 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
 
 fn execute_test(args: TestArgs) -> Result<i32, String> {
     match args.mode {
-        TestMode::Test262 { out_dir, suite_path: _ } => {
+        TestMode::Test262 {
+            out_dir,
+            suite_path: _,
+        } => {
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
             println!("Test test262 executed (placeholder implementation)");
@@ -4469,7 +4555,10 @@ fn execute_orchestrate(args: OrchestrateArgs) -> Result<i32, String> {
     match args.mode {
         OrchestrateMode::ContextRefactor { out } => {
             if let Some(path) = out {
-                println!("Orchestrate context-refactor would write to: {}", path.display());
+                println!(
+                    "Orchestrate context-refactor would write to: {}",
+                    path.display()
+                );
             }
             println!("Orchestrate context-refactor executed (placeholder implementation)");
             Ok(0)
@@ -4490,7 +4579,11 @@ fn execute_orchestrate(args: OrchestrateArgs) -> Result<i32, String> {
 
 fn execute_runtime(args: RuntimeArgs) -> Result<i32, String> {
     match args.mode {
-        RuntimeMode::Diagnostics { input, out_dir, summary } => {
+        RuntimeMode::Diagnostics {
+            input,
+            out_dir,
+            summary,
+        } => {
             if let Some(dir) = out_dir {
                 std::fs::create_dir_all(&dir)
                     .map_err(|e| format!("Failed to create output directory: {e}"))?;

@@ -71,14 +71,21 @@ impl TestFixtureGenerator {
     pub fn generate_source(&mut self, complexity: SourceComplexity) -> TestSource {
         self.counter += 1;
         let content = match complexity {
-            SourceComplexity::Simple => format!("const value_{} = {};", self.counter, self.seed + self.counter),
+            SourceComplexity::Simple => format!(
+                "const value_{} = {};",
+                self.counter,
+                self.seed + self.counter
+            ),
             SourceComplexity::Moderate => format!(
                 "function test_{}() {{ return {} + Math.floor({} / 2); }}",
                 self.counter, self.seed, self.counter
             ),
             SourceComplexity::Complex => format!(
                 "class Test{} {{ constructor() {{ this.value = {}; }} compute() {{ return this.value * {} + {}; }} }}",
-                self.counter, self.seed, self.counter, self.seed % 100
+                self.counter,
+                self.seed,
+                self.counter,
+                self.seed % 100
             ),
         };
 
@@ -162,8 +169,12 @@ impl RuntimeTestHarness {
         let start_time = std::time::Instant::now();
 
         // Generate deterministic test fixtures
-        let source = self.fixture_generator.generate_source(test_spec.source_complexity);
-        let test_data = self.fixture_generator.generate_test_data(test_spec.data_size);
+        let source = self
+            .fixture_generator
+            .generate_source(test_spec.source_complexity);
+        let test_data = self
+            .fixture_generator
+            .generate_test_data(test_spec.data_size);
 
         // Execute test logic (mock implementation for now)
         let success = self.mock_runtime_execution(&source, &test_data);
@@ -297,7 +308,9 @@ impl SecurityTestHarness {
         let start_time = std::time::Instant::now();
 
         // Generate deterministic security test scenarios
-        let test_data = self.fixture_generator.generate_test_data(test_spec.threat_vectors.len());
+        let test_data = self
+            .fixture_generator
+            .generate_test_data(test_spec.threat_vectors.len());
 
         // Execute security validation (mock implementation)
         let success = self.mock_security_validation(&test_spec);
@@ -552,7 +565,10 @@ mod tests {
 
         let spec = SecurityTestSpec {
             test_id: "security_test_1".to_string(),
-            threat_vectors: vec![ThreatVector::CodeInjection, ThreatVector::PrototypePollution],
+            threat_vectors: vec![
+                ThreatVector::CodeInjection,
+                ThreatVector::PrototypePollution,
+            ],
             security_level: SecurityLevel::High,
             expected_outcome: TestOutcome::Success,
         };

@@ -37,30 +37,26 @@ fn test_cross_platform_deterministic_execution() {
                 expected_outcome: TestOutcome::Success,
             },
         ],
-        parser_tests: vec![
-            ParserTestSpec {
-                test_id: "parser_cross_platform_1".to_string(),
-                source_complexity: SourceComplexity::Complex,
-                syntax_features: vec![
-                    SyntaxFeature::ArrowFunctions,
-                    SyntaxFeature::AsyncAwait,
-                    SyntaxFeature::Classes,
-                ],
-                expected_outcome: TestOutcome::Success,
-            },
-        ],
-        security_tests: vec![
-            SecurityTestSpec {
-                test_id: "security_cross_platform_1".to_string(),
-                threat_vectors: vec![
-                    ThreatVector::CodeInjection,
-                    ThreatVector::PrototypePollution,
-                    ThreatVector::PathTraversal,
-                ],
-                security_level: SecurityLevel::High,
-                expected_outcome: TestOutcome::Success,
-            },
-        ],
+        parser_tests: vec![ParserTestSpec {
+            test_id: "parser_cross_platform_1".to_string(),
+            source_complexity: SourceComplexity::Complex,
+            syntax_features: vec![
+                SyntaxFeature::ArrowFunctions,
+                SyntaxFeature::AsyncAwait,
+                SyntaxFeature::Classes,
+            ],
+            expected_outcome: TestOutcome::Success,
+        }],
+        security_tests: vec![SecurityTestSpec {
+            test_id: "security_cross_platform_1".to_string(),
+            threat_vectors: vec![
+                ThreatVector::CodeInjection,
+                ThreatVector::PrototypePollution,
+                ThreatVector::PathTraversal,
+            ],
+            security_level: SecurityLevel::High,
+            expected_outcome: TestOutcome::Success,
+        }],
     };
 
     let result = runner.execute_test_suite(suite);
@@ -125,7 +121,10 @@ fn test_deterministic_reproducibility_across_runs() {
         assert_eq!(result1.results[i].success, result2.results[i].success);
         assert_eq!(result2.results[i].success, result3.results[i].success);
         assert_eq!(result1.results[i].test_id, result2.results[i].test_id);
-        assert_eq!(result1.results[i].artifacts.len(), result2.results[i].artifacts.len());
+        assert_eq!(
+            result1.results[i].artifacts.len(),
+            result2.results[i].artifacts.len()
+        );
     }
 }
 
@@ -324,9 +323,18 @@ fn test_isolation_level_behavior() {
     let runner_process = TestSuiteRunner::new(process_config);
 
     // Verify different isolation levels can be instantiated
-    assert!(matches!(runner_complete.config.isolation, TestIsolationLevel::Complete));
-    assert!(matches!(runner_shared.config.isolation, TestIsolationLevel::Shared));
-    assert!(matches!(runner_process.config.isolation, TestIsolationLevel::Process));
+    assert!(matches!(
+        runner_complete.config.isolation,
+        TestIsolationLevel::Complete
+    ));
+    assert!(matches!(
+        runner_shared.config.isolation,
+        TestIsolationLevel::Shared
+    ));
+    assert!(matches!(
+        runner_process.config.isolation,
+        TestIsolationLevel::Process
+    ));
 }
 
 #[test]
@@ -358,11 +366,19 @@ fn test_execution_mode_behavior() {
 
         // Verify mode is set correctly
         match mode {
-            TestExecutionMode::Unit => assert!(matches!(runner.config.mode, TestExecutionMode::Unit)),
-            TestExecutionMode::Integration => assert!(matches!(runner.config.mode, TestExecutionMode::Integration)),
+            TestExecutionMode::Unit => {
+                assert!(matches!(runner.config.mode, TestExecutionMode::Unit))
+            }
+            TestExecutionMode::Integration => {
+                assert!(matches!(runner.config.mode, TestExecutionMode::Integration))
+            }
             TestExecutionMode::E2E => assert!(matches!(runner.config.mode, TestExecutionMode::E2E)),
-            TestExecutionMode::Security => assert!(matches!(runner.config.mode, TestExecutionMode::Security)),
-            TestExecutionMode::Parser => assert!(matches!(runner.config.mode, TestExecutionMode::Parser)),
+            TestExecutionMode::Security => {
+                assert!(matches!(runner.config.mode, TestExecutionMode::Security))
+            }
+            TestExecutionMode::Parser => {
+                assert!(matches!(runner.config.mode, TestExecutionMode::Parser))
+            }
         }
     }
 }
@@ -512,11 +528,14 @@ fn test_serialization_compatibility() {
     let json = serde_json::to_string(&config).expect("Should serialize config");
     assert!(!json.is_empty());
 
-    let deserialized: TestHarnessConfig = serde_json::from_str(&json)
-        .expect("Should deserialize config");
+    let deserialized: TestHarnessConfig =
+        serde_json::from_str(&json).expect("Should deserialize config");
 
     assert_eq!(deserialized.deterministic_seed, 999888);
     assert_eq!(deserialized.timeout_millis, 45000);
     assert!(matches!(deserialized.mode, TestExecutionMode::Integration));
-    assert!(matches!(deserialized.isolation, TestIsolationLevel::Process));
+    assert!(matches!(
+        deserialized.isolation,
+        TestIsolationLevel::Process
+    ));
 }

@@ -7329,6 +7329,153 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ArrayPrototypeSlice" => {
+                // Array.prototype.slice implementation - returns shallow copy of portion of array
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                // Get the array object (first argument should be the array)
+                let array_arg = self.read_reg(args.start)?;
+
+                match array_arg {
+                    Value::Object(obj_id) => {
+                        // Get array length
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(length_val) = obj.properties.get("length") {
+                                if let Value::Int(len) = length_val {
+                                    let length = *len as i64;
+
+                                    // Get start index (default to 0)
+                                    let start_idx = if args.count > 1 {
+                                        let start_arg = self.read_reg(args.start + 1)?;
+                                        match start_arg {
+                                            Value::Int(n) => {
+                                                if n < 0 {
+                                                    (length + n).max(0) as usize
+                                                } else {
+                                                    (n.min(length) as usize)
+                                                }
+                                            }
+                                            Value::Float(f) => {
+                                                let val = f.inner();
+                                                if val < 0.0 {
+                                                    ((length as f64) + val).max(0.0) as usize
+                                                } else {
+                                                    (val.min(length as f64) as usize)
+                                                }
+                                            }
+                                            _ => 0,
+                                        }
+                                    } else {
+                                        0
+                                    };
+
+                                    // Get end index (default to array length)
+                                    let end_idx = if args.count > 2 {
+                                        let end_arg = self.read_reg(args.start + 2)?;
+                                        match end_arg {
+                                            Value::Int(n) => {
+                                                if n < 0 {
+                                                    (length + n).max(0) as usize
+                                                } else {
+                                                    (n.min(length) as usize)
+                                                }
+                                            }
+                                            Value::Float(f) => {
+                                                let val = f.inner();
+                                                if val < 0.0 {
+                                                    ((length as f64) + val).max(0.0) as usize
+                                                } else {
+                                                    (val.min(length as f64) as usize)
+                                                }
+                                            }
+                                            _ => length as usize,
+                                        }
+                                    } else {
+                                        length as usize
+                                    };
+
+                                    // Create new array with sliced elements
+                                    let new_array_id = self.alloc_object_with_prototype(None)?;
+
+                                    // Copy elements from start_idx to end_idx
+                                    if start_idx < end_idx {
+                                        let mut new_length = 0;
+                                        for i in start_idx..end_idx {
+                                            let element = obj
+                                                .properties
+                                                .get(&i.to_string())
+                                                .cloned()
+                                                .unwrap_or(Value::Undefined);
+
+                                            self.set_object_property(
+                                                new_array_id,
+                                                new_length.to_string(),
+                                                element,
+                                            )?;
+                                            new_length += 1;
+                                        }
+
+                                        // Set length property
+                                        self.set_object_property(
+                                            new_array_id,
+                                            "length".to_string(),
+                                            Value::Int(new_length as i64),
+                                        )?;
+                                    } else {
+                                        // Empty slice
+                                        self.set_object_property(
+                                            new_array_id,
+                                            "length".to_string(),
+                                            Value::Int(0),
+                                        )?;
+                                    }
+
+                                    Ok(Value::Object(new_array_id))
+                                } else {
+                                    // Invalid length, return empty array
+                                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                                    self.set_object_property(
+                                        empty_array_id,
+                                        "length".to_string(),
+                                        Value::Int(0),
+                                    )?;
+                                    Ok(Value::Object(empty_array_id))
+                                }
+                            } else {
+                                // No length property, return empty array
+                                let empty_array_id = self.alloc_object_with_prototype(None)?;
+                                self.set_object_property(
+                                    empty_array_id,
+                                    "length".to_string(),
+                                    Value::Int(0),
+                                )?;
+                                Ok(Value::Object(empty_array_id))
+                            }
+                        } else {
+                            // Object not found, return empty array
+                            let empty_array_id = self.alloc_object_with_prototype(None)?;
+                            self.set_object_property(
+                                empty_array_id,
+                                "length".to_string(),
+                                Value::Int(0),
+                            )?;
+                            Ok(Value::Object(empty_array_id))
+                        }
+                    }
+                    _ => {
+                        // Non-object argument, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        Ok(Value::Object(empty_array_id))
+                    }
+                }
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {
@@ -8599,6 +8746,7 @@ impl InterpreterCore {
             17 => Some("builtin:ArrayPrototypeJoin".to_string()),
             18 => Some("builtin:ArrayPrototypeIncludes".to_string()),
             19 => Some("builtin:ArrayPrototypeIndexOf".to_string()),
+            20 => Some("builtin:ArrayPrototypeSlice".to_string()),
 
             // String methods
             30 => Some("builtin:StringPrototypeCharAt".to_string()),

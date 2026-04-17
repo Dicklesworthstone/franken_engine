@@ -7238,6 +7238,97 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ArrayPrototypeIndexOf" => {
+                // Array.prototype.indexOf implementation - finds first index of element in array
+                if args.count == 0 {
+                    return Ok(Value::Int(-1));
+                }
+
+                // Get the array object (first argument should be the array)
+                let array_arg = self.read_reg(args.start)?;
+
+                // Get the search element
+                let search_element = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Get optional start index (default to 0)
+                let start_index = if args.count > 2 {
+                    let start_arg = self.read_reg(args.start + 2)?;
+                    match start_arg {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                match array_arg {
+                    Value::Object(obj_id) => {
+                        // Get array length and search through elements
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(length_val) = obj.properties.get("length") {
+                                if let Value::Int(len) = length_val {
+                                    let length = *len as usize;
+
+                                    // Search through array elements starting from start_index
+                                    for i in start_index..length {
+                                        let element = obj
+                                            .properties
+                                            .get(&i.to_string())
+                                            .cloned()
+                                            .unwrap_or(Value::Undefined);
+
+                                        // JavaScript === comparison (strict equality)
+                                        let matches = match (&search_element, &element) {
+                                            (Value::Int(a), Value::Int(b)) => a == b,
+                                            (Value::Float(a), Value::Float(b)) => {
+                                                let a_val = a.inner();
+                                                let b_val = b.inner();
+                                                // NaN !== NaN in indexOf (different from includes)
+                                                if a_val.is_nan() || b_val.is_nan() {
+                                                    false
+                                                } else {
+                                                    a_val == b_val
+                                                }
+                                            }
+                                            (Value::Str(a), Value::Str(b)) => a == b,
+                                            (Value::Bool(a), Value::Bool(b)) => a == b,
+                                            (Value::Null, Value::Null) => true,
+                                            (Value::Undefined, Value::Undefined) => true,
+                                            (Value::Object(a), Value::Object(b)) => a == b,
+                                            _ => false, // Different types don't match in strict equality
+                                        };
+
+                                        if matches {
+                                            return Ok(Value::Int(i as i64));
+                                        }
+                                    }
+
+                                    // Not found
+                                    Ok(Value::Int(-1))
+                                } else {
+                                    // Invalid length, return -1
+                                    Ok(Value::Int(-1))
+                                }
+                            } else {
+                                // No length property, return -1
+                                Ok(Value::Int(-1))
+                            }
+                        } else {
+                            // Object not found, return -1
+                            Ok(Value::Int(-1))
+                        }
+                    }
+                    _ => {
+                        // Non-object argument, return -1
+                        Ok(Value::Int(-1))
+                    }
+                }
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {
@@ -7866,6 +7957,27 @@ impl InterpreterCore {
 
                 Ok(Value::Object(array_id))
             }
+            "builtin:StringPrototypeTrim" => {
+                // String.prototype.trim implementation - removes whitespace from both ends
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                // Remove whitespace from both ends using Unicode-aware trimming
+                let trimmed = string_val.trim();
+                Ok(Value::Str(trimmed.to_string()))
+            }
 
             // Math methods
             "builtin:MathAbs" => {
@@ -8059,7 +8171,7 @@ impl InterpreterCore {
 
                 // Use some execution state as seed (simplified)
                 // In practice, this should use a proper PRNG state
-                self.stack.len().hash(&mut hasher);
+                self.call_stack.len().hash(&mut hasher);
                 self.heap.len().hash(&mut hasher);
 
                 let hash = hasher.finish();
@@ -8486,6 +8598,7 @@ impl InterpreterCore {
             16 => Some("builtin:ArrayPrototypeUnshift".to_string()),
             17 => Some("builtin:ArrayPrototypeJoin".to_string()),
             18 => Some("builtin:ArrayPrototypeIncludes".to_string()),
+            19 => Some("builtin:ArrayPrototypeIndexOf".to_string()),
 
             // String methods
             30 => Some("builtin:StringPrototypeCharAt".to_string()),
@@ -8495,6 +8608,7 @@ impl InterpreterCore {
             34 => Some("builtin:StringPrototypeToLowerCase".to_string()),
             35 => Some("builtin:StringPrototypeToUpperCase".to_string()),
             36 => Some("builtin:StringPrototypeSplit".to_string()),
+            37 => Some("builtin:StringPrototypeTrim".to_string()),
 
             // Math methods
             50 => Some("builtin:MathAbs".to_string()),

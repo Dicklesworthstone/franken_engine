@@ -961,7 +961,9 @@ fn sorted_signature_array_serde_round_trip() {
 
     // Verify still sorted after deserialization.
     for i in 1..restored.entries().len() {
-        assert!(restored.entries()[i - 1].signer.as_bytes() < restored.entries()[i].signer.as_bytes());
+        assert!(
+            restored.entries()[i - 1].signer.as_bytes() < restored.entries()[i].signer.as_bytes()
+        );
     }
 }
 

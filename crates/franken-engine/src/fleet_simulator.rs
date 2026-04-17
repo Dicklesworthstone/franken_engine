@@ -354,11 +354,9 @@ impl FleetSimulator {
                 thresholds: containment_thresholds.clone(),
                 ..Default::default()
             };
-            let convergence_engine =
-                ConvergenceEngine::new(node_id.clone(), convergence_config);
+            let convergence_engine = ConvergenceEngine::new(node_id.clone(), convergence_config);
 
-            let protocol_state =
-                FleetProtocolState::new(node_id.clone(), Default::default());
+            let protocol_state = FleetProtocolState::new(node_id.clone(), Default::default());
 
             let instance = EngineInstance {
                 node_id: node_id.clone(),
@@ -887,7 +885,6 @@ impl FleetSimulator {
     pub fn message_bus_queue_length(&self) -> usize {
         self.message_bus.queue_length()
     }
-
 }
 
 /// Quarantine statistics for reporting.

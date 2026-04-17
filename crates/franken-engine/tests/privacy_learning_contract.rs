@@ -814,7 +814,9 @@ fn contract_creation_deterministic() {
 #[test]
 fn contract_wrong_key_fails_verification() {
     let contract = create_contract();
-    let wrong = SigningKey::from_bytes([0xFF; 32]).unwrap().verification_key();
+    let wrong = SigningKey::from_bytes([0xFF; 32])
+        .unwrap()
+        .verification_key();
     assert!(matches!(
         contract.verify_governance_signature(&wrong),
         Err(ContractError::SignatureInvalid { .. })

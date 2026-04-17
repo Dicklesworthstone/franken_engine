@@ -210,7 +210,9 @@ fn signed_log_checkpoint_serde_roundtrip() {
 fn log_operator_key_serde_roundtrip() {
     let key = LogOperatorKey {
         key_id: "op-1".to_string(),
-        verification_key: SigningKey::from_bytes([9u8; 32]).unwrap().verification_key(),
+        verification_key: SigningKey::from_bytes([9u8; 32])
+            .unwrap()
+            .verification_key(),
         revoked: false,
     };
     let json = serde_json::to_string(&key).unwrap();
@@ -1141,12 +1143,16 @@ fn signed_log_checkpoint_clone_eq() {
 fn log_operator_key_revoked_flag() {
     let active_key = LogOperatorKey {
         key_id: "k1".to_string(),
-        verification_key: SigningKey::from_bytes([1u8; 32]).unwrap().verification_key(),
+        verification_key: SigningKey::from_bytes([1u8; 32])
+            .unwrap()
+            .verification_key(),
         revoked: false,
     };
     let revoked_key = LogOperatorKey {
         key_id: "k2".to_string(),
-        verification_key: SigningKey::from_bytes([2u8; 32]).unwrap().verification_key(),
+        verification_key: SigningKey::from_bytes([2u8; 32])
+            .unwrap()
+            .verification_key(),
         revoked: true,
     };
     assert!(!active_key.revoked);

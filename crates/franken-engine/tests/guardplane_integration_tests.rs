@@ -197,9 +197,9 @@ fn test_evidence_generation_disabled() {
 #[test]
 fn test_risk_threshold_configuration() {
     let config = GuardplaneConfig {
-        challenge_threshold: 50_000, // 0.05 - very sensitive
-        sandbox_threshold: 100_000,  // 0.1
-        suspend_threshold: 150_000,  // 0.15
+        challenge_threshold: 50_000,  // 0.05 - very sensitive
+        sandbox_threshold: 100_000,   // 0.1
+        suspend_threshold: 150_000,   // 0.15
         terminate_threshold: 200_000, // 0.2
         ..Default::default()
     };

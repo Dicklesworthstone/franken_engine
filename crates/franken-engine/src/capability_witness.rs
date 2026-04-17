@@ -4246,7 +4246,9 @@ mod tests {
     #[test]
     fn verify_signature_fails_wrong_key() {
         let witness = build_test_witness();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
+        let wrong_key = SigningKey::from_bytes([99u8; 32])
+            .unwrap()
+            .verification_key();
         let err = witness
             .verify_synthesizer_signature(&wrong_key)
             .unwrap_err();

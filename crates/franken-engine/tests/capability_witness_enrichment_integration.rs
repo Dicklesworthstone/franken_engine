@@ -1575,7 +1575,9 @@ fn verify_synthesizer_signature_correct_key() {
 #[test]
 fn verify_synthesizer_signature_wrong_key() {
     let witness = build_minimal_witness();
-    let wrong_vk = SigningKey::from_bytes([0xAA; 32]).unwrap().verification_key();
+    let wrong_vk = SigningKey::from_bytes([0xAA; 32])
+        .unwrap()
+        .verification_key();
     assert!(witness.verify_synthesizer_signature(&wrong_vk).is_err());
 }
 

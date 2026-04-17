@@ -271,10 +271,7 @@ mod tests {
         let config = ProfilingConfig::default();
         let mut profiler = Profiler::new(config);
 
-        let load_int = Ir3Instruction::LoadInt {
-            dst: 0,
-            value: 42,
-        };
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 42 };
         let add = Ir3Instruction::Add {
             dst: 0,
             lhs: 1,
@@ -308,10 +305,7 @@ mod tests {
 
     #[test]
     fn test_instruction_name_extraction() {
-        let load_int = Ir3Instruction::LoadInt {
-            dst: 0,
-            value: 42,
-        };
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 42 };
         assert_eq!(instruction_name(&load_int), "LoadInt");
 
         let add = Ir3Instruction::Add {

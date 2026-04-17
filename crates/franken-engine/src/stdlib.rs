@@ -7269,10 +7269,7 @@ mod tests {
             .entries()
             .iter()
             .any(|(_, id)| *id == BuiltinId::PromiseThen);
-        assert!(
-            registered,
-            "Promise.prototype.then should be registered"
-        );
+        assert!(registered, "Promise.prototype.then should be registered");
     }
 
     #[test]
@@ -7287,10 +7284,7 @@ mod tests {
             .entries()
             .iter()
             .any(|(_, id)| *id == BuiltinId::PromiseCatch);
-        assert!(
-            registered,
-            "Promise.prototype.catch should be registered"
-        );
+        assert!(registered, "Promise.prototype.catch should be registered");
     }
 
     #[test]
@@ -7305,9 +7299,6 @@ mod tests {
             .entries()
             .iter()
             .any(|(_, id)| *id == BuiltinId::PromiseFinally);
-        assert!(
-            registered,
-            "Promise.prototype.finally should be registered"
-        );
+        assert!(registered, "Promise.prototype.finally should be registered");
     }
 }

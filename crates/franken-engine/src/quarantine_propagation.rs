@@ -147,8 +147,7 @@ impl QuarantineState {
         self.quarantined_extensions
             .insert(decision.extension_id.clone());
         self.pending_decisions.insert(evidence_hash, decision);
-        self.acknowledgments
-            .insert(evidence_hash, BTreeSet::new());
+        self.acknowledgments.insert(evidence_hash, BTreeSet::new());
         true
     }
 

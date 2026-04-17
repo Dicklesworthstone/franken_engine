@@ -1926,7 +1926,9 @@ mod tests {
     #[test]
     fn verify_signature_fails_with_wrong_key() {
         let bundle = build_test_bundle();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
+        let wrong_key = SigningKey::from_bytes([99u8; 32])
+            .unwrap()
+            .verification_key();
         let verifier = BundleVerifier::new();
         let report = verifier.verify_signature(&bundle, &wrong_key, 6000);
 

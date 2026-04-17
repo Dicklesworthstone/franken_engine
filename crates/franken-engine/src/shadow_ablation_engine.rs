@@ -2690,7 +2690,9 @@ mod tests {
                 fallback: None,
                 budget_utilization: BTreeMap::new(),
                 transcript_hash: ContentHash::compute(b"test-hash"),
-                signer: SigningKey::from_bytes([1u8; 32]).unwrap().verification_key(),
+                signer: SigningKey::from_bytes([1u8; 32])
+                    .unwrap()
+                    .verification_key(),
                 signature: Signature::from_bytes([0u8; 64]),
             },
         };
@@ -2723,7 +2725,9 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
             transcript_hash: ContentHash::compute(b"tx-hash-2"),
-            signer: SigningKey::from_bytes([2u8; 32]).unwrap().verification_key(),
+            signer: SigningKey::from_bytes([2u8; 32])
+                .unwrap()
+                .verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
         let json = serde_json::to_string(&transcript).unwrap();

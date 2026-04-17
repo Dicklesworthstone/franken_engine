@@ -468,7 +468,9 @@ fn enrichment_exception_denied_with_empty_justification() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
+    let err = gate
+        .apply_exception(&mut result, "", None, None)
+        .unwrap_err();
     assert!(err.contains("justification"));
 }
 

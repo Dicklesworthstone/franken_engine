@@ -558,7 +558,9 @@ fn receipt_sign_and_verify_roundtrip() {
 #[test]
 fn receipt_verify_fails_wrong_key() {
     let key = signing_key();
-    let wrong_vk = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
+    let wrong_vk = SigningKey::from_bytes([99u8; 32])
+        .unwrap()
+        .verification_key();
     let mut receipt = test_receipt(epoch());
     receipt.sign(&key).unwrap();
     assert!(receipt.verify(&wrong_vk).is_err());

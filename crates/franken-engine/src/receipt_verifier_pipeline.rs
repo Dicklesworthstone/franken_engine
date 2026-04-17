@@ -2000,7 +2000,9 @@ mod tests {
     fn log_operator_key_serde_roundtrip() {
         let key = LogOperatorKey {
             key_id: "op-key-1".to_string(),
-            verification_key: SigningKey::from_bytes([3u8; 32]).unwrap().verification_key(),
+            verification_key: SigningKey::from_bytes([3u8; 32])
+                .unwrap()
+                .verification_key(),
             revoked: false,
         };
         let json = serde_json::to_string(&key).unwrap();

@@ -11004,8 +11004,8 @@ mod tests {
     }
 
     mod async_function_tests {
-        use super::*;
         use super::containment_tests::test_interpreter;
+        use super::*;
 
         #[test]
         fn async_function_call_returns_promise() {

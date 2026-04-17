@@ -692,7 +692,8 @@ fn deferred_decision_without_sandbox_when_config_disabled() {
         challenge_on_fallback: false,
         sandbox_on_fallback: false,
     };
-    let mut mgr = AttestationFallbackManager::new(config, SigningKey::from_bytes([7u8; 32]).unwrap());
+    let mut mgr =
+        AttestationFallbackManager::new(config, SigningKey::from_bytes([7u8; 32]).unwrap());
     let req = mk_request(
         "trace-no-sandbox",
         "decision-no-sandbox",

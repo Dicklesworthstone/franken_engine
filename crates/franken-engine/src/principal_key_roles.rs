@@ -793,7 +793,9 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(), // placeholder for encryption role
+                SigningKey::from_bytes([0x01; 32])
+                    .unwrap()
+                    .verification_key(), // placeholder for encryption role
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -867,7 +869,9 @@ mod tests {
         )
         .unwrap();
 
-        let wrong_vk = SigningKey::from_bytes([0xAB; 32]).unwrap().verification_key();
+        let wrong_vk = SigningKey::from_bytes([0xAB; 32])
+            .unwrap()
+            .verification_key();
         assert_eq!(
             bundle.verify(&wrong_vk),
             Err(KeyRoleError::BundleSignatureInvalid)
@@ -1020,7 +1024,9 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
+                SigningKey::from_bytes([0x01; 32])
+                    .unwrap()
+                    .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -1256,7 +1262,9 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
+                SigningKey::from_bytes([0x01; 32])
+                    .unwrap()
+                    .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -1831,7 +1839,9 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
+                SigningKey::from_bytes([0x01; 32])
+                    .unwrap()
+                    .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,

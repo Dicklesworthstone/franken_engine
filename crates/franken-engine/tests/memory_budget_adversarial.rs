@@ -3,7 +3,9 @@
 //! These tests verify that the memory budget constraints properly prevent
 //! denial-of-service attacks through unbounded memory allocation.
 
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterError, QuickJsLane};
+use frankenengine_engine::baseline_interpreter::{
+    InterpreterConfig, InterpreterError, QuickJsLane,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};

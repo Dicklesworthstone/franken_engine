@@ -1133,7 +1133,9 @@ fn exception_rejected_empty_justification() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
+    let err = gate
+        .apply_exception(&mut result, "", None, None)
+        .unwrap_err();
     assert!(err.contains("justification"));
     assert!(!result.exception_applied);
 }
@@ -1183,7 +1185,8 @@ fn exception_changes_digest() {
     let mut result = make_failed_result();
     result.result_digest = "original_digest".to_string();
     let before = result.result_digest.clone();
-    gate.apply_exception(&mut result, "hotfix", None, None).unwrap();
+    gate.apply_exception(&mut result, "hotfix", None, None)
+        .unwrap();
     assert_ne!(result.result_digest, before);
 }
 
@@ -1215,7 +1218,9 @@ fn exception_validation_order_adr_before_justification() {
     };
     let gate = ReleaseGate::with_exception_policy(42, policy);
     let mut result = make_failed_result();
-    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
+    let err = gate
+        .apply_exception(&mut result, "", None, None)
+        .unwrap_err();
     // ADR check comes before justification check.
     assert!(err.contains("ADR reference"));
 }
@@ -1635,8 +1640,13 @@ fn integration_exception_overrides_failure() {
     assert!(result.is_blocked());
 
     // Apply exception.
-    gate.apply_exception(&mut result, "Critical hotfix P0", Some("ADR-2026-003"), None)
-        .unwrap();
+    gate.apply_exception(
+        &mut result,
+        "Critical hotfix P0",
+        Some("ADR-2026-003"),
+        None,
+    )
+    .unwrap();
     assert!(!result.is_blocked());
     assert!(result.exception_applied);
     assert_eq!(result.verdict, Verdict::Pass);

@@ -338,7 +338,7 @@ fn exact_budget_boundary_does_not_timeout() {
                 "exact budget should not timeout: {reason}"
             );
         }
-        Verdict::Pass => {}                                    // fine
+        Verdict::Pass => {}                                   // fine
         Verdict::PassWithException { justification: _ } => {} // fine
     }
 }
@@ -420,7 +420,9 @@ fn exception_requires_nonempty_justification() {
         gate_events: Vec::new(),
         result_digest: String::new(),
     };
-    let err = gate.apply_exception(&mut result, "", None, None).unwrap_err();
+    let err = gate
+        .apply_exception(&mut result, "", None, None)
+        .unwrap_err();
     assert!(err.contains("justification"));
 }
 
@@ -476,7 +478,8 @@ fn exception_changes_digest() {
         result_digest: "original_digest".to_string(),
     };
     let before = result.result_digest.clone();
-    gate.apply_exception(&mut result, "hotfix", None, None).unwrap();
+    gate.apply_exception(&mut result, "hotfix", None, None)
+        .unwrap();
     assert_ne!(result.result_digest, before);
     // New digest should be 16-char hex.
     assert_eq!(result.result_digest.len(), 16);
@@ -1480,7 +1483,8 @@ fn enrichment_exception_does_not_modify_checks() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "override", None, None).unwrap();
+    gate.apply_exception(&mut result, "override", None, None)
+        .unwrap();
     // Checks should be unchanged
     assert_eq!(result.checks.len(), 1);
     assert!(!result.checks[0].passed);
@@ -1509,9 +1513,11 @@ fn enrichment_exception_multiple_applications_idempotent() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
-    gate.apply_exception(&mut result, "first", None, None).unwrap();
+    gate.apply_exception(&mut result, "first", None, None)
+        .unwrap();
     let digest_after_first = result.result_digest.clone();
-    gate.apply_exception(&mut result, "second", None, None).unwrap();
+    gate.apply_exception(&mut result, "second", None, None)
+        .unwrap();
     // After first apply verdict is Pass; second apply is a no-op (already passing).
     assert_eq!(result.exception_justification, "first");
     assert!(result.exception_applied);
@@ -2494,7 +2500,8 @@ fn enrichment_result_verdict_fail_to_pass_via_exception() {
         result_digest: "before".to_string(),
     };
     assert!(result.is_blocked());
-    gate.apply_exception(&mut result, "override", None, None).unwrap();
+    gate.apply_exception(&mut result, "override", None, None)
+        .unwrap();
     assert!(!result.is_blocked());
     // total_checks and passed_checks unchanged
     assert_eq!(result.total_checks, 4);

@@ -1389,8 +1389,16 @@ fn enrichment_drain_audit_log_idempotent_empty() {
 fn enrichment_token_acceptance_same_jti_different_key_cleared() {
     let mut enforcer = make_enforcer();
     let jti = EngineObjectId([50; 32]);
-    let r1 = enforcer.check_token_acceptance(&jti, &VerificationKey::from_bytes([1; 32]).unwrap(), "t-a");
-    let r2 = enforcer.check_token_acceptance(&jti, &VerificationKey::from_bytes([2; 32]).unwrap(), "t-b");
+    let r1 = enforcer.check_token_acceptance(
+        &jti,
+        &VerificationKey::from_bytes([1; 32]).unwrap(),
+        "t-a",
+    );
+    let r2 = enforcer.check_token_acceptance(
+        &jti,
+        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        "t-b",
+    );
     assert!(r1.is_cleared());
     assert!(r2.is_cleared());
 }

@@ -15598,24 +15598,24 @@ impl InterpreterCore {
                 // Create result array (immutable operation)
                 let result_array_id = self.alloc_object_with_prototype(None)?;
 
-                // Copy elements in reverse order
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        let reverse_index = length - 1 - i;
-                        if let Some(element) = obj.properties.get(&reverse_index.to_string()) {
-                            self.set_object_property(
-                                result_array_id,
-                                i.to_string(),
-                                element.clone(),
-                            )?;
-                        } else {
-                            self.set_object_property(
-                                result_array_id,
-                                i.to_string(),
-                                Value::Undefined,
-                            )?;
-                        }
-                    }
+                // Copy elements in reverse order without holding the source borrow across writes.
+                let reversed_elements = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    (0..length)
+                        .map(|i| {
+                            let reverse_index = length - 1 - i;
+                            let element = obj
+                                .properties
+                                .get(&reverse_index.to_string())
+                                .cloned()
+                                .unwrap_or(Value::Undefined);
+                            (i, element)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                for (i, element) in reversed_elements {
+                    self.set_object_property(result_array_id, i.to_string(), element)?;
                 }
 
                 self.set_object_property(
@@ -15648,6 +15648,169 @@ impl InterpreterCore {
                 };
 
                 // Check if the object has the property
+                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+
+            "builtin:StringPrototypeToUpperCase" => {
+                // String.prototype.toUpperCase() implementation
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                Ok(Value::Str(str_text.to_uppercase()))
+            }
+
+            "builtin:MathHypot" => {
+                // Math.hypot(...values) implementation (Euclidean norm)
+                let mut sum_squares = 0.0;
+
+                // Process all arguments after the first (which is 'this')
+                for i in 1..args.count {
+                    let val = self.read_reg(args.start + i)?;
+                    let num = match val {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f.inner(),
+                        Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                        Value::Bool(true) => 1.0,
+                        Value::Bool(false) => 0.0,
+                        Value::Null => 0.0,
+                        _ => f64::NAN,
+                    };
+
+                    // If any argument is NaN or infinite, return NaN or infinity
+                    if num.is_nan() {
+                        return Ok(Value::Float(Float64::new(f64::NAN)));
+                    }
+                    if num.is_infinite() {
+                        return Ok(Value::Float(Float64::new(f64::INFINITY)));
+                    }
+
+                    sum_squares += num * num;
+                }
+
+                Ok(Value::Float(Float64::new(sum_squares.sqrt())))
+            }
+
+            "builtin:ArrayPrototypeToSorted" => {
+                // Array.prototype.toSorted([compareFunction]) implementation (ES2023)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Create result array (immutable operation)
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                // Copy and sort elements (simplified string-based sorting)
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let mut elements_with_indices = Vec::new();
+
+                    // Collect all elements
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            elements_with_indices.push((i, element.clone()));
+                        } else {
+                            elements_with_indices.push((i, Value::Undefined));
+                        }
+                    }
+
+                    // Simple string-based sort (like default Array.sort)
+                    elements_with_indices.sort_by(|(_i1, a), (_i2, b)| {
+                        let a_str = match a {
+                            Value::Str(s) => s.clone(),
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => "[object Object]".to_string(),
+                        };
+                        let b_str = match b {
+                            Value::Str(s) => s.clone(),
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => "[object Object]".to_string(),
+                        };
+                        a_str.cmp(&b_str)
+                    });
+
+                    // Set sorted elements in result array
+                    for (new_index, (_original_index, element)) in
+                        elements_with_indices.iter().enumerate()
+                    {
+                        self.set_object_property(
+                            result_array_id,
+                            new_index.to_string(),
+                            element.clone(),
+                        )?;
+                    }
+                }
+
+                self.set_object_property(
+                    result_array_id,
+                    "length".to_string(),
+                    Value::Int(length as i64),
+                )?;
+
+                Ok(Value::Object(result_array_id))
+            }
+
+            "builtin:ObjectPropertyIsEnumerable" => {
+                // Object.propertyIsEnumerable(property) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let obj_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Primitives don't have enumerable properties
+                };
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_key = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Simplified implementation: all own properties are enumerable
                 if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                     Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
                 } else {
@@ -15918,6 +16081,10 @@ impl InterpreterCore {
             294 => Some("builtin:MathAtanh".to_string()),
             295 => Some("builtin:ArrayPrototypeToReversed".to_string()),
             296 => Some("builtin:ObjectHasOwnProperty".to_string()),
+            297 => Some("builtin:StringPrototypeToUpperCase".to_string()),
+            298 => Some("builtin:MathHypot".to_string()),
+            299 => Some("builtin:ArrayPrototypeToSorted".to_string()),
+            300 => Some("builtin:ObjectPropertyIsEnumerable".to_string()),
 
             _ => None, // Not a recognized builtin
         }

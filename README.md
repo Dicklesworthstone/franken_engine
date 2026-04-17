@@ -198,6 +198,39 @@ To verify the invariant contract:
 
 See [`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`](./docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md) for the complete invariant specification.
 
+## Placeholder Closure Verification
+
+The placeholder closure verification contract defines explicit verification and waiver discipline for closing out the zero-placeholder audit workstream. This contract proves that all audited placeholder/mock/stub findings have been resolved or explicitly waived with proper justification.
+
+To verify the closure contract:
+
+```bash
+jq empty docs/rgc_placeholder_closure_verification_v1.json
+cargo test --test placeholder_closure_verification
+./scripts/run_placeholder_closure_matrix.sh generate
+./scripts/run_placeholder_closure_verification.sh verify
+./scripts/run_placeholder_closure_bundle.sh bundle
+./scripts/run_placeholder_waiver_validation.sh check
+```
+
+See [`docs/RGC_PLACEHOLDER_CLOSURE_VERIFICATION_V1.md`](./docs/RGC_PLACEHOLDER_CLOSURE_VERIFICATION_V1.md) for the complete contract specification.
+
+## RGC Cross-Platform Matrix Gate
+
+The cross-platform matrix gate establishes deterministic verification for runtime execution and CLI workflows across Linux/macOS/Windows and x64/arm64 targets. This gate ensures user-facing reliability is proven, not assumed.
+
+To verify the cross-platform matrix:
+
+```bash
+./scripts/run_rgc_cross_platform_matrix_gate.sh ci
+./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix
+jq empty docs/rgc_cross_platform_matrix_v1.json
+```
+
+Matrix artifacts are generated at `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json` for each verification run.
+
+See [`docs/RGC_CROSS_PLATFORM_MATRIX_V1.md`](./docs/RGC_CROSS_PLATFORM_MATRIX_V1.md) for the complete contract specification.
+
 ## Installation
 
 ### Option 1: One-Line Installer

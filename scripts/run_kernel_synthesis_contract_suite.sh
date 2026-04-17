@@ -64,6 +64,7 @@ verify_bundle() {
     kernel_schema_catalog.json \
     synthesis_eligibility_report.json \
     kernel_synth_evidence_manifest.json \
+    superoptimization_report.json \
     run_manifest.json \
     events.jsonl \
     commands.txt \
@@ -88,6 +89,12 @@ verify_bundle() {
     "${run_dir}/run_manifest.json" >/dev/null
   jq -e '.certificates | length >= 10' \
     "${run_dir}/kernel_synth_evidence_manifest.json" >/dev/null
+  jq -e '.schema_version == "franken-engine.budgeted-superoptimization-report.v1"' \
+    "${run_dir}/superoptimization_report.json" >/dev/null
+  jq -e '.admitted_candidate_count >= 1 and .refuted_candidate_count >= 1 and .timed_out_candidate_count >= 1 and .total_counterexamples >= 1' \
+    "${run_dir}/superoptimization_report.json" >/dev/null
+  jq -e '.deterministic_rollback.fallback_path == "baseline_compiled_code" and .deterministic_rollback.deterministic == true' \
+    "${run_dir}/superoptimization_report.json" >/dev/null
 }
 
 run_mode() {
@@ -219,6 +226,7 @@ write_manifest() {
     echo "    \"kernel_schema_catalog\": \"${run_dir}/kernel_schema_catalog.json\","
     echo "    \"synthesis_eligibility_report\": \"${run_dir}/synthesis_eligibility_report.json\","
     echo "    \"kernel_synth_evidence_manifest\": \"${run_dir}/kernel_synth_evidence_manifest.json\","
+    echo "    \"superoptimization_report\": \"${run_dir}/superoptimization_report.json\","
     echo "    \"runner_manifest\": \"${run_dir}/run_manifest.json\","
     echo "    \"suite_manifest\": \"${suite_manifest_path}\""
     echo '  },'
@@ -226,6 +234,7 @@ write_manifest() {
     echo "    \"cat ${run_dir}/kernel_schema_catalog.json\","
     echo "    \"cat ${run_dir}/synthesis_eligibility_report.json\","
     echo "    \"cat ${run_dir}/kernel_synth_evidence_manifest.json\","
+    echo "    \"cat ${run_dir}/superoptimization_report.json\","
     echo "    \"cat ${run_dir}/run_manifest.json\","
     echo "    \"cat ${suite_manifest_path}\","
     echo "    \"${0} ci\""

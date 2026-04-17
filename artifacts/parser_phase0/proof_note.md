@@ -6,24 +6,24 @@
 
 ## Grammar Completeness Snapshot
 
-- family_count: 20
-- supported_families: 8
-- partially_supported_families: 5
-- unsupported_families: 7
-- completeness_millionths: 537500
+- family_count: 21
+- supported_families: 21
+- partially_supported_families: 0
+- unsupported_families: 0
+- completeness_millionths: 1000000
 
 ## Determinism Evidence
 
 - fixture_catalog: crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json
-- fixture_count: 20
+- fixture_count: 21
 - canonical fixture hashes pinned in fixture catalog and verified in
   `crates/franken-engine/tests/parser_phase0_semantic_fixtures.rs`.
 
 ## Latency Snapshot (local reference only)
 
-- p50_ns: 126997
-- p95_ns: 254435
-- p99_ns: 275584
+- p50_ns: 146272
+- p95_ns: 230740
+- p99_ns: 286113
 
 ## Isomorphism / Safety Notes
 

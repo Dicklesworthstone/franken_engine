@@ -18087,6 +18087,10 @@ impl InterpreterCore {
             350 => Some("builtin:MathMin".to_string()),
             351 => Some("builtin:StringPrototypeLocaleCompare".to_string()),
             352 => Some("builtin:ArrayPrototypeFilter".to_string()),
+            353 => Some("builtin:MathFloor".to_string()),
+            354 => Some("builtin:MathCeil".to_string()),
+            355 => Some("builtin:MathRound".to_string()),
+            356 => Some("builtin:StringPrototypeSplit".to_string()),
 
             _ => None, // Not a recognized builtin
         }

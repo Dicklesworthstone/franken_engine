@@ -2737,9 +2737,11 @@ mod tests {
         assert!(assessment.flow_authorized);
         assert!(assessment.envelope_authorized);
 
-        // Should generate declassification obligation
+        // Should generate declassification obligation. Clone so we don't
+        // partially-move `assessment` (it's borrowed again below).
         let obligation = assessment
             .declassification_obligation
+            .clone()
             .expect("Should have declassification obligation");
         assert_eq!(obligation.obligation_id, "obl-auth-test");
         assert_eq!(obligation.source_label, Label::Secret);

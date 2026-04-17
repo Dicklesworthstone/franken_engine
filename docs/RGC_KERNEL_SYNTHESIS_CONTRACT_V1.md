@@ -1,12 +1,15 @@
 # RGC Kernel Synthesis Contract v1
 
-Bead: `bd-1lsy.7.13.1`
+Beads: `bd-1lsy.7.13`, `bd-1lsy.7.13.1`
 
 This contract turns the existing kernel-synthesis eligibility module into a
 replayable operator lane. It mines the canonical hot-kernel corpus, classifies
 each kernel into eligible/forbidden/deferred buckets, emits the synthesis
 evidence manifest, and writes a deterministic artifact bundle that later
-superoptimization and translation-validation lanes can consume.
+superoptimization and translation-validation lanes can consume. The bundle also
+emits `superoptimization_report.json`, tying budgeted synthesis sessions,
+equivalence receipts, counterexample archives, stale invalidation, and
+deterministic rollback semantics to the run manifest.
 
 ## Guard Scope
 
@@ -29,6 +32,7 @@ superoptimization and translation-validation lanes can consume.
 - `manifest.json`
 - `repro.lock`
 - `run_manifest.json`
+- `superoptimization_report.json`
 - `summary.md`
 - `synthesis_eligibility_report.json`
 - `trace_ids.json`

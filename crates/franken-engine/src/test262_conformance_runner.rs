@@ -602,10 +602,12 @@ mod tests {
         let result2 = runner.simulate_test_result(path2);
         assert_eq!(result1, result2); // Deterministic
 
-        // Test different paths give different results
+        // Test different paths give different results. Bind the String to
+        // a `let` so `Path::new(&s)` doesn't dangle on a temporary.
         let different_results: Vec<_> = (0..20)
             .map(|i| {
-                let path = Path::new(&format!("test/different/{}.js", i));
+                let s = format!("test/different/{}.js", i);
+                let path = Path::new(&s);
                 runner.simulate_test_result(path)
             })
             .collect();

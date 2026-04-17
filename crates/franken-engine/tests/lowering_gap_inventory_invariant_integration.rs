@@ -1,5 +1,5 @@
 use frankenengine_engine::lowering_gap_inventory::{
-    lowering_gap_inventory, LoweringGapSiteDescriptor, LoweringGapSiteId, LoweringGapStatus,
+    LoweringGapSiteDescriptor, LoweringGapSiteId, LoweringGapStatus, lowering_gap_inventory,
 };
 
 #[test]
@@ -166,8 +166,7 @@ fn test_lowering_gap_inventory_count_consistency() {
 
     // For current implementation: all sites are resolved, so execution_ready should equal total
     assert_eq!(
-        resolved_count,
-        execution_ready_count,
+        resolved_count, execution_ready_count,
         "All resolved sites should be execution ready"
     );
 }
@@ -281,7 +280,7 @@ fn test_invariant_validation_for_future_changes() {
 
     // Simulate different status combinations and verify invariant holds
     let test_cases = [
-        (LoweringGapStatus::Resolved, true, true),      // (status, parser_ready, execution_ready)
+        (LoweringGapStatus::Resolved, true, true), // (status, parser_ready, execution_ready)
         (LoweringGapStatus::OpenPlaceholder, true, false),
         (LoweringGapStatus::FailClosed, false, false),
     ];
@@ -290,16 +289,34 @@ fn test_invariant_validation_for_future_changes() {
         // This validates the logical invariant for each status type
         match status {
             LoweringGapStatus::Resolved => {
-                assert!(expected_execution_ready, "Resolved status requires execution_ready");
-                assert!(expected_parser_ready, "Resolved status requires parser_ready");
+                assert!(
+                    expected_execution_ready,
+                    "Resolved status requires execution_ready"
+                );
+                assert!(
+                    expected_parser_ready,
+                    "Resolved status requires parser_ready"
+                );
             }
             LoweringGapStatus::OpenPlaceholder => {
-                assert!(!expected_execution_ready, "OpenPlaceholder status forbids execution_ready");
-                assert!(expected_parser_ready, "OpenPlaceholder status requires parser_ready");
+                assert!(
+                    !expected_execution_ready,
+                    "OpenPlaceholder status forbids execution_ready"
+                );
+                assert!(
+                    expected_parser_ready,
+                    "OpenPlaceholder status requires parser_ready"
+                );
             }
             LoweringGapStatus::FailClosed => {
-                assert!(!expected_execution_ready, "FailClosed status forbids execution_ready");
-                assert!(!expected_parser_ready, "FailClosed status forbids parser_ready");
+                assert!(
+                    !expected_execution_ready,
+                    "FailClosed status forbids execution_ready"
+                );
+                assert!(
+                    !expected_parser_ready,
+                    "FailClosed status forbids parser_ready"
+                );
             }
         }
     }

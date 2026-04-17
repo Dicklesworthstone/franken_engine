@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.manifest.v1",
   "schema_hash": "sha256:manifest-schema-v1",
   "manifest_id": "parser-phase0-manifest-v1",
-  "generated_at_utc": "2026-02-25T06:14:25Z",
+  "generated_at_utc": "2026-04-17T15:20:48Z",
   "claim": {
     "claim_id": "claim.parser.scalar_reference_deterministic",
     "class": "DETERMINISM",
@@ -13,7 +13,7 @@
   "source_revision": {
     "repo": "franken_engine",
     "branch": "main",
-    "commit": "48a58608eed8eae3b04bee3a10109fa62880369e"
+    "commit": "bebc96bd7593fc8d30f405fee920f73a298ae69f"
   },
   "provenance": {
     "trace_id": "trace.parser.phase0",
@@ -28,47 +28,47 @@
   "artifacts": {
     "baseline": {
       "path": "artifacts/parser_phase0/baseline.json",
-      "sha256": "sha256:df1aae3b20a60007427f581f114c3361255afe7a810f3f764595e888022f340d"
+      "sha256": "sha256:673fc50caf946a651adc6c85a809d455edb508a73d3c72a37fb71052b487f182"
     },
-    "flamegraph": {
-      "path": "artifacts/parser_phase0/flamegraph.svg",
-      "sha256": "sha256:9164ffc100db034d76efaa87189ea42b4add96e60315e3756bebd7417b7b9f43"
+    "performance_receipt": {
+      "path": "artifacts/parser_phase0/parser_phase0_performance_artifact_receipt.json",
+      "sha256": "sha256:653c606b4194d6f395ecb9e67673b4304bc4e7a1e7f6eef5f3fcb6e2a89106e0"
     },
     "golden_checksums": {
       "path": "artifacts/parser_phase0/golden_checksums.txt",
-      "sha256": "sha256:cb8dfd85f72f684d7b1804f6f2aeef75b9eab00e9fc7f95d1e4b71c7c83c9565"
+      "sha256": "sha256:5354ca522a26edd8c8117de9e6761c15b7705bc470665ec94d9b6a5615ce4e2f"
     },
     "proof_note": {
       "path": "artifacts/parser_phase0/proof_note.md",
-      "sha256": "sha256:9cc20c718768a4c022a0e9ab4cbb78f6b5cc2be6e196c93665adcad8eb2bdc1c"
+      "sha256": "sha256:7ef369f7ceef7e3f3b505a1b16dd79cfa71bc285b3fcacb6646b35022971e9b7"
     },
     "env": {
       "path": "artifacts/parser_phase0/env.json",
-      "sha256": "sha256:188a1747cb606cb4222b8b2dbbb5db0e0fbd8895bca9d515ed1fd52f837eb173"
+      "sha256": "sha256:0257c5f45b9a4f876d6e335a4cb8759a1b01459adbeaac98161a213c493815fc"
     },
     "repro_lock": {
       "path": "artifacts/parser_phase0/repro.lock",
-      "sha256": "sha256:f9246bd832fc79cd34334fbe929a3560c52fa6114a031f42186917c13b17cd4b"
+      "sha256": "sha256:85a16d55ea4ac528ac3fca42b50614f6b1e6b6c61a2215f84f16d82b12657efe"
     },
     "provenance": {
       "path": "artifacts/parser_phase0/provenance.json",
-      "sha256": "sha256:f94375fd8b2506f48254a2f57b9b5ffd47eec946f4f571458e77646ffefc4a9d"
+      "sha256": "sha256:e73972a6475a6797793592f3f177117226a42bba4533233de0b27ee37bfa8732"
     }
   },
   "inputs": [
     {
       "path": "crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json",
-      "sha256": "sha256:223e5161db6cbff5d3da21c222825f609cc39e4ed7727c2bcceba92ad96ab056"
+      "sha256": "sha256:bf9e3ce2c5f5053eba20d2f2bec739116baeb38bcd7c8eb6816874e9c9885fd7"
     }
   ],
   "outputs": [
     {
       "path": "artifacts/parser_phase0/baseline.json",
-      "sha256": "sha256:df1aae3b20a60007427f581f114c3361255afe7a810f3f764595e888022f340d"
+      "sha256": "sha256:673fc50caf946a651adc6c85a809d455edb508a73d3c72a37fb71052b487f182"
     },
     {
       "path": "artifacts/parser_phase0/provenance.json",
-      "sha256": "sha256:f94375fd8b2506f48254a2f57b9b5ffd47eec946f4f571458e77646ffefc4a9d"
+      "sha256": "sha256:e73972a6475a6797793592f3f177117226a42bba4533233de0b27ee37bfa8732"
     }
   ],
   "canonicalization": {

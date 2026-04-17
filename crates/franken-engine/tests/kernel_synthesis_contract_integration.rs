@@ -13,6 +13,9 @@
     clippy::manual_abs_diff
 )]
 
+use std::fs;
+use std::process::Command;
+
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::kernel_synthesis_contract::{
     EligibilityDecision, EligibilityStatus, ForbiddenReason, KERNEL_SYNTH_COMPONENT,
@@ -671,4 +674,70 @@ fn integration_certificate_hash_determinism_across_runs() {
         assert_eq!(c1.certificate_hash, c2.certificate_hash);
         assert_eq!(c1.kernel_id, c2.kernel_id);
     }
+}
+
+// ---------------------------------------------------------------------------
+// CLI artifact bundle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integration_cli_emits_superoptimization_report_artifact() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_franken_kernel_synthesis_contract"))
+        .arg("--artifact-dir")
+        .arg(temp_dir.path())
+        .arg("--trace-id")
+        .arg("trace.rgc.613.integration")
+        .arg("--decision-id")
+        .arg("decision.rgc.613.integration")
+        .arg("--policy-id")
+        .arg("policy.rgc.613.integration")
+        .arg("--run-id")
+        .arg("run-rgc-613-integration")
+        .arg("--generated-at-utc")
+        .arg("2026-04-17T00:00:00Z")
+        .arg("--source-commit")
+        .arg("test-commit")
+        .arg("--toolchain")
+        .arg("nightly")
+        .status()
+        .unwrap();
+
+    assert!(status.success());
+
+    let report_path = temp_dir.path().join("superoptimization_report.json");
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&report_path).unwrap()).unwrap();
+    assert_eq!(
+        report["schema_version"],
+        "franken-engine.budgeted-superoptimization-report.v1"
+    );
+    assert!(report["admitted_candidate_count"].as_u64().unwrap() >= 1);
+    assert!(report["refuted_candidate_count"].as_u64().unwrap() >= 1);
+    assert!(report["timed_out_candidate_count"].as_u64().unwrap() >= 1);
+    assert!(report["total_counterexamples"].as_u64().unwrap() >= 1);
+    assert_eq!(
+        report["deterministic_rollback"]["fallback_path"],
+        "baseline_compiled_code"
+    );
+    assert_eq!(report["deterministic_rollback"]["deterministic"], true);
+
+    let run_manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp_dir.path().join("run_manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        run_manifest["superoptimization_report"],
+        report_path.display().to_string()
+    );
+    assert_eq!(
+        run_manifest["superoptimization_report_hash"]
+            .as_array()
+            .unwrap()
+            .len(),
+        32
+    );
+
+    let events = fs::read_to_string(temp_dir.path().join("events.jsonl")).unwrap();
+    assert!(events.contains("budgeted_superoptimization_report_emitted"));
 }

@@ -1,17 +1,17 @@
 {
   "schema_version": "franken-engine.parser-phase0.baseline.v1",
-  "generated_at_utc": "2026-02-25T06:14:25Z",
+  "generated_at_utc": "2026-04-17T15:20:48Z",
   "parser_mode": "scalar_reference",
   "fixture_catalog_path": "crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json",
   "fixture_catalog_schema": "franken-engine.parser-phase0.semantic-fixtures.v1",
-  "fixture_count": 20,
-  "deterministic_hash_validation": true,
+  "fixture_count": 21,
+  "deterministic_hash_validation": false,
   "grammar_completeness": {
-    "family_count": 20,
-    "supported_families": 8,
-    "partially_supported_families": 5,
-    "unsupported_families": 7,
-    "completeness_millionths": 537500
+    "family_count": 21,
+    "supported_families": 21,
+    "partially_supported_families": 0,
+    "unsupported_families": 0,
+    "completeness_millionths": 1000000
   },
   "parser_budget": {
     "max_source_bytes": 1048576,
@@ -19,10 +19,10 @@
     "max_recursion_depth": 256
   },
   "latency": {
-    "sample_count": 2560,
+    "sample_count": 2688,
     "repetitions": 128,
-    "p50_ns": 126997,
-    "p95_ns": 254435,
-    "p99_ns": 275584
+    "p50_ns": 146272,
+    "p95_ns": 230740,
+    "p99_ns": 286113
   }
 }

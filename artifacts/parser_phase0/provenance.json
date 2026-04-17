@@ -1,13 +1,13 @@
 {
   "schema_version": "franken-engine.parser-phase0.provenance.v1",
-  "generated_at_utc": "2026-02-25T06:14:25Z",
+  "generated_at_utc": "2026-04-17T15:20:48Z",
   "claim_id": "claim.parser.scalar_reference_deterministic",
   "demo_id": "demo.parser.scalar_reference",
   "artifact_hashes": {
-    "baseline_json": "sha256:df1aae3b20a60007427f581f114c3361255afe7a810f3f764595e888022f340d",
-    "flamegraph_svg": "sha256:9164ffc100db034d76efaa87189ea42b4add96e60315e3756bebd7417b7b9f43",
-    "fixture_catalog": "sha256:223e5161db6cbff5d3da21c222825f609cc39e4ed7727c2bcceba92ad96ab056",
-    "proof_note": "sha256:9cc20c718768a4c022a0e9ab4cbb78f6b5cc2be6e196c93665adcad8eb2bdc1c"
+    "baseline_json": "sha256:673fc50caf946a651adc6c85a809d455edb508a73d3c72a37fb71052b487f182",
+    "performance_receipt": "sha256:653c606b4194d6f395ecb9e67673b4304bc4e7a1e7f6eef5f3fcb6e2a89106e0",
+    "fixture_catalog": "sha256:bf9e3ce2c5f5053eba20d2f2bec739116baeb38bcd7c8eb6816874e9c9885fd7",
+    "proof_note": "sha256:7ef369f7ceef7e3f3b505a1b16dd79cfa71bc285b3fcacb6646b35022971e9b7"
   },
   "evidence_links": {
     "fixture_suite": "crates/franken-engine/tests/parser_phase0_semantic_fixtures.rs",

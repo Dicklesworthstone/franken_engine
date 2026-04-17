@@ -2058,7 +2058,12 @@ mod tests {
             extension_id: "test-ext-1".to_string(),
             source: "42".to_string(),
             source_file: None,
-            capabilities: vec![],
+            // Grant the two execution-time capabilities every test here needs
+            // just to dispatch VM instructions and allocate heap objects. The
+            // orchestrator turns these strings into `RuntimeCapability` grants
+            // via `RuntimeCapability::from_tag_str`, which requires the
+            // canonical snake_case tag names.
+            capabilities: vec!["vm_dispatch".to_string(), "heap_allocate".to_string()],
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
         }

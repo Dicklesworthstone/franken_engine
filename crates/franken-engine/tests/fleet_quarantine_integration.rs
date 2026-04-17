@@ -355,11 +355,11 @@ fn test_convergence_slo_met() {
     let mut sorted_times = convergence_times.clone();
     sorted_times.sort();
 
-    let _p50 = sorted_times[sorted_times.len() * 50 / 100];
-    let _p95 = sorted_times[sorted_times.len() * 95 / 100];
+    let p50 = sorted_times[sorted_times.len() * 50 / 100];
+    let p95 = sorted_times[sorted_times.len() * 95 / 100];
     let p99 = sorted_times[sorted_times.len() * 99 / 100];
-    let _max_time = *sorted_times.last().unwrap();
-    let _mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
+    let max_time = *sorted_times.last().unwrap();
+    let mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
 
     let violations = sorted_times
         .iter()
@@ -367,13 +367,55 @@ fn test_convergence_slo_met() {
         .count();
     let slo_met = violations == 0;
 
-    // All measurements should be well under SLO
+    // Percentile ordering invariant — a sort-then-index bug would break this.
+    assert!(
+        p50 <= p95,
+        "percentile order violated: p50 {p50} > p95 {p95}"
+    );
+    assert!(
+        p95 <= p99,
+        "percentile order violated: p95 {p95} > p99 {p99}"
+    );
+    assert!(
+        p99 <= max_time,
+        "percentile order violated: p99 {p99} > max {max_time}"
+    );
+
+    // Every percentile (not just p99) must sit under the SLO for this test
+    // to claim "convergence met the SLO across the distribution". Asserting
+    // p99 alone hides a fat-tailed p50/p95 that would still violate real SLO.
+    assert!(
+        p50 < config.max_convergence_ms,
+        "p50 {} exceeds SLO {}",
+        p50,
+        config.max_convergence_ms
+    );
+    assert!(
+        p95 < config.max_convergence_ms,
+        "p95 {} exceeds SLO {}",
+        p95,
+        config.max_convergence_ms
+    );
     assert!(
         p99 < config.max_convergence_ms,
         "p99 {} exceeds SLO {}",
         p99,
         config.max_convergence_ms
     );
+    assert!(
+        max_time < config.max_convergence_ms,
+        "max {} exceeds SLO {}",
+        max_time,
+        config.max_convergence_ms
+    );
+
+    // Mean gives an additional smoke check — if it's above p95 we picked the
+    // wrong percentile boundaries.
+    assert!(
+        mean_time <= p95 as f64,
+        "mean {mean_time} above p95 {p95} — percentile math is suspect"
+    );
+
     assert!(
         slo_met,
         "SLO violated in {} out of {} events",

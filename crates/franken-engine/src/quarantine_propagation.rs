@@ -362,6 +362,11 @@ impl QuarantineProtocolManager {
     }
 
     /// Send acknowledgment for a quarantine decision.
+    ///
+    /// Emits a `MessagePayload::QuarantineAck` back to the decision originator so
+    /// `process_acknowledgment` on the originator side records convergence.
+    /// Previously this site constructed a `QuarantineAck`, dropped it, and sent a
+    /// `StateChange` instead — the ack was silently lost.
     fn send_acknowledgment(
         &mut self,
         acknowledging_instance: &NodeId,
@@ -369,19 +374,12 @@ impl QuarantineProtocolManager {
     ) -> Result<(), QuarantineProtocolError> {
         self.lamport_clock += 1;
 
-        let _ack = QuarantineAck::new(
-            decision.evidence_hash,
-            acknowledging_instance.clone(),
-            self.lamport_clock,
-            true, // Assume successful enforcement
-            Some(format!("Quarantined extension: {}", decision.extension_id)),
-        );
-
-        // Send ack to originator
-        let payload = MessagePayload::StateChange {
-            old_state: crate::fleet_simulator::InstanceState::Healthy,
-            new_state: crate::fleet_simulator::InstanceState::Healthy,
-            reason: format!("Quarantine ack: {}", decision.extension_id),
+        let payload = MessagePayload::QuarantineAck {
+            extension_id: decision.extension_id.clone(),
+            evidence_hash: decision.evidence_hash.to_hex(),
+            acknowledging_instance: acknowledging_instance.clone(),
+            originator_instance: decision.originator_instance.clone(),
+            lamport_timestamp: self.lamport_clock,
         };
 
         self.fleet_simulator

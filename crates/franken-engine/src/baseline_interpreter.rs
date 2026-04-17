@@ -1032,18 +1032,25 @@ impl EvidenceLog {
         self.receipts.is_empty()
     }
 
-    /// Generate a random signing key for HMAC.
+    /// Generate a signing key for HMAC.
+    ///
+    /// Dev-only stopgap — production must wire in a CSPRNG. The 128-bit
+    /// nanosecond timestamp is spread across bytes 0..=15 of the key, then
+    /// wrapped into bytes 16..=31. The `% 16` is load-bearing: without it,
+    /// `i * 8` reaches 128+ once `i >= 16` and shifting a `u128` by 128 bits
+    /// panics with "attempt to shift right with overflow" in debug builds —
+    /// which is why every interpreter test that constructed an
+    /// `InterpreterCore` was failing at runtime.
     fn generate_signing_key() -> [u8; 32] {
-        // In production, this would use a secure random number generator
-        // For now, use a deterministic key based on current time
-        let mut key = [0u8; 32];
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
 
+        let mut key = [0u8; 32];
         for (i, byte) in key.iter_mut().enumerate() {
-            *byte = ((timestamp >> (i * 8)) & 0xFF) as u8;
+            let shift = ((i % 16) * 8) as u32; // stays in 0..=120, inside u128 width
+            *byte = ((timestamp >> shift) & 0xFF) as u8;
         }
 
         key
@@ -7904,16 +7911,36 @@ mod tests {
         m
     }
 
+    /// Build a test interpreter config that grants the execution capabilities
+    /// every baseline interpreter test needs. The production `quickjs_defaults`
+    /// / `v8_defaults` intentionally start with an empty capability set so
+    /// callers must explicitly grant what an extension may do; tests are not
+    /// exercising the grant-policy surface, so they need a fully-enabled
+    /// baseline to actually dispatch VM instructions and allocate objects.
+    fn test_quickjs_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities =
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config
+    }
+
+    fn test_v8_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::v8_defaults();
+        config.granted_capabilities =
+            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config
+    }
+
     fn quickjs_execute(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        QuickJsLane::new().execute(module, "test-trace")
+        QuickJsLane::with_config(test_quickjs_config()).execute(module, "test-trace")
     }
 
     fn v8_execute(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        V8Lane::new().execute(module, "test-trace")
+        V8Lane::with_config(test_v8_config()).execute(module, "test-trace")
     }
 
     fn quickjs_test_core() -> InterpreterCore {
-        InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test-trace")
+        InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
     #[allow(dead_code)]

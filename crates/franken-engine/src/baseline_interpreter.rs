@@ -10202,66 +10202,90 @@ impl InterpreterCore {
                     1
                 };
 
-                // Get array length first
-                let length = if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
+                // Snapshot outer array length + outer elements; also snapshot
+                // every inner (level-1) array's elements. Done entirely under
+                // immutable borrows so we can safely allocate + set below.
+                let outer_snapshot: Vec<Value> =
+                    if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                        let length = array_obj
+                            .properties
+                            .get("length")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i as usize),
+                                Value::Float(f) => Some(f.inner() as usize),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        (0..length)
+                            .filter_map(|i| {
+                                array_obj.properties.get(&i.to_string()).cloned()
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
 
-                if length > 0 {
-                    // Create a new flattened array
-                    let result_id = self.alloc_object_with_prototype(None)?;
-
-                    // Collect elements (simplified - one level flattening only)
+                if !outer_snapshot.is_empty() {
+                    // Pre-flatten level 1 under immutable borrows.
                     let mut flat_elements: Vec<Value> = Vec::new();
-                    for i in 0..length {
-                        if let Some(value) = array_obj.properties.get(&i.to_string()) {
-                            // If depth > 0 and value is an array, flatten it (simplified)
-                            if depth > 0 {
-                                if let Value::Object(inner_id) = value {
-                                    if let Some(inner_obj) = self.heap.get(inner_id.0 as usize) {
+                    for value in outer_snapshot {
+                        let flattened = if depth > 0 {
+                            match &value {
+                                Value::Object(inner_id) => {
+                                    if let Some(inner_obj) =
+                                        self.heap.get(inner_id.0 as usize)
+                                    {
                                         if inner_obj.properties.contains_key("length") {
-                                            // It's an array-like object, flatten its elements
                                             let inner_length = inner_obj
                                                 .properties
                                                 .get("length")
                                                 .and_then(|v| match v {
                                                     Value::Int(i) => Some(*i as usize),
-                                                    Value::Float(f) => Some(f.inner() as usize),
+                                                    Value::Float(f) => {
+                                                        Some(f.inner() as usize)
+                                                    }
                                                     _ => None,
                                                 })
                                                 .unwrap_or(0);
-
-                                            for j in 0..inner_length {
-                                                if let Some(inner_value) =
-                                                    inner_obj.properties.get(&j.to_string())
-                                                {
-                                                    flat_elements.push(inner_value.clone());
-                                                }
-                                            }
-                                            continue;
+                                            let elems: Vec<Value> = (0..inner_length)
+                                                .filter_map(|j| {
+                                                    inner_obj
+                                                        .properties
+                                                        .get(&j.to_string())
+                                                        .cloned()
+                                                })
+                                                .collect();
+                                            Some(elems)
+                                        } else {
+                                            None
                                         }
+                                    } else {
+                                        None
                                     }
                                 }
+                                _ => None,
                             }
-                            flat_elements.push(value.clone());
+                        } else {
+                            None
+                        };
+                        match flattened {
+                            Some(elems) => flat_elements.extend(elems),
+                            None => flat_elements.push(value),
                         }
                     }
+
+                    // Create a new flattened array
+                    let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Set up result array
                     for (i, value) in flat_elements.iter().enumerate() {
                         self.set_object_property(result_id, i.to_string(), value.clone())?;
                     }
-                    self.set_object_property(result_id, "length".to_string(), Value::Int(flat_elements.len() as i64))?;
+                    self.set_object_property(
+                        result_id,
+                        "length".to_string(),
+                        Value::Int(flat_elements.len() as i64),
+                    )?;
 
                     Ok(Value::Object(result_id))
                 } else {
@@ -12624,6 +12648,114 @@ impl InterpreterCore {
                 Ok(Value::Object(obj_id))
             }
 
+            "builtin:SymbolIterator" => {
+                // Symbol.iterator implementation - well-known symbol for iteration protocol
+                // Create a special symbol object for the iterator symbol
+                let symbol_id = self.alloc_object_with_prototype(None)?;
+
+                // Set symbol metadata
+                self.set_object_property(
+                    symbol_id,
+                    "__type".to_string(),
+                    Value::Str("Symbol".to_string()),
+                )?;
+                self.set_object_property(
+                    symbol_id,
+                    "__description".to_string(),
+                    Value::Str("Symbol.iterator".to_string()),
+                )?;
+                self.set_object_property(
+                    symbol_id,
+                    "__wellKnown".to_string(),
+                    Value::Bool(true),
+                )?;
+                self.set_object_property(
+                    symbol_id,
+                    "__key".to_string(),
+                    Value::Str("@@iterator".to_string()),
+                )?;
+
+                Ok(Value::Object(symbol_id))
+            }
+
+            "builtin:StringPrototypeNormalize" => {
+                // String.prototype.normalize(form) implementation - Unicode normalization
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                let _form = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Str(f) => f,
+                        _ => "NFC".to_string(), // Default normalization form
+                    }
+                } else {
+                    "NFC".to_string()
+                };
+
+                // Simplified implementation - return the string as-is
+                // TODO: Implement proper Unicode normalization with different forms (NFC, NFD, NFKC, NFKD)
+                Ok(Value::Str(string_val))
+            }
+
+            "builtin:StringPrototypeTrimStart" => {
+                // String.prototype.trimStart() implementation - remove leading whitespace
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                // Remove leading whitespace
+                let trimmed = string_val.trim_start();
+                Ok(Value::Str(trimmed.to_string()))
+            }
+
+            "builtin:StringPrototypeTrimEnd" => {
+                // String.prototype.trimEnd() implementation - remove trailing whitespace
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                // Remove trailing whitespace
+                let trimmed = string_val.trim_end();
+                Ok(Value::Str(trimmed.to_string()))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -12811,6 +12943,10 @@ impl InterpreterCore {
             218 => Some("builtin:ArrayPrototypeKeys".to_string()),
             219 => Some("builtin:ArrayPrototypeValues".to_string()),
             220 => Some("builtin:ObjectSetPrototypeOf".to_string()),
+            221 => Some("builtin:SymbolIterator".to_string()),
+            222 => Some("builtin:StringPrototypeNormalize".to_string()),
+            223 => Some("builtin:StringPrototypeTrimStart".to_string()),
+            224 => Some("builtin:StringPrototypeTrimEnd".to_string()),
 
             _ => None, // Not a recognized builtin
         }

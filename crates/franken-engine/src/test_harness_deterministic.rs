@@ -225,8 +225,10 @@ impl ParserTestHarness {
     pub fn execute_parser_test(&mut self, test_spec: ParserTestSpec) -> TestResult {
         let start_time = std::time::Instant::now();
 
-        // Extract needed fields before any moves
-        let source_complexity = test_spec.source_complexity;
+        // Extract needed fields before any moves. SourceComplexity is Clone
+        // but not Copy, so clone explicitly to avoid partially moving
+        // test_spec before we re-borrow it.
+        let source_complexity = test_spec.source_complexity.clone();
 
         // Generate deterministic parser test cases
         let source = self.fixture_generator.generate_source(source_complexity);

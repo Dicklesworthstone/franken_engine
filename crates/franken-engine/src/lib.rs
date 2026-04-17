@@ -351,6 +351,7 @@ pub mod revocation_chain;
 pub mod revocation_enforcement;
 pub mod revocation_freshness;
 pub mod rgc_execution_waves;
+pub mod rgc_cross_arch_reproducibility;
 pub mod rgc_planning_track;
 pub mod rgc_test_harness;
 pub mod rollback_safemode_synthesizer;

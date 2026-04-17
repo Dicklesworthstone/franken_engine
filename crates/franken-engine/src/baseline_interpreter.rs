@@ -9788,19 +9788,15 @@ impl InterpreterCore {
                     String::new()
                 };
 
-                // Create a new Error object
-                let error_id = ObjectId(self.next_object_id());
-                let mut error_obj = Object::new();
-
-                // Set standard Error properties
-                error_obj
-                    .properties
-                    .insert("name".to_string(), Value::Str("Error".to_string()));
-                error_obj
-                    .properties
-                    .insert("message".to_string(), Value::Str(message));
-
-                self.heap.push(error_obj);
+                // Create a new Error object via the capability-checked
+                // allocator.
+                let error_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(
+                    error_id,
+                    "name".to_string(),
+                    Value::Str("Error".to_string()),
+                )?;
+                self.set_object_property(error_id, "message".to_string(), Value::Str(message))?;
                 Ok(Value::Object(error_id))
             }
             "builtin:StringPrototypePadEnd" => {
@@ -10521,6 +10517,118 @@ impl InterpreterCore {
 
                 Ok(obj_val) // Return the original object
             }
+            "builtin:Map" => {
+                // Map([iterable]) constructor implementation
+                let map_id = ObjectId(self.next_object_id());
+                let mut map_obj = Object::new();
+
+                // Mark as Map type
+                map_obj
+                    .properties
+                    .insert("__type".to_string(), Value::Str("Map".to_string()));
+                map_obj.properties.insert(
+                    "__entries".to_string(),
+                    Value::Object(ObjectId(self.next_object_id())),
+                );
+                map_obj.properties.insert("size".to_string(), Value::Int(0));
+
+                // Create internal entries storage
+                let entries_id = self.next_object_id() - 1;
+                let entries_obj = Object::new();
+                self.heap.push(entries_obj);
+
+                // TODO: If iterable argument provided, populate map with entries
+                if args.count > 0 {
+                    // Simplified: ignore iterable for now
+                }
+
+                self.heap.push(map_obj);
+                Ok(Value::Object(map_id))
+            }
+            "builtin:Set" => {
+                // Set([iterable]) constructor implementation
+                let set_id = ObjectId(self.next_object_id());
+                let mut set_obj = Object::new();
+
+                // Mark as Set type
+                set_obj
+                    .properties
+                    .insert("__type".to_string(), Value::Str("Set".to_string()));
+                set_obj.properties.insert(
+                    "__values".to_string(),
+                    Value::Object(ObjectId(self.next_object_id())),
+                );
+                set_obj.properties.insert("size".to_string(), Value::Int(0));
+
+                // Create internal values storage
+                let values_id = self.next_object_id() - 1;
+                let values_obj = Object::new();
+                self.heap.push(values_obj);
+
+                // TODO: If iterable argument provided, populate set with values
+                if args.count > 0 {
+                    // Simplified: ignore iterable for now
+                }
+
+                self.heap.push(set_obj);
+                Ok(Value::Object(set_id))
+            }
+            "builtin:WeakMap" => {
+                // WeakMap([iterable]) constructor implementation (simplified)
+                let weakmap_id = ObjectId(self.next_object_id());
+                let mut weakmap_obj = Object::new();
+
+                // Mark as WeakMap type
+                weakmap_obj
+                    .properties
+                    .insert("__type".to_string(), Value::Str("WeakMap".to_string()));
+                weakmap_obj.properties.insert(
+                    "__entries".to_string(),
+                    Value::Object(ObjectId(self.next_object_id())),
+                );
+
+                // Create internal entries storage (simplified - using regular object)
+                let entries_id = self.next_object_id() - 1;
+                let entries_obj = Object::new();
+                self.heap.push(entries_obj);
+
+                // Note: In a full implementation, WeakMap would use weak references
+                // TODO: If iterable argument provided, populate weakmap with entries
+                if args.count > 0 {
+                    // Simplified: ignore iterable for now
+                }
+
+                self.heap.push(weakmap_obj);
+                Ok(Value::Object(weakmap_id))
+            }
+            "builtin:WeakSet" => {
+                // WeakSet([iterable]) constructor implementation (simplified)
+                let weakset_id = ObjectId(self.next_object_id());
+                let mut weakset_obj = Object::new();
+
+                // Mark as WeakSet type
+                weakset_obj
+                    .properties
+                    .insert("__type".to_string(), Value::Str("WeakSet".to_string()));
+                weakset_obj.properties.insert(
+                    "__values".to_string(),
+                    Value::Object(ObjectId(self.next_object_id())),
+                );
+
+                // Create internal values storage (simplified - using regular object)
+                let values_id = self.next_object_id() - 1;
+                let values_obj = Object::new();
+                self.heap.push(values_obj);
+
+                // Note: In a full implementation, WeakSet would use weak references
+                // TODO: If iterable argument provided, populate weakset with values
+                if args.count > 0 {
+                    // Simplified: ignore iterable for now
+                }
+
+                self.heap.push(weakset_obj);
+                Ok(Value::Object(weakset_id))
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -10657,6 +10765,12 @@ impl InterpreterCore {
 
             // Operators
             160 => Some("builtin:typeof".to_string()),
+
+            // Collection constructors
+            170 => Some("builtin:Map".to_string()),
+            171 => Some("builtin:Set".to_string()),
+            172 => Some("builtin:WeakMap".to_string()),
+            173 => Some("builtin:WeakSet".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -6864,7 +6864,7 @@ impl InterpreterCore {
 
             // Math methods
             "builtin:MathAbs" => {
-                // TODO: Implement Math.abs
+                // Math.abs implementation - returns absolute value of the argument
                 if args.count > 0 {
                     let arg = self.read_reg(args.start)?;
                     match arg {

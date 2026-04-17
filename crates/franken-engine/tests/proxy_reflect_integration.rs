@@ -27,7 +27,11 @@ fn create_test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
     Ir3Module {
         id: "proxy_test".to_string(),
         instructions,
-        constant_pool: vec!["target".to_string(), "handler".to_string(), "test".to_string()],
+        constant_pool: vec![
+            "target".to_string(),
+            "handler".to_string(),
+            "test".to_string(),
+        ],
         import_map: Default::default(),
         export_map: Default::default(),
     }
@@ -63,8 +67,14 @@ fn proxy_get_trap_intercepts_property_access() {
     let module = create_test_module(vec![
         // Create target: { x: 42 }
         Ir3Instruction::NewObject { dst: Reg(1) },
-        Ir3Instruction::LoadInt { dst: Reg(5), value: 42 },
-        Ir3Instruction::LoadStr { dst: Reg(6), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadInt {
+            dst: Reg(5),
+            value: 42,
+        },
+        Ir3Instruction::LoadStr {
+            dst: Reg(6),
+            pool_index: 2,
+        }, // "x"
         Ir3Instruction::SetProperty {
             obj: Reg(1),
             key: Reg(6),
@@ -89,8 +99,14 @@ fn proxy_get_trap_intercepts_property_access() {
 fn proxy_set_trap_intercepts_property_assignment() {
     // Test: proxy set trap intercepts property write
     let module = create_test_module(vec![
-        Ir3Instruction::LoadInt { dst: Reg(4), value: 99 },
-        Ir3Instruction::LoadStr { dst: Reg(5), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadInt {
+            dst: Reg(4),
+            value: 99,
+        },
+        Ir3Instruction::LoadStr {
+            dst: Reg(5),
+            pool_index: 2,
+        }, // "x"
         Ir3Instruction::SetProperty {
             obj: Reg(3), // proxy object
             key: Reg(5), // "x"
@@ -107,7 +123,10 @@ fn proxy_set_trap_intercepts_property_assignment() {
 fn proxy_has_trap_intercepts_in_operator() {
     // Test: proxy has trap intercepts 'in' operator
     let module = create_test_module(vec![
-        Ir3Instruction::LoadStr { dst: Reg(4), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadStr {
+            dst: Reg(4),
+            pool_index: 2,
+        }, // "x"
         // "x" in proxy should trigger has trap
         Ir3Instruction::In {
             prop: Reg(4),
@@ -125,7 +144,10 @@ fn proxy_has_trap_intercepts_in_operator() {
 fn proxy_delete_trap_intercepts_delete_operator() {
     // Test: proxy deleteProperty trap intercepts delete
     let module = create_test_module(vec![
-        Ir3Instruction::LoadStr { dst: Reg(4), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadStr {
+            dst: Reg(4),
+            pool_index: 2,
+        }, // "x"
         Ir3Instruction::DeleteProperty {
             obj: Reg(3), // proxy object
             key: Reg(4), // "x"
@@ -143,8 +165,14 @@ fn proxy_apply_trap_intercepts_function_call() {
     // Test: proxy apply trap intercepts function call
     let module = create_test_module(vec![
         // Call proxy as function: proxy(arg1, arg2)
-        Ir3Instruction::LoadInt { dst: Reg(4), value: 1 },
-        Ir3Instruction::LoadInt { dst: Reg(5), value: 2 },
+        Ir3Instruction::LoadInt {
+            dst: Reg(4),
+            value: 1,
+        },
+        Ir3Instruction::LoadInt {
+            dst: Reg(5),
+            value: 2,
+        },
         Ir3Instruction::Call {
             func: Reg(3), // proxy object (callable)
             args: vec![Reg(4), Reg(5)],
@@ -162,8 +190,14 @@ fn proxy_construct_trap_intercepts_new_operator() {
     // Test: proxy construct trap intercepts new operator
     let module = create_test_module(vec![
         // new proxy(arg1, arg2)
-        Ir3Instruction::LoadInt { dst: Reg(4), value: 1 },
-        Ir3Instruction::LoadInt { dst: Reg(5), value: 2 },
+        Ir3Instruction::LoadInt {
+            dst: Reg(4),
+            value: 1,
+        },
+        Ir3Instruction::LoadInt {
+            dst: Reg(5),
+            value: 2,
+        },
         Ir3Instruction::Construct {
             constructor: Reg(3), // proxy object (constructable)
             args: vec![Reg(4), Reg(5)],
@@ -200,7 +234,10 @@ fn reflect_get_provides_default_behavior() {
     // Test: Reflect.get(target, prop, receiver)
     let module = create_test_module(vec![
         Ir3Instruction::NewObject { dst: Reg(1) }, // target
-        Ir3Instruction::LoadStr { dst: Reg(2), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadStr {
+            dst: Reg(2),
+            pool_index: 2,
+        }, // "x"
         // Reflect.get(target, "x")
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.get
@@ -219,8 +256,14 @@ fn reflect_set_provides_default_behavior() {
     // Test: Reflect.set(target, prop, value, receiver)
     let module = create_test_module(vec![
         Ir3Instruction::NewObject { dst: Reg(1) }, // target
-        Ir3Instruction::LoadStr { dst: Reg(2), pool_index: 2 }, // "x"
-        Ir3Instruction::LoadInt { dst: Reg(3), value: 42 }, // value
+        Ir3Instruction::LoadStr {
+            dst: Reg(2),
+            pool_index: 2,
+        }, // "x"
+        Ir3Instruction::LoadInt {
+            dst: Reg(3),
+            value: 42,
+        }, // value
         // Reflect.set(target, "x", 42)
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.set
@@ -239,7 +282,10 @@ fn reflect_has_provides_default_behavior() {
     // Test: Reflect.has(target, prop)
     let module = create_test_module(vec![
         Ir3Instruction::NewObject { dst: Reg(1) }, // target
-        Ir3Instruction::LoadStr { dst: Reg(2), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadStr {
+            dst: Reg(2),
+            pool_index: 2,
+        }, // "x"
         // Reflect.has(target, "x")
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.has
@@ -258,7 +304,10 @@ fn reflect_delete_property_provides_default_behavior() {
     // Test: Reflect.deleteProperty(target, prop)
     let module = create_test_module(vec![
         Ir3Instruction::NewObject { dst: Reg(1) }, // target
-        Ir3Instruction::LoadStr { dst: Reg(2), pool_index: 2 }, // "x"
+        Ir3Instruction::LoadStr {
+            dst: Reg(2),
+            pool_index: 2,
+        }, // "x"
         // Reflect.deleteProperty(target, "x")
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.deleteProperty
@@ -279,7 +328,7 @@ fn reflect_apply_provides_default_behavior() {
         // Create function target, this, and args array
         Ir3Instruction::NewObject { dst: Reg(1) }, // function
         Ir3Instruction::LoadUndefined { dst: Reg(2) }, // this
-        Ir3Instruction::NewArray { dst: Reg(3) }, // args
+        Ir3Instruction::NewArray { dst: Reg(3) },  // args
         // Reflect.apply(target, this, args)
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.apply
@@ -299,7 +348,7 @@ fn reflect_construct_provides_default_behavior() {
     let module = create_test_module(vec![
         // Create constructor target and args
         Ir3Instruction::NewObject { dst: Reg(1) }, // constructor
-        Ir3Instruction::NewArray { dst: Reg(2) }, // args
+        Ir3Instruction::NewArray { dst: Reg(2) },  // args
         // Reflect.construct(target, args)
         Ir3Instruction::Call {
             func: Reg(0), // Reflect.construct

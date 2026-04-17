@@ -16705,6 +16705,146 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeBig" => {
+                // String.prototype.big() implementation (deprecated HTML wrapper)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let result = format!("<big>{}</big>", str_text);
+                Ok(Value::Str(result))
+            }
+
+            "builtin:NumberPrototypeToPrecision" => {
+                // Number.prototype.toPrecision(precision) implementation
+                let this_val = self.read_reg(args.start)?;
+                let num = match this_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let precision = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => Some(((n as usize).max(1)).min(21)), // 1-21 range
+                        Value::Float(f) => Some(((f.inner() as usize).max(1)).min(21)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                if num.is_nan() {
+                    Ok(Value::Str("NaN".to_string()))
+                } else if num.is_infinite() {
+                    if num.is_sign_positive() {
+                        Ok(Value::Str("Infinity".to_string()))
+                    } else {
+                        Ok(Value::Str("-Infinity".to_string()))
+                    }
+                } else {
+                    let formatted = if let Some(prec) = precision {
+                        // Use exponential notation if number is too large/small for fixed precision
+                        if num.abs() >= 10_f64.powi(prec as i32) || (num.abs() < 1.0 && num != 0.0)
+                        {
+                            format!("{:.precision$e}", num, precision = prec.saturating_sub(1))
+                        } else {
+                            format!("{:.precision$}", num, precision = prec.saturating_sub(1))
+                        }
+                    } else {
+                        num.to_string()
+                    };
+                    Ok(Value::Str(formatted))
+                }
+            }
+
+            "builtin:ArrayPrototypeKeys" => {
+                // Array.prototype.keys() implementation (ES2015 iterator method - simplified)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Simplified implementation: return array of indices (instead of iterator)
+                let keys_array_id = self.alloc_object_with_prototype(None)?;
+
+                for i in 0..length {
+                    self.set_object_property(keys_array_id, i.to_string(), Value::Int(i as i64))?;
+                }
+
+                self.set_object_property(
+                    keys_array_id,
+                    "length".to_string(),
+                    Value::Int(length as i64),
+                )?;
+
+                Ok(Value::Object(keys_array_id))
+            }
+
+            "builtin:WeakMapPrototypeHas" => {
+                // WeakMap.prototype.has(key) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let weakmap_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects can't be WeakMaps
+                };
+
+                let key = self.read_reg(args.start + 1)?;
+
+                // Simplified implementation: check if key exists in WeakMap-like object
+                // In a real implementation, this would use weak references
+                if let Some(weakmap_obj) = self.heap.get(weakmap_id.0 as usize) {
+                    // Use a simple string representation of the key for lookup
+                    let key_str = match key {
+                        Value::Object(obj_id) => format!("obj_{}", obj_id.0),
+                        Value::Str(s) => format!("str_{}", s),
+                        Value::Int(n) => format!("int_{}", n),
+                        Value::Float(f) => format!("float_{}", f.inner()),
+                        _ => return Ok(Value::Bool(false)), // WeakMap only accepts object keys
+                    };
+
+                    Ok(Value::Bool(weakmap_obj.properties.contains_key(&key_str)))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -16992,6 +17132,10 @@ impl InterpreterCore {
             318 => Some("builtin:NumberPrototypeToExponential".to_string()),
             319 => Some("builtin:ArrayPrototypeValues".to_string()),
             320 => Some("builtin:ObjectIsSealed".to_string()),
+            321 => Some("builtin:StringPrototypeBig".to_string()),
+            322 => Some("builtin:NumberPrototypeToPrecision".to_string()),
+            323 => Some("builtin:ArrayPrototypeKeys".to_string()),
+            324 => Some("builtin:WeakMapPrototypeHas".to_string()),
 
             _ => None, // Not a recognized builtin
         }

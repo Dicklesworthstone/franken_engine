@@ -442,18 +442,29 @@ impl ContextualSelector {
                     .strategies
                     .iter()
                     .find(|s| s.strategy_id == *strategy_id);
-                let kind = matched.map(|s| s.kind);
-                let feasible_count = usize::from(matched.is_some());
+
+                if let Some(strategy) = matched {
+                    return self.build_decision(
+                        epoch,
+                        Some(strategy_id.clone()),
+                        Some(strategy.kind),
+                        SelectionReason::OperatorOverride {
+                            strategy_id: strategy_id.clone(),
+                        },
+                        Vec::new(),
+                        1,
+                        0,
+                    );
+                }
+
                 return self.build_decision(
                     epoch,
-                    Some(strategy_id.clone()),
-                    kind,
-                    SelectionReason::OperatorOverride {
-                        strategy_id: strategy_id.clone(),
-                    },
-                    Vec::new(),
-                    feasible_count,
+                    None,
+                    None,
+                    SelectionReason::FallbackToDefault,
+                    vec![(strategy_id.clone(), SelectionReason::Forbidden)],
                     0,
+                    1,
                 );
             }
         }

@@ -13206,33 +13206,32 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 }
 
-                // Parse sign
-                let (sign, mut chars_iter) = if trimmed.starts_with('-') {
-                    (-1i64, trimmed.chars().skip(1))
+                // Parse sign and determine parsing start position
+                let (sign, start_pos) = if trimmed.starts_with('-') {
+                    (-1i64, 1)
                 } else if trimmed.starts_with('+') {
-                    (1i64, trimmed.chars().skip(1))
+                    (1i64, 1)
                 } else {
-                    (1i64, trimmed.chars().skip(0))
+                    (1i64, 0)
                 };
 
                 // For radix 16, handle 0x prefix
-                let actual_radix = if radix == 16 || radix == 0 {
-                    let remaining: String = chars_iter.collect();
+                let (actual_radix, parse_start) = if radix == 16 || radix == 0 {
+                    let remaining = &trimmed[start_pos..];
                     if remaining.starts_with("0x") || remaining.starts_with("0X") {
-                        chars_iter = remaining.chars().skip(2);
-                        16
+                        (16, start_pos + 2)
                     } else if radix == 0 {
-                        10 // Default to decimal if radix is 0
+                        (10, start_pos) // Default to decimal if radix is 0
                     } else {
-                        radix
+                        (radix, start_pos)
                     }
                 } else {
-                    radix
+                    (radix, start_pos)
                 };
 
                 // Parse integer
                 let mut result = 0i64;
-                for c in chars_iter {
+                for c in trimmed[parse_start..].chars() {
                     let digit_val = if c.is_ascii_digit() {
                         (c as u32 - '0' as u32) as i64
                     } else if c.is_ascii_alphabetic() {
@@ -13343,9 +13342,9 @@ impl InterpreterCore {
 
                 // Create result array
                 let result_array_id = self.alloc_object_with_prototype(None)?;
-                let mut result_length = 0;
 
-                // Simplified implementation: filter truthy values
+                // Collect truthy elements first to avoid borrow checker issues
+                let mut filtered_elements = Vec::new();
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
                     for i in 0..length {
                         if let Some(element) = obj.properties.get(&i.to_string()) {
@@ -13358,22 +13357,22 @@ impl InterpreterCore {
                             };
 
                             if is_truthy {
-                                self.set_object_property(
-                                    result_array_id,
-                                    result_length.to_string(),
-                                    element.clone(),
-                                )?;
-                                result_length += 1;
+                                filtered_elements.push(element.clone());
                             }
                         }
                     }
+                }
+
+                // Set the filtered elements to the result array
+                for (i, element) in filtered_elements.iter().enumerate() {
+                    self.set_object_property(result_array_id, i.to_string(), element.clone())?;
                 }
 
                 // Set result array length
                 self.set_object_property(
                     result_array_id,
                     "length".to_string(),
-                    Value::Int(result_length as i64),
+                    Value::Int(filtered_elements.len() as i64),
                 )?;
 
                 Ok(Value::Object(result_array_id))

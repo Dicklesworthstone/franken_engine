@@ -322,6 +322,27 @@ serving as roadmap/library surfaces until dedicated CLI beads land them.
 
 ## Operator Documentation
 
+## Parser Operator/Developer Runbook Gate
+
+Run the parser operator/developer runbook gate from the repository root:
+
+```bash
+./scripts/run_parser_operator_developer_runbook.sh ci
+```
+
+The wrapper uses a repo-local `target_rch_parser_operator_developer_runbook_` target directory and a timeout-safe `cargo test --no-run` compile smoke instead of `cargo check` for the integration-test lane. It emits `run_manifest.json`, `events.jsonl`, `commands.txt`, and `step_logs/step_*.log`; exact preserved-bundle replay requires `step_logs/step_000.log` as part of the complete bundle.
+
+Replay current or preserved evidence with:
+
+```bash
+./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
+PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=artifacts/parser_operator_developer_runbook/<timestamp> \
+  ./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+```
+
+The replay wrapper prints the latest complete artifact bundle, can skip a newer incomplete run directory, and states whether output reflects the current failed invocation or an older complete bundle. Drill mode reuses the latest complete dependency bundles instead of rerunning dependent parser lanes. The emitted `run_manifest.json` includes `operator_verification` commands for both the normal rerun path and the preserved-bundle path without rerunning the lane.
+
 For detailed gate documentation, artifact contracts, and operator workflows, see:
 
 - **[RGC Gates Reference](./docs/operator-gates/RGC_GATES_REFERENCE.md)** - Complete reference for all RGC gate scripts, artifact paths, and replay commands

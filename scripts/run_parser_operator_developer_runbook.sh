@@ -156,6 +156,7 @@ dependency_bundle_is_complete() {
   [[ -f "${candidate}/run_manifest.json" ]] || return 1
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
 
 latest_dependency_artifact_dir() {
@@ -200,10 +201,8 @@ print_latest_dependency_bundle() {
   cat "${latest_complete_dir}/events.jsonl"
   echo "[${label}] latest commands: ${latest_complete_dir}/commands.txt"
   cat "${latest_complete_dir}/commands.txt"
-  if [[ -f "${latest_complete_dir}/step_logs/step_000.log" ]]; then
-    echo "[${label}] latest first step log: ${latest_complete_dir}/step_logs/step_000.log"
-    cat "${latest_complete_dir}/step_logs/step_000.log"
-  fi
+  echo "[${label}] latest first step log: ${latest_complete_dir}/step_logs/step_000.log"
+  cat "${latest_complete_dir}/step_logs/step_000.log"
 }
 
 run_mode() {

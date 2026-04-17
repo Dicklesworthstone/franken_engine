@@ -422,6 +422,35 @@ fn enrichment_selection_decision_is_fallback_when_empty() {
     assert!(!dec.has_selection());
 }
 
+#[test]
+fn enrichment_force_strategy_missing_falls_back_without_selection() {
+    let selector = ContextualSelector::with_defaults(
+        vec![make_strategy(
+            "known",
+            StrategyKind::Tiering,
+            100_000,
+            20_000,
+        )],
+        vec![PolicyConstraint::ForceStrategy {
+            strategy_id: "missing".to_string(),
+        }],
+    );
+    let ctx = make_context();
+    let dec = selector.select(&ctx, SecurityEpoch::from_raw(1));
+
+    assert!(!dec.has_selection());
+    assert!(dec.is_fallback());
+    assert!(!dec.is_override());
+    assert_eq!(dec.selected_strategy_id, None);
+    assert_eq!(dec.selected_kind, None);
+    assert_eq!(dec.feasible_count, 0);
+    assert_eq!(dec.infeasible_count, 1);
+    assert_eq!(
+        dec.candidate_evaluations,
+        vec![("missing".to_string(), SelectionReason::Forbidden)]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ContextualSelector — Clone / Debug
 // ---------------------------------------------------------------------------

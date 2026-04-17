@@ -117,7 +117,9 @@ stdout/stderr into later step logs (`step_logs/step_001.log`,
 evidence without spending another remote compile/test cycle. If the newest
 dependency bundle is incomplete, the drill warns and falls back to the latest
 complete bundle; if no complete dependency bundle exists, the drill fails
-closed.
+closed. A dependency bundle is complete only when it includes
+`run_manifest.json`, `events.jsonl`, `commands.txt`, and
+`step_logs/step_000.log`.
 
 By default, the replay wrapper reruns the selected lane and then prints the latest complete
 artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`, and

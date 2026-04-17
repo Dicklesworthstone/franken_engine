@@ -61,6 +61,7 @@ pub mod causal_regret_evidence_gate;
 pub mod causal_replay;
 pub mod causal_uplift_evidence_gate;
 pub mod certified_optimization_governance;
+pub mod certified_rewrite_optimizer;
 pub mod checkpoint;
 pub mod checkpoint_frontier;
 pub mod claim_atom_lattice;

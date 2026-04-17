@@ -14479,6 +14479,155 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringFromCharCode" => {
+                // String.fromCharCode(...charCodes) implementation
+                let mut result = String::new();
+
+                // Process all arguments as character codes
+                for i in 1..args.count {
+                    let code_val = self.read_reg(args.start + i)?;
+                    let code = match code_val {
+                        Value::Int(n) => (n as u32) & 0xFFFF, // Mask to 16 bits like JavaScript
+                        Value::Float(f) => (f.inner() as u32) & 0xFFFF,
+                        Value::Bool(true) => 1,
+                        Value::Bool(false) => 0,
+                        Value::Null => 0,
+                        _ => 0, // undefined and others default to 0
+                    };
+
+                    // Convert code to char if it's a valid Unicode code point
+                    if let Some(ch) = std::char::from_u32(code) {
+                        result.push(ch);
+                    } else {
+                        result.push('\u{FFFD}'); // Replacement character for invalid codes
+                    }
+                }
+
+                Ok(Value::Str(result))
+            }
+
+            "builtin:MathAcos" => {
+                // Math.acos(x) implementation
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                // acos is only defined for values in [-1, 1]
+                if num < -1.0 || num > 1.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else {
+                    Ok(Value::Float(Float64::new(num.acos())))
+                }
+            }
+
+            "builtin:ArrayPrototypeLastIndexOf" => {
+                // Array.prototype.lastIndexOf(searchElement[, fromIndex]) implementation
+                if args.count < 2 {
+                    return Ok(Value::Int(-1));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
+                };
+
+                let search_element = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                if length == 0 {
+                    return Ok(Value::Int(-1));
+                }
+
+                let from_index = if args.count > 2 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => {
+                            if n < 0 {
+                                (length as i64 + n).max(0) as usize
+                            } else {
+                                (n as usize).min(length - 1)
+                            }
+                        }
+                        Value::Float(f) => {
+                            if f.inner() < 0.0 {
+                                (length as f64 + f.inner()).max(0.0) as usize
+                            } else {
+                                (f.inner() as usize).min(length - 1)
+                            }
+                        }
+                        _ => length - 1,
+                    }
+                } else {
+                    length - 1
+                };
+
+                // Search backwards from fromIndex
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in (0..=from_index).rev() {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            if Self::values_equal(element, &search_element) {
+                                return Ok(Value::Int(i as i64));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Int(-1))
+            }
+
+            "builtin:RegExpPrototypeTest" => {
+                // RegExp.prototype.test(string) implementation (simplified)
+                let this_val = self.read_reg(args.start)?;
+
+                // For now, simplified implementation: return true if both arguments are strings and second contains first
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let test_string = match self.read_reg(args.start + 1)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Very simplified: if the regexp object has a "source" property, use it as a substring search
+                if let Value::Object(regexp_id) = this_val {
+                    if let Some(regexp_obj) = self.heap.get(regexp_id.0 as usize) {
+                        if let Some(Value::Str(pattern)) = regexp_obj.properties.get("source") {
+                            return Ok(Value::Bool(test_string.contains(pattern)));
+                        }
+                    }
+                }
+
+                // Default: return false for non-regexp objects or missing pattern
+                Ok(Value::Bool(false))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -14710,6 +14859,10 @@ impl InterpreterCore {
             262 => Some("builtin:MathLog2".to_string()),
             263 => Some("builtin:ArrayPrototypeReduceRight".to_string()),
             264 => Some("builtin:ObjectPrototypeToString".to_string()),
+            265 => Some("builtin:StringFromCharCode".to_string()),
+            266 => Some("builtin:MathAcos".to_string()),
+            267 => Some("builtin:ArrayPrototypeLastIndexOf".to_string()),
+            268 => Some("builtin:RegExpPrototypeTest".to_string()),
 
             _ => None, // Not a recognized builtin
         }

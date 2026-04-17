@@ -13096,8 +13096,13 @@ impl InterpreterCore {
                     } else if (c == 'e' || c == 'E') && !has_e && i > 0 {
                         has_e = true;
                         end_idx = i + 1;
-                    } else if has_e && (c == '+' || c == '-') &&
-                              trimmed.chars().nth(i - 1).map_or(false, |prev| prev == 'e' || prev == 'E') {
+                    } else if has_e
+                        && (c == '+' || c == '-')
+                        && trimmed
+                            .chars()
+                            .nth(i - 1)
+                            .map_or(false, |prev| prev == 'e' || prev == 'E')
+                    {
                         end_idx = i + 1;
                     } else {
                         break;

@@ -517,6 +517,33 @@ fn cost_model_tampered_hash_is_noncanonical() {
 }
 
 #[test]
+fn cost_model_negative_instruction_cost_is_noncanonical() {
+    let model = DeterministicCostModel::new(
+        "negative-instruction-cost",
+        BTreeMap::from([(InstructionCostClass::Hostcall, -MILLION)]),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+
+    assert!(!model.is_canonical());
+    assert_eq!(model.instruction_cost(InstructionCostClass::Hostcall), 0);
+}
+
+#[test]
+fn cost_model_negative_application_cost_is_noncanonical() {
+    let model = DeterministicCostModel::new(
+        "negative-application-cost",
+        BTreeMap::new(),
+        BTreeMap::from([("fold".into(), 5 * MILLION)]),
+        BTreeMap::from([("fold".into(), -MILLION)]),
+    );
+
+    assert!(!model.is_canonical());
+    assert_eq!(model.rule_gain("fold"), 0);
+    assert_eq!(model.net_gain("fold"), 0);
+}
+
+#[test]
 fn cost_model_queries_fail_closed_when_noncanonical() {
     let mut model = DeterministicCostModel::new(
         "tampered-read-surface",

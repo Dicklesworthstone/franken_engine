@@ -277,12 +277,18 @@ impl DeterministicCostModel {
             .any(|rule_id| is_blank_identifier(rule_id))
     }
 
+    fn has_nonnegative_cost_values<T: Ord>(costs: &BTreeMap<T, i64>) -> bool {
+        costs.values().all(|cost| *cost >= 0)
+    }
+
     /// Return whether this cost model is canonical and fail-closed safe to ship.
     pub fn is_canonical(&self) -> bool {
         self.schema_version == COST_MODEL_SCHEMA_VERSION
             && !is_blank_identifier(&self.model_id)
+            && Self::has_nonnegative_cost_values(&self.instruction_costs)
             && Self::has_valid_rule_cost_keys(&self.rule_gains)
             && Self::has_valid_rule_cost_keys(&self.rule_application_costs)
+            && Self::has_nonnegative_cost_values(&self.rule_application_costs)
             && self.content_hash
                 == Self::compute_hash(
                     &self.model_id,
@@ -1260,6 +1266,33 @@ mod tests {
             app_costs,
         );
         assert!(!model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_rejects_negative_instruction_costs() {
+        let model = DeterministicCostModel::new(
+            "negative-instruction-cost",
+            BTreeMap::from([(InstructionCostClass::Hostcall, -MILLION)]),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+
+        assert!(!model.is_canonical());
+        assert_eq!(model.instruction_cost(InstructionCostClass::Hostcall), 0);
+    }
+
+    #[test]
+    fn cost_model_rejects_negative_rule_application_costs() {
+        let model = DeterministicCostModel::new(
+            "negative-rule-application-cost",
+            BTreeMap::new(),
+            BTreeMap::from([("fold_const".into(), 5 * MILLION)]),
+            BTreeMap::from([("fold_const".into(), -MILLION)]),
+        );
+
+        assert!(!model.is_canonical());
+        assert_eq!(model.rule_gain("fold_const"), 0);
+        assert_eq!(model.net_gain("fold_const"), 0);
     }
 
     #[test]

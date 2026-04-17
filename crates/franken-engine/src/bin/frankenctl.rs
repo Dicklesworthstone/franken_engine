@@ -329,6 +329,7 @@ struct GatesArgs {
     mode: GatesMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum GatesMode {
     ZeroPlaceholder {
@@ -365,6 +366,7 @@ struct ReportsArgs {
     mode: ReportsMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportsMode {
     ParserOracle {
@@ -411,6 +413,7 @@ struct TestArgs {
     mode: TestMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestMode {
     Test262 {
@@ -453,6 +456,7 @@ struct SynthArgs {
     mode: SynthMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SynthMode {
     KernelContract { out_dir: PathBuf },
@@ -468,6 +472,7 @@ struct OrchestrateArgs {
     mode: OrchestrateMode,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OrchestrateMode {
     ContextRefactor { out: Option<PathBuf> },

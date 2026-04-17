@@ -13122,6 +13122,265 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeRepeat" => {
+                // String.prototype.repeat(count) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Str(string_val));
+                }
+
+                let count = match self.read_reg(args.start + 1)? {
+                    Value::Int(n) => {
+                        if n < 0 {
+                            return Ok(Value::Str("RangeError".to_string())); // Negative count
+                        }
+                        n as usize
+                    }
+                    Value::Float(f) => {
+                        let num = f.inner();
+                        if num.is_infinite() || num.is_nan() || num < 0.0 {
+                            return Ok(Value::Str("RangeError".to_string()));
+                        }
+                        num as usize
+                    }
+                    _ => 0,
+                };
+
+                // Limit repeat count to prevent memory issues
+                if count > 10000 {
+                    return Ok(Value::Str("RangeError".to_string()));
+                }
+
+                Ok(Value::Str(string_val.repeat(count)))
+            }
+
+            "builtin:NumberParseInt" => {
+                // Number.parseInt(string, radix) implementation
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let string_val = match self.read_reg(args.start)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Float(f64::NAN.into())),
+                };
+
+                let radix = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(r) => r as i32,
+                        Value::Float(f) => f.inner() as i32,
+                        _ => 10,
+                    }
+                } else {
+                    10
+                };
+
+                // Validate radix
+                if radix != 0 && (radix < 2 || radix > 36) {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                // Trim leading whitespace
+                let trimmed = string_val.trim_start();
+                if trimmed.is_empty() {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                // Parse sign
+                let (sign, mut chars_iter) = if trimmed.starts_with('-') {
+                    (-1i64, trimmed.chars().skip(1))
+                } else if trimmed.starts_with('+') {
+                    (1i64, trimmed.chars().skip(1))
+                } else {
+                    (1i64, trimmed.chars().skip(0))
+                };
+
+                // For radix 16, handle 0x prefix
+                let actual_radix = if radix == 16 || radix == 0 {
+                    let remaining: String = chars_iter.collect();
+                    if remaining.starts_with("0x") || remaining.starts_with("0X") {
+                        chars_iter = remaining.chars().skip(2);
+                        16
+                    } else if radix == 0 {
+                        10 // Default to decimal if radix is 0
+                    } else {
+                        radix
+                    }
+                } else {
+                    radix
+                };
+
+                // Parse integer
+                let mut result = 0i64;
+                for c in chars_iter {
+                    let digit_val = if c.is_ascii_digit() {
+                        (c as u32 - '0' as u32) as i64
+                    } else if c.is_ascii_alphabetic() {
+                        (c.to_ascii_lowercase() as u32 - 'a' as u32 + 10) as i64
+                    } else {
+                        break; // Stop at first non-digit character
+                    };
+
+                    if digit_val >= actual_radix as i64 {
+                        break; // Stop at invalid digit for this radix
+                    }
+
+                    result = result.saturating_mul(actual_radix as i64).saturating_add(digit_val);
+                }
+
+                Ok(Value::Int(sign * result))
+            }
+
+            "builtin:StringPrototypeReplace" => {
+                // String.prototype.replace(searchValue, replaceValue) implementation (simplified)
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Str(string_val));
+                }
+
+                let search_val = match self.read_reg(args.start + 1)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Str(string_val)),
+                };
+
+                let replace_val = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => String::new(),
+                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                // Simple string replacement (only first occurrence)
+                let result = string_val.replacen(&search_val, &replace_val, 1);
+                Ok(Value::Str(result))
+            }
+
+            "builtin:ArrayPrototypeFilter" => {
+                // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
+                if args.count < 2 {
+                    // Return empty array if no callback provided
+                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(
+                        empty_array_id,
+                        "length".to_string(),
+                        Value::Int(0),
+                    )?;
+                    return Ok(Value::Object(empty_array_id));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Create result array
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let mut result_length = 0;
+
+                // Simplified implementation: filter truthy values
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            let is_truthy = match element {
+                                Value::Bool(false) | Value::Null | Value::Undefined => false,
+                                Value::Int(0) => false,
+                                Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => false,
+                                Value::Str(s) if s.is_empty() => false,
+                                _ => true,
+                            };
+
+                            if is_truthy {
+                                self.set_object_property(
+                                    result_array_id,
+                                    result_length.to_string(),
+                                    element.clone(),
+                                )?;
+                                result_length += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Set result array length
+                self.set_object_property(
+                    result_array_id,
+                    "length".to_string(),
+                    Value::Int(result_length as i64),
+                )?;
+
+                Ok(Value::Object(result_array_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -13321,6 +13580,10 @@ impl InterpreterCore {
             230 => Some("builtin:StringPrototypeEndsWith".to_string()),
             231 => Some("builtin:NumberIsInteger".to_string()),
             232 => Some("builtin:NumberParseFloat".to_string()),
+            233 => Some("builtin:StringPrototypeRepeat".to_string()),
+            234 => Some("builtin:NumberParseInt".to_string()),
+            235 => Some("builtin:StringPrototypeReplace".to_string()),
+            236 => Some("builtin:ArrayPrototypeFilter".to_string()),
 
             _ => None, // Not a recognized builtin
         }

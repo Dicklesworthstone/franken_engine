@@ -6970,58 +6970,60 @@ impl InterpreterCore {
 
                 match first_arg {
                     Value::Object(obj_id) => {
-                        // Check if object is array-like (has length property)
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(length_val) = obj.properties.get("length") {
-                                match length_val {
-                                    Value::Int(len) if *len >= 0 => {
-                                        let len_u32 = *len as u32;
-
-                                        // Copy elements from array-like object
-                                        for i in 0..len_u32 {
-                                            let element = obj
-                                                .properties
+                        // Check if object is array-like (has length property).
+                        // Snapshot length + elements under an immutable borrow
+                        // so we can release it before the &mut self calls below.
+                        #[derive(Debug)]
+                        enum Snapshot {
+                            ObjectMissing,
+                            NoLength,
+                            InvalidLength,
+                            Valid(u32, Vec<Value>),
+                        }
+                        let snapshot: Snapshot = match self.heap.get(obj_id.0 as usize) {
+                            None => Snapshot::ObjectMissing,
+                            Some(obj) => match obj.properties.get("length") {
+                                None => Snapshot::NoLength,
+                                Some(Value::Int(len)) if *len >= 0 => {
+                                    let len_u32 = *len as u32;
+                                    let elements: Vec<Value> = (0..len_u32)
+                                        .map(|i| {
+                                            obj.properties
                                                 .get(&i.to_string())
                                                 .cloned()
-                                                .unwrap_or(Value::Undefined);
-                                            self.set_object_property(
-                                                array_id,
-                                                i.to_string(),
-                                                element,
-                                            )?;
-                                        }
-
-                                        // Set length property
-                                        self.set_object_property(
-                                            array_id,
-                                            "length".to_string(),
-                                            Value::Int(len_u32 as i64),
-                                        )?;
-                                    }
-                                    _ => {
-                                        // Invalid length, treat as empty
-                                        self.set_object_property(
-                                            array_id,
-                                            "length".to_string(),
-                                            Value::Int(0),
-                                        )?;
-                                    }
+                                                .unwrap_or(Value::Undefined)
+                                        })
+                                        .collect();
+                                    Snapshot::Valid(len_u32, elements)
                                 }
-                            } else {
-                                // No length property, treat object as empty array-like
+                                Some(_) => Snapshot::InvalidLength,
+                            },
+                        };
+
+                        match snapshot {
+                            Snapshot::Valid(len_u32, elements) => {
+                                for (i, element) in elements.into_iter().enumerate() {
+                                    self.set_object_property(array_id, i.to_string(), element)?;
+                                }
+
+                                // Set length property
+                                self.set_object_property(
+                                    array_id,
+                                    "length".to_string(),
+                                    Value::Int(len_u32 as i64),
+                                )?;
+                            }
+                            // All of: invalid length value, missing length, or
+                            // missing object — treat as empty array.
+                            Snapshot::InvalidLength
+                            | Snapshot::NoLength
+                            | Snapshot::ObjectMissing => {
                                 self.set_object_property(
                                     array_id,
                                     "length".to_string(),
                                     Value::Int(0),
                                 )?;
                             }
-                        } else {
-                            // Object not found, create empty array
-                            self.set_object_property(
-                                array_id,
-                                "length".to_string(),
-                                Value::Int(0),
-                            )?;
                         }
                     }
                     Value::Str(s) => {
@@ -7670,6 +7672,55 @@ impl InterpreterCore {
                     Ok(Value::Float(Float64::new(max_val)))
                 }
             }
+            "builtin:MathMin" => {
+                // Math.min implementation - returns smallest of given numbers
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
+                }
+
+                let mut min_val = f64::INFINITY;
+                let mut has_nan = false;
+                let mut is_all_int = true;
+                let mut int_min = i64::MAX;
+
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    match arg {
+                        Value::Int(n) => {
+                            if is_all_int {
+                                int_min = int_min.min(n);
+                            }
+                            min_val = min_val.min(n as f64);
+                        }
+                        Value::Float(f) => {
+                            is_all_int = false;
+                            let val = f.inner();
+                            if val.is_nan() {
+                                has_nan = true;
+                                break;
+                            }
+                            min_val = min_val.min(val);
+                        }
+                        _ => {
+                            // Non-numeric values become NaN in JavaScript
+                            has_nan = true;
+                            break;
+                        }
+                    }
+                }
+
+                if has_nan {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else if is_all_int
+                    && min_val.is_finite()
+                    && min_val >= i64::MIN as f64
+                    && min_val <= i64::MAX as f64
+                {
+                    Ok(Value::Int(int_min))
+                } else {
+                    Ok(Value::Float(Float64::new(min_val)))
+                }
+            }
 
             // JSON methods
             "builtin:JsonStringify" => {
@@ -7923,6 +7974,7 @@ impl InterpreterCore {
             52 => Some("builtin:MathFloor".to_string()),
             53 => Some("builtin:MathRound".to_string()),
             54 => Some("builtin:MathMax".to_string()),
+            55 => Some("builtin:MathMin".to_string()),
 
             // JSON methods
             70 => Some("builtin:JsonParse".to_string()),

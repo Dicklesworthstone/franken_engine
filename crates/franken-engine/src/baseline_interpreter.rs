@@ -11058,6 +11058,165 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
 
+            "builtin:ArrayPrototypeLastIndexOf" => {
+                // Array.prototype.lastIndexOf(searchElement, fromIndex) implementation
+                if args.count < 2 {
+                    return Ok(Value::Int(-1));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
+                };
+
+                let search_element = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Int(-1)),
+                    }
+                } else {
+                    return Ok(Value::Int(-1));
+                };
+
+                if length == 0 {
+                    return Ok(Value::Int(-1));
+                }
+
+                // Get fromIndex if provided, otherwise start from the end
+                let from_index = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(idx) => idx,
+                        Value::Float(idx) => idx.inner() as i64,
+                        _ => length as i64 - 1,
+                    }
+                } else {
+                    length as i64 - 1
+                };
+
+                // Convert negative indices to positive
+                let start_idx = if from_index < 0 {
+                    let adjusted = (length as i64) + from_index;
+                    if adjusted < 0 {
+                        return Ok(Value::Int(-1));
+                    }
+                    adjusted as usize
+                } else {
+                    (from_index as usize).min(length - 1)
+                };
+
+                // Search backwards from start_idx
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in (0..=start_idx).rev() {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            if Self::values_equal(element, &search_element) {
+                                return Ok(Value::Int(i as i64));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Int(-1))
+            }
+
+            "builtin:ArrayPrototypeFindIndex" => {
+                // Array.prototype.findIndex(callback) implementation
+                if args.count < 2 {
+                    return Ok(Value::Int(-1));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Int(-1)),
+                    }
+                } else {
+                    return Ok(Value::Int(-1));
+                };
+
+                // For now, simplified implementation without function call support
+                // Return -1 since we can't execute callback functions yet
+                // TODO: Implement function call mechanism for full callback support
+                Ok(Value::Int(-1))
+            }
+
+            "builtin:StringPrototypeCharCodeAt" => {
+                // String.prototype.charCodeAt(index) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Float(f64::NAN.into())),
+                        }
+                    }
+                };
+
+                let index = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(idx) => idx as usize,
+                        Value::Float(idx) => idx.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get character at index
+                let chars: Vec<char> = string_val.chars().collect();
+                if index < chars.len() {
+                    let char_code = chars[index] as u32;
+                    Ok(Value::Int(char_code as i64))
+                } else {
+                    Ok(Value::Float(f64::NAN.into()))
+                }
+            }
+
+            "builtin:StringFromCharCode" => {
+                // String.fromCharCode(...charCodes) implementation
+                let mut result = String::new();
+
+                // Iterate through all provided character codes
+                for i in 0..args.count {
+                    let char_code_val = self.read_reg(args.start + i)?;
+                    let char_code = match char_code_val {
+                        Value::Int(n) => n as u32,
+                        Value::Float(f) => f.inner() as u32,
+                        _ => 0, // Invalid character codes become null char
+                    };
+
+                    // Convert to character (modulo 65536 for 16-bit values)
+                    let char_code_16bit = char_code & 0xFFFF;
+                    if let Some(ch) = std::char::from_u32(char_code_16bit) {
+                        result.push(ch);
+                    } else {
+                        result.push('\u{0000}'); // Null character for invalid codes
+                    }
+                }
+
+                Ok(Value::Str(result))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11209,8 +11368,52 @@ impl InterpreterCore {
             179 => Some("builtin:MapPrototypeDelete".to_string()),
             180 => Some("builtin:SetPrototypeDelete".to_string()),
             181 => Some("builtin:SetPrototypeClear".to_string()),
+            182 => Some("builtin:ArrayPrototypeLastIndexOf".to_string()),
+            183 => Some("builtin:ArrayPrototypeFindIndex".to_string()),
+            184 => Some("builtin:StringPrototypeCharCodeAt".to_string()),
+            185 => Some("builtin:StringFromCharCode".to_string()),
 
             _ => None, // Not a recognized builtin
+        }
+    }
+
+    /// Compare two values for equality (used by array methods like lastIndexOf).
+    /// Implements JavaScript equality comparison rules.
+    fn values_equal(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Undefined, Value::Undefined) => true,
+            (Value::Null, Value::Null) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => {
+                let a_val = a.inner();
+                let b_val = b.inner();
+                // Handle NaN case (NaN != NaN in JS)
+                if a_val.is_nan() || b_val.is_nan() {
+                    false
+                } else {
+                    a_val == b_val
+                }
+            }
+            (Value::Int(a), Value::Float(b)) => {
+                let b_val = b.inner();
+                if b_val.is_nan() {
+                    false
+                } else {
+                    (*a as f64) == b_val
+                }
+            }
+            (Value::Float(a), Value::Int(b)) => {
+                let a_val = a.inner();
+                if a_val.is_nan() {
+                    false
+                } else {
+                    a_val == (*b as f64)
+                }
+            }
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Object(a), Value::Object(b)) => a.0 == b.0, // Object identity comparison
+            _ => false, // Different types are not equal
         }
     }
 

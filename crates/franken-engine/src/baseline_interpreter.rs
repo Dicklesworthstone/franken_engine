@@ -10935,32 +10935,46 @@ impl InterpreterCore {
 
                 let key = self.read_reg(args.start + 1)?;
 
-                // Delete the key from the map
-                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
-                        if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
-                            // Use the same key representation as set()
-                            let key_str = match key {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                // Resolve entries_id under an immutable borrow, then do the
+                // mutable removal + size update under separate mutable borrows.
+                let entries_id_opt: Option<ObjectId> = self
+                    .heap
+                    .get(map_id.0 as usize)
+                    .and_then(|m| m.properties.get("__entries").cloned())
+                    .and_then(|v| match v {
+                        Value::Object(id) => Some(id),
+                        _ => None,
+                    });
 
-                            if entries_obj.properties.remove(&key_str).is_some() {
-                                // Update size
-                                if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
-                                    if let Some(Value::Int(size)) = map_obj.properties.get("size") {
-                                        map_obj.properties.insert("size".to_string(), Value::Int(size - 1));
-                                    }
-                                }
-                                return Ok(Value::Bool(true));
+                if let Some(entries_id) = entries_id_opt {
+                    // Use the same key representation as set()
+                    let key_str = match key {
+                        Value::Str(s) => format!("s:{}", s),
+                        Value::Int(i) => format!("n:{}", i),
+                        Value::Float(f) => format!("n:{}", f.inner()),
+                        Value::Bool(b) => format!("b:{}", b),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(id) => format!("o:{}", id.0),
+                        _ => "other".to_string(),
+                    };
+
+                    let removed = self
+                        .heap
+                        .get_mut(entries_id.0 as usize)
+                        .map(|entries_obj| entries_obj.properties.remove(&key_str).is_some())
+                        .unwrap_or(false);
+
+                    if removed {
+                        if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
+                            if let Some(Value::Int(size)) = map_obj.properties.get("size") {
+                                let new_size = *size - 1;
+                                map_obj
+                                    .properties
+                                    .insert("size".to_string(), Value::Int(new_size));
                             }
                         }
+                        return Ok(Value::Bool(true));
                     }
                 }
 
@@ -10991,32 +11005,46 @@ impl InterpreterCore {
 
                 let value = self.read_reg(args.start + 1)?;
 
-                // Delete the value from the set
-                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
-                        if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
-                            // Use the same value representation as add()
-                            let value_str = match value {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                // Resolve values_id under an immutable borrow, then do the
+                // mutable removal + size update under separate borrows.
+                let values_id_opt: Option<ObjectId> = self
+                    .heap
+                    .get(set_id.0 as usize)
+                    .and_then(|s| s.properties.get("__values").cloned())
+                    .and_then(|v| match v {
+                        Value::Object(id) => Some(id),
+                        _ => None,
+                    });
 
-                            if values_obj.properties.remove(&value_str).is_some() {
-                                // Update size
-                                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                                    if let Some(Value::Int(size)) = set_obj.properties.get("size") {
-                                        set_obj.properties.insert("size".to_string(), Value::Int(size - 1));
-                                    }
-                                }
-                                return Ok(Value::Bool(true));
+                if let Some(values_id) = values_id_opt {
+                    // Use the same value representation as add()
+                    let value_str = match value {
+                        Value::Str(s) => format!("s:{}", s),
+                        Value::Int(i) => format!("n:{}", i),
+                        Value::Float(f) => format!("n:{}", f.inner()),
+                        Value::Bool(b) => format!("b:{}", b),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(id) => format!("o:{}", id.0),
+                        _ => "other".to_string(),
+                    };
+
+                    let removed = self
+                        .heap
+                        .get_mut(values_id.0 as usize)
+                        .map(|values_obj| values_obj.properties.remove(&value_str).is_some())
+                        .unwrap_or(false);
+
+                    if removed {
+                        if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                            if let Some(Value::Int(size)) = set_obj.properties.get("size") {
+                                let new_size = *size - 1;
+                                set_obj
+                                    .properties
+                                    .insert("size".to_string(), Value::Int(new_size));
                             }
                         }
+                        return Ok(Value::Bool(true));
                     }
                 }
 
@@ -11041,12 +11069,21 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
 
-                // Clear all values from the set
-                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
-                        if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
-                            values_obj.properties.clear();
-                        }
+                // Clear all values from the set. Resolve values_id under an
+                // immutable borrow first, then clear + zero size under
+                // separate mutable borrows.
+                let values_id_opt: Option<ObjectId> = self
+                    .heap
+                    .get(set_id.0 as usize)
+                    .and_then(|s| s.properties.get("__values").cloned())
+                    .and_then(|v| match v {
+                        Value::Object(id) => Some(id),
+                        _ => None,
+                    });
+
+                if let Some(values_id) = values_id_opt {
+                    if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
+                        values_obj.properties.clear();
                     }
                 }
 
@@ -11217,6 +11254,146 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
+            "builtin:ObjectGetOwnPropertyNames" => {
+                // Object.getOwnPropertyNames(obj) implementation
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Get the object's own property names
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            let property_names: Vec<String> = obj.properties.keys().cloned().collect();
+
+                            // Create array object to hold the property names
+                            let array_id = self.alloc_object_with_prototype(None)?;
+
+                            // Add property names to the array
+                            for (i, name) in property_names.iter().enumerate() {
+                                self.set_object_property(
+                                    array_id,
+                                    i.to_string(),
+                                    Value::Str(name.clone()),
+                                )?;
+                            }
+
+                            // Set length property
+                            self.set_object_property(
+                                array_id,
+                                "length".to_string(),
+                                Value::Int(property_names.len() as i64),
+                            )?;
+
+                            Ok(Value::Object(array_id))
+                        } else {
+                            // Object not found, return empty array
+                            let empty_array_id = self.alloc_object_with_prototype(None)?;
+                            self.set_object_property(
+                                empty_array_id,
+                                "length".to_string(),
+                                Value::Int(0),
+                            )?;
+                            Ok(Value::Object(empty_array_id))
+                        }
+                    }
+                    _ => {
+                        // Non-object argument, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        Ok(Value::Object(empty_array_id))
+                    }
+                }
+            }
+
+            "builtin:ObjectGetPrototypeOf" => {
+                // Object.getPrototypeOf(obj) implementation
+                if args.count == 0 {
+                    return Ok(Value::Null);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Get the object's prototype
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(prototype_id) = obj.prototype {
+                                Ok(Value::Object(prototype_id))
+                            } else {
+                                Ok(Value::Null)
+                            }
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    _ => {
+                        // Non-object argument throws TypeError in strict JS, but we'll return null
+                        Ok(Value::Null)
+                    }
+                }
+            }
+
+            "builtin:PromiseReject" => {
+                // Promise.reject(reason) implementation
+                let reason = if args.count >= 1 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Create a rejected Promise object
+                let promise_id = self.alloc_object_with_prototype(None)?;
+
+                // Set Promise metadata
+                self.set_object_property(
+                    promise_id,
+                    "__type".to_string(),
+                    Value::Str("Promise".to_string()),
+                )?;
+                self.set_object_property(
+                    promise_id,
+                    "__state".to_string(),
+                    Value::Str("rejected".to_string()),
+                )?;
+                self.set_object_property(
+                    promise_id,
+                    "__value".to_string(),
+                    reason,
+                )?;
+
+                Ok(Value::Object(promise_id))
+            }
+
+            "builtin:MathAtan2" => {
+                // Math.atan2(y, x) implementation
+                if args.count < 2 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let y_val = self.read_reg(args.start)?;
+                let x_val = self.read_reg(args.start + 1)?;
+
+                let y = match y_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => f64::NAN,
+                };
+
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => f64::NAN,
+                };
+
+                let result = y.atan2(x);
+                Ok(Value::Float(result.into()))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11372,6 +11549,10 @@ impl InterpreterCore {
             183 => Some("builtin:ArrayPrototypeFindIndex".to_string()),
             184 => Some("builtin:StringPrototypeCharCodeAt".to_string()),
             185 => Some("builtin:StringFromCharCode".to_string()),
+            186 => Some("builtin:ObjectGetOwnPropertyNames".to_string()),
+            187 => Some("builtin:ObjectGetPrototypeOf".to_string()),
+            188 => Some("builtin:PromiseReject".to_string()),
+            189 => Some("builtin:MathAtan2".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -6837,8 +6837,51 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
             "builtin:ArrayIsArray" => {
-                // TODO: Implement Array.isArray
-                Ok(Value::Bool(false))
+                // Array.isArray implementation - checks if argument is an array
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                match arg {
+                    Value::Object(obj_id) => {
+                        // Check if object has array-like characteristics
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            // An array-like object should have a "length" property
+                            if let Some(length_val) = obj.properties.get("length") {
+                                // Additional check: verify the length is a non-negative integer
+                                match length_val {
+                                    Value::Int(len) if *len >= 0 => {
+                                        // Check if object has numeric properties consistent with array
+                                        let len_u32 = *len as u32;
+                                        let mut has_array_pattern = true;
+
+                                        // Basic validation: check that numeric properties exist for indices < length
+                                        for i in 0..len_u32.min(10) { // Check first 10 elements for efficiency
+                                            if !obj.properties.contains_key(&i.to_string()) {
+                                                has_array_pattern = false;
+                                                break;
+                                            }
+                                        }
+
+                                        // If length is 0, it's still an array
+                                        if len_u32 == 0 {
+                                            has_array_pattern = true;
+                                        }
+
+                                        Ok(Value::Bool(has_array_pattern))
+                                    }
+                                    _ => Ok(Value::Bool(false)), // Invalid length property
+                                }
+                            } else {
+                                Ok(Value::Bool(false)) // No length property
+                            }
+                        } else {
+                            Ok(Value::Bool(false)) // Object not found
+                        }
+                    }
+                    _ => Ok(Value::Bool(false)), // Non-object values are not arrays
+                }
             }
             "builtin:ArrayPrototypePop" => {
                 // TODO: Implement Array.prototype.pop

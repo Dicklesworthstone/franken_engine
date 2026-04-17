@@ -420,27 +420,20 @@ impl CompatibilityMetrics {
     pub fn compute_compatibility_score(&self) -> u64 {
         // Simple scoring: equal weight for each category that had any operations attempted
         let mut total_score = 0u64;
-        let mut categories_with_operations = 0;
-
         // Count non-zero categories and sum their contributions
         if self.packages_resolved > 0 {
-            categories_with_operations += 1;
             total_score += MILLIONTHS / 5; // 200,000 millionths per category
         }
         if self.entry_points_loaded > 0 {
-            categories_with_operations += 1;
             total_score += MILLIONTHS / 5;
         }
         if self.subpaths_resolved > 0 {
-            categories_with_operations += 1;
             total_score += MILLIONTHS / 5;
         }
         if self.compilations_successful > 0 {
-            categories_with_operations += 1;
             total_score += MILLIONTHS / 5;
         }
         if self.runtime_operations_successful > 0 {
-            categories_with_operations += 1;
             total_score += MILLIONTHS / 5;
         }
 

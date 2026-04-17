@@ -25,6 +25,8 @@
 //! Plan reference: Section 10.2 item 8, bd-2f8.
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
+#![allow(unreachable_patterns)]
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -7947,7 +7949,7 @@ impl InterpreterCore {
                             if n < 0 {
                                 (str_len + n).max(0) as usize
                             } else {
-                                (n.min(str_len) as usize)
+                                n.min(str_len) as usize
                             }
                         }
                         Value::Float(f) => {
@@ -7957,7 +7959,7 @@ impl InterpreterCore {
                             } else if val < 0.0 {
                                 ((str_len as f64) + val).max(0.0) as usize
                             } else {
-                                (val.min(str_len as f64) as usize)
+                                val.min(str_len as f64) as usize
                             }
                         }
                         _ => 0,
@@ -7974,7 +7976,7 @@ impl InterpreterCore {
                             if n < 0 {
                                 (str_len + n).max(0) as usize
                             } else {
-                                (n.min(str_len) as usize)
+                                n.min(str_len) as usize
                             }
                         }
                         Value::Float(f) => {
@@ -7984,7 +7986,7 @@ impl InterpreterCore {
                             } else if val < 0.0 {
                                 ((str_len as f64) + val).max(0.0) as usize
                             } else {
-                                (val.min(str_len as f64) as usize)
+                                val.min(str_len as f64) as usize
                             }
                         }
                         _ => str_len as usize,

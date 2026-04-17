@@ -18623,6 +18623,177 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
 
+            "builtin:ParseInt" => {
+                // parseInt() implementation - parses string to integer
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let input_str = match value {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Bool(true) => "1".to_string(),
+                    Value::Bool(false) => "0".to_string(),
+                    _ => return Ok(Value::Float(Float64::new(f64::NAN))),
+                };
+
+                let radix = if args.count >= 3 {
+                    let radix_val = self.read_reg(args.start + 2)?;
+                    match radix_val {
+                        Value::Int(n) => n.max(2).min(36) as u32,
+                        Value::Float(f) => f.inner().max(2.0).min(36.0) as u32,
+                        _ => 10,
+                    }
+                } else {
+                    10
+                };
+
+                // Parse the string, stopping at first non-digit character
+                let trimmed = input_str.trim();
+                if trimmed.is_empty() {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                // Simple parsing for base 10
+                if radix == 10 {
+                    let mut result_str = String::new();
+                    let mut chars = trimmed.chars();
+
+                    // Handle sign
+                    if let Some(first_char) = chars.next() {
+                        if first_char == '+' || first_char == '-' {
+                            result_str.push(first_char);
+                        } else if first_char.is_ascii_digit() {
+                            result_str.push(first_char);
+                        } else {
+                            return Ok(Value::Float(Float64::new(f64::NAN)));
+                        }
+                    }
+
+                    // Parse digits
+                    for c in chars {
+                        if c.is_ascii_digit() {
+                            result_str.push(c);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if let Ok(parsed) = result_str.parse::<i64>() {
+                        Ok(Value::Int(parsed))
+                    } else {
+                        Ok(Value::Float(Float64::new(f64::NAN)))
+                    }
+                } else {
+                    // Simplified non-base-10 parsing
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                }
+            }
+
+            "builtin:ParseFloat" => {
+                // parseFloat() implementation - parses string to float
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let input_str = match value {
+                    Value::Str(s) => s,
+                    Value::Int(n) => return Ok(Value::Int(n)),
+                    Value::Float(f) => return Ok(Value::Float(f)),
+                    Value::Bool(true) => "1".to_string(),
+                    Value::Bool(false) => "0".to_string(),
+                    _ => return Ok(Value::Float(Float64::new(f64::NAN))),
+                };
+
+                let trimmed = input_str.trim();
+                if trimmed.is_empty() {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                // Parse float, stopping at first invalid character
+                let mut result_str = String::new();
+                let mut has_dot = false;
+                let mut chars = trimmed.chars();
+
+                // Handle sign
+                if let Some(first_char) = chars.next() {
+                    if first_char == '+' || first_char == '-' {
+                        result_str.push(first_char);
+                    } else if first_char.is_ascii_digit() || first_char == '.' {
+                        result_str.push(first_char);
+                        if first_char == '.' {
+                            has_dot = true;
+                        }
+                    } else {
+                        return Ok(Value::Float(Float64::new(f64::NAN)));
+                    }
+                }
+
+                // Parse digits and decimal point
+                for c in chars {
+                    if c.is_ascii_digit() {
+                        result_str.push(c);
+                    } else if c == '.' && !has_dot {
+                        result_str.push(c);
+                        has_dot = true;
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Ok(parsed) = result_str.parse::<f64>() {
+                    // Return Int if it's a whole number
+                    if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
+                        Ok(Value::Int(parsed as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(parsed)))
+                    }
+                } else {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                }
+            }
+
+            "builtin:IsNaN" => {
+                // isNaN() implementation - checks if value is NaN (with coercion)
+                if args.count == 0 {
+                    return Ok(Value::Bool(true)); // isNaN() with no args returns true
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(_) => return Ok(Value::Bool(false)), // Integers are never NaN
+                    Value::Float(f) => f.inner(),
+                    _ => {
+                        // Coerce to number first
+                        Self::coerce_to_float(&value).unwrap_or(f64::NAN)
+                    }
+                };
+
+                Ok(Value::Bool(num.is_nan()))
+            }
+
+            "builtin:IsFinite" => {
+                // isFinite() implementation - checks if value is finite (with coercion)
+                if args.count == 0 {
+                    return Ok(Value::Bool(false)); // isFinite() with no args returns false
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(_) => return Ok(Value::Bool(true)), // Integers are always finite
+                    Value::Float(f) => f.inner(),
+                    _ => {
+                        // Coerce to number first
+                        Self::coerce_to_float(&value).unwrap_or(f64::NAN)
+                    }
+                };
+
+                Ok(Value::Bool(num.is_finite()))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -18966,6 +19137,10 @@ impl InterpreterCore {
             374 => Some("builtin:DecodeURIComponent".to_string()),
             375 => Some("builtin:SetTimeout".to_string()),
             376 => Some("builtin:ClearTimeout".to_string()),
+            377 => Some("builtin:ParseInt".to_string()),
+            378 => Some("builtin:ParseFloat".to_string()),
+            379 => Some("builtin:IsNaN".to_string()),
+            380 => Some("builtin:IsFinite".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -6847,9 +6847,50 @@ impl InterpreterCore {
 
             // Object methods
             "builtin:ObjectKeys" => {
-                // TODO: Implement Object.keys
-                // Return empty array for now
-                Ok(Value::Object(ObjectId(0)))
+                // Object.keys implementation - returns array of object's own property names
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Get the object's properties
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            let keys: Vec<String> = obj.properties.keys().cloned().collect();
+
+                            // Create array object to hold the keys
+                            let array_id = self.alloc_object_with_prototype(None)?;
+
+                            // Set array elements as numeric properties
+                            for (index, key) in keys.iter().enumerate() {
+                                self.set_object_property(
+                                    array_id,
+                                    index.to_string(),
+                                    Value::Str(key.clone()),
+                                )?;
+                            }
+
+                            // Set length property
+                            self.set_object_property(
+                                array_id,
+                                "length".to_string(),
+                                Value::Int(keys.len() as i64),
+                            )?;
+
+                            Ok(Value::Object(array_id))
+                        } else {
+                            // Object not found in heap
+                            Ok(Value::Undefined)
+                        }
+                    }
+                    _ => {
+                        // Non-object argument - return empty array per JavaScript behavior
+                        let array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        Ok(Value::Object(array_id))
+                    }
+                }
             }
             "builtin:ObjectValues" => {
                 // TODO: Implement Object.values

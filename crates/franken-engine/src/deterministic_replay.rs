@@ -3153,7 +3153,7 @@ mod tests {
     #[test]
     fn fp_trace_deterministic_100_captures() {
         // Capturing the same FP value 100 times produces identical trace events
-        let value = 1.414213562373095_f64; // sqrt(2)
+        let value = std::f64::consts::SQRT_2;
         let mut traces = Vec::new();
         for i in 0..100 {
             let mut trace = NondeterminismTrace::new(format!("det-{}", i));
@@ -3167,6 +3167,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn mixed_int_float_captures_only_float() {
         let mut trace = NondeterminismTrace::new("mixed");
 

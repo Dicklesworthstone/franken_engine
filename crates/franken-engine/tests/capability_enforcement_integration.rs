@@ -15,6 +15,13 @@
 //! the new surface is beyond the ~40-line threshold per test, so disable
 //! the whole module until it is rewritten against the current APIs.
 
+// NOTE: still quarantined - pervasive API drift: ModuleHeader removed from
+// ir_contract, DeterministicTimestamp + SecurityEpoch + generate_ed25519_keypair
+// moved out of their original modules, Ir3Module lost literal_table/
+// identifier_table/exception_table, Ir3Instruction::LoadInt32 renamed,
+// Ir3Instruction::Add fields renamed (dest/left/right -> dst/lhs/rhs),
+// Ir3Instruction::Hostcall variant gone, VerificationContext gained new
+// required fields. Rewriting all 500+ lines is beyond scope.
 #![cfg(any())]
 
 use std::collections::BTreeSet;

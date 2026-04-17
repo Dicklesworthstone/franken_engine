@@ -12,7 +12,7 @@
 //! Plan reference: bd-6a61n.5.1
 
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,10 +21,9 @@ use crate::fleet_convergence::{
 };
 use crate::fleet_immune_protocol::{
     ContainmentAction, FleetMessage as ProtocolFleetMessage, FleetProtocolState, NodeId,
-    ProtocolVersion, QuorumCheckpoint,
+    QuorumCheckpoint,
 };
 use crate::hash_tiers::ContentHash;
-use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -237,6 +236,7 @@ pub struct FleetSimulator {
     /// Centralized message bus.
     message_bus: MessageBus,
     /// Containment thresholds for all instances.
+    #[allow(dead_code)]
     containment_thresholds: ContainmentThresholds,
     /// Simulation start time for relative timestamps.
     start_time: Instant,
@@ -737,7 +737,7 @@ impl FleetSimulator {
     pub fn process_quarantine_decision(
         &mut self,
         extension_id: String,
-        reason: String,
+        _reason: String,
         evidence_hash: String,
         originator_instance: NodeId,
         decision_timestamp: u64,
@@ -1022,7 +1022,7 @@ mod tests {
                 .unwrap();
         }
 
-        let stats = fleet.simulation_stats();
+        let _stats = fleet.simulation_stats();
         let (delivered, dropped) = fleet.message_bus.delivery_stats();
 
         // In degraded mode, some messages should be dropped
@@ -1345,7 +1345,7 @@ mod tests {
 
     #[test]
     fn test_partition_mode_tightening() {
-        let mut thresholds = test_thresholds();
+        let thresholds = test_thresholds();
 
         // Create fleet with normal partition mode
         let mut fleet = FleetSimulator::new(3, thresholds.clone()).unwrap();

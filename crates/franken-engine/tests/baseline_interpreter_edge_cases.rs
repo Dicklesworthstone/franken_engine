@@ -1126,9 +1126,9 @@ fn deterministic_execution_same_witness() {
 fn alloc_object_returns_sequential_ids() {
     let cfg = InterpreterConfig::quickjs_defaults();
     let mut core = InterpreterCore::new(cfg, "test");
-    let id0 = core.alloc_object();
-    let id1 = core.alloc_object();
-    let id2 = core.alloc_object();
+    let id0 = core.alloc_object_with_prototype(None).unwrap();
+    let id1 = core.alloc_object_with_prototype(None).unwrap();
+    let id2 = core.alloc_object_with_prototype(None).unwrap();
     assert_eq!(id0, ObjectId(0));
     assert_eq!(id1, ObjectId(1));
     assert_eq!(id2, ObjectId(2));

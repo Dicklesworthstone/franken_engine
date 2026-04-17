@@ -105,7 +105,7 @@ fn test_compilation_evidence_generation() {
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
     let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
 
-    assert_eq!(evidence.output_spec.success, true);
+    assert!(evidence.output_spec.success);
     assert!(!evidence.compile_receipt.input_hash.as_bytes().is_empty());
     assert!(!evidence.compile_receipt.output_hash.as_bytes().is_empty());
     assert_eq!(evidence.input_spec.language, ReactInputLanguage::Jsx);
@@ -175,8 +175,10 @@ fn test_compilation_metadata() {
 #[test]
 fn test_source_map_generation() {
     let source = r#"<div>Test</div>"#;
-    let mut config = ReactCompileConfig::default();
-    config.generate_source_maps = true;
+    let config = ReactCompileConfig {
+        generate_source_maps: true,
+        ..Default::default()
+    };
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
     assert!(
@@ -194,7 +196,6 @@ fn test_source_map_generation() {
 #[test]
 fn test_classic_vs_automatic_runtime() {
     use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
-    use frankenengine_engine::react_jsx_lowering::ReactLoweringConfig;
 
     let source = r#"<div>Hello</div>"#;
 

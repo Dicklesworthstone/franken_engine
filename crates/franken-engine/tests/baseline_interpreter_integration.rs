@@ -427,10 +427,10 @@ fn core_alloc_object_increments_heap_size() {
     let config = InterpreterConfig::quickjs_defaults();
     let mut core = InterpreterCore::new(config, "test");
     assert_eq!(core.heap_size(), 0);
-    let id0 = core.alloc_object();
+    let id0 = core.alloc_object_with_prototype(None).unwrap();
     assert_eq!(id0, ObjectId(0));
     assert_eq!(core.heap_size(), 1);
-    let id1 = core.alloc_object();
+    let id1 = core.alloc_object_with_prototype(None).unwrap();
     assert_eq!(id1, ObjectId(1));
     assert_eq!(core.heap_size(), 2);
 }

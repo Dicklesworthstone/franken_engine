@@ -11,9 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::fleet_convergence::{ContainmentThresholds, PartitionMode};
-use crate::fleet_immune_protocol::{NodeId, QuorumCheckpoint};
-use crate::fleet_simulator::{FleetSimulator, MessagePayload, SimulationEvent};
+use crate::fleet_immune_protocol::NodeId;
+use crate::fleet_simulator::{FleetSimulator, MessagePayload};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
@@ -371,7 +370,7 @@ impl QuarantineProtocolManager {
     ) -> Result<(), QuarantineProtocolError> {
         self.lamport_clock += 1;
 
-        let ack = QuarantineAck::new(
+        let _ack = QuarantineAck::new(
             decision.evidence_hash,
             acknowledging_instance.clone(),
             self.lamport_clock,

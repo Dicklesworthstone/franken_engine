@@ -17,6 +17,9 @@
 //! hundreds of instruction-construction lines. Disable the module body until
 //! the test can be rewritten to match the new surface.
 
+// NOTE: still quarantined - 283 compile errors spanning hundreds of IR3
+// instruction constructions that reference removed field names like src_reg
+// and dest_reg. Per task spec, left quarantined pending a full test rewrite.
 #![cfg(any())]
 #![forbid(unsafe_code)]
 #![allow(

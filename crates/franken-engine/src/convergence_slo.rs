@@ -7,14 +7,16 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::path::PathBuf;
+#[cfg(test)]
+use std::time::Duration;
+use std::time::{Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
 use crate::fleet_immune_protocol::NodeId;
 use crate::hash_tiers::ContentHash;
-use crate::quarantine_propagation::{QuarantineDecision, QuarantineProtocolManager};
+use crate::quarantine_propagation::QuarantineDecision;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -227,7 +229,7 @@ impl ConvergenceMeter {
         let measurement = self
             .active_measurements
             .get_mut(&evidence_hash)
-            .ok_or_else(|| ConvergenceError::MeasurementNotFound { evidence_hash })?;
+            .ok_or(ConvergenceError::MeasurementNotFound { evidence_hash })?;
 
         measurement.record_acknowledgment(instance_id, ack_time);
 
@@ -346,7 +348,7 @@ impl ConvergenceMeter {
 
                 instance_avg_times
                     .entry(instance_id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(duration_ms);
             }
         }

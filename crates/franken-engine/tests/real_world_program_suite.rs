@@ -17,15 +17,16 @@ use std::path::Path;
 ///
 /// Each program is designed to be 200+ lines and use 5+ JavaScript features:
 /// - ES2015 classes and inheritance
-/// - Generators and iterators
-/// - Maps, Sets, WeakMaps
-/// - Template literals and computed properties
-/// - Arrow functions and closures
-/// - Symbols and proxies
-/// - Async/await and promises
-/// - Destructuring and spread syntax
-
+///   - Generators and iterators
+///   - Maps, Sets, WeakMaps
+///   - Template literals and computed properties
+///   - Arrow functions and closures
+///   - Symbols and proxies
+///   - Async/await and promises
+///   - Destructuring and spread syntax
+///
 /// Program descriptor for test execution
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ProgramDescriptor {
     name: &'static str,
@@ -37,6 +38,7 @@ struct ProgramDescriptor {
 }
 
 /// Result of program execution
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ExecutionResult {
     program_name: String,
@@ -255,7 +257,7 @@ impl RealWorldProgramSuite {
         let success = execution_result.is_ok()
             && features_verified.len() >= program.expected_features.len().saturating_sub(1)
             && self.verify_output_expectations(
-                &execution_result.as_ref().unwrap_or(&String::new()),
+                execution_result.as_ref().unwrap_or(&String::new()),
                 program,
             );
 

@@ -7,23 +7,11 @@
 use frankenengine_engine::convergence_slo::{
     ConvergenceMeter, ConvergenceSloConfig, StatisticalAnalysisConfig,
 };
-use frankenengine_engine::fleet_convergence::ContainmentThresholds;
 use frankenengine_engine::fleet_immune_protocol::NodeId;
-use frankenengine_engine::fleet_simulator::FleetSimulator;
-use frankenengine_engine::quarantine_propagation::{QuarantineDecision, QuarantineProtocolManager};
+use frankenengine_engine::quarantine_propagation::QuarantineDecision;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-
-fn test_thresholds() -> ContainmentThresholds {
-    ContainmentThresholds {
-        sandbox_threshold: 1_000_000,
-        suspend_threshold: 5_000_000,
-        terminate_threshold: 10_000_000,
-        quarantine_threshold: 20_000_000,
-    }
-}
 
 fn test_config() -> ConvergenceSloConfig {
     let temp_dir = TempDir::new().unwrap();

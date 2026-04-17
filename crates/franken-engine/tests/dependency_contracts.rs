@@ -49,7 +49,7 @@ mod asupersync_contracts {
         let _evidence_records: Vec<String> = Vec::new();
 
         // This test passes if compilation succeeds
-        assert!(true, "Integration contract compilation check passed");
+        // (No runtime assertion needed — the compile itself is the verification.)
     }
 }
 
@@ -98,6 +98,5 @@ fn build_mode_verification() {
         println!("Running in standalone mode without external dependencies");
     }
 
-    // This test always passes - it's for verification purposes
-    assert!(true, "Build mode verification completed");
+    // This test always passes - the compile-time feature check is the verification.
 }

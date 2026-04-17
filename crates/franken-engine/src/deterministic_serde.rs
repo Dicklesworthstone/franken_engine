@@ -639,6 +639,7 @@ pub fn canonical_hash(schema: &SchemaHash, value: &CanonicalValue) -> ContentHas
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
 

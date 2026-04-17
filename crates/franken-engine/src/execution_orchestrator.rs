@@ -2899,15 +2899,14 @@ mod tests {
         assert!(
             result.evidence_entries[0]
                 .metadata
-                .get("hook_requested_action")
-                .is_some(),
+                .contains_key("hook_requested_action"),
             "hook-requested action should be recorded in evidence metadata"
         );
 
         let guardplane_entries: Vec<_> = result
             .evidence_entries
             .iter()
-            .filter(|entry| entry.metadata.get("guardplane_decision_index").is_some())
+            .filter(|entry| entry.metadata.contains_key("guardplane_decision_index"))
             .collect();
         assert!(
             !guardplane_entries.is_empty(),

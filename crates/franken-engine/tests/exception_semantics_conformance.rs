@@ -29,7 +29,6 @@ use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
 use frankenengine_engine::parser_api_stability::parse_script;
 use frankenengine_engine::promise_model::PromiseHandle;
-use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine};
 
 // ---------------------------------------------------------------------------
 // Helpers

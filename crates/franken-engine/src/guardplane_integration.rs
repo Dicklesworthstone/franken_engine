@@ -13,7 +13,6 @@
 //!
 //! Reference: [RC-4] Guardplane Wired Into Execution
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -680,10 +679,12 @@ mod tests {
 
     #[test]
     fn test_action_determination() {
-        let mut config = GuardplaneConfig::default();
-        config.challenge_threshold = 100_000; // 0.1
-        config.sandbox_threshold = 200_000; // 0.2
-        config.suspend_threshold = 300_000; // 0.3
+        let config = GuardplaneConfig {
+            challenge_threshold: 100_000, // 0.1
+            sandbox_threshold: 200_000,   // 0.2
+            suspend_threshold: 300_000,   // 0.3
+            ..Default::default()
+        };
 
         let adapter = BasicGuardplaneAdapter::new(config);
 

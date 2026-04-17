@@ -7179,7 +7179,6 @@ mod tests {
         // Test that Promise.all resolves with array of values when all resolve
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let mut heap = crate::object_model::ObjectHeap::new();
 
         // This test validates that the Promise.all builtin ID is registered
         let registered = env
@@ -7245,7 +7244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_promise_allSettled() {
+    fn test_promise_all_settled() {
         // Test that Promise.allSettled resolves with array of outcomes
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);

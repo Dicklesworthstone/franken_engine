@@ -103,6 +103,7 @@ pub struct Profiler {
     instruction_times: BTreeMap<String, Duration>,
     memory_stats: MemoryStats,
     start_time: Instant,
+    #[allow(dead_code)]
     last_sample_time: Instant,
     instruction_counter: u64,
 }
@@ -193,7 +194,7 @@ impl Profiler {
                 .copied()
                 .unwrap_or(Duration::ZERO);
             let total_time_ns = total_time.as_nanos() as u64;
-            let average_time_ns = if count > 0 { total_time_ns / count } else { 0 };
+            let average_time_ns = total_time_ns.checked_div(count).unwrap_or(0);
 
             instruction_stats.insert(
                 name.clone(),
@@ -218,7 +219,7 @@ impl Profiler {
             } else {
                 0.0
             };
-            let average_time_ns = if count > 0 { total_time_ns / count } else { 0 };
+            let average_time_ns = total_time_ns.checked_div(count).unwrap_or(0);
 
             let recommendation = if time_percentage > 5.0 {
                 "High-priority optimization target".to_string()

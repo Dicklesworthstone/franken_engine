@@ -15,16 +15,12 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::SourceSpan;
 use crate::hash_tiers::ContentHash;
 use crate::jsx_tsx_parser::{JsxParseResult, JsxParserConfig, parse_jsx};
-use crate::react_jsx_lowering::{
-    ReactLoweringConfig, ReactLoweringResult, compute_lowering_receipt, lower_parse_result,
-};
+use crate::react_jsx_lowering::{ReactLoweringConfig, ReactLoweringResult, lower_parse_result};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -42,7 +38,7 @@ pub const REACT_COMPILATION_POLICY_ID: &str = "RGC-206";
 // ---------------------------------------------------------------------------
 
 /// Configuration for the React compilation pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReactCompileConfig {
     /// JSX parser configuration.
     pub parser_config: JsxParserConfig,
@@ -52,17 +48,6 @@ pub struct ReactCompileConfig {
     pub generate_source_maps: bool,
     /// Whether to include debug information.
     pub include_debug_info: bool,
-}
-
-impl Default for ReactCompileConfig {
-    fn default() -> Self {
-        Self {
-            parser_config: JsxParserConfig::default(),
-            lowering_config: ReactLoweringConfig::default(),
-            generate_source_maps: false,
-            include_debug_info: false,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +242,7 @@ impl std::error::Error for ReactCompileError {}
 /// Compile React/JSX source through the complete pipeline.
 pub fn compile_react_source(
     source: &str,
-    language: ReactInputLanguage,
+    _language: ReactInputLanguage,
     config: &ReactCompileConfig,
 ) -> Result<ReactCompileResult, ReactCompileError> {
     // Validate input
@@ -356,7 +341,7 @@ fn generate_javascript_output(
 }
 
 /// Generate a source map for the transformation.
-fn generate_source_map(original: &str, generated: &str) -> Result<String, ReactCompileError> {
+fn generate_source_map(original: &str, _generated: &str) -> Result<String, ReactCompileError> {
     // Basic source map generation - in a full implementation this would be more sophisticated
     let source_map = serde_json::json!({
         "version": 3,
@@ -392,7 +377,7 @@ fn count_transforms(lowering_result: &ReactLoweringResult) -> BTreeMap<String, u
 }
 
 /// Compute deterministic process hash for compilation.
-fn compute_process_hash(result: &ReactCompileResult, config: &ReactCompileConfig) -> ContentHash {
+fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfig) -> ContentHash {
     let process_data = serde_json::json!({
         "pipeline": "react_compilation",
         "steps": ["parse", "lower", "generate"],
@@ -459,7 +444,7 @@ mod tests {
         let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
         let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
 
-        assert_eq!(evidence.output_spec.success, true);
+        assert!(evidence.output_spec.success);
         assert_eq!(
             evidence.compile_receipt.component,
             REACT_COMPILATION_COMPONENT

@@ -63,8 +63,10 @@ fn test_untrusted_property_access_triggers_guardplane() {
 
 #[test]
 fn test_high_risk_property_access_triggers_containment() {
-    let mut config = GuardplaneConfig::default();
-    config.challenge_threshold = 100_000; // 0.1 - very sensitive
+    let config = GuardplaneConfig {
+        challenge_threshold: 100_000, // 0.1 - very sensitive
+        ..Default::default()
+    };
 
     let mut adapter = BasicGuardplaneAdapter::new(config);
 
@@ -169,8 +171,10 @@ fn test_import_risk_assessment() {
 
 #[test]
 fn test_evidence_generation_disabled() {
-    let mut config = GuardplaneConfig::default();
-    config.emit_evidence = false;
+    let config = GuardplaneConfig {
+        emit_evidence: false,
+        ..Default::default()
+    };
 
     let mut adapter = BasicGuardplaneAdapter::new(config);
 
@@ -192,11 +196,13 @@ fn test_evidence_generation_disabled() {
 
 #[test]
 fn test_risk_threshold_configuration() {
-    let mut config = GuardplaneConfig::default();
-    config.challenge_threshold = 50_000; // 0.05 - very sensitive
-    config.sandbox_threshold = 100_000; // 0.1
-    config.suspend_threshold = 150_000; // 0.15
-    config.terminate_threshold = 200_000; // 0.2
+    let config = GuardplaneConfig {
+        challenge_threshold: 50_000, // 0.05 - very sensitive
+        sandbox_threshold: 100_000,  // 0.1
+        suspend_threshold: 150_000,  // 0.15
+        terminate_threshold: 200_000, // 0.2
+        ..Default::default()
+    };
 
     let mut adapter = BasicGuardplaneAdapter::new(config);
 
@@ -317,7 +323,7 @@ fn test_escalating_risk_patterns() {
     let mut adapter = BasicGuardplaneAdapter::new(config);
 
     // Simulate escalating risk pattern: Get → Set → Delete
-    let operations = vec![
+    let operations = [
         PropertyAccessType::Get,
         PropertyAccessType::Set,
         PropertyAccessType::Delete,
@@ -366,8 +372,8 @@ fn test_large_allocation_triggers_scrutiny() {
         extension_id: Some("memory-light".to_string()),
     };
 
-    let large_action = adapter.pre_allocation(&large_context).unwrap();
-    let small_action = adapter.pre_allocation(&small_context).unwrap();
+    let _large_action = adapter.pre_allocation(&large_context).unwrap();
+    let _small_action = adapter.pre_allocation(&small_context).unwrap();
 
     // Both should be tracked, but implementation could differentiate
     assert_eq!(adapter.decision_history.len(), 2);

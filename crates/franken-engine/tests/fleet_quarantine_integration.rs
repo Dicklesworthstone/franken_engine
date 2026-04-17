@@ -18,7 +18,6 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -28,13 +27,9 @@ use serde::{Deserialize, Serialize};
 use frankenengine_engine::fleet_convergence::{
     ContainmentThresholds, PartitionInfo, PartitionMode,
 };
-use frankenengine_engine::fleet_immune_protocol::{NodeId, QuorumCheckpoint};
-use frankenengine_engine::fleet_simulator::{
-    FleetSimulator, FleetSimulatorError, InstanceState, QuarantineStats,
-};
-use frankenengine_engine::tee_attestation_policy::{
-    AttestationQuote, MockTeeProvider, TeePlatform,
-};
+use frankenengine_engine::fleet_immune_protocol::NodeId;
+use frankenengine_engine::fleet_simulator::{FleetSimulator, InstanceState};
+use frankenengine_engine::tee_attestation_policy::{MockTeeProvider, TeePlatform};
 
 // ---------------------------------------------------------------------------
 // Test Configuration and Helpers
@@ -65,6 +60,7 @@ impl Default for FleetQuarantineConfig {
 }
 
 /// Convergence metrics for SLO verification.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConvergenceMetrics {
     pub p50_ms: u64,
@@ -83,6 +79,7 @@ fn test_containment_thresholds() -> ContainmentThresholds {
 }
 
 /// Create test artifacts directory.
+#[allow(dead_code)]
 fn create_test_artifacts_dir() -> PathBuf {
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let artifacts_dir =
@@ -358,11 +355,11 @@ fn test_convergence_slo_met() {
     let mut sorted_times = convergence_times.clone();
     sorted_times.sort();
 
-    let p50 = sorted_times[sorted_times.len() * 50 / 100];
-    let p95 = sorted_times[sorted_times.len() * 95 / 100];
+    let _p50 = sorted_times[sorted_times.len() * 50 / 100];
+    let _p95 = sorted_times[sorted_times.len() * 95 / 100];
     let p99 = sorted_times[sorted_times.len() * 99 / 100];
-    let max_time = *sorted_times.last().unwrap();
-    let mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
+    let _max_time = *sorted_times.last().unwrap();
+    let _mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
 
     let violations = sorted_times
         .iter()
@@ -503,6 +500,7 @@ fn test_100_quarantine_events() {
 // ---------------------------------------------------------------------------
 
 /// Generate convergence metrics from timing data.
+#[allow(dead_code)]
 fn generate_convergence_metrics(times: &[u64], max_convergence_ms: u64) -> ConvergenceMetrics {
     let mut sorted_times = times.to_vec();
     sorted_times.sort();

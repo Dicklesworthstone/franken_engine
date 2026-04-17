@@ -35,6 +35,7 @@ fn lower_source_to_ir3(source: &str) -> Ir3Module {
 }
 
 /// Create a test module with specific IR3 instructions for direct testing.
+#[allow(dead_code)]
 fn test_module_with_instructions(instructions: Vec<Ir3Instruction>) -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"adversarial-test"), "adversarial.js");
     m.instructions = instructions;

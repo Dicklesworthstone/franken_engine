@@ -531,6 +531,7 @@ struct GeneratorObject {
 }
 
 /// Execution phases for async function objects.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AsyncFunctionPhase {
     /// Created but not yet started.
@@ -544,6 +545,7 @@ enum AsyncFunctionPhase {
 }
 
 /// Execution phases for async generator objects.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AsyncGeneratorPhase {
     /// Created but not yet started (initial .next() call).
@@ -560,6 +562,7 @@ enum AsyncGeneratorPhase {
 
 /// An async function object holds the suspended state of an async function
 /// and its result Promise.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncFunctionObject {
     /// Function index in the function table.
@@ -580,6 +583,7 @@ struct AsyncFunctionObject {
 
 /// An async generator object combines generator suspension with promise wrapping.
 /// Each yield creates a promise-wrapped value, and can use await inside the body.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct AsyncGeneratorObject {
     /// Function index in the function table.
@@ -1696,14 +1700,19 @@ pub struct InterpreterCore {
     /// Active timers for clearTimeout/clearInterval tracking.
     active_timers: std::collections::BTreeMap<u32, ActiveTimer>,
     /// Containment state: whether execution is suspended due to guardplane action.
+    #[allow(dead_code)]
     suspended: bool,
     /// Containment state: whether execution is sandboxed (capabilities restricted).
+    #[allow(dead_code)]
     sandboxed: bool,
     /// Containment state: whether extension is marked for quarantine.
+    #[allow(dead_code)]
     quarantined: bool,
     /// Pending challenge tokens requiring resolution.
+    #[allow(dead_code)]
     pending_challenges: Vec<ChallengeToken>,
     /// Evidence records for containment actions taken.
+    #[allow(dead_code)]
     containment_evidence: Vec<WitnessEvent>,
     /// Decision receipt log for signed evidence chain.
     decision_receipts: EvidenceLog,
@@ -2784,6 +2793,7 @@ impl InterpreterCore {
     /// Handle containment action enforcement with proper state management and evidence emission.
     /// This replaces the simple error-throwing approach of enforce_hook_action with actual
     /// containment behaviors as required by RC-4.3.
+    #[allow(dead_code)]
     fn handle_containment_action(&mut self, action: HookAction) -> Result<(), InterpreterError> {
         match action {
             HookAction::Allow => Ok(()),
@@ -2829,6 +2839,7 @@ impl InterpreterCore {
 
     /// Emit evidence record for containment actions taken.
     /// Creates a signed evidence record and decision receipt that can be verified later.
+    #[allow(dead_code)]
     fn emit_containment_evidence(&mut self, action: &HookAction) {
         // Create decision receipt for signed evidence chain
         let (operation_type, action_taken, risk_score) = match action {
@@ -3130,9 +3141,10 @@ impl InterpreterCore {
 
     /// Execute .next() on an async generator.
     /// Returns a Promise that resolves to {value, done}.
+    #[allow(dead_code)]
     fn async_generator_next(
         &mut self,
-        module: &Ir3Module,
+        _module: &Ir3Module,
         gen_id: u32,
         _arg: Value,
     ) -> Result<Value, InterpreterError> {
@@ -4702,7 +4714,7 @@ impl InterpreterCore {
                         // Promise already settled - continue execution synchronously
                         match &promise_record.state {
                             crate::promise_model::PromiseState::Fulfilled(js_val) => {
-                                let result_value = Self::js_value_to_value(js_val);
+                                let _result_value = Self::js_value_to_value(js_val);
                                 // Store result in a temporary register or continue with the value
                                 // For now, we'll need to figure out where to store the resolved value
                                 // This might need to be handled by the lowering pipeline
@@ -4738,7 +4750,7 @@ impl InterpreterCore {
 
                     // This is a simplified implementation - in a full implementation, we'd need
                     // to track the current async function context and resolve its result promise
-                    let js_val = Self::value_to_js_value(&return_value);
+                    let _js_val = Self::value_to_js_value(&return_value);
 
                     // For now, return an error indicating this needs more context tracking
                     return Err(InterpreterError::TypeError {
@@ -4755,7 +4767,7 @@ impl InterpreterCore {
 
                     // This is a simplified implementation - in a full implementation, we'd need
                     // to track the current async function context and reject its result promise
-                    let js_reason = Self::value_to_js_value(&error_value);
+                    let _js_reason = Self::value_to_js_value(&error_value);
 
                     // For now, return an error indicating this needs more context tracking
                     return Err(InterpreterError::TypeError {
@@ -10654,56 +10666,56 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn setTimeout_fires_after_delay() {
+    fn set_timeout_fires_after_delay() {
         // TODO: Test that setTimeout callback executes after specified delay
         // When timer substrate is implemented, this will:
         // 1. Call setTimeout with a callback and delay
         // 2. Verify timer ID is returned
         // 3. Run event loop until timer fires
         // 4. Verify callback executed at the right time
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation — empty body so the test still compiles/runs.
     }
 
     #[test]
-    fn setTimeout_returns_id() {
+    fn set_timeout_returns_id() {
         // TODO: Test that setTimeout returns numeric timer ID
         // When timer substrate is implemented, this will:
         // 1. Call setTimeout(callback, delay)
         // 2. Verify return value is a numeric timer ID
         // 3. Verify IDs are deterministic and monotonic
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
-    fn clearTimeout_cancels() {
+    fn clear_timeout_cancels() {
         // TODO: Test that clearTimeout prevents timer from firing
         // When timer substrate is implemented, this will:
         // 1. Call setTimeout to schedule a timer
         // 2. Call clearTimeout with the timer ID
         // 3. Run event loop
         // 4. Verify callback never executes
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
-    fn setInterval_repeats() {
+    fn set_interval_repeats() {
         // TODO: Test that setInterval fires multiple times
         // When timer substrate is implemented, this will:
         // 1. Call setInterval with callback and interval
         // 2. Run event loop for several intervals
         // 3. Verify callback fires multiple times at regular intervals
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
-    fn clearInterval_stops() {
+    fn clear_interval_stops() {
         // TODO: Test that clearInterval stops repeating timer
         // When timer substrate is implemented, this will:
         // 1. Call setInterval to start repeating timer
         // 2. Let it fire a few times
         // 3. Call clearInterval to stop it
         // 4. Verify timer stops firing
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
@@ -10713,7 +10725,7 @@ mod tests {
         // 1. Schedule multiple timers with different delays
         // 2. Run event loop until all fire
         // 3. Verify execution order matches delay ordering
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
@@ -10724,17 +10736,17 @@ mod tests {
         // 2. Enqueue a microtask (Promise.then)
         // 3. Run event loop
         // 4. Verify microtask executes before timer callback
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
-    fn nested_setTimeout() {
+    fn nested_set_timeout() {
         // TODO: Test that setTimeout inside timer callback works
         // When timer substrate is implemented, this will:
         // 1. Call setTimeout with callback that calls setTimeout again
         // 2. Run event loop
         // 3. Verify both timers execute in correct order
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     #[test]
@@ -10745,7 +10757,7 @@ mod tests {
         // 2. Enqueue some microtasks
         // 3. Run event loop
         // 4. Verify timer fires after microtasks drain
-        assert!(true); // Placeholder until implementation
+        // Placeholder until implementation.
     }
 
     // RC-4.3 Containment Action Enforcement Tests

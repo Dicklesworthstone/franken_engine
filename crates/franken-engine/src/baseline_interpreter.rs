@@ -7207,6 +7207,55 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:StringPrototypeIndexOf" => {
+                // String.prototype.indexOf implementation - returns index of first occurrence of substring
+                if args.count < 2 {
+                    return Ok(Value::Int(-1)); // No search string provided
+                }
+
+                let string_val = self.read_reg(args.start)?;
+                let search_val = self.read_reg(args.start + 1)?;
+
+                match (string_val, search_val) {
+                    (Value::Str(haystack), Value::Str(needle)) => {
+                        // Optional start position (fromIndex parameter)
+                        let start_pos = if args.count >= 3 {
+                            let start_val = self.read_reg(args.start + 2)?;
+                            match start_val {
+                                Value::Int(pos) => {
+                                    if pos < 0 {
+                                        0
+                                    } else {
+                                        pos as usize
+                                    }
+                                }
+                                Value::Float(f) => {
+                                    let pos = f.inner().floor() as i64;
+                                    if pos < 0 { 0 } else { pos as usize }
+                                }
+                                _ => 0,
+                            }
+                        } else {
+                            0
+                        };
+
+                        // Find the substring starting from the specified position
+                        if start_pos >= haystack.len() {
+                            Ok(Value::Int(-1))
+                        } else {
+                            let search_slice = &haystack[start_pos..];
+                            match search_slice.find(&needle) {
+                                Some(pos) => Ok(Value::Int((start_pos + pos) as i64)),
+                                None => Ok(Value::Int(-1)),
+                            }
+                        }
+                    }
+                    _ => {
+                        // Non-string arguments - return -1 per JavaScript behavior
+                        Ok(Value::Int(-1))
+                    }
+                }
+            }
 
             // Math methods
             "builtin:MathAbs" => {
@@ -7309,6 +7358,46 @@ impl InterpreterCore {
                     Value::BuiltinFunction(_) => "undefined".to_string(),
                 };
                 Ok(Value::Str(json_str))
+            }
+            "builtin:JsonParse" => {
+                // JSON.parse implementation - parses JSON string into JavaScript value
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let json_str_val = self.read_reg(args.start)?;
+                match json_str_val {
+                    Value::Str(json_str) => {
+                        // Simple JSON parsing for basic cases
+                        match json_str.trim() {
+                            "null" => Ok(Value::Null),
+                            "true" => Ok(Value::Bool(true)),
+                            "false" => Ok(Value::Bool(false)),
+                            "undefined" => Ok(Value::Undefined),
+                            s if s.starts_with('"') && s.ends_with('"') => {
+                                // String value - remove quotes and handle basic escape sequences
+                                let content = &s[1..s.len() - 1];
+                                let unescaped = content.replace("\\\"", "\"").replace("\\\\", "\\");
+                                Ok(Value::Str(unescaped))
+                            }
+                            s => {
+                                // Try to parse as number
+                                if let Ok(int_val) = s.parse::<i64>() {
+                                    Ok(Value::Int(int_val))
+                                } else if let Ok(float_val) = s.parse::<f64>() {
+                                    Ok(Value::Float(Float64::new(float_val)))
+                                } else {
+                                    // Invalid JSON - return undefined (simplified error handling)
+                                    Ok(Value::Undefined)
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // Non-string argument - return undefined
+                        Ok(Value::Undefined)
+                    }
+                }
             }
 
             _ => {

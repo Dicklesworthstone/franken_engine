@@ -60,9 +60,11 @@ require_fixture() {
 
   if ! jq -e '
     type == "object"
+    and (.schema_version == "franken-engine.parser-final-readiness-dossier.v1")
+    and (.log_schema_version == "franken-engine.parser-log-event.v1")
     and (.dossier_version | type == "string")
     and (.dossier_id | type == "string")
-    and (.bead_id | type == "string")
+    and (.bead_id == "bd-2mds.1.8.4")
     and (.blocked_dependency_ids | type == "array")
     and all(.blocked_dependency_ids[]; type == "string")
     and (.expected_gate | type == "object")

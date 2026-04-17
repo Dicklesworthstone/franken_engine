@@ -432,7 +432,7 @@ fn test_runner_mock_execution() {
         max_tests: 10,
         ..RunnerConfig::default()
     };
-    let mut runner = Test262Runner::new(config);
+    let runner = Test262Runner::new(config);
     let epoch = SecurityEpoch::from_raw(1);
 
     let result = runner.run_conformance(epoch);
@@ -465,8 +465,8 @@ fn test_runner_deterministic_simulation() {
         max_tests: 5,
         ..RunnerConfig::default()
     };
-    let mut runner1 = Test262Runner::new(config.clone());
-    let mut runner2 = Test262Runner::new(config);
+    let runner1 = Test262Runner::new(config.clone());
+    let runner2 = Test262Runner::new(config);
     let epoch = SecurityEpoch::from_raw(1);
 
     let report1 = runner1.run_conformance(epoch).unwrap();
@@ -492,7 +492,7 @@ fn test_runner_unlimited_tests() {
         max_tests: 0, // Unlimited
         ..RunnerConfig::default()
     };
-    let mut runner = Test262Runner::new(config);
+    let runner = Test262Runner::new(config);
     let epoch = SecurityEpoch::from_raw(1);
 
     let result = runner.run_conformance(epoch);

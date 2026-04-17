@@ -1071,6 +1071,18 @@ fn parser_final_readiness_script_uses_repo_local_target_dir_and_retained_step_lo
         "script should validate the fixture JSON contract before heavy work"
     );
     assert!(
+        script.contains(".schema_version == \"franken-engine.parser-final-readiness-dossier.v1\""),
+        "script should reject fixtures with the wrong dossier schema"
+    );
+    assert!(
+        script.contains(".log_schema_version == \"franken-engine.parser-log-event.v1\""),
+        "script should reject fixtures with the wrong structured log schema"
+    );
+    assert!(
+        script.contains(".bead_id == \"bd-2mds.1.8.4\""),
+        "script should reject fixtures for a different bead"
+    );
+    assert!(
         script.contains(".blocked_dependency_ids | type == \"array\""),
         "script should validate blocked dependency typing before manifest generation"
     );

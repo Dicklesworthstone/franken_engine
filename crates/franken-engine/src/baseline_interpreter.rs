@@ -15016,19 +15016,20 @@ impl InterpreterCore {
                 let result_array_id = self.alloc_object_with_prototype(None)?;
                 let mut result_length = 0;
 
-                // Simplified implementation: copy elements and flatten one level
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            // For simplicity, just copy the element (no actual mapping)
-                            self.set_object_property(
-                                result_array_id,
-                                result_length.to_string(),
-                                element.clone(),
-                            )?;
-                            result_length += 1;
-                        }
-                    }
+                // Simplified implementation: copy elements and flatten one level.
+                let elements_to_copy = self
+                    .heap
+                    .get(array_id.0 as usize)
+                    .map(|obj| {
+                        (0..length)
+                            .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                for element in elements_to_copy {
+                    self.set_object_property(result_array_id, result_length.to_string(), element)?;
+                    result_length += 1;
                 }
 
                 self.set_object_property(

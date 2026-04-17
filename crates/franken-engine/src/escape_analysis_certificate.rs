@@ -463,10 +463,12 @@ pub fn analyze_escape(
         let reasons: Vec<InvalidationReason> = if budget_exceeded {
             vec![InvalidationReason::BudgetExceeded]
         } else {
+            // Absent from the invalidation map == no recorded invalidation
+            // reasons for this site. Default to empty vec rather than panic.
             invalidation_map
                 .get(site.site_id.as_str())
                 .cloned()
-                .unwrap()
+                .unwrap_or_default()
         };
 
         let abstention = !reasons.is_empty();

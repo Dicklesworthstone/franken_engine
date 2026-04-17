@@ -356,7 +356,7 @@ pub fn evaluate_plas_lockstep_case(
             .reference_tolerances
             .get(&LockstepRuntime::Node)
             .cloned()
-            .unwrap();
+            .unwrap_or_default();
         let comparison = compare_against_baseline(&scenario.full_manifest, reference, &tolerance);
         if !comparison.semantic_match {
             reference_divergences.push(reference.runtime.to_string());
@@ -368,7 +368,7 @@ pub fn evaluate_plas_lockstep_case(
             .reference_tolerances
             .get(&LockstepRuntime::Bun)
             .cloned()
-            .unwrap();
+            .unwrap_or_default();
         let comparison = compare_against_baseline(&scenario.full_manifest, reference, &tolerance);
         if !comparison.semantic_match {
             reference_divergences.push(reference.runtime.to_string());

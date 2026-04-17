@@ -344,7 +344,7 @@ impl Test262Runner {
 
     /// Execute Test262 conformance suite.
     pub fn run_conformance(
-        &mut self,
+        &self,
         security_epoch: SecurityEpoch,
     ) -> Result<ConformanceReport, String> {
         // For MVP, create a mock report with expected structure
@@ -432,11 +432,14 @@ impl Test262Runner {
             mock_test_paths.len()
         };
 
-        (0..max_tests)
-            .map(|i| {
-                let path = PathBuf::from(mock_test_paths[i % mock_test_paths.len()]);
-                self.execute_test(&path)
-            })
+        // Create the paths first, then map over them to avoid borrowing issues
+        let test_paths: Vec<_> = (0..max_tests)
+            .map(|i| PathBuf::from(mock_test_paths[i % mock_test_paths.len()]))
+            .collect();
+
+        test_paths
+            .iter()
+            .map(|path| self.execute_test(path))
             .collect()
     }
 }

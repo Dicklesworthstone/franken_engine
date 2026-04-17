@@ -12343,9 +12343,15 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined),
                 };
 
-                // Check if the property exists on the object
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    if let Some(value) = obj.properties.get(&prop_name) {
+                // Snapshot the property value under an immutable borrow,
+                // then allocate + populate the descriptor under a fresh
+                // &mut self context.
+                let value_snapshot: Option<Value> = self
+                    .heap
+                    .get(obj_id.0 as usize)
+                    .and_then(|obj| obj.properties.get(&prop_name).cloned());
+                if let Some(value) = value_snapshot {
+                    {
                         // Create property descriptor object
                         let descriptor_id = self.alloc_object_with_prototype(None)?;
 

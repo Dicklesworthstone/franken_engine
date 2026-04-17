@@ -6954,6 +6954,106 @@ impl InterpreterCore {
                 // Return the new array object
                 Ok(Value::Object(array_id))
             }
+            "builtin:ArrayFrom" => {
+                // Array.from implementation - creates new Array instance from array-like or iterable object
+                if args.count == 0 {
+                    // Array.from() with no arguments creates empty array
+                    let array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                    return Ok(Value::Object(array_id));
+                }
+
+                let first_arg = self.read_reg(args.start)?;
+
+                // Create new array object
+                let array_id = self.alloc_object_with_prototype(None)?;
+
+                match first_arg {
+                    Value::Object(obj_id) => {
+                        // Check if object is array-like (has length property)
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(length_val) = obj.properties.get("length") {
+                                match length_val {
+                                    Value::Int(len) if *len >= 0 => {
+                                        let len_u32 = *len as u32;
+
+                                        // Copy elements from array-like object
+                                        for i in 0..len_u32 {
+                                            let element = obj
+                                                .properties
+                                                .get(&i.to_string())
+                                                .cloned()
+                                                .unwrap_or(Value::Undefined);
+                                            self.set_object_property(
+                                                array_id,
+                                                i.to_string(),
+                                                element,
+                                            )?;
+                                        }
+
+                                        // Set length property
+                                        self.set_object_property(
+                                            array_id,
+                                            "length".to_string(),
+                                            Value::Int(len_u32 as i64),
+                                        )?;
+                                    }
+                                    _ => {
+                                        // Invalid length, treat as empty
+                                        self.set_object_property(
+                                            array_id,
+                                            "length".to_string(),
+                                            Value::Int(0),
+                                        )?;
+                                    }
+                                }
+                            } else {
+                                // No length property, treat object as empty array-like
+                                self.set_object_property(
+                                    array_id,
+                                    "length".to_string(),
+                                    Value::Int(0),
+                                )?;
+                            }
+                        } else {
+                            // Object not found, create empty array
+                            self.set_object_property(
+                                array_id,
+                                "length".to_string(),
+                                Value::Int(0),
+                            )?;
+                        }
+                    }
+                    Value::Str(s) => {
+                        // Convert string to array of characters
+                        let chars: Vec<char> = s.chars().collect();
+
+                        for (i, ch) in chars.iter().enumerate() {
+                            self.set_object_property(
+                                array_id,
+                                i.to_string(),
+                                Value::Str(ch.to_string()),
+                            )?;
+                        }
+
+                        // Set length property
+                        self.set_object_property(
+                            array_id,
+                            "length".to_string(),
+                            Value::Int(chars.len() as i64),
+                        )?;
+                    }
+                    _ => {
+                        // Non-iterable value, create empty array
+                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                    }
+                }
+
+                // TODO: Handle mapping function (second argument) if provided
+                // TODO: Handle thisArg (third argument) if provided
+
+                Ok(Value::Object(array_id))
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {
@@ -7289,6 +7389,160 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:StringPrototypeSubstring" => {
+                // String.prototype.substring implementation - returns substring between two indices
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                let str_len = string_val.chars().count();
+
+                // Get start index (default to 0)
+                let start_idx = if args.count > 1 {
+                    let start_arg = self.read_reg(args.start + 1)?;
+                    match start_arg {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => {
+                            let val = f.inner();
+                            if val.is_nan() || val < 0.0 {
+                                0
+                            } else {
+                                val as usize
+                            }
+                        }
+                        _ => 0,
+                    }
+                } else {
+                    0
+                }
+                .min(str_len);
+
+                // Get end index (default to string length)
+                let end_idx = if args.count > 2 {
+                    let end_arg = self.read_reg(args.start + 2)?;
+                    match end_arg {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => {
+                            let val = f.inner();
+                            if val.is_nan() || val < 0.0 {
+                                0
+                            } else {
+                                val as usize
+                            }
+                        }
+                        _ => str_len,
+                    }
+                } else {
+                    str_len
+                }
+                .min(str_len);
+
+                // Ensure start <= end (swap if necessary, per JavaScript spec)
+                let (actual_start, actual_end) = if start_idx <= end_idx {
+                    (start_idx, end_idx)
+                } else {
+                    (end_idx, start_idx)
+                };
+
+                // Extract substring using character indices
+                let chars: Vec<char> = string_val.chars().collect();
+                let substring: String = chars[actual_start..actual_end].iter().collect();
+
+                Ok(Value::Str(substring))
+            }
+            "builtin:StringPrototypeSlice" => {
+                // String.prototype.slice implementation - extracts part of string with different negative index behavior
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                let str_len = string_val.chars().count() as i64;
+
+                // Get start index (default to 0)
+                let start_idx = if args.count > 1 {
+                    let start_arg = self.read_reg(args.start + 1)?;
+                    match start_arg {
+                        Value::Int(n) => {
+                            if n < 0 {
+                                (str_len + n).max(0) as usize
+                            } else {
+                                (n.min(str_len) as usize)
+                            }
+                        }
+                        Value::Float(f) => {
+                            let val = f.inner();
+                            if val.is_nan() {
+                                0
+                            } else if val < 0.0 {
+                                ((str_len as f64) + val).max(0.0) as usize
+                            } else {
+                                (val.min(str_len as f64) as usize)
+                            }
+                        }
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get end index (default to string length)
+                let end_idx = if args.count > 2 {
+                    let end_arg = self.read_reg(args.start + 2)?;
+                    match end_arg {
+                        Value::Int(n) => {
+                            if n < 0 {
+                                (str_len + n).max(0) as usize
+                            } else {
+                                (n.min(str_len) as usize)
+                            }
+                        }
+                        Value::Float(f) => {
+                            let val = f.inner();
+                            if val.is_nan() {
+                                str_len as usize
+                            } else if val < 0.0 {
+                                ((str_len as f64) + val).max(0.0) as usize
+                            } else {
+                                (val.min(str_len as f64) as usize)
+                            }
+                        }
+                        _ => str_len as usize,
+                    }
+                } else {
+                    str_len as usize
+                };
+
+                // Extract substring if start < end
+                if start_idx < end_idx {
+                    let chars: Vec<char> = string_val.chars().collect();
+                    let substring: String = chars[start_idx..end_idx].iter().collect();
+                    Ok(Value::Str(substring))
+                } else {
+                    Ok(Value::Str("".to_string()))
+                }
+            }
 
             // Math methods
             "builtin:MathAbs" => {
@@ -7590,6 +7844,8 @@ impl InterpreterCore {
             // String methods
             30 => Some("builtin:StringPrototypeCharAt".to_string()),
             31 => Some("builtin:StringPrototypeIndexOf".to_string()),
+            32 => Some("builtin:StringPrototypeSubstring".to_string()),
+            33 => Some("builtin:StringPrototypeSlice".to_string()),
 
             // Math methods
             50 => Some("builtin:MathAbs".to_string()),

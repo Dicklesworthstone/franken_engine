@@ -102,6 +102,12 @@ enum CommandSpec {
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
     React(ReactArgs),
+    Gates(GatesArgs),
+    Reports(ReportsArgs),
+    Test(TestArgs),
+    Synth(SynthArgs),
+    Orchestrate(OrchestrateArgs),
+    Runtime(RuntimeArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +309,102 @@ struct ReactContractArgs {
     trace_id: String,
     decision_id: String,
     policy_id: String,
+}
+
+// New consolidated subcommand groups
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatesArgs {
+    mode: GatesMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GatesMode {
+    ZeroPlaceholder { out_dir: PathBuf, waivers: Option<PathBuf> },
+    SignatureDrift { out_dir: PathBuf, config: Option<PathBuf> },
+    AdversarialCampaign { out_dir: PathBuf },
+    AmbientMockGuard { out_dir: PathBuf },
+    IfcConformance { out_dir: PathBuf },
+    SecurityConformance { out_dir: PathBuf },
+    ArtifactValidator { input: PathBuf, out: Option<PathBuf> },
+    PlaceholderScan { out_dir: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportsArgs {
+    mode: ReportsMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReportsMode {
+    ParserOracle { config: Option<PathBuf>, out: Option<PathBuf> },
+    ParserPhase0 { out: Option<PathBuf> },
+    LoweringGap { out: Option<PathBuf> },
+    ParserGap { out: Option<PathBuf> },
+    ControlPlaneBenchmark { out: Option<PathBuf> },
+    ControlPlaneMock { out: Option<PathBuf> },
+    ControlPlanePolicy { out_dir: PathBuf },
+    EngineBlockerLedger { out_dir: PathBuf },
+    MetadataEvidence { out_dir: PathBuf },
+    NpmCompatibility { out_dir: PathBuf },
+    ObservabilityBundle { out_dir: PathBuf },
+    RgcPlanning { out: Option<PathBuf> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestArgs {
+    mode: TestMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TestMode {
+    Test262 { out_dir: PathBuf, suite_path: Option<PathBuf> },
+    Lockstep { config: Option<PathBuf>, out: Option<PathBuf> },
+    MultiEngineParser { out_dir: PathBuf },
+    S3FifoBaseline { out: Option<PathBuf> },
+    FrxOracle { out: Option<PathBuf> },
+    SeqlockCandidate { out: Option<PathBuf> },
+    SeqlockReaderWriter { out: Option<PathBuf> },
+    SeqlockRollout { out: Option<PathBuf> },
+    ShippedPathParity { out_dir: PathBuf },
+    VerifyGeneral { input: PathBuf, out: Option<PathBuf> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SynthArgs {
+    mode: SynthMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SynthMode {
+    KernelContract { out_dir: PathBuf },
+    ShapeLattice { out_dir: PathBuf },
+    LawMining { out: Option<PathBuf> },
+    EvidenceStitching { out_dir: PathBuf },
+    CacheContract { out: Option<PathBuf> },
+    ColdStart { out_dir: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OrchestrateArgs {
+    mode: OrchestrateMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OrchestrateMode {
+    ContextRefactor { out: Option<PathBuf> },
+    ReactCohort { out: Option<PathBuf> },
+    AsupersyncMatrix { out_dir: PathBuf },
+    TailLatency { out_dir: PathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeArgs {
+    mode: RuntimeMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeMode {
+    Diagnostics { input: PathBuf, out_dir: Option<PathBuf>, summary: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

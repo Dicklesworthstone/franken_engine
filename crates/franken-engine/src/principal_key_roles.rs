@@ -644,8 +644,7 @@ pub fn enforce_active_role(entry: &RoleKeyEntry, expected: KeyRole) -> Result<()
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need the SigningKey Result port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -655,7 +654,7 @@ mod tests {
 
     fn make_signing_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Signing, epoch);
-        SigningKey::from_bytes(derived)
+        SigningKey::from_bytes(derived).unwrap()
     }
 
     fn make_encryption_private(seed: &[u8; 32], epoch: SecurityEpoch) -> EncryptionPrivateKey {
@@ -665,7 +664,7 @@ mod tests {
 
     fn make_issuance_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Issuance, epoch);
-        SigningKey::from_bytes(derived)
+        SigningKey::from_bytes(derived).unwrap()
     }
 
     fn make_role_entry(
@@ -794,7 +793,7 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                VerificationKey([0u8; 32]), // placeholder for encryption role
+                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(), // placeholder for encryption role
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -868,7 +867,7 @@ mod tests {
         )
         .unwrap();
 
-        let wrong_vk = VerificationKey([0xFF; 32]);
+        let wrong_vk = SigningKey::from_bytes([0xAB; 32]).unwrap().verification_key();
         assert_eq!(
             bundle.verify(&wrong_vk),
             Err(KeyRoleError::BundleSignatureInvalid)
@@ -1021,7 +1020,7 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                VerificationKey([0u8; 32]),
+                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -1257,7 +1256,7 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                VerificationKey([0u8; 32]),
+                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -1832,7 +1831,7 @@ mod tests {
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
-                VerificationKey([0u8; 32]),
+                SigningKey::from_bytes([0x01; 32]).unwrap().verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,

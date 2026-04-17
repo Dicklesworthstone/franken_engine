@@ -800,16 +800,14 @@ pub struct AttestationEvent {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need the SigningKey Result port.
-// Disabled; external integration tests cover this module.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const TEST_ZONE: &str = "test-zone";
 
     fn owner_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x01; 32])
+        SigningKey::from_bytes([0x01; 32]).unwrap()
     }
 
     fn owner_vk() -> VerificationKey {
@@ -817,7 +815,7 @@ mod tests {
     }
 
     fn attested_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x02; 32])
+        SigningKey::from_bytes([0x02; 32]).unwrap()
     }
 
     fn attested_vk() -> VerificationKey {
@@ -1008,7 +1006,7 @@ mod tests {
     #[test]
     fn verify_owner_signature_wrong_key_fails() {
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let wrong_vk = wrong_sk.verification_key();
         let result = att.verify_owner_signature(&wrong_vk);
         assert!(matches!(
@@ -1225,7 +1223,7 @@ mod tests {
     fn store_register_wrong_signature_rejected() {
         let mut store = AttestationStore::new(TEST_ZONE);
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let wrong_vk = wrong_sk.verification_key();
         let result = store.register(att, &wrong_vk, DeterministicTimestamp(150), "t-sig");
         assert!(matches!(
@@ -1526,7 +1524,7 @@ mod tests {
         assert_eq!(active.len(), 1);
 
         // Rotate: create new attestation with different key and higher nonce.
-        let new_key_sk = SigningKey::from_bytes([0x03; 32]);
+        let new_key_sk = SigningKey::from_bytes([0x03; 32]).unwrap();
         let new_key_vk = new_key_sk.verification_key();
         let att2 = KeyAttestation::create_signed(
             &owner_signing_key(),
@@ -1571,10 +1569,10 @@ mod tests {
             .expect("p1");
 
         // Principal 2 (different owner key)
-        let p2_owner_sk = SigningKey::from_bytes([0x10; 32]);
+        let p2_owner_sk = SigningKey::from_bytes([0x10; 32]).unwrap();
         let p2_owner_vk = p2_owner_sk.verification_key();
         let p2_principal = PrincipalId::from_verification_key(&p2_owner_vk);
-        let p2_attested_sk = SigningKey::from_bytes([0x20; 32]);
+        let p2_attested_sk = SigningKey::from_bytes([0x20; 32]).unwrap();
         let p2_attested_vk = p2_attested_sk.verification_key();
 
         let att2 = KeyAttestation::create_signed(

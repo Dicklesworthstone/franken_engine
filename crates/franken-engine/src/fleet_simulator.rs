@@ -903,8 +903,7 @@ pub struct QuarantineStats {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 

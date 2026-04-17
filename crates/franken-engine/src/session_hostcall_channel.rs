@@ -1372,13 +1372,12 @@ fn append_str(preimage: &mut Vec<u8>, value: &str) {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need the SigningKey Result port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn signing_key(byte: u8) -> SigningKey {
-        SigningKey::from_bytes([byte; 32])
+        SigningKey::from_bytes([byte; 32]).unwrap()
     }
 
     fn handshake(session_id: &str, trace_id: &str, tick: u64) -> SessionHandshake {
@@ -3221,7 +3220,7 @@ mod tests {
 
     #[test]
     fn handshake_request_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xAA; 32]);
+        let sk = SigningKey::from_bytes([0xAA; 32]).unwrap();
         let req = HandshakeRequest {
             session_id: "sess-1".into(),
             extension_id: "ext-1".into(),
@@ -3240,7 +3239,7 @@ mod tests {
 
     #[test]
     fn handshake_response_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xAA; 32]);
+        let sk = SigningKey::from_bytes([0xAA; 32]).unwrap();
         let resp = HandshakeResponse {
             session_id: "sess-1".into(),
             extension_nonce: 42,
@@ -3368,7 +3367,7 @@ mod tests {
 
     #[test]
     fn session_channel_error_from_signature_error() {
-        let sk = SigningKey::from_bytes([0xBB; 32]);
+        let sk = SigningKey::from_bytes([0xBB; 32]).unwrap();
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "test mismatch".into(),
@@ -3470,7 +3469,7 @@ mod tests {
 
     #[test]
     fn signature_failure_display_contains_inner_error() {
-        let sk = SigningKey::from_bytes([0xCC; 32]);
+        let sk = SigningKey::from_bytes([0xCC; 32]).unwrap();
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "mismatch detail".into(),
@@ -3489,7 +3488,7 @@ mod tests {
 
     #[test]
     fn signature_failure_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xDD; 32]);
+        let sk = SigningKey::from_bytes([0xDD; 32]).unwrap();
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "bad sig".into(),

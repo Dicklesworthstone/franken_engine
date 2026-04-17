@@ -555,8 +555,7 @@ impl Default for MultiSigContext {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::deterministic_serde::{CanonicalValue, SchemaHash};
@@ -567,7 +566,7 @@ mod tests {
     };
 
     fn make_signing_key(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; SIGNING_KEY_LEN])
+        SigningKey::from_bytes([seed; SIGNING_KEY_LEN]).unwrap()
     }
 
     fn make_sig_pair(seed: u8) -> (SigningKey, VerificationKey) {
@@ -897,7 +896,10 @@ mod tests {
         assert_eq!(arr, restored);
         // Verify still sorted.
         for i in 1..restored.entries().len() {
-            assert!(restored.entries()[i - 1].signer.0 < restored.entries()[i].signer.0);
+            assert!(
+                restored.entries()[i - 1].signer.as_bytes()
+                    < restored.entries()[i].signer.as_bytes()
+            );
         }
     }
 
@@ -1165,7 +1167,7 @@ mod tests {
 
         let keys = arr.signer_keys();
         assert_eq!(keys.len(), 2);
-        assert!(keys[0].0 < keys[1].0);
+        assert!(keys[0].as_bytes() < keys[1].as_bytes());
     }
 
     // -----------------------------------------------------------------------

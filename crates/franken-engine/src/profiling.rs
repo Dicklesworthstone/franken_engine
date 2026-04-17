@@ -261,12 +261,9 @@ pub fn instruction_name(instruction: &Ir3Instruction) -> String {
     }
 }
 
-// NOTE: API drift - in-module unit tests need a rewrite for the
-// Profiler/SigningKey surface migrations. Disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir_contract::Reg;
 
     #[test]
     fn test_profiler_instruction_counting() {
@@ -274,13 +271,13 @@ mod tests {
         let mut profiler = Profiler::new(config);
 
         let load_int = Ir3Instruction::LoadInt {
-            dst: Reg(0),
+            dst: 0,
             value: 42,
         };
         let add = Ir3Instruction::Add {
-            dst: Reg(0),
-            lhs: Reg(1),
-            rhs: Reg(2),
+            dst: 0,
+            lhs: 1,
+            rhs: 2,
         };
 
         profiler.record_instruction(&load_int);
@@ -311,15 +308,15 @@ mod tests {
     #[test]
     fn test_instruction_name_extraction() {
         let load_int = Ir3Instruction::LoadInt {
-            dst: Reg(0),
+            dst: 0,
             value: 42,
         };
         assert_eq!(instruction_name(&load_int), "LoadInt");
 
         let add = Ir3Instruction::Add {
-            dst: Reg(0),
-            lhs: Reg(1),
-            rhs: Reg(2),
+            dst: 0,
+            lhs: 1,
+            rhs: 2,
         };
         assert_eq!(instruction_name(&add), "Add");
     }

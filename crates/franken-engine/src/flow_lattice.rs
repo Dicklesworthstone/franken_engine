@@ -911,9 +911,7 @@ impl Ir2FlowLattice {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 29 compile errors from the signing-key Result migration.
-// Disable until rewritten; integration tests elsewhere cover this module.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
@@ -1612,7 +1610,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([9u8; 32]);
+        let signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-2".to_string(),
             source_label: Label::Secret,
@@ -1666,7 +1664,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([3u8; 32]);
+        let signing_key = SigningKey::from_bytes([3u8; 32]).unwrap();
         let mut denied_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-deny".to_string(),
             source_label: Label::Secret,
@@ -1720,7 +1718,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([4u8; 32]);
+        let signing_key = SigningKey::from_bytes([4u8; 32]).unwrap();
         let mut tampered_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-tampered".to_string(),
             source_label: Label::Secret,
@@ -1783,7 +1781,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([5u8; 32]);
+        let signing_key = SigningKey::from_bytes([5u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-untrusted".to_string(),
             source_label: Label::Secret,
@@ -1838,7 +1836,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([6u8; 32]);
+        let signing_key = SigningKey::from_bytes([6u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-cross-trace".to_string(),
             source_label: Label::Secret,
@@ -2630,7 +2628,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([7u8; 32]);
+        let signing_key = SigningKey::from_bytes([7u8; 32]).unwrap();
         // Receipt's source_label is Public but obligation expects Secret
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-m".into(),
@@ -2684,7 +2682,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([8u8; 32]);
+        let signing_key = SigningKey::from_bytes([8u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-sink".into(),
             source_label: Label::Secret,
@@ -2736,7 +2734,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([11u8; 32]);
+        let signing_key = SigningKey::from_bytes([11u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-custom".into(),
             source_label: Label::Secret,
@@ -2791,7 +2789,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([12u8; 32]);
+        let signing_key = SigningKey::from_bytes([12u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-contract".into(),
             source_label: Label::Secret,
@@ -2843,7 +2841,7 @@ mod tests {
             })
             .unwrap();
 
-        let signing_key = SigningKey::from_bytes([13u8; 32]);
+        let signing_key = SigningKey::from_bytes([13u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-binding".into(),
             source_label: Label::Secret,

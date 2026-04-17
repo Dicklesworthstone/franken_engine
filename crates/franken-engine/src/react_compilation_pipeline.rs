@@ -409,8 +409,7 @@ fn compute_process_hash(result: &ReactCompileResult, config: &ReactCompileConfig
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - in-module unit tests need port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 

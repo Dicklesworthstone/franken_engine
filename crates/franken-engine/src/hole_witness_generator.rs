@@ -1208,8 +1208,7 @@ mod tests {
         w.description = "modified".into();
         w.seal();
         // After modifying description (not in hash), hash stays the same
-        // But tags etc. didn't change, so only description didn't change hash
-        // Actually description is not in hash, so hash shouldn't change
+        // Description is not included in hash calculation, so hash remains unchanged
         assert_eq!(hash1, w.content_hash);
     }
 

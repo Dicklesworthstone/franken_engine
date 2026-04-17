@@ -34,12 +34,11 @@ pub trait SchemaVersionExt {
     fn minor_val(&self) -> u32;
 }
 
-// Assume it has major() and minor() or fields. To be safe, serialize to JSON and read fields? No, just assume public fields or methods.
-// We'll use a hack to get major/minor: format!("{}", self) usually gives major.minor.patch or similar.
-// But wait, the previous code used self.major. Let's assume it has public fields `major` and `minor`.
+// Extension trait for SchemaVersion compatibility checking.
+// Assumes SchemaVersion has public major and minor fields.
 impl SchemaVersionExt for SchemaVersion {
     fn is_compatible_with(&self, reader_version: &SchemaVersion) -> bool {
-        // Just use major and minor fields assuming they are public. If not, it's a compile error, but that's standard.
+        // Major versions must match; minor versions can be backward compatible.
         self.major == reader_version.major && self.minor <= reader_version.minor
     }
     fn major_val(&self) -> u32 {

@@ -691,7 +691,7 @@ mod tests {
         // Need to resolve child obligations too — they propagate through drain_tick and
         // get force-aborted on finalize timeout if needed.
         // For this test, drain with short deadline to force-abort child obligations.
-        // Actually the child is already draining. Let's force timeout on child.
+        // Force timeout on child to test abort handling.
         let result = parent.finalize();
         // Child has unresolved obligation, so it won't be success unless we force-abort.
         // Since no timeout escalation happened, child finalize will report !success.

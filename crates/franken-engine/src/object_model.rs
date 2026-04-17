@@ -4334,9 +4334,8 @@ mod tests {
 
         // Frozen properties are non-enumerable per our freeze impl? No — freeze only
         // sets non-configurable and non-writable but keeps enumerable unchanged.
-        // Actually, freeze doesn't change enumerable. Let me verify:
-        // Our freeze() calls set_non_configurable() and set_non_writable().
-        // It does NOT call set_non_enumerable().
+        // freeze() only makes properties non-configurable and non-writable.
+        // It does not affect the enumerable flag.
         // So frozen values are still enumerable and should appear.
         let vals = heap.values(h).unwrap();
         assert_eq!(vals, vec![int_val(1), int_val(2)]);

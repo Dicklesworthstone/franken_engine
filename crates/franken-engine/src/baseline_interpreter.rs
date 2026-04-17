@@ -12929,6 +12929,192 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeStartsWith" => {
+                // String.prototype.startsWith(searchString[, position]) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Bool(false)),
+                        }
+                    }
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let search_string = match self.read_reg(args.start + 1)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                let position = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get substring starting from position
+                let string_chars: Vec<char> = string_val.chars().collect();
+                if position >= string_chars.len() {
+                    return Ok(Value::Bool(false));
+                }
+
+                let substring: String = string_chars[position..].iter().collect();
+                Ok(Value::Bool(substring.starts_with(&search_string)))
+            }
+
+            "builtin:StringPrototypeEndsWith" => {
+                // String.prototype.endsWith(searchString[, length]) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Bool(false)),
+                        }
+                    }
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let search_string = match self.read_reg(args.start + 1)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                let length = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => string_val.len(),
+                    }
+                } else {
+                    string_val.len()
+                };
+
+                // Get substring up to specified length
+                let string_chars: Vec<char> = string_val.chars().collect();
+                let actual_length = length.min(string_chars.len());
+                let substring: String = string_chars[..actual_length].iter().collect();
+
+                Ok(Value::Bool(substring.ends_with(&search_string)))
+            }
+
+            "builtin:NumberIsInteger" => {
+                // Number.isInteger(value) implementation - determines if value is finite integer
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let value = self.read_reg(args.start)?;
+                let is_integer = match value {
+                    Value::Int(_) => true, // All integers are integers
+                    Value::Float(f) => {
+                        let num = f.inner();
+                        num.is_finite() && num.fract() == 0.0 // Finite and no fractional part
+                    }
+                    _ => false, // Non-numbers are not integers
+                };
+
+                Ok(Value::Bool(is_integer))
+            }
+
+            "builtin:NumberParseFloat" => {
+                // Number.parseFloat(string) implementation - parse string as floating point
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let string_val = match self.read_reg(args.start)? {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Float(f64::NAN.into())),
+                };
+
+                // Trim leading whitespace and try to parse
+                let trimmed = string_val.trim_start();
+
+                // Handle special cases
+                if trimmed.is_empty() || trimmed == "NaN" {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+                if trimmed == "Infinity" || trimmed == "+Infinity" {
+                    return Ok(Value::Float(f64::INFINITY.into()));
+                }
+                if trimmed == "-Infinity" {
+                    return Ok(Value::Float(f64::NEG_INFINITY.into()));
+                }
+
+                // Try to parse as float, stopping at first non-numeric character
+                let mut end_idx = 0;
+                let mut has_dot = false;
+                let mut has_e = false;
+
+                for (i, c) in trimmed.chars().enumerate() {
+                    if i == 0 && (c == '+' || c == '-') {
+                        end_idx = i + 1;
+                    } else if c.is_ascii_digit() {
+                        end_idx = i + 1;
+                    } else if c == '.' && !has_dot && !has_e {
+                        has_dot = true;
+                        end_idx = i + 1;
+                    } else if (c == 'e' || c == 'E') && !has_e && i > 0 {
+                        has_e = true;
+                        end_idx = i + 1;
+                    } else if has_e && (c == '+' || c == '-') &&
+                              trimmed.chars().nth(i - 1).map_or(false, |prev| prev == 'e' || prev == 'E') {
+                        end_idx = i + 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if end_idx == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let parse_str = &trimmed[..end_idx];
+                match parse_str.parse::<f64>() {
+                    Ok(num) => Ok(Value::Float(num.into())),
+                    Err(_) => Ok(Value::Float(f64::NAN.into())),
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -13124,6 +13310,10 @@ impl InterpreterCore {
             226 => Some("builtin:StringPrototypePadStart".to_string()),
             227 => Some("builtin:StringPrototypePadEnd".to_string()),
             228 => Some("builtin:ObjectPrototypeHasOwnProperty".to_string()),
+            229 => Some("builtin:StringPrototypeStartsWith".to_string()),
+            230 => Some("builtin:StringPrototypeEndsWith".to_string()),
+            231 => Some("builtin:NumberIsInteger".to_string()),
+            232 => Some("builtin:NumberParseFloat".to_string()),
 
             _ => None, // Not a recognized builtin
         }

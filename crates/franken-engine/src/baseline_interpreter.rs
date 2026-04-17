@@ -25,7 +25,15 @@
 //! Plan reference: Section 10.2 item 8, bd-2f8.
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
-#![allow(unreachable_patterns)]
+#![allow(
+    unreachable_patterns,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::if_same_then_else,
+    clippy::manual_range_contains,
+    clippy::map_entry,
+    clippy::unnecessary_map_or
+)]
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

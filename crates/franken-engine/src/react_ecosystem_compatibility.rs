@@ -1,4 +1,9 @@
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::derivable_impls,
+    clippy::needless_borrows_for_generic_args
+)]
 
 //! React ecosystem compatibility program for native JSX runtime support.
 //!

@@ -9421,6 +9421,129 @@ impl InterpreterCore {
                 let result = num.exp();
                 Ok(Value::Float(Float64::new(result)))
             }
+            "builtin:MathTan" => {
+                // Math.tan(x) implementation - returns tangent of x in radians
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = num.tan();
+                Ok(Value::Float(Float64::new(result)))
+            }
+            "builtin:MathPI" => {
+                // Math.PI constant - returns the mathematical constant π
+                Ok(Value::Float(Float64::new(std::f64::consts::PI)))
+            }
+            "builtin:StringPrototypeRepeat" => {
+                // String.prototype.repeat(count) implementation
+                if args.count == 0 {
+                    return Ok(Value::Str(String::new()));
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Str(String::new())),
+                };
+
+                // Get repeat count
+                let count_val = self.read_reg(args.start + 1)?;
+                let count = match count_val {
+                    Value::Int(i) => i.max(0) as usize,
+                    Value::Float(f) => f.inner().max(0.0) as usize,
+                    Value::Bool(true) => 1,
+                    Value::Bool(false) => 0,
+                    Value::Null => 0,
+                    _ => return Ok(Value::Str(String::new())),
+                };
+
+                // Prevent excessive memory usage
+                if count > 1000 {
+                    return Ok(Value::Str(String::new()));
+                }
+
+                let result = this_str.repeat(count);
+                Ok(Value::Str(result))
+            }
+            "builtin:ArrayPrototypeConcat" => {
+                // Array.prototype.concat(...items) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Create a new array for the concatenated result
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+
+                    // Get original array length
+                    let original_length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Copy original array elements first
+                    let mut result_index = 0;
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < original_length {
+                                result_obj
+                                    .properties
+                                    .insert(result_index.to_string(), value.clone());
+                                result_index += 1;
+                            }
+                        }
+                    }
+
+                    // Add additional arguments (simplified - just add non-array values directly)
+                    for i in 1..args.count {
+                        let item = self.read_reg(args.start + i)?;
+                        // TODO: In full implementation, would handle array arguments by spreading them
+                        // For now, just add the item directly
+                        result_obj.properties.insert(result_index.to_string(), item);
+                        result_index += 1;
+                    }
+
+                    // Set length property
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(result_index as i64));
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -9506,12 +9629,15 @@ impl InterpreterCore {
             60 => Some("builtin:MathCos".to_string()),
             61 => Some("builtin:MathLog".to_string()),
             62 => Some("builtin:MathExp".to_string()),
+            63 => Some("builtin:MathTan".to_string()),
+            64 => Some("builtin:MathPI".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
             39 => Some("builtin:StringPrototypeStartsWith".to_string()),
             40 => Some("builtin:StringPrototypeEndsWith".to_string()),
             41 => Some("builtin:StringPrototypeReplace".to_string()),
+            42 => Some("builtin:StringPrototypeRepeat".to_string()),
 
             // Additional Array methods
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
@@ -9519,6 +9645,7 @@ impl InterpreterCore {
             23 => Some("builtin:ArrayPrototypeMap".to_string()),
             24 => Some("builtin:ArrayPrototypeFilter".to_string()),
             25 => Some("builtin:ArrayPrototypeFind".to_string()),
+            26 => Some("builtin:ArrayPrototypeConcat".to_string()),
 
             _ => None, // Not a recognized builtin
         }

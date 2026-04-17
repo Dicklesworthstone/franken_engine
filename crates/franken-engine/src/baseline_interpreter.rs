@@ -11394,6 +11394,108 @@ impl InterpreterCore {
                 Ok(Value::Float(result.into()))
             }
 
+            "builtin:FunctionPrototypeCall" => {
+                // Function.prototype.call(thisArg, ...args) implementation
+                // For now, simplified implementation without full function call support
+                // TODO: Implement proper function call mechanism with context binding
+
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                // The first argument is the function to call, second is thisArg
+                let _function = self.read_reg(args.start)?;
+                let _this_arg = if args.count >= 2 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+
+                // For now, return undefined since we don't have full function call support
+                // This is a foundation for future function call implementation
+                Ok(Value::Undefined)
+            }
+
+            "builtin:MathAsin" => {
+                // Math.asin(x) implementation - arcsine
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => f64::NAN,
+                };
+
+                let result = x.asin();
+                Ok(Value::Float(result.into()))
+            }
+
+            "builtin:MathAcos" => {
+                // Math.acos(x) implementation - arccosine
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => f64::NAN,
+                };
+
+                let result = x.acos();
+                Ok(Value::Float(result.into()))
+            }
+
+            "builtin:RegExp" => {
+                // RegExp constructor implementation
+                let pattern = if args.count >= 1 {
+                    match self.read_reg(args.start)? {
+                        Value::Str(s) => s,
+                        Value::Undefined => String::new(),
+                        Value::Null => "null".to_string(),
+                        _ => String::new(),
+                    }
+                } else {
+                    String::new()
+                };
+
+                let flags = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Str(s) => s,
+                        Value::Undefined => String::new(),
+                        _ => String::new(),
+                    }
+                } else {
+                    String::new()
+                };
+
+                // Create RegExp object
+                let regexp_id = self.alloc_object_with_prototype(None)?;
+
+                // Set RegExp metadata
+                self.set_object_property(
+                    regexp_id,
+                    "__type".to_string(),
+                    Value::Str("RegExp".to_string()),
+                )?;
+                self.set_object_property(
+                    regexp_id,
+                    "source".to_string(),
+                    Value::Str(pattern),
+                )?;
+                self.set_object_property(
+                    regexp_id,
+                    "flags".to_string(),
+                    Value::Str(flags),
+                )?;
+
+                Ok(Value::Object(regexp_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11553,6 +11655,10 @@ impl InterpreterCore {
             187 => Some("builtin:ObjectGetPrototypeOf".to_string()),
             188 => Some("builtin:PromiseReject".to_string()),
             189 => Some("builtin:MathAtan2".to_string()),
+            190 => Some("builtin:FunctionPrototypeCall".to_string()),
+            191 => Some("builtin:MathAsin".to_string()),
+            192 => Some("builtin:MathAcos".to_string()),
+            193 => Some("builtin:RegExp".to_string()),
 
             _ => None, // Not a recognized builtin
         }

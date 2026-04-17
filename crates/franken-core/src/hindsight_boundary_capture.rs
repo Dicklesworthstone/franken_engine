@@ -1,0 +1,2480 @@
+use std::collections::BTreeMap;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::hash_tiers::ContentHash;
+
+pub const BEAD_ID: &str = "bd-1lsy.9.11.1";
+pub const CONTRACT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-hindsight-boundary-capture.contract.v1";
+pub const BOUNDARY_CATALOG_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-hindsight-boundary-catalog.v1";
+pub const MINIMAL_REPLAY_INPUT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-minimal-replay-input-schema.v1";
+pub const BOUNDARY_REDACTION_MAP_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-boundary-redaction-map.v1";
+pub const BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-boundary-capture-event.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryClass {
+    ClockRead,
+    RandomnessDraw,
+    FilesystemInput,
+    NetworkResponse,
+    ModuleResolution,
+    SchedulingDecision,
+    ControllerOverride,
+    ExternalPolicyRead,
+    HardwareSurfaceRead,
+}
+
+impl BoundaryClass {
+    pub const ALL: [Self; 9] = [
+        Self::ClockRead,
+        Self::RandomnessDraw,
+        Self::FilesystemInput,
+        Self::NetworkResponse,
+        Self::ModuleResolution,
+        Self::SchedulingDecision,
+        Self::ControllerOverride,
+        Self::ExternalPolicyRead,
+        Self::HardwareSurfaceRead,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClockRead => "clock_read",
+            Self::RandomnessDraw => "randomness_draw",
+            Self::FilesystemInput => "filesystem_input",
+            Self::NetworkResponse => "network_response",
+            Self::ModuleResolution => "module_resolution",
+            Self::SchedulingDecision => "scheduling_decision",
+            Self::ControllerOverride => "controller_override",
+            Self::ExternalPolicyRead => "external_policy_read",
+            Self::HardwareSurfaceRead => "hardware_surface_read",
+        }
+    }
+}
+
+impl fmt::Display for BoundaryClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyClass {
+    PublicMetadata,
+    PathDigest,
+    SecretDigest,
+    PolicyDigest,
+    HardwareFingerprint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedactionTreatment {
+    Plaintext,
+    DigestOnly,
+    Omit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplaySufficiency {
+    Sufficient,
+    NeedsEscalation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldContract {
+    pub field: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscalationCase {
+    pub case_id: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldPrivacyMetadata {
+    pub field: String,
+    pub privacy_class: PrivacyClass,
+    pub treatment: RedactionTreatment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryRule {
+    pub boundary_class: BoundaryClass,
+    pub nondeterminism_tag: String,
+    pub minimal_fields: Vec<FieldContract>,
+    pub escalation_cases: Vec<EscalationCase>,
+    pub redaction_rules: Vec<FieldPrivacyMetadata>,
+}
+
+impl BoundaryRule {
+    fn required_fields(&self) -> Vec<&str> {
+        self.minimal_fields
+            .iter()
+            .map(|field| field.field.as_str())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryCatalog {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub rules: Vec<BoundaryRule>,
+}
+
+impl BoundaryCatalog {
+    pub fn default_v1() -> Self {
+        Self {
+            schema_version: BOUNDARY_CATALOG_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            rules: vec![
+                boundary_rule(
+                    BoundaryClass::ClockRead,
+                    "clock_read",
+                    &[
+                        ("clock_id", "stable identifier for the clock source"),
+                        ("clock_domain", "monotonic or realtime domain label"),
+                        ("observed_tick", "captured tick or timestamp value"),
+                    ],
+                    &[(
+                        "clock-non-monotonic",
+                        "escalate when the clock source is observed to move backwards or drift unexpectedly",
+                    )],
+                    &[
+                        (
+                            "clock_id",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "clock_domain",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "observed_tick",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::RandomnessDraw,
+                    "randomness_draw",
+                    &[
+                        (
+                            "generator_id",
+                            "stable identifier for the randomness source",
+                        ),
+                        ("draw_index", "monotonic draw index within the run"),
+                        ("sample_digest", "digest of the produced random sample"),
+                    ],
+                    &[(
+                        "randomness-unseeded",
+                        "escalate when entropy is sourced outside the declared seeded generator path",
+                    )],
+                    &[
+                        (
+                            "generator_id",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "draw_index",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "sample_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::FilesystemInput,
+                    "filesystem_input",
+                    &[
+                        ("operation", "filesystem operation kind"),
+                        ("path_digest", "digest of the normalized path"),
+                        ("content_digest", "digest of the observed bytes or metadata"),
+                    ],
+                    &[(
+                        "filesystem-path-explanation",
+                        "escalate when an operator explanation requires the raw path instead of the path digest",
+                    )],
+                    &[
+                        (
+                            "operation",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "path_digest",
+                            PrivacyClass::PathDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "content_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::NetworkResponse,
+                    "network_response",
+                    &[
+                        (
+                            "request_digest",
+                            "digest of the normalized request envelope",
+                        ),
+                        ("response_digest", "digest of the response body or headers"),
+                        ("status_code", "HTTP or transport status code"),
+                    ],
+                    &[(
+                        "network-rich-body-needed",
+                        "escalate when replay or support requires structured body fields beyond the response digest",
+                    )],
+                    &[
+                        (
+                            "request_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "response_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "status_code",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::ModuleResolution,
+                    "module_resolution",
+                    &[
+                        ("specifier", "requested module specifier"),
+                        (
+                            "referrer_digest",
+                            "digest of the requesting referrer context",
+                        ),
+                        ("resolved_path_digest", "digest of the resolved target"),
+                    ],
+                    &[(
+                        "module-resolution-fallback",
+                        "escalate when resolution depended on ambient filesystem fallback heuristics",
+                    )],
+                    &[
+                        (
+                            "specifier",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "referrer_digest",
+                            PrivacyClass::PathDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "resolved_path_digest",
+                            PrivacyClass::PathDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::SchedulingDecision,
+                    "scheduling_decision",
+                    &[
+                        ("queue_id", "stable queue or lane identifier"),
+                        ("task_id", "stable task identifier"),
+                        (
+                            "ordering_digest",
+                            "digest of the ordering witness used for the decision",
+                        ),
+                    ],
+                    &[(
+                        "scheduler-work-steal",
+                        "escalate when work stealing or contested wake-up ordering requires a richer queue snapshot",
+                    )],
+                    &[
+                        (
+                            "queue_id",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "task_id",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "ordering_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::ControllerOverride,
+                    "controller_override",
+                    &[
+                        ("controller_id", "stable controller identifier"),
+                        ("override_kind", "kind of override or forced route"),
+                        ("value_digest", "digest of the override payload"),
+                    ],
+                    &[(
+                        "interactive-controller-input",
+                        "escalate when the override was sourced from interactive operator input",
+                    )],
+                    &[
+                        (
+                            "controller_id",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "override_kind",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "value_digest",
+                            PrivacyClass::SecretDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::ExternalPolicyRead,
+                    "external_policy_read",
+                    &[
+                        ("policy_name", "logical name of the policy surface"),
+                        ("policy_digest", "digest of the policy snapshot"),
+                        ("policy_epoch", "epoch or monotonic policy version"),
+                    ],
+                    &[(
+                        "unsigned-policy-snapshot",
+                        "escalate when the policy snapshot lacks a stable signed digest",
+                    )],
+                    &[
+                        (
+                            "policy_name",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "policy_digest",
+                            PrivacyClass::PolicyDigest,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "policy_epoch",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                    ],
+                ),
+                boundary_rule(
+                    BoundaryClass::HardwareSurfaceRead,
+                    "hardware_surface_read",
+                    &[
+                        ("surface_kind", "hardware surface or device class"),
+                        ("measurement_digest", "digest of the observed measurement"),
+                        (
+                            "driver_fingerprint",
+                            "stable digest of the driver or firmware surface",
+                        ),
+                    ],
+                    &[(
+                        "hardware-quote-required",
+                        "escalate when later validation requires the raw quote or vendor payload",
+                    )],
+                    &[
+                        (
+                            "surface_kind",
+                            PrivacyClass::PublicMetadata,
+                            RedactionTreatment::Plaintext,
+                        ),
+                        (
+                            "measurement_digest",
+                            PrivacyClass::HardwareFingerprint,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                        (
+                            "driver_fingerprint",
+                            PrivacyClass::HardwareFingerprint,
+                            RedactionTreatment::DigestOnly,
+                        ),
+                    ],
+                ),
+            ],
+        }
+    }
+
+    pub fn rule_for(&self, boundary_class: BoundaryClass) -> Option<&BoundaryRule> {
+        self.rules
+            .iter()
+            .find(|rule| rule.boundary_class == boundary_class)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimalReplayInputEntry {
+    pub boundary_class: BoundaryClass,
+    pub required_fields: Vec<String>,
+    pub sufficiency_rule: String,
+    pub escalation_cases: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimalReplayInputSchema {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub entries: Vec<MinimalReplayInputEntry>,
+}
+
+impl MinimalReplayInputSchema {
+    pub fn from_catalog(catalog: &BoundaryCatalog) -> Self {
+        let entries = catalog
+            .rules
+            .iter()
+            .map(|rule| MinimalReplayInputEntry {
+                boundary_class: rule.boundary_class,
+                required_fields: rule
+                    .minimal_fields
+                    .iter()
+                    .map(|field| field.field.clone())
+                    .collect(),
+                sufficiency_rule:
+                    "minimal fields are sufficient unless the capture explicitly marks the event for escalation"
+                        .to_string(),
+                escalation_cases: rule
+                    .escalation_cases
+                    .iter()
+                    .map(|entry| entry.case_id.clone())
+                    .collect(),
+            })
+            .collect();
+        Self {
+            schema_version: MINIMAL_REPLAY_INPUT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            entries,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryRedactionEntry {
+    pub boundary_class: BoundaryClass,
+    pub field: String,
+    pub privacy_class: PrivacyClass,
+    pub treatment: RedactionTreatment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryRedactionMap {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub entries: Vec<BoundaryRedactionEntry>,
+}
+
+impl BoundaryRedactionMap {
+    pub fn from_catalog(catalog: &BoundaryCatalog) -> Self {
+        let entries = catalog
+            .rules
+            .iter()
+            .flat_map(|rule| {
+                rule.redaction_rules
+                    .iter()
+                    .map(|entry| BoundaryRedactionEntry {
+                        boundary_class: rule.boundary_class,
+                        field: entry.field.clone(),
+                        privacy_class: entry.privacy_class,
+                        treatment: entry.treatment,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Self {
+            schema_version: BOUNDARY_REDACTION_MAP_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            entries,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryCaptureContract {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub boundary_catalog: BoundaryCatalog,
+    pub minimal_replay_input_schema: MinimalReplayInputSchema,
+    pub boundary_redaction_map: BoundaryRedactionMap,
+}
+
+impl BoundaryCaptureContract {
+    pub fn default_v1() -> Self {
+        let boundary_catalog = BoundaryCatalog::default_v1();
+        let minimal_replay_input_schema = MinimalReplayInputSchema::from_catalog(&boundary_catalog);
+        let boundary_redaction_map = BoundaryRedactionMap::from_catalog(&boundary_catalog);
+        Self {
+            schema_version: CONTRACT_SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            boundary_catalog,
+            minimal_replay_input_schema,
+            boundary_redaction_map,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryContext<'a> {
+    pub trace_id: &'a str,
+    pub decision_id: &'a str,
+    pub policy_id: &'a str,
+    pub component: &'a str,
+    pub virtual_ts: u64,
+}
+
+impl<'a> BoundaryContext<'a> {
+    pub const fn new(
+        trace_id: &'a str,
+        decision_id: &'a str,
+        policy_id: &'a str,
+        component: &'a str,
+        virtual_ts: u64,
+    ) -> Self {
+        Self {
+            trace_id,
+            decision_id,
+            policy_id,
+            component,
+            virtual_ts,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryCaptureRequest {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub boundary_class: BoundaryClass,
+    pub virtual_ts: u64,
+    pub minimal_fields: BTreeMap<String, String>,
+    pub escalation_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldRedactionValue {
+    pub privacy_class: PrivacyClass,
+    pub treatment: RedactionTreatment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryCaptureRecord {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub sequence: u64,
+    pub boundary_class: BoundaryClass,
+    pub nondeterminism_tag: String,
+    pub correlation_key: String,
+    pub virtual_ts: u64,
+    pub minimal_fields: BTreeMap<String, String>,
+    pub redaction: BTreeMap<String, FieldRedactionValue>,
+    pub sufficiency: ReplaySufficiency,
+    pub escalation_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimalReplayInputRecord {
+    pub correlation_key: String,
+    pub boundary_class: BoundaryClass,
+    pub component: String,
+    pub virtual_ts: u64,
+    pub minimal_fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimalReplayPlan {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inputs: Vec<MinimalReplayInputRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundaryCaptureLog {
+    pub records: Vec<BoundaryCaptureRecord>,
+    pub next_sequence: u64,
+}
+
+impl BoundaryCaptureLog {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            next_sequence: 0,
+        }
+    }
+
+    pub fn records(&self) -> &[BoundaryCaptureRecord] {
+        &self.records
+    }
+
+    pub fn render_jsonl(&self) -> Result<String, serde_json::Error> {
+        let mut lines = Vec::with_capacity(self.records.len());
+        for record in &self.records {
+            lines.push(serde_json::to_string(record)?);
+        }
+        Ok(lines.join("\n"))
+    }
+
+    pub fn minimal_replay_plans(
+        &self,
+        catalog: &BoundaryCatalog,
+    ) -> Result<Vec<MinimalReplayPlan>, BoundaryCaptureError> {
+        let mut grouped =
+            BTreeMap::<(String, String, String), Vec<MinimalReplayInputRecord>>::new();
+        for record in &self.records {
+            let rule = catalog.rule_for(record.boundary_class).ok_or(
+                BoundaryCaptureError::MissingBoundaryRule {
+                    boundary_class: record.boundary_class,
+                },
+            )?;
+            validate_minimal_fields(rule, record.boundary_class, &record.minimal_fields)?;
+            if matches!(record.sufficiency, ReplaySufficiency::NeedsEscalation)
+                || record.escalation_reason.is_some()
+            {
+                return Err(BoundaryCaptureError::ReplayNeedsEscalation {
+                    boundary_class: record.boundary_class,
+                    correlation_key: record.correlation_key.clone(),
+                    reason: record
+                        .escalation_reason
+                        .clone()
+                        .unwrap_or_else(|| "capture marked for escalation".to_string()),
+                });
+            }
+            grouped
+                .entry((
+                    record.trace_id.clone(),
+                    record.decision_id.clone(),
+                    record.policy_id.clone(),
+                ))
+                .or_default()
+                .push(MinimalReplayInputRecord {
+                    correlation_key: record.correlation_key.clone(),
+                    boundary_class: record.boundary_class,
+                    component: record.component.clone(),
+                    virtual_ts: record.virtual_ts,
+                    minimal_fields: record.minimal_fields.clone(),
+                });
+        }
+
+        Ok(grouped
+            .into_iter()
+            .map(
+                |((trace_id, decision_id, policy_id), inputs)| MinimalReplayPlan {
+                    trace_id,
+                    decision_id,
+                    policy_id,
+                    inputs,
+                },
+            )
+            .collect())
+    }
+
+    pub fn append(
+        &mut self,
+        catalog: &BoundaryCatalog,
+        request: BoundaryCaptureRequest,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        let BoundaryCaptureRequest {
+            trace_id,
+            decision_id,
+            policy_id,
+            component,
+            boundary_class,
+            virtual_ts,
+            minimal_fields,
+            escalation_reason,
+        } = request;
+
+        let rule = catalog
+            .rule_for(boundary_class)
+            .ok_or(BoundaryCaptureError::MissingBoundaryRule { boundary_class })?;
+        validate_minimal_fields(rule, boundary_class, &minimal_fields)?;
+
+        let sequence = self.next_sequence;
+        self.next_sequence += 1;
+        let correlation_key = derive_correlation_key(
+            boundary_class,
+            sequence,
+            trace_id.as_str(),
+            decision_id.as_str(),
+            component.as_str(),
+            virtual_ts,
+        );
+        let sufficiency = if escalation_reason.is_some() {
+            ReplaySufficiency::NeedsEscalation
+        } else {
+            ReplaySufficiency::Sufficient
+        };
+
+        let record = BoundaryCaptureRecord {
+            schema_version: BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id,
+            decision_id,
+            policy_id,
+            component,
+            sequence,
+            boundary_class,
+            nondeterminism_tag: rule.nondeterminism_tag.clone(),
+            correlation_key,
+            virtual_ts,
+            minimal_fields,
+            redaction: build_redaction_map(rule),
+            sufficiency,
+            escalation_reason,
+        };
+        self.records.push(record.clone());
+        Ok(record)
+    }
+}
+
+impl Default for BoundaryCaptureLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryCaptureSession {
+    catalog: BoundaryCatalog,
+    log: BoundaryCaptureLog,
+}
+
+impl BoundaryCaptureSession {
+    pub fn new(catalog: BoundaryCatalog) -> Self {
+        Self {
+            catalog,
+            log: BoundaryCaptureLog::new(),
+        }
+    }
+
+    pub fn default_v1() -> Self {
+        Self::new(BoundaryCatalog::default_v1())
+    }
+
+    pub fn catalog(&self) -> &BoundaryCatalog {
+        &self.catalog
+    }
+
+    pub fn log(&self) -> &BoundaryCaptureLog {
+        &self.log
+    }
+
+    pub fn minimal_replay_plans(&self) -> Result<Vec<MinimalReplayPlan>, BoundaryCaptureError> {
+        self.log.minimal_replay_plans(&self.catalog)
+    }
+
+    pub fn capture_boundary(
+        &mut self,
+        request: BoundaryCaptureRequest,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.log.append(&self.catalog, request)
+    }
+
+    pub fn capture_clock_read(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        clock_id: &str,
+        clock_domain: &str,
+        observed_tick: u64,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::ClockRead,
+            escalation_reason,
+            [
+                ("clock_id", clock_id.to_string()),
+                ("clock_domain", clock_domain.to_string()),
+                ("observed_tick", observed_tick.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_randomness_draw(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        generator_id: &str,
+        draw_index: u64,
+        sample_digest: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::RandomnessDraw,
+            escalation_reason,
+            [
+                ("generator_id", generator_id.to_string()),
+                ("draw_index", draw_index.to_string()),
+                ("sample_digest", sample_digest.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_filesystem_input(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        operation: &str,
+        path_digest: &str,
+        content_digest: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::FilesystemInput,
+            escalation_reason,
+            [
+                ("operation", operation.to_string()),
+                ("path_digest", path_digest.to_string()),
+                ("content_digest", content_digest.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_network_response(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        request_digest: &str,
+        response_digest: &str,
+        status_code: u16,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::NetworkResponse,
+            escalation_reason,
+            [
+                ("request_digest", request_digest.to_string()),
+                ("response_digest", response_digest.to_string()),
+                ("status_code", status_code.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_module_resolution(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        specifier: &str,
+        referrer_digest: &str,
+        resolved_path_digest: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::ModuleResolution,
+            escalation_reason,
+            [
+                ("specifier", specifier.to_string()),
+                ("referrer_digest", referrer_digest.to_string()),
+                ("resolved_path_digest", resolved_path_digest.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_scheduling_decision(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        queue_id: &str,
+        task_id: &str,
+        ordering_digest: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::SchedulingDecision,
+            escalation_reason,
+            [
+                ("queue_id", queue_id.to_string()),
+                ("task_id", task_id.to_string()),
+                ("ordering_digest", ordering_digest.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_controller_override(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        controller_id: &str,
+        override_kind: &str,
+        value_digest: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::ControllerOverride,
+            escalation_reason,
+            [
+                ("controller_id", controller_id.to_string()),
+                ("override_kind", override_kind.to_string()),
+                ("value_digest", value_digest.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_external_policy_read(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        policy_name: &str,
+        policy_digest: &str,
+        policy_epoch: u64,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::ExternalPolicyRead,
+            escalation_reason,
+            [
+                ("policy_name", policy_name.to_string()),
+                ("policy_digest", policy_digest.to_string()),
+                ("policy_epoch", policy_epoch.to_string()),
+            ],
+        ))
+    }
+
+    pub fn capture_hardware_surface_read(
+        &mut self,
+        context: &BoundaryContext<'_>,
+        surface_kind: &str,
+        measurement_digest: &str,
+        driver_fingerprint: &str,
+        escalation_reason: Option<&str>,
+    ) -> Result<BoundaryCaptureRecord, BoundaryCaptureError> {
+        self.capture_boundary(build_request(
+            context,
+            BoundaryClass::HardwareSurfaceRead,
+            escalation_reason,
+            [
+                ("surface_kind", surface_kind.to_string()),
+                ("measurement_digest", measurement_digest.to_string()),
+                ("driver_fingerprint", driver_fingerprint.to_string()),
+            ],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundaryCaptureError {
+    MissingBoundaryRule {
+        boundary_class: BoundaryClass,
+    },
+    MissingRequiredField {
+        boundary_class: BoundaryClass,
+        field: String,
+    },
+    UnexpectedField {
+        boundary_class: BoundaryClass,
+        field: String,
+    },
+    EmptyField {
+        boundary_class: BoundaryClass,
+        field: String,
+    },
+    ReplayNeedsEscalation {
+        boundary_class: BoundaryClass,
+        correlation_key: String,
+        reason: String,
+    },
+}
+
+impl fmt::Display for BoundaryCaptureError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingBoundaryRule { boundary_class } => {
+                write!(f, "missing boundary rule for {boundary_class}")
+            }
+            Self::MissingRequiredField {
+                boundary_class,
+                field,
+            } => {
+                write!(
+                    f,
+                    "missing required field `{field}` for boundary class {boundary_class}"
+                )
+            }
+            Self::UnexpectedField {
+                boundary_class,
+                field,
+            } => {
+                write!(
+                    f,
+                    "unexpected minimal field `{field}` for boundary class {boundary_class}"
+                )
+            }
+            Self::EmptyField {
+                boundary_class,
+                field,
+            } => {
+                write!(
+                    f,
+                    "empty field `{field}` for boundary class {boundary_class}"
+                )
+            }
+            Self::ReplayNeedsEscalation {
+                boundary_class,
+                correlation_key,
+                reason,
+            } => write!(
+                f,
+                "boundary class {boundary_class} requires escalation before replay ({correlation_key}): {reason}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BoundaryCaptureError {}
+
+fn boundary_rule(
+    boundary_class: BoundaryClass,
+    nondeterminism_tag: &str,
+    minimal_fields: &[(&str, &str)],
+    escalation_cases: &[(&str, &str)],
+    redaction_rules: &[(&str, PrivacyClass, RedactionTreatment)],
+) -> BoundaryRule {
+    BoundaryRule {
+        boundary_class,
+        nondeterminism_tag: nondeterminism_tag.to_string(),
+        minimal_fields: minimal_fields
+            .iter()
+            .map(|(field, description)| FieldContract {
+                field: (*field).to_string(),
+                description: (*description).to_string(),
+            })
+            .collect(),
+        escalation_cases: escalation_cases
+            .iter()
+            .map(|(case_id, description)| EscalationCase {
+                case_id: (*case_id).to_string(),
+                description: (*description).to_string(),
+            })
+            .collect(),
+        redaction_rules: redaction_rules
+            .iter()
+            .map(|(field, privacy_class, treatment)| FieldPrivacyMetadata {
+                field: (*field).to_string(),
+                privacy_class: *privacy_class,
+                treatment: *treatment,
+            })
+            .collect(),
+    }
+}
+
+fn build_redaction_map(rule: &BoundaryRule) -> BTreeMap<String, FieldRedactionValue> {
+    rule.redaction_rules
+        .iter()
+        .map(|entry| {
+            (
+                entry.field.clone(),
+                FieldRedactionValue {
+                    privacy_class: entry.privacy_class,
+                    treatment: entry.treatment,
+                },
+            )
+        })
+        .collect()
+}
+
+fn validate_minimal_fields(
+    rule: &BoundaryRule,
+    boundary_class: BoundaryClass,
+    minimal_fields: &BTreeMap<String, String>,
+) -> Result<(), BoundaryCaptureError> {
+    let required_fields = rule.required_fields();
+
+    for required_field in &required_fields {
+        let value = minimal_fields.get(*required_field).ok_or_else(|| {
+            BoundaryCaptureError::MissingRequiredField {
+                boundary_class,
+                field: (*required_field).to_string(),
+            }
+        })?;
+        if value.trim().is_empty() {
+            return Err(BoundaryCaptureError::EmptyField {
+                boundary_class,
+                field: (*required_field).to_string(),
+            });
+        }
+    }
+
+    for field in minimal_fields.keys() {
+        if !required_fields.contains(&field.as_str()) {
+            return Err(BoundaryCaptureError::UnexpectedField {
+                boundary_class,
+                field: field.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn build_request<const N: usize>(
+    context: &BoundaryContext<'_>,
+    boundary_class: BoundaryClass,
+    escalation_reason: Option<&str>,
+    fields: [(&str, String); N],
+) -> BoundaryCaptureRequest {
+    BoundaryCaptureRequest {
+        trace_id: context.trace_id.to_string(),
+        decision_id: context.decision_id.to_string(),
+        policy_id: context.policy_id.to_string(),
+        component: context.component.to_string(),
+        boundary_class,
+        virtual_ts: context.virtual_ts,
+        minimal_fields: fields
+            .into_iter()
+            .map(|(field, value)| (field.to_string(), value))
+            .collect(),
+        escalation_reason: escalation_reason.map(ToOwned::to_owned),
+    }
+}
+
+fn derive_correlation_key(
+    boundary_class: BoundaryClass,
+    sequence: u64,
+    trace_id: &str,
+    decision_id: &str,
+    component: &str,
+    virtual_ts: u64,
+) -> String {
+    let canonical = format!(
+        "{}|{}|{}|{}|{}|{}",
+        boundary_class.as_str(),
+        sequence,
+        trace_id,
+        decision_id,
+        component,
+        virtual_ts
+    );
+    format!(
+        "bcorr_{}",
+        ContentHash::compute(canonical.as_bytes()).to_hex()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hindsight_boundary_contract_covers_every_boundary_class() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let actual: Vec<_> = contract
+            .boundary_catalog
+            .rules
+            .iter()
+            .map(|rule| rule.boundary_class)
+            .collect();
+        assert_eq!(actual, BoundaryClass::ALL);
+    }
+
+    #[test]
+    fn capture_clock_read_requires_all_fields() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-a", "decision-a", "policy-a", "clock", 10);
+        let mut request = build_request(
+            &context,
+            BoundaryClass::ClockRead,
+            None,
+            [
+                ("clock_id", "mono".to_string()),
+                ("clock_domain", "monotonic".to_string()),
+                ("observed_tick", "10".to_string()),
+            ],
+        );
+        request.minimal_fields.remove("clock_id");
+        let error = session
+            .capture_boundary(request)
+            .expect_err("missing field");
+        assert_eq!(
+            error,
+            BoundaryCaptureError::MissingRequiredField {
+                boundary_class: BoundaryClass::ClockRead,
+                field: "clock_id".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn every_boundary_wrapper_emits_expected_class_and_fields() {
+        let mut session = BoundaryCaptureSession::default_v1();
+
+        let captures = [
+            (
+                session
+                    .capture_clock_read(
+                        &BoundaryContext::new("trace-0", "decision-0", "policy-0", "clock", 1),
+                        "mono",
+                        "monotonic",
+                        1,
+                        None,
+                    )
+                    .expect("clock capture"),
+                BoundaryClass::ClockRead,
+                ["clock_domain", "clock_id", "observed_tick"],
+            ),
+            (
+                session
+                    .capture_randomness_draw(
+                        &BoundaryContext::new("trace-1", "decision-1", "policy-1", "rng", 2),
+                        "rng-seeded",
+                        3,
+                        "digest-sample",
+                        None,
+                    )
+                    .expect("rng capture"),
+                BoundaryClass::RandomnessDraw,
+                ["draw_index", "generator_id", "sample_digest"],
+            ),
+            (
+                session
+                    .capture_filesystem_input(
+                        &BoundaryContext::new("trace-2", "decision-2", "policy-2", "cache", 3),
+                        "cache_read",
+                        "digest-path",
+                        "digest-content",
+                        None,
+                    )
+                    .expect("filesystem capture"),
+                BoundaryClass::FilesystemInput,
+                ["content_digest", "operation", "path_digest"],
+            ),
+            (
+                session
+                    .capture_network_response(
+                        &BoundaryContext::new("trace-3", "decision-3", "policy-3", "network", 4),
+                        "digest-request",
+                        "digest-response",
+                        200,
+                        None,
+                    )
+                    .expect("network capture"),
+                BoundaryClass::NetworkResponse,
+                ["request_digest", "response_digest", "status_code"],
+            ),
+            (
+                session
+                    .capture_module_resolution(
+                        &BoundaryContext::new("trace-4", "decision-4", "policy-4", "module", 5),
+                        "pkg:demo/widget",
+                        "digest-referrer",
+                        "digest-resolved",
+                        None,
+                    )
+                    .expect("module capture"),
+                BoundaryClass::ModuleResolution,
+                ["referrer_digest", "resolved_path_digest", "specifier"],
+            ),
+            (
+                session
+                    .capture_scheduling_decision(
+                        &BoundaryContext::new("trace-5", "decision-5", "policy-5", "scheduler", 6),
+                        "ready",
+                        "task-41",
+                        "digest-ordering",
+                        None,
+                    )
+                    .expect("scheduler capture"),
+                BoundaryClass::SchedulingDecision,
+                ["ordering_digest", "queue_id", "task_id"],
+            ),
+            (
+                session
+                    .capture_controller_override(
+                        &BoundaryContext::new("trace-6", "decision-6", "policy-6", "controller", 7),
+                        "router",
+                        "force_safe_mode",
+                        "digest-value",
+                        None,
+                    )
+                    .expect("controller capture"),
+                BoundaryClass::ControllerOverride,
+                ["controller_id", "override_kind", "value_digest"],
+            ),
+            (
+                session
+                    .capture_external_policy_read(
+                        &BoundaryContext::new("trace-7", "decision-7", "policy-7", "policy", 8),
+                        "risk-router",
+                        "digest-policy",
+                        9,
+                        None,
+                    )
+                    .expect("policy capture"),
+                BoundaryClass::ExternalPolicyRead,
+                ["policy_digest", "policy_epoch", "policy_name"],
+            ),
+            (
+                session
+                    .capture_hardware_surface_read(
+                        &BoundaryContext::new("trace-8", "decision-8", "policy-8", "hardware", 9),
+                        "tpm_quote",
+                        "digest-measurement",
+                        "digest-driver",
+                        None,
+                    )
+                    .expect("hardware capture"),
+                BoundaryClass::HardwareSurfaceRead,
+                ["driver_fingerprint", "measurement_digest", "surface_kind"],
+            ),
+        ];
+
+        for (record, expected_class, expected_fields) in captures {
+            assert_eq!(record.boundary_class, expected_class);
+            let actual_fields: Vec<_> = record.minimal_fields.keys().map(String::as_str).collect();
+            assert_eq!(actual_fields, expected_fields);
+        }
+    }
+
+    #[test]
+    fn capture_rejects_unexpected_fields() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-a", "decision-a", "policy-a", "fs", 10);
+        let mut request = build_request(
+            &context,
+            BoundaryClass::FilesystemInput,
+            None,
+            [
+                ("operation", "read".to_string()),
+                ("path_digest", "path-digest".to_string()),
+                ("content_digest", "content-digest".to_string()),
+            ],
+        );
+        request
+            .minimal_fields
+            .insert("raw_path".to_string(), "/tmp/x".to_string());
+        let error = session
+            .capture_boundary(request)
+            .expect_err("unexpected field");
+        assert_eq!(
+            error,
+            BoundaryCaptureError::UnexpectedField {
+                boundary_class: BoundaryClass::FilesystemInput,
+                field: "raw_path".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn correlation_key_is_stable_for_same_identity_tuple() {
+        let left = derive_correlation_key(
+            BoundaryClass::ModuleResolution,
+            2,
+            "trace-a",
+            "decision-a",
+            "module-loader",
+            42,
+        );
+        let right = derive_correlation_key(
+            BoundaryClass::ModuleResolution,
+            2,
+            "trace-a",
+            "decision-a",
+            "module-loader",
+            42,
+        );
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn escalation_reason_marks_record_for_follow_up() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-b", "decision-b", "policy-b", "net", 77);
+        let record = session
+            .capture_network_response(
+                &context,
+                "request-digest",
+                "response-digest",
+                503,
+                Some("network-rich-body-needed"),
+            )
+            .expect("capture succeeds");
+        assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
+        assert_eq!(
+            record.escalation_reason.as_deref(),
+            Some("network-rich-body-needed")
+        );
+    }
+
+    #[test]
+    fn capture_log_renders_jsonl() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-c", "decision-c", "policy-c", "scheduler", 15);
+        session
+            .capture_scheduling_decision(&context, "ready", "task-1", "ordering-digest", None)
+            .expect("capture succeeds");
+        let rendered = session.log().render_jsonl().expect("jsonl renders");
+        assert!(rendered.contains("\"boundary_class\":\"scheduling_decision\""));
+        assert!(rendered.contains("\"correlation_key\":\"bcorr_"));
+    }
+
+    #[test]
+    fn minimal_replay_plan_rejects_escalated_capture() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-d", "decision-d", "policy-d", "controller", 22);
+        session
+            .capture_controller_override(
+                &context,
+                "router",
+                "force_safe_mode",
+                "digest-value",
+                Some("interactive-controller-input"),
+            )
+            .expect("capture succeeds");
+
+        let error = session
+            .minimal_replay_plans()
+            .expect_err("escalated capture must block minimal replay");
+        assert_eq!(
+            error,
+            BoundaryCaptureError::ReplayNeedsEscalation {
+                boundary_class: BoundaryClass::ControllerOverride,
+                correlation_key: session.log().records()[0].correlation_key.clone(),
+                reason: "interactive-controller-input".to_string(),
+            }
+        );
+    }
+
+    // ── schema constants ────────────────────────────────────────────
+
+    #[test]
+    fn schema_constants_start_with_franken_engine() {
+        assert!(CONTRACT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_CATALOG_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(MINIMAL_REPLAY_INPUT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_REDACTION_MAP_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    // ── BoundaryClass enum ──────────────────────────────────────────
+
+    #[test]
+    fn boundary_class_all_has_nine_members() {
+        assert_eq!(BoundaryClass::ALL.len(), 9);
+    }
+
+    #[test]
+    fn boundary_class_as_str_is_snake_case() {
+        for class in &BoundaryClass::ALL {
+            let s = class.as_str();
+            assert!(!s.is_empty());
+            assert!(s.chars().all(|c| c.is_ascii_lowercase() || c == '_'));
+        }
+    }
+
+    #[test]
+    fn boundary_class_display_matches_as_str() {
+        for class in &BoundaryClass::ALL {
+            assert_eq!(format!("{class}"), class.as_str());
+        }
+    }
+
+    #[test]
+    fn boundary_class_serde_round_trip() {
+        for class in &BoundaryClass::ALL {
+            let json = serde_json::to_string(class).unwrap();
+            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(*class, back);
+        }
+    }
+
+    // ── PrivacyClass / RedactionTreatment enums ─────────────────────
+
+    #[test]
+    fn privacy_class_serde_round_trip() {
+        for pc in [
+            PrivacyClass::PublicMetadata,
+            PrivacyClass::PathDigest,
+            PrivacyClass::SecretDigest,
+        ] {
+            let json = serde_json::to_string(&pc).unwrap();
+            let back: PrivacyClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(pc, back);
+        }
+    }
+
+    #[test]
+    fn redaction_treatment_serde_round_trip() {
+        for rt in [
+            RedactionTreatment::Plaintext,
+            RedactionTreatment::DigestOnly,
+            RedactionTreatment::Omit,
+        ] {
+            let json = serde_json::to_string(&rt).unwrap();
+            let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, back);
+        }
+    }
+
+    #[test]
+    fn replay_sufficiency_serde_round_trip() {
+        for rs in [
+            ReplaySufficiency::Sufficient,
+            ReplaySufficiency::NeedsEscalation,
+        ] {
+            let json = serde_json::to_string(&rs).unwrap();
+            let back: ReplaySufficiency = serde_json::from_str(&json).unwrap();
+            assert_eq!(rs, back);
+        }
+    }
+
+    // ── error display ───────────────────────────────────────────────
+
+    #[test]
+    fn error_display_missing_boundary_rule() {
+        let err = BoundaryCaptureError::MissingBoundaryRule {
+            boundary_class: BoundaryClass::ClockRead,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("clock_read"));
+        assert!(msg.contains("missing boundary rule"));
+    }
+
+    #[test]
+    fn error_display_empty_field() {
+        let err = BoundaryCaptureError::EmptyField {
+            boundary_class: BoundaryClass::NetworkResponse,
+            field: "status_code".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("empty field"));
+        assert!(msg.contains("status_code"));
+    }
+
+    // ── empty field rejection ───────────────────────────────────────
+
+    #[test]
+    fn capture_rejects_empty_field_values() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-e", "decision-e", "policy-e", "clock", 1);
+        let request = BoundaryCaptureRequest {
+            trace_id: context.trace_id.to_string(),
+            decision_id: context.decision_id.to_string(),
+            policy_id: context.policy_id.to_string(),
+            component: context.component.to_string(),
+            boundary_class: BoundaryClass::ClockRead,
+            virtual_ts: 1,
+            minimal_fields: [
+                ("clock_id".to_string(), "  ".to_string()),
+                ("clock_domain".to_string(), "monotonic".to_string()),
+                ("observed_tick".to_string(), "10".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            escalation_reason: None,
+        };
+        let error = session.capture_boundary(request).expect_err("empty field");
+        assert!(matches!(
+            error,
+            BoundaryCaptureError::EmptyField {
+                boundary_class: BoundaryClass::ClockRead,
+                ..
+            }
+        ));
+    }
+
+    // ── correlation key uniqueness ──────────────────────────────────
+
+    #[test]
+    fn correlation_keys_differ_for_different_sequences() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 1, "t", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_starts_with_bcorr_prefix() {
+        let key = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        assert!(key.starts_with("bcorr_"));
+    }
+
+    // ── redaction map coverage ──────────────────────────────────────
+
+    #[test]
+    fn every_rule_has_at_least_one_redaction_entry() {
+        let contract = BoundaryCaptureContract::default_v1();
+        for rule in &contract.boundary_catalog.rules {
+            assert!(
+                !rule.redaction_rules.is_empty(),
+                "rule for {:?} must have redaction entries",
+                rule.boundary_class
+            );
+        }
+    }
+
+    // ── minimal replay plan success ─────────────────────────────────
+
+    #[test]
+    fn minimal_replay_plan_succeeds_without_escalation() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let context = BoundaryContext::new("trace-f", "decision-f", "policy-f", "scheduler", 1);
+        session
+            .capture_scheduling_decision(&context, "ready", "task-1", "ordering-digest", None)
+            .expect("capture");
+        let plans = session
+            .minimal_replay_plans()
+            .expect("no escalation needed");
+        assert_eq!(plans.len(), 1);
+    }
+
+    // ── log sequence numbers ────────────────────────────────────────
+
+    #[test]
+    fn capture_records_have_monotonic_sequence_numbers() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        for i in 0..5_u64 {
+            let trace = format!("trace-{i}");
+            let decision = format!("decision-{i}");
+            let policy = format!("policy-{i}");
+            let context = BoundaryContext::new(&trace, &decision, &policy, "clock", i);
+            session
+                .capture_clock_read(&context, "mono", "monotonic", i, None)
+                .expect("capture");
+        }
+        let records = session.log().records();
+        assert_eq!(records.len(), 5);
+        for (i, record) in records.iter().enumerate() {
+            assert_eq!(record.sequence, i as u64);
+        }
+    }
+
+    // ── contract serde round-trip ───────────────────────────────────
+
+    #[test]
+    fn boundary_capture_contract_serde_round_trip() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let json = serde_json::to_string(&contract).unwrap();
+        let back: BoundaryCaptureContract = serde_json::from_str(&json).unwrap();
+        assert_eq!(contract, back);
+    }
+
+    #[test]
+    fn boundary_context_stores_all_fields() {
+        let ctx = BoundaryContext::new("t1", "d1", "p1", "comp", 42);
+        assert_eq!(ctx.trace_id, "t1");
+        assert_eq!(ctx.decision_id, "d1");
+        assert_eq!(ctx.policy_id, "p1");
+        assert_eq!(ctx.component, "comp");
+        assert_eq!(ctx.virtual_ts, 42);
+    }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn boundary_class_serde_roundtrip() {
+        for class in BoundaryClass::ALL {
+            let json = serde_json::to_string(&class).unwrap();
+            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(class, back);
+        }
+    }
+
+    #[test]
+    fn boundary_class_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> =
+            BoundaryClass::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(strs.len(), BoundaryClass::ALL.len());
+    }
+
+    #[test]
+    fn boundary_class_all_has_nine_variants() {
+        assert_eq!(BoundaryClass::ALL.len(), 9);
+    }
+
+    #[test]
+    fn boundary_class_display_format_matches_as_str() {
+        for class in BoundaryClass::ALL {
+            assert_eq!(class.to_string(), class.as_str());
+        }
+    }
+
+    #[test]
+    fn schema_version_constants_non_empty() {
+        assert!(!CONTRACT_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_CATALOG_SCHEMA_VERSION.is_empty());
+        assert!(!MINIMAL_REPLAY_INPUT_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_REDACTION_MAP_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!BEAD_ID.is_empty());
+    }
+
+    #[test]
+    fn default_contract_covers_all_boundary_classes() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let covered: std::collections::BTreeSet<BoundaryClass> = contract
+            .boundary_catalog
+            .rules
+            .iter()
+            .map(|r| r.boundary_class)
+            .collect();
+        for class in BoundaryClass::ALL {
+            assert!(covered.contains(&class), "missing rule for {:?}", class);
+        }
+    }
+
+    #[test]
+    fn default_contract_rules_have_unique_boundary_classes() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let classes: std::collections::BTreeSet<BoundaryClass> = contract
+            .boundary_catalog
+            .rules
+            .iter()
+            .map(|r| r.boundary_class)
+            .collect();
+        assert_eq!(classes.len(), contract.boundary_catalog.rules.len());
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_boundary_classes() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::RandomnessDraw, 0, "t", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_trace_ids() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t1", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t2", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_is_deterministic() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 5, "t", "d", "c", 10);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 5, "t", "d", "c", 10);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn capture_session_empty_log_has_zero_records() {
+        let session = BoundaryCaptureSession::default_v1();
+        assert_eq!(session.log().records().len(), 0);
+    }
+
+    #[test]
+    fn multiple_captures_in_session_accumulate() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        for i in 0..3_u64 {
+            let trace_id = format!("trace-{i}");
+            let decision_id = format!("decision-{i}");
+            let ctx = BoundaryContext::new(&trace_id, &decision_id, "policy", "clock", i);
+            session
+                .capture_clock_read(&ctx, "mono", "monotonic", i, None)
+                .expect("capture");
+        }
+        assert_eq!(session.log().records().len(), 3);
+    }
+
+    #[test]
+    fn boundary_capture_log_records_have_correct_class() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "clock", 1);
+        session
+            .capture_clock_read(&ctx, "mono", "monotonic", 1, None)
+            .expect("capture");
+        let records = session.log().records();
+        assert!(!records.is_empty());
+        assert_eq!(records[0].boundary_class, BoundaryClass::ClockRead);
+    }
+
+    #[test]
+    fn minimal_replay_plan_content_hash_deterministic() {
+        let make_session = || {
+            let mut s = BoundaryCaptureSession::default_v1();
+            let ctx = BoundaryContext::new("t", "d", "p", "sched", 1);
+            s.capture_scheduling_decision(&ctx, "ready", "task-1", "digest", None)
+                .expect("cap");
+            s
+        };
+        let s1 = make_session();
+        let s2 = make_session();
+        let p1 = s1.minimal_replay_plans().unwrap();
+        let p2 = s2.minimal_replay_plans().unwrap();
+        assert_eq!(p1.len(), p2.len());
+    }
+
+    // ── Additional enrichment tests (PearlTower 2026-03-18) ─────────
+
+    #[test]
+    fn correlation_keys_differ_for_different_decision_ids() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d1", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d2", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_components() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "comp1", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "comp2", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_virtual_ts() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 2);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_hex_length_is_consistent() {
+        for class in BoundaryClass::ALL {
+            let key = derive_correlation_key(class, 0, "trace", "decision", "comp", 99);
+            // "bcorr_" prefix + 64 hex chars from ContentHash
+            assert!(key.starts_with("bcorr_"));
+            let hex_part = &key["bcorr_".len()..];
+            assert_eq!(
+                hex_part.len(),
+                64,
+                "hex portion should be 64 chars for {:?}",
+                class
+            );
+            assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn boundary_catalog_rule_for_returns_none_for_missing_class() {
+        let catalog = BoundaryCatalog {
+            schema_version: "test".to_string(),
+            bead_id: "test".to_string(),
+            rules: vec![],
+        };
+        assert!(catalog.rule_for(BoundaryClass::ClockRead).is_none());
+    }
+
+    #[test]
+    fn boundary_catalog_rule_for_finds_each_default_class() {
+        let catalog = BoundaryCatalog::default_v1();
+        for class in BoundaryClass::ALL {
+            let rule = catalog.rule_for(class);
+            assert!(rule.is_some(), "rule_for({:?}) should return Some", class);
+            assert_eq!(rule.unwrap().boundary_class, class);
+        }
+    }
+
+    #[test]
+    fn every_rule_has_at_least_one_minimal_field() {
+        let catalog = BoundaryCatalog::default_v1();
+        for rule in &catalog.rules {
+            assert!(
+                !rule.minimal_fields.is_empty(),
+                "rule for {:?} has no minimal fields",
+                rule.boundary_class
+            );
+        }
+    }
+
+    #[test]
+    fn every_rule_has_at_least_one_escalation_case() {
+        let catalog = BoundaryCatalog::default_v1();
+        for rule in &catalog.rules {
+            assert!(
+                !rule.escalation_cases.is_empty(),
+                "rule for {:?} has no escalation cases",
+                rule.boundary_class
+            );
+        }
+    }
+
+    #[test]
+    fn every_rule_nondeterminism_tag_matches_boundary_class_as_str() {
+        let catalog = BoundaryCatalog::default_v1();
+        for rule in &catalog.rules {
+            assert_eq!(
+                rule.nondeterminism_tag,
+                rule.boundary_class.as_str(),
+                "nondeterminism_tag mismatch for {:?}",
+                rule.boundary_class
+            );
+        }
+    }
+
+    #[test]
+    fn boundary_rule_required_fields_returns_field_names() {
+        let rule = boundary_rule(
+            BoundaryClass::ClockRead,
+            "clock_read",
+            &[("alpha", "first"), ("beta", "second")],
+            &[],
+            &[],
+        );
+        let fields = rule.required_fields();
+        assert_eq!(fields, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn capture_rejects_whitespace_only_field_values() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "net", 1);
+        let request = BoundaryCaptureRequest {
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            component: "net".to_string(),
+            boundary_class: BoundaryClass::NetworkResponse,
+            virtual_ts: ctx.virtual_ts,
+            minimal_fields: [
+                ("request_digest".to_string(), "ok".to_string()),
+                ("response_digest".to_string(), "\t\n ".to_string()),
+                ("status_code".to_string(), "200".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            escalation_reason: None,
+        };
+        let err = session.capture_boundary(request).expect_err("empty field");
+        assert!(matches!(err, BoundaryCaptureError::EmptyField { .. }));
+    }
+
+    #[test]
+    fn capture_record_has_correct_schema_version() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "hw", 1);
+        let record = session
+            .capture_hardware_surface_read(&ctx, "gpu", "meas-digest", "drv-digest", None)
+            .unwrap();
+        assert_eq!(record.schema_version, BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn capture_record_nondeterminism_tag_matches_rule() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
+        let record = session
+            .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
+            .unwrap();
+        assert_eq!(record.nondeterminism_tag, "randomness_draw");
+    }
+
+    #[test]
+    fn capture_record_redaction_map_has_correct_entries() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
+        let record = session
+            .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
+            .unwrap();
+        // randomness_draw has sample_digest as SecretDigest/DigestOnly
+        let sample_redaction = record.redaction.get("sample_digest").unwrap();
+        assert_eq!(sample_redaction.privacy_class, PrivacyClass::SecretDigest);
+        assert_eq!(sample_redaction.treatment, RedactionTreatment::DigestOnly);
+        // generator_id is PublicMetadata/Plaintext
+        let gen_redaction = record.redaction.get("generator_id").unwrap();
+        assert_eq!(gen_redaction.privacy_class, PrivacyClass::PublicMetadata);
+        assert_eq!(gen_redaction.treatment, RedactionTreatment::Plaintext);
+    }
+
+    #[test]
+    fn boundary_capture_record_serde_round_trip() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t-rt", "d-rt", "p-rt", "policy", 42);
+        let record = session
+            .capture_external_policy_read(&ctx, "risk-router", "digest-policy", 7, None)
+            .unwrap();
+        let json = serde_json::to_string(&record).unwrap();
+        let back: BoundaryCaptureRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, back);
+    }
+
+    #[test]
+    fn boundary_capture_log_serde_round_trip() {
+        let mut log = BoundaryCaptureLog::new();
+        let catalog = BoundaryCatalog::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "clock", 1);
+        let request = build_request(
+            &ctx,
+            BoundaryClass::ClockRead,
+            None,
+            [
+                ("clock_id", "mono".to_string()),
+                ("clock_domain", "monotonic".to_string()),
+                ("observed_tick", "100".to_string()),
+            ],
+        );
+        log.append(&catalog, request).unwrap();
+        let json = serde_json::to_string(&log).unwrap();
+        let back: BoundaryCaptureLog = serde_json::from_str(&json).unwrap();
+        assert_eq!(log.records, back.records);
+        assert_eq!(log.next_sequence, back.next_sequence);
+    }
+
+    #[test]
+    fn boundary_capture_log_default_is_empty() {
+        let log = BoundaryCaptureLog::default();
+        assert!(log.records.is_empty());
+        assert_eq!(log.next_sequence, 0);
+    }
+
+    #[test]
+    fn render_jsonl_empty_log_produces_empty_string() {
+        let log = BoundaryCaptureLog::new();
+        let rendered = log.render_jsonl().unwrap();
+        assert!(rendered.is_empty());
+    }
+
+    #[test]
+    fn render_jsonl_multiple_records_separated_by_newlines() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        for i in 0..3_u64 {
+            let trace = format!("trace-{i}");
+            let decision = format!("decision-{i}");
+            let ctx = BoundaryContext::new(&trace, &decision, "p", "clock", i);
+            session
+                .capture_clock_read(&ctx, "mono", "monotonic", i, None)
+                .unwrap();
+        }
+        let rendered = session.log().render_jsonl().unwrap();
+        let lines: Vec<&str> = rendered.split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            // Each line must be valid JSON
+            let _: serde_json::Value = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[test]
+    fn minimal_replay_input_schema_from_catalog_preserves_all_entries() {
+        let catalog = BoundaryCatalog::default_v1();
+        let schema = MinimalReplayInputSchema::from_catalog(&catalog);
+        assert_eq!(schema.entries.len(), catalog.rules.len());
+        assert_eq!(schema.schema_version, MINIMAL_REPLAY_INPUT_SCHEMA_VERSION);
+        assert_eq!(schema.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn minimal_replay_input_entry_required_fields_match_rule_fields() {
+        let catalog = BoundaryCatalog::default_v1();
+        let schema = MinimalReplayInputSchema::from_catalog(&catalog);
+        for (entry, rule) in schema.entries.iter().zip(catalog.rules.iter()) {
+            assert_eq!(entry.boundary_class, rule.boundary_class);
+            let rule_fields: Vec<String> = rule
+                .minimal_fields
+                .iter()
+                .map(|f| f.field.clone())
+                .collect();
+            assert_eq!(entry.required_fields, rule_fields);
+        }
+    }
+
+    #[test]
+    fn minimal_replay_input_entry_escalation_case_ids_match_rule() {
+        let catalog = BoundaryCatalog::default_v1();
+        let schema = MinimalReplayInputSchema::from_catalog(&catalog);
+        for (entry, rule) in schema.entries.iter().zip(catalog.rules.iter()) {
+            let rule_ids: Vec<String> = rule
+                .escalation_cases
+                .iter()
+                .map(|e| e.case_id.clone())
+                .collect();
+            assert_eq!(entry.escalation_cases, rule_ids);
+        }
+    }
+
+    #[test]
+    fn boundary_redaction_map_from_catalog_covers_all_fields() {
+        let catalog = BoundaryCatalog::default_v1();
+        let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
+        assert_eq!(
+            redaction_map.schema_version,
+            BOUNDARY_REDACTION_MAP_SCHEMA_VERSION
+        );
+        assert_eq!(redaction_map.bead_id, BEAD_ID);
+        // Total entries should be the sum of redaction_rules across all rules
+        let expected_count: usize = catalog.rules.iter().map(|r| r.redaction_rules.len()).sum();
+        assert_eq!(redaction_map.entries.len(), expected_count);
+    }
+
+    #[test]
+    fn redaction_map_entries_preserve_privacy_class_and_treatment() {
+        let catalog = BoundaryCatalog::default_v1();
+        let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
+        // Check filesystem_input path_digest entry
+        let fs_path_entry = redaction_map
+            .entries
+            .iter()
+            .find(|e| {
+                e.boundary_class == BoundaryClass::FilesystemInput && e.field == "path_digest"
+            })
+            .expect("fs path_digest entry");
+        assert_eq!(fs_path_entry.privacy_class, PrivacyClass::PathDigest);
+        assert_eq!(fs_path_entry.treatment, RedactionTreatment::DigestOnly);
+    }
+
+    #[test]
+    fn minimal_replay_plan_groups_by_trace_decision_policy() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        // Two captures with the same (trace, decision, policy)
+        let ctx1 = BoundaryContext::new("t", "d", "p", "clock", 1);
+        session
+            .capture_clock_read(&ctx1, "mono", "monotonic", 1, None)
+            .unwrap();
+        let ctx2 = BoundaryContext::new("t", "d", "p", "rng", 2);
+        session
+            .capture_randomness_draw(&ctx2, "gen-1", 0, "sample", None)
+            .unwrap();
+        // One capture with a different trace
+        let ctx3 = BoundaryContext::new("t-other", "d", "p", "clock", 3);
+        session
+            .capture_clock_read(&ctx3, "mono", "monotonic", 3, None)
+            .unwrap();
+
+        let plans = session.minimal_replay_plans().unwrap();
+        assert_eq!(plans.len(), 2);
+        // Find the plan for trace "t"
+        let plan_t = plans.iter().find(|p| p.trace_id == "t").unwrap();
+        assert_eq!(plan_t.inputs.len(), 2);
+        let plan_other = plans.iter().find(|p| p.trace_id == "t-other").unwrap();
+        assert_eq!(plan_other.inputs.len(), 1);
+    }
+
+    #[test]
+    fn minimal_replay_plan_inputs_preserve_virtual_ts() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "scheduler", 999);
+        session
+            .capture_scheduling_decision(&ctx, "ready", "task-1", "digest", None)
+            .unwrap();
+        let plans = session.minimal_replay_plans().unwrap();
+        assert_eq!(plans[0].inputs[0].virtual_ts, 999);
+    }
+
+    #[test]
+    fn error_display_missing_required_field() {
+        let err = BoundaryCaptureError::MissingRequiredField {
+            boundary_class: BoundaryClass::RandomnessDraw,
+            field: "generator_id".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("missing required field"));
+        assert!(msg.contains("generator_id"));
+        assert!(msg.contains("randomness_draw"));
+    }
+
+    #[test]
+    fn error_display_unexpected_field() {
+        let err = BoundaryCaptureError::UnexpectedField {
+            boundary_class: BoundaryClass::FilesystemInput,
+            field: "raw_path".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("unexpected minimal field"));
+        assert!(msg.contains("raw_path"));
+        assert!(msg.contains("filesystem_input"));
+    }
+
+    #[test]
+    fn error_display_replay_needs_escalation() {
+        let err = BoundaryCaptureError::ReplayNeedsEscalation {
+            boundary_class: BoundaryClass::ControllerOverride,
+            correlation_key: "bcorr_abc123".to_string(),
+            reason: "interactive input".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("controller_override"));
+        assert!(msg.contains("bcorr_abc123"));
+        assert!(msg.contains("interactive input"));
+        assert!(msg.contains("escalation"));
+    }
+
+    #[test]
+    fn error_implements_std_error_trait() {
+        let err = BoundaryCaptureError::MissingBoundaryRule {
+            boundary_class: BoundaryClass::ClockRead,
+        };
+        let std_err: &dyn std::error::Error = &err;
+        assert!(!std_err.to_string().is_empty());
+    }
+
+    #[test]
+    fn boundary_class_ord_is_consistent_with_all_order() {
+        // The ALL array defines the canonical ordering; Ord should match
+        for i in 0..BoundaryClass::ALL.len() {
+            for j in (i + 1)..BoundaryClass::ALL.len() {
+                assert!(
+                    BoundaryClass::ALL[i] < BoundaryClass::ALL[j],
+                    "{:?} should be less than {:?}",
+                    BoundaryClass::ALL[i],
+                    BoundaryClass::ALL[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn boundary_class_hash_is_consistent_with_eq() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        for class in BoundaryClass::ALL {
+            let mut h1 = DefaultHasher::new();
+            class.hash(&mut h1);
+            let hash1 = h1.finish();
+            let mut h2 = DefaultHasher::new();
+            class.hash(&mut h2);
+            let hash2 = h2.finish();
+            assert_eq!(hash1, hash2, "Hash not deterministic for {:?}", class);
+        }
+    }
+
+    #[test]
+    fn privacy_class_serde_all_variants_round_trip() {
+        for pc in [
+            PrivacyClass::PublicMetadata,
+            PrivacyClass::PathDigest,
+            PrivacyClass::SecretDigest,
+            PrivacyClass::PolicyDigest,
+            PrivacyClass::HardwareFingerprint,
+        ] {
+            let json = serde_json::to_string(&pc).unwrap();
+            let back: PrivacyClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(pc, back);
+        }
+    }
+
+    #[test]
+    fn field_redaction_value_serde_round_trip() {
+        let val = FieldRedactionValue {
+            privacy_class: PrivacyClass::HardwareFingerprint,
+            treatment: RedactionTreatment::Omit,
+        };
+        let json = serde_json::to_string(&val).unwrap();
+        let back: FieldRedactionValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(val, back);
+    }
+
+    #[test]
+    fn boundary_capture_contract_default_v1_schema_versions_correct() {
+        let contract = BoundaryCaptureContract::default_v1();
+        assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
+        assert_eq!(contract.bead_id, BEAD_ID);
+        assert_eq!(
+            contract.boundary_catalog.schema_version,
+            BOUNDARY_CATALOG_SCHEMA_VERSION
+        );
+        assert_eq!(
+            contract.minimal_replay_input_schema.schema_version,
+            MINIMAL_REPLAY_INPUT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            contract.boundary_redaction_map.schema_version,
+            BOUNDARY_REDACTION_MAP_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn capture_with_escalation_sets_needs_escalation_sufficiency() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "fs", 1);
+        let record = session
+            .capture_filesystem_input(
+                &ctx,
+                "read",
+                "path-digest",
+                "content-digest",
+                Some("filesystem-path-explanation"),
+            )
+            .unwrap();
+        assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
+        assert_eq!(
+            record.escalation_reason.as_deref(),
+            Some("filesystem-path-explanation")
+        );
+    }
+
+    #[test]
+    fn capture_without_escalation_sets_sufficient() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "fs", 1);
+        let record = session
+            .capture_filesystem_input(&ctx, "read", "path-digest", "content-digest", None)
+            .unwrap();
+        assert_eq!(record.sufficiency, ReplaySufficiency::Sufficient);
+        assert!(record.escalation_reason.is_none());
+    }
+
+    #[test]
+    fn next_sequence_increments_after_each_append() {
+        let mut log = BoundaryCaptureLog::new();
+        let catalog = BoundaryCatalog::default_v1();
+        assert_eq!(log.next_sequence, 0);
+        let ctx = BoundaryContext::new("t", "d", "p", "clock", 1);
+        let req = build_request(
+            &ctx,
+            BoundaryClass::ClockRead,
+            None,
+            [
+                ("clock_id", "mono".to_string()),
+                ("clock_domain", "monotonic".to_string()),
+                ("observed_tick", "1".to_string()),
+            ],
+        );
+        log.append(&catalog, req).unwrap();
+        assert_eq!(log.next_sequence, 1);
+        let ctx2 = BoundaryContext::new("t", "d", "p", "clock", 2);
+        let req2 = build_request(
+            &ctx2,
+            BoundaryClass::ClockRead,
+            None,
+            [
+                ("clock_id", "mono".to_string()),
+                ("clock_domain", "monotonic".to_string()),
+                ("observed_tick", "2".to_string()),
+            ],
+        );
+        log.append(&catalog, req2).unwrap();
+        assert_eq!(log.next_sequence, 2);
+    }
+
+    #[test]
+    fn append_to_empty_catalog_returns_missing_boundary_rule_error() {
+        let empty_catalog = BoundaryCatalog {
+            schema_version: "test".to_string(),
+            bead_id: "test".to_string(),
+            rules: vec![],
+        };
+        let mut log = BoundaryCaptureLog::new();
+        let ctx = BoundaryContext::new("t", "d", "p", "clock", 1);
+        let req = build_request(
+            &ctx,
+            BoundaryClass::ClockRead,
+            None,
+            [
+                ("clock_id", "mono".to_string()),
+                ("clock_domain", "monotonic".to_string()),
+                ("observed_tick", "1".to_string()),
+            ],
+        );
+        let err = log.append(&empty_catalog, req).expect_err("no rule");
+        assert_eq!(
+            err,
+            BoundaryCaptureError::MissingBoundaryRule {
+                boundary_class: BoundaryClass::ClockRead,
+            }
+        );
+    }
+
+    #[test]
+    fn minimal_replay_plan_on_empty_log_returns_empty_vec() {
+        let session = BoundaryCaptureSession::default_v1();
+        let plans = session.minimal_replay_plans().unwrap();
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn boundary_context_equality() {
+        let ctx1 = BoundaryContext::new("t", "d", "p", "c", 1);
+        let ctx2 = BoundaryContext::new("t", "d", "p", "c", 1);
+        assert_eq!(ctx1, ctx2);
+        let ctx3 = BoundaryContext::new("t", "d", "p", "c", 2);
+        assert_ne!(ctx1, ctx3);
+    }
+
+    #[test]
+    fn minimal_replay_plan_serde_round_trip() {
+        let plan = MinimalReplayPlan {
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: "policy-1".to_string(),
+            inputs: vec![MinimalReplayInputRecord {
+                correlation_key: "bcorr_abc".to_string(),
+                boundary_class: BoundaryClass::ClockRead,
+                component: "clock".to_string(),
+                virtual_ts: 42,
+                minimal_fields: [
+                    ("clock_id".to_string(), "mono".to_string()),
+                    ("clock_domain".to_string(), "monotonic".to_string()),
+                    ("observed_tick".to_string(), "42".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        };
+        let json = serde_json::to_string(&plan).unwrap();
+        let back: MinimalReplayPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(plan, back);
+    }
+
+    #[test]
+    fn boundary_redaction_map_serde_round_trip() {
+        let catalog = BoundaryCatalog::default_v1();
+        let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
+        let json = serde_json::to_string(&redaction_map).unwrap();
+        let back: BoundaryRedactionMap = serde_json::from_str(&json).unwrap();
+        assert_eq!(redaction_map, back);
+    }
+
+    #[test]
+    fn hardware_surface_read_redaction_has_hardware_fingerprint_privacy() {
+        let catalog = BoundaryCatalog::default_v1();
+        let rule = catalog
+            .rule_for(BoundaryClass::HardwareSurfaceRead)
+            .unwrap();
+        let driver_fp_entry = rule
+            .redaction_rules
+            .iter()
+            .find(|e| e.field == "driver_fingerprint")
+            .unwrap();
+        assert_eq!(
+            driver_fp_entry.privacy_class,
+            PrivacyClass::HardwareFingerprint
+        );
+        assert_eq!(driver_fp_entry.treatment, RedactionTreatment::DigestOnly);
+        let measurement_entry = rule
+            .redaction_rules
+            .iter()
+            .find(|e| e.field == "measurement_digest")
+            .unwrap();
+        assert_eq!(
+            measurement_entry.privacy_class,
+            PrivacyClass::HardwareFingerprint
+        );
+    }
+
+    #[test]
+    fn external_policy_read_has_policy_digest_privacy_class() {
+        let catalog = BoundaryCatalog::default_v1();
+        let rule = catalog.rule_for(BoundaryClass::ExternalPolicyRead).unwrap();
+        let policy_digest_entry = rule
+            .redaction_rules
+            .iter()
+            .find(|e| e.field == "policy_digest")
+            .unwrap();
+        assert_eq!(
+            policy_digest_entry.privacy_class,
+            PrivacyClass::PolicyDigest
+        );
+    }
+}

@@ -18179,24 +18179,34 @@ impl InterpreterCore {
                         match arg_val {
                             Value::Object(concat_id) => {
                                 // If it's an array, concatenate its elements
-                                if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
+                                let elements_to_add = if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
                                     if let Some(concat_length_prop) = concat_obj.properties.get("length") {
                                         let concat_length = match concat_length_prop {
                                             Value::Int(n) => (*n).max(0) as usize,
                                             _ => 0,
                                         };
 
+                                        let mut elements = Vec::new();
                                         for i in 0..concat_length {
                                             if let Some(element) = concat_obj.properties.get(&i.to_string()) {
-                                                self.set_object_property(
-                                                    result_array_id,
-                                                    result_index.to_string(),
-                                                    element.clone(),
-                                                )?;
-                                                result_index += 1;
+                                                elements.push(element.clone());
                                             }
                                         }
+                                        elements
+                                    } else {
+                                        Vec::new()
                                     }
+                                } else {
+                                    Vec::new()
+                                };
+
+                                for element in elements_to_add {
+                                    self.set_object_property(
+                                        result_array_id,
+                                        result_index.to_string(),
+                                        element,
+                                    )?;
+                                    result_index += 1;
                                 }
                             }
                             _ => {

@@ -10103,8 +10103,16 @@ impl InterpreterCore {
                     let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Add the matched string
-                    self.set_object_property(result_id, "0".to_string(), Value::Str(pattern_str.clone()))?;
-                    self.set_object_property(result_id, "index".to_string(), Value::Int(index as i64))?;
+                    self.set_object_property(
+                        result_id,
+                        "0".to_string(),
+                        Value::Str(pattern_str.clone()),
+                    )?;
+                    self.set_object_property(
+                        result_id,
+                        "index".to_string(),
+                        Value::Int(index as i64),
+                    )?;
                     self.set_object_property(result_id, "input".to_string(), Value::Str(this_str))?;
                     self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
 
@@ -10134,11 +10142,23 @@ impl InterpreterCore {
                 let symbol_id = self.alloc_object_with_prototype(None)?;
 
                 // Store symbol metadata
-                self.set_object_property(symbol_id, "__type".to_string(), Value::Str("symbol".to_string()))?;
+                self.set_object_property(
+                    symbol_id,
+                    "__type".to_string(),
+                    Value::Str("symbol".to_string()),
+                )?;
                 if let Some(desc) = description {
-                    self.set_object_property(symbol_id, "__description".to_string(), Value::Str(desc))?;
+                    self.set_object_property(
+                        symbol_id,
+                        "__description".to_string(),
+                        Value::Str(desc),
+                    )?;
                 }
-                self.set_object_property(symbol_id, "__id".to_string(), Value::Int(symbol_id.0 as i64))?;
+                self.set_object_property(
+                    symbol_id,
+                    "__id".to_string(),
+                    Value::Int(symbol_id.0 as i64),
+                )?;
                 Ok(Value::Object(symbol_id))
             }
             "builtin:typeof" => {
@@ -10217,9 +10237,7 @@ impl InterpreterCore {
                             })
                             .unwrap_or(0);
                         (0..length)
-                            .filter_map(|i| {
-                                array_obj.properties.get(&i.to_string()).cloned()
-                            })
+                            .filter_map(|i| array_obj.properties.get(&i.to_string()).cloned())
                             .collect()
                     } else {
                         Vec::new()
@@ -10232,18 +10250,14 @@ impl InterpreterCore {
                         let flattened = if depth > 0 {
                             match &value {
                                 Value::Object(inner_id) => {
-                                    if let Some(inner_obj) =
-                                        self.heap.get(inner_id.0 as usize)
-                                    {
+                                    if let Some(inner_obj) = self.heap.get(inner_id.0 as usize) {
                                         if inner_obj.properties.contains_key("length") {
                                             let inner_length = inner_obj
                                                 .properties
                                                 .get("length")
                                                 .and_then(|v| match v {
                                                     Value::Int(i) => Some(*i as usize),
-                                                    Value::Float(f) => {
-                                                        Some(f.inner() as usize)
-                                                    }
+                                                    Value::Float(f) => Some(f.inner() as usize),
                                                     _ => None,
                                                 })
                                                 .unwrap_or(0);
@@ -10530,8 +10544,16 @@ impl InterpreterCore {
                 let entries_id = self.alloc_object_with_prototype(None)?;
 
                 // Mark as Map type
-                self.set_object_property(map_id, "__type".to_string(), Value::Str("Map".to_string()))?;
-                self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
+                self.set_object_property(
+                    map_id,
+                    "__type".to_string(),
+                    Value::Str("Map".to_string()),
+                )?;
+                self.set_object_property(
+                    map_id,
+                    "__entries".to_string(),
+                    Value::Object(entries_id),
+                )?;
                 self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
 
                 // Create internal entries storage
@@ -10785,8 +10807,7 @@ impl InterpreterCore {
                         _ => "other".to_string(),
                     };
 
-                    let inserted = if let Some(values_obj) =
-                        self.heap.get_mut(values_id.0 as usize)
+                    let inserted = if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize)
                     {
                         if values_obj.properties.contains_key(&value_str) {
                             false
@@ -11261,7 +11282,8 @@ impl InterpreterCore {
                     Value::Object(obj_id) => {
                         // Get the object's own property names
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            let property_names: Vec<String> = obj.properties.keys().cloned().collect();
+                            let property_names: Vec<String> =
+                                obj.properties.keys().cloned().collect();
 
                             // Create array object to hold the property names
                             let array_id = self.alloc_object_with_prototype(None)?;
@@ -11356,11 +11378,7 @@ impl InterpreterCore {
                     "__state".to_string(),
                     Value::Str("rejected".to_string()),
                 )?;
-                self.set_object_property(
-                    promise_id,
-                    "__value".to_string(),
-                    reason,
-                )?;
+                self.set_object_property(promise_id, "__value".to_string(), reason)?;
 
                 Ok(Value::Object(promise_id))
             }
@@ -11478,16 +11496,8 @@ impl InterpreterCore {
                     "__type".to_string(),
                     Value::Str("RegExp".to_string()),
                 )?;
-                self.set_object_property(
-                    regexp_id,
-                    "source".to_string(),
-                    Value::Str(pattern),
-                )?;
-                self.set_object_property(
-                    regexp_id,
-                    "flags".to_string(),
-                    Value::Str(flags),
-                )?;
+                self.set_object_property(regexp_id, "source".to_string(), Value::Str(pattern))?;
+                self.set_object_property(regexp_id, "flags".to_string(), Value::Str(flags))?;
 
                 Ok(Value::Object(regexp_id))
             }
@@ -11668,11 +11678,7 @@ impl InterpreterCore {
 
                 // Create empty array as resolved value for now
                 let empty_array_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    empty_array_id,
-                    "length".to_string(),
-                    Value::Int(0),
-                )?;
+                self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
 
                 self.set_object_property(
                     promise_id,
@@ -11766,9 +11772,13 @@ impl InterpreterCore {
                     if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
                         if type_val == "Date" {
                             // Get the timestamp value
-                            if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                            if let Some(Value::Float(timestamp)) =
+                                date_obj.properties.get("__timestamp")
+                            {
                                 return Ok(Value::Float(*timestamp));
-                            } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                            } else if let Some(Value::Int(timestamp)) =
+                                date_obj.properties.get("__timestamp")
+                            {
                                 return Ok(Value::Int(*timestamp));
                             }
                         }
@@ -11792,11 +11802,15 @@ impl InterpreterCore {
                     if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
                         if type_val == "Date" {
                             // Get the timestamp and format it
-                            if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                            if let Some(Value::Float(timestamp)) =
+                                date_obj.properties.get("__timestamp")
+                            {
                                 // Simplified date formatting (ISO-8601 style for now)
                                 // TODO: Implement proper locale-aware date formatting
                                 return Ok(Value::Str(format!("Date({})", timestamp.inner())));
-                            } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                            } else if let Some(Value::Int(timestamp)) =
+                                date_obj.properties.get("__timestamp")
+                            {
                                 return Ok(Value::Str(format!("Date({})", timestamp)));
                             }
                         }
@@ -11856,11 +11870,7 @@ impl InterpreterCore {
                 if args.count < 2 {
                     // Return empty array if no callback provided
                     let empty_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        empty_array_id,
-                        "length".to_string(),
-                        Value::Int(0),
-                    )?;
+                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
                     return Ok(Value::Object(empty_array_id));
                 }
 
@@ -11896,11 +11906,7 @@ impl InterpreterCore {
                 // Return empty array since we can't execute callback functions yet
                 // TODO: Implement function call mechanism for full flatMap support
                 let empty_array_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    empty_array_id,
-                    "length".to_string(),
-                    Value::Int(0),
-                )?;
+                self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
                 Ok(Value::Object(empty_array_id))
             }
 
@@ -12034,11 +12040,7 @@ impl InterpreterCore {
 
                     // Copy the elements to the target location
                     for (i, element) in elements_to_copy.into_iter().enumerate() {
-                        self.set_object_property(
-                            array_id,
-                            (target_idx + i).to_string(),
-                            element,
-                        )?;
+                        self.set_object_property(array_id, (target_idx + i).to_string(), element)?;
                     }
                 }
 
@@ -12110,11 +12112,7 @@ impl InterpreterCore {
                 // Fill the array elements
                 if start_idx < end_idx {
                     for i in start_idx..end_idx {
-                        self.set_object_property(
-                            array_id,
-                            i.to_string(),
-                            fill_value.clone(),
-                        )?;
+                        self.set_object_property(array_id, i.to_string(), fill_value.clone())?;
                     }
                 }
 
@@ -12248,11 +12246,7 @@ impl InterpreterCore {
                 }
 
                 // Handle negative indexing
-                let actual_index = if index < 0 {
-                    length + index
-                } else {
-                    index
-                };
+                let actual_index = if index < 0 { length + index } else { index };
 
                 // Check bounds
                 if actual_index < 0 || actual_index >= length {
@@ -12307,11 +12301,7 @@ impl InterpreterCore {
                 }
 
                 // Handle negative indexing
-                let actual_index = if index < 0 {
-                    length + index
-                } else {
-                    index
-                };
+                let actual_index = if index < 0 { length + index } else { index };
 
                 // Check bounds
                 if actual_index < 0 || actual_index >= length {
@@ -12457,16 +12447,8 @@ impl InterpreterCore {
                     "__array".to_string(),
                     Value::Object(array_id),
                 )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__index".to_string(),
-                    Value::Int(0),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__length".to_string(),
-                    Value::Int(length),
-                )?;
+                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
+                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
                 self.set_object_property(
                     iterator_id,
                     "__kind".to_string(),
@@ -12531,16 +12513,8 @@ impl InterpreterCore {
                     "__array".to_string(),
                     Value::Object(array_id),
                 )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__index".to_string(),
-                    Value::Int(0),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__length".to_string(),
-                    Value::Int(length),
-                )?;
+                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
+                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
                 self.set_object_property(
                     iterator_id,
                     "__kind".to_string(),
@@ -12605,16 +12579,8 @@ impl InterpreterCore {
                     "__array".to_string(),
                     Value::Object(array_id),
                 )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__index".to_string(),
-                    Value::Int(0),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__length".to_string(),
-                    Value::Int(length),
-                )?;
+                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
+                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
                 self.set_object_property(
                     iterator_id,
                     "__kind".to_string(),
@@ -12668,11 +12634,7 @@ impl InterpreterCore {
                     "__description".to_string(),
                     Value::Str("Symbol.iterator".to_string()),
                 )?;
-                self.set_object_property(
-                    symbol_id,
-                    "__wellKnown".to_string(),
-                    Value::Bool(true),
-                )?;
+                self.set_object_property(symbol_id, "__wellKnown".to_string(), Value::Bool(true))?;
                 self.set_object_property(
                     symbol_id,
                     "__key".to_string(),
@@ -13203,7 +13165,7 @@ impl InterpreterCore {
             }
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Object(a), Value::Object(b)) => a.0 == b.0, // Object identity comparison
-            _ => false, // Different types are not equal
+            _ => false,                                         // Different types are not equal
         }
     }
 

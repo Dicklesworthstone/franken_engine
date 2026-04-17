@@ -942,9 +942,18 @@ mod tests {
     }
 
     fn trust_anchors() -> PlasReleaseGateTrustAnchors {
+        // Derive valid Ed25519 VerificationKeys from SigningKey seeds.
+        // Arbitrary 32-byte arrays are not guaranteed to decode as valid
+        // Ed25519 public keys, but SigningKey::from_bytes accepts any seed
+        // and produces a well-formed verification key.
+        use crate::signature_preimage::SigningKey;
         PlasReleaseGateTrustAnchors {
-            witness_verification_key: VerificationKey::from_bytes([1u8; 32]).unwrap(),
-            transparency_log_verification_key: VerificationKey::from_bytes([2u8; 32]).unwrap(),
+            witness_verification_key: SigningKey::from_bytes([1u8; 32])
+                .unwrap()
+                .verification_key(),
+            transparency_log_verification_key: SigningKey::from_bytes([2u8; 32])
+                .unwrap()
+                .verification_key(),
         }
     }
 

@@ -7082,6 +7082,83 @@ impl InterpreterCore {
 
                 Ok(Value::Object(array_id))
             }
+            "builtin:ArrayPrototypeJoin" => {
+                // Array.prototype.join implementation - joins array elements into string
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                // Get the array object (first argument should be the array)
+                let array_arg = self.read_reg(args.start)?;
+
+                // Get the separator (default to comma)
+                let separator = if args.count > 1 {
+                    let sep_arg = self.read_reg(args.start + 1)?;
+                    match sep_arg {
+                        Value::Str(s) => s,
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => ",".to_string(), // Default separator
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => ",".to_string(),
+                    }
+                } else {
+                    ",".to_string() // Default separator
+                };
+
+                match array_arg {
+                    Value::Object(obj_id) => {
+                        // Get array length and elements
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(length_val) = obj.properties.get("length") {
+                                if let Value::Int(len) = length_val {
+                                    let length = *len as usize;
+                                    let mut elements = Vec::new();
+
+                                    // Collect array elements
+                                    for i in 0..length {
+                                        let element = obj
+                                            .properties
+                                            .get(&i.to_string())
+                                            .cloned()
+                                            .unwrap_or(Value::Undefined);
+
+                                        // Convert element to string
+                                        let str_val = match element {
+                                            Value::Str(s) => s,
+                                            Value::Int(n) => n.to_string(),
+                                            Value::Float(f) => f.inner().to_string(),
+                                            Value::Bool(b) => b.to_string(),
+                                            Value::Null => "null".to_string(),
+                                            Value::Undefined => "".to_string(), // undefined becomes empty string in join
+                                            _ => "[object Object]".to_string(),
+                                        };
+                                        elements.push(str_val);
+                                    }
+
+                                    // Join elements with separator
+                                    let result = elements.join(&separator);
+                                    Ok(Value::Str(result))
+                                } else {
+                                    // Invalid length, return empty string
+                                    Ok(Value::Str("".to_string()))
+                                }
+                            } else {
+                                // No length property, return empty string
+                                Ok(Value::Str("".to_string()))
+                            }
+                        } else {
+                            // Object not found, return empty string
+                            Ok(Value::Str("".to_string()))
+                        }
+                    }
+                    _ => {
+                        // Non-object argument, return empty string
+                        Ok(Value::Str("".to_string()))
+                    }
+                }
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {
@@ -7645,6 +7722,71 @@ impl InterpreterCore {
                 let uppercase = string_val.to_uppercase();
                 Ok(Value::Str(uppercase))
             }
+            "builtin:StringPrototypeSplit" => {
+                // String.prototype.split implementation - splits string into array
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                // Get separator argument (default to undefined which means split into characters)
+                let separator = if args.count > 1 {
+                    let sep_arg = self.read_reg(args.start + 1)?;
+                    match sep_arg {
+                        Value::Str(s) => Some(s),
+                        Value::Null => Some("null".to_string()),
+                        Value::Undefined => None, // Split each character
+                        Value::Int(n) => Some(n.to_string()),
+                        Value::Float(f) => Some(f.inner().to_string()),
+                        Value::Bool(b) => Some(b.to_string()),
+                        _ => None,
+                    }
+                } else {
+                    None // Split each character
+                };
+
+                // Create result array
+                let array_id = self.alloc_object_with_prototype(None)?;
+
+                let parts: Vec<String> = match separator {
+                    Some(sep) if !sep.is_empty() => {
+                        // Split by separator
+                        string_val.split(&sep).map(|s| s.to_string()).collect()
+                    }
+                    Some(_) => {
+                        // Empty separator - split into characters
+                        string_val.chars().map(|c| c.to_string()).collect()
+                    }
+                    None => {
+                        // No separator - split into characters
+                        string_val.chars().map(|c| c.to_string()).collect()
+                    }
+                };
+
+                // Add parts to array
+                for (i, part) in parts.iter().enumerate() {
+                    self.set_object_property(array_id, i.to_string(), Value::Str(part.clone()))?;
+                }
+
+                // Set length property
+                self.set_object_property(
+                    array_id,
+                    "length".to_string(),
+                    Value::Int(parts.len() as i64),
+                )?;
+
+                Ok(Value::Object(array_id))
+            }
 
             // Math methods
             "builtin:MathAbs" => {
@@ -8152,6 +8294,7 @@ impl InterpreterCore {
             14 => Some("builtin:ArrayPrototypePop".to_string()),
             15 => Some("builtin:ArrayPrototypeShift".to_string()),
             16 => Some("builtin:ArrayPrototypeUnshift".to_string()),
+            17 => Some("builtin:ArrayPrototypeJoin".to_string()),
 
             // String methods
             30 => Some("builtin:StringPrototypeCharAt".to_string()),
@@ -8160,6 +8303,7 @@ impl InterpreterCore {
             33 => Some("builtin:StringPrototypeSlice".to_string()),
             34 => Some("builtin:StringPrototypeToLowerCase".to_string()),
             35 => Some("builtin:StringPrototypeToUpperCase".to_string()),
+            36 => Some("builtin:StringPrototypeSplit".to_string()),
 
             // Math methods
             50 => Some("builtin:MathAbs".to_string()),

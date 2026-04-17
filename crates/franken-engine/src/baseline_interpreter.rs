@@ -12557,6 +12557,10 @@ impl InterpreterCore {
             214 => Some("builtin:StringPrototypeAt".to_string()),
             215 => Some("builtin:ObjectGetOwnPropertyDescriptor".to_string()),
             216 => Some("builtin:MathClz32".to_string()),
+            217 => Some("builtin:ArrayPrototypeEntries".to_string()),
+            218 => Some("builtin:ArrayPrototypeKeys".to_string()),
+            219 => Some("builtin:ArrayPrototypeValues".to_string()),
+            220 => Some("builtin:ObjectSetPrototypeOf".to_string()),
 
             _ => None, // Not a recognized builtin
         }

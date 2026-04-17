@@ -7432,6 +7432,34 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:isNaN" => {
+                // isNaN global function - tests if value is NaN
+                if args.count == 0 {
+                    return Ok(Value::Bool(true)); // isNaN() with no args returns true
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let is_nan = match arg {
+                    Value::Float(f) => f.inner().is_nan(),
+                    Value::Int(_) => false, // Integers are never NaN
+                    Value::Str(s) => {
+                        // Try to convert string to number
+                        match s.parse::<f64>() {
+                            Ok(num) => num.is_nan(),
+                            Err(_) => true, // Invalid number strings are NaN
+                        }
+                    }
+                    Value::Bool(b) => {
+                        // Booleans convert to numbers: true->1, false->0
+                        false // Neither 1 nor 0 is NaN
+                    }
+                    Value::Null => false, // null converts to 0, which is not NaN
+                    Value::Undefined => true, // undefined converts to NaN
+                    _ => true,            // Objects and other complex types typically become NaN
+                };
+
+                Ok(Value::Bool(is_nan))
+            }
 
             _ => {
                 // Unknown builtin method - return undefined

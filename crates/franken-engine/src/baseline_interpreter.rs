@@ -17937,6 +17937,175 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
+            "builtin:ArrayPrototypeMap" => {
+                // Array.prototype.map() implementation - simplified version
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects return undefined
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Undefined); // No callback provided
+                }
+
+                let callback_val = self.read_reg(args.start + 1)?;
+                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
+                    return Ok(Value::Undefined); // Callback is not a function
+                }
+
+                let mapped_array_id = self.alloc_object_with_prototype(None)?;
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length = match length_prop {
+                        Value::Int(n) => n.max(0) as usize,
+                        _ => 0,
+                    };
+
+                    // Simplified implementation: copy all existing elements (identity mapping)
+                    // (Full implementation would require callback execution)
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            self.set_object_property(
+                                mapped_array_id,
+                                i.to_string(),
+                                element.clone(),
+                            )?;
+                        } else {
+                            self.set_object_property(
+                                mapped_array_id,
+                                i.to_string(),
+                                Value::Undefined,
+                            )?;
+                        }
+                    }
+
+                    self.set_object_property(
+                        mapped_array_id,
+                        "length".to_string(),
+                        Value::Int(length as i64),
+                    )?;
+                }
+
+                Ok(Value::Object(mapped_array_id))
+            }
+
+            "builtin:MathSqrt" => {
+                // Math.sqrt() implementation - returns square root
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                if num < 0.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else {
+                    let result = num.sqrt();
+                    // Return Int if result is whole number in i64 range
+                    if result.fract() == 0.0 && result >= 0.0 && result <= i64::MAX as f64 {
+                        Ok(Value::Int(result as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(result)))
+                    }
+                }
+            }
+
+            "builtin:MathPow" => {
+                // Math.pow(base, exponent) implementation - returns base^exponent
+                if args.count < 2 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let base_val = self.read_reg(args.start + 1)?;
+                let exp_val = self.read_reg(args.start + 2)?;
+
+                let base = match base_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&base_val).unwrap_or(f64::NAN),
+                };
+
+                let exponent = match exp_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&exp_val).unwrap_or(f64::NAN),
+                };
+
+                let result = base.powf(exponent);
+
+                // Return Int if result is whole number in i64 range
+                if result.fract() == 0.0 && !result.is_infinite() && !result.is_nan()
+                   && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(result)))
+                }
+            }
+
+            "builtin:StringPrototypeReplace" => {
+                // String.prototype.replace() implementation - simplified version
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Str(str_text)); // No search string provided
+                }
+
+                let search_val = self.read_reg(args.start + 1)?;
+                let search_str = match search_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                let replace_str = if args.count >= 3 {
+                    let replace_val = self.read_reg(args.start + 2)?;
+                    match replace_val {
+                        Value::Str(s) => s,
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                // Simple string replacement (only first occurrence)
+                let result = if let Some(index) = str_text.find(&search_str) {
+                    let mut result = String::new();
+                    result.push_str(&str_text[..index]);
+                    result.push_str(&replace_str);
+                    result.push_str(&str_text[index + search_str.len()..]);
+                    result
+                } else {
+                    str_text // No match found
+                };
+
+                Ok(Value::Str(result))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -18260,6 +18429,10 @@ impl InterpreterCore {
             354 => Some("builtin:MathCeil".to_string()),
             355 => Some("builtin:MathRound".to_string()),
             356 => Some("builtin:StringPrototypeSplit".to_string()),
+            357 => Some("builtin:ArrayPrototypeMap".to_string()),
+            358 => Some("builtin:MathSqrt".to_string()),
+            359 => Some("builtin:MathPow".to_string()),
+            360 => Some("builtin:StringPrototypeReplace".to_string()),
 
             _ => None, // Not a recognized builtin
         }

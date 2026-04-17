@@ -25,16 +25,16 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 
 use crate::certified_optimization_governance::{
     GovernanceState, OptimizationCertificate, OptimizationTier, RollbackRecord,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
-use crate::translation_validation::{TranslationValidator, ValidationMode, ValidationResult};
-use crate::translation_validation_receipt::ValidationReceipt;
-use crate::versioned_rewrite_pack::{RewritePack, RewriteRule, RewriteRuleId};
+use crate::translation_validation::{TranslationValidationGate, ValidationMode, ValidationVerdict};
+use crate::translation_validation_receipt::TranslationValidationReceipt;
+use crate::versioned_rewrite_pack::{RewritePack, RewriteRuleEntry};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -759,7 +759,7 @@ impl CertifiedRewriteOptimizer {
         // For now, return a placeholder certificate
         Ok(OptimizationCertificate::new(
             rule_id.clone(),
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
         ))
     }
 }
@@ -774,7 +774,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "test_request".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + 0".to_string(),
         );
 
@@ -792,7 +792,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "valid_request".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + y".to_string(),
         );
 
@@ -805,7 +805,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + y".to_string(),
         );
 
@@ -825,7 +825,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "test".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "".to_string(),
         );
 
@@ -922,7 +922,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "test_result".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + 0 + y".to_string(),
         );
 
@@ -943,7 +943,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "test_result".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + 0".to_string(),
         );
 
@@ -1018,7 +1018,7 @@ mod tests {
         let request = OptimizationRequest::new(
             "basic_test".to_string(),
             epoch,
-            OptimizationTier::Conservative,
+            OptimizationTier::Standard,
             "x + 0".to_string(),
         );
 

@@ -7159,6 +7159,85 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ArrayPrototypeIncludes" => {
+                // Array.prototype.includes implementation - checks if array contains a value
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                // Get the array object (first argument should be the array)
+                let array_arg = self.read_reg(args.start)?;
+
+                // Get the search element
+                let search_element = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+
+                match array_arg {
+                    Value::Object(obj_id) => {
+                        // Get array length and search through elements
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(length_val) = obj.properties.get("length") {
+                                if let Value::Int(len) = length_val {
+                                    let length = *len as usize;
+
+                                    // Search through array elements
+                                    for i in 0..length {
+                                        let element = obj
+                                            .properties
+                                            .get(&i.to_string())
+                                            .cloned()
+                                            .unwrap_or(Value::Undefined);
+
+                                        // JavaScript === comparison (strict equality)
+                                        let matches = match (&search_element, &element) {
+                                            (Value::Int(a), Value::Int(b)) => a == b,
+                                            (Value::Float(a), Value::Float(b)) => {
+                                                let a_val = a.inner();
+                                                let b_val = b.inner();
+                                                // Handle NaN case: NaN === NaN is false in JS, but includes should find NaN
+                                                if a_val.is_nan() && b_val.is_nan() {
+                                                    true
+                                                } else {
+                                                    a_val == b_val
+                                                }
+                                            }
+                                            (Value::Str(a), Value::Str(b)) => a == b,
+                                            (Value::Bool(a), Value::Bool(b)) => a == b,
+                                            (Value::Null, Value::Null) => true,
+                                            (Value::Undefined, Value::Undefined) => true,
+                                            (Value::Object(a), Value::Object(b)) => a == b,
+                                            _ => false, // Different types don't match in strict equality
+                                        };
+
+                                        if matches {
+                                            return Ok(Value::Bool(true));
+                                        }
+                                    }
+
+                                    // Not found
+                                    Ok(Value::Bool(false))
+                                } else {
+                                    // Invalid length, return false
+                                    Ok(Value::Bool(false))
+                                }
+                            } else {
+                                // No length property, return false
+                                Ok(Value::Bool(false))
+                            }
+                        } else {
+                            // Object not found, return false
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                    _ => {
+                        // Non-object argument, return false
+                        Ok(Value::Bool(false))
+                    }
+                }
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {
@@ -8263,6 +8342,31 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:NumberIsNaN" => {
+                // Number.isNaN implementation - more strict than global isNaN
+                if args.count == 0 {
+                    return Ok(Value::Bool(false)); // Number.isNaN() with no args returns false
+                }
+
+                let arg = self.read_reg(args.start)?;
+                match arg {
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_nan())),
+                    _ => Ok(Value::Bool(false)), // Number.isNaN only returns true for NaN numbers, not type coerced
+                }
+            }
+            "builtin:NumberIsFinite" => {
+                // Number.isFinite implementation - more strict than global isFinite
+                if args.count == 0 {
+                    return Ok(Value::Bool(false)); // Number.isFinite() with no args returns false
+                }
+
+                let arg = self.read_reg(args.start)?;
+                match arg {
+                    Value::Int(_) => Ok(Value::Bool(true)), // All integers are finite
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_finite())),
+                    _ => Ok(Value::Bool(false)), // Number.isFinite only returns true for finite numbers, not type coerced
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8295,6 +8399,7 @@ impl InterpreterCore {
             15 => Some("builtin:ArrayPrototypeShift".to_string()),
             16 => Some("builtin:ArrayPrototypeUnshift".to_string()),
             17 => Some("builtin:ArrayPrototypeJoin".to_string()),
+            18 => Some("builtin:ArrayPrototypeIncludes".to_string()),
 
             // String methods
             30 => Some("builtin:StringPrototypeCharAt".to_string()),
@@ -8322,6 +8427,10 @@ impl InterpreterCore {
             81 => Some("builtin:isFinite".to_string()),
             82 => Some("builtin:parseInt".to_string()),
             83 => Some("builtin:parseFloat".to_string()),
+
+            // Number methods
+            90 => Some("builtin:NumberIsNaN".to_string()),
+            91 => Some("builtin:NumberIsFinite".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -16340,6 +16340,216 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeSubstr" => {
+                // String.prototype.substr(start, length) implementation (deprecated but widely used)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let start = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n as i32,
+                        Value::Float(f) => f.inner() as i32,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let length = if args.count > 2 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => Some(n as usize),
+                        Value::Float(f) => Some(f.inner() as usize),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                let chars: Vec<char> = str_text.chars().collect();
+                let str_len = chars.len() as i32;
+
+                // Handle negative start (count from end)
+                let actual_start = if start < 0 {
+                    (str_len + start).max(0) as usize
+                } else {
+                    (start as usize).min(chars.len())
+                };
+
+                let actual_length = length.unwrap_or(chars.len() - actual_start);
+                let end_pos = (actual_start + actual_length).min(chars.len());
+
+                if actual_start >= chars.len() {
+                    Ok(Value::Str("".to_string()))
+                } else {
+                    let result: String = chars[actual_start..end_pos].iter().collect();
+                    Ok(Value::Str(result))
+                }
+            }
+
+            "builtin:NumberPrototypeToFixed" => {
+                // Number.prototype.toFixed(digits) implementation
+                let this_val = self.read_reg(args.start)?;
+                let num = match this_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let digits = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => (n as usize).min(20), // Max 20 digits
+                        Value::Float(f) => (f.inner() as usize).min(20),
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                if num.is_nan() {
+                    Ok(Value::Str("NaN".to_string()))
+                } else if num.is_infinite() {
+                    if num.is_sign_positive() {
+                        Ok(Value::Str("Infinity".to_string()))
+                    } else {
+                        Ok(Value::Str("-Infinity".to_string()))
+                    }
+                } else {
+                    let formatted = format!("{:.precision$}", num, precision = digits);
+                    Ok(Value::Str(formatted))
+                }
+            }
+
+            "builtin:ArrayPrototypeCopyWithin" => {
+                // Array.prototype.copyWithin(target, start[, end]) implementation (ES2015)
+                if args.count < 3 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let target = match self.read_reg(args.start + 1)? {
+                    Value::Int(n) => n,
+                    Value::Float(f) => f.inner() as i64,
+                    _ => return Ok(Value::Undefined),
+                };
+
+                let start = match self.read_reg(args.start + 2)? {
+                    Value::Int(n) => n,
+                    Value::Float(f) => f.inner() as i64,
+                    _ => return Ok(Value::Undefined),
+                };
+
+                let end = if args.count > 3 {
+                    match self.read_reg(args.start + 3)? {
+                        Value::Int(n) => Some(n),
+                        Value::Float(f) => Some(f.inner() as i64),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len,
+                        Some(Value::Float(len)) => len.inner() as i64,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // Normalize indices
+                let actual_target = if target < 0 {
+                    (length + target).max(0)
+                } else {
+                    target.min(length - 1)
+                };
+
+                let actual_start = if start < 0 {
+                    (length + start).max(0)
+                } else {
+                    start.min(length - 1)
+                };
+
+                let actual_end = end.map_or(length, |e| {
+                    if e < 0 {
+                        (length + e).max(0)
+                    } else {
+                        e.min(length)
+                    }
+                });
+
+                // Copy elements within the array
+                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                    // Collect elements to copy
+                    let mut elements_to_copy = Vec::new();
+                    for i in actual_start..actual_end {
+                        if let Some(element) = array_obj.properties.get(&i.to_string()) {
+                            elements_to_copy.push(element.clone());
+                        } else {
+                            elements_to_copy.push(Value::Undefined);
+                        }
+                    }
+
+                    // Copy to target positions
+                    for (offset, element) in elements_to_copy.into_iter().enumerate() {
+                        let target_index = actual_target + offset as i64;
+                        if target_index < length {
+                            array_obj
+                                .properties
+                                .insert(target_index.to_string(), element);
+                        }
+                    }
+                }
+
+                Ok(Value::Object(array_id))
+            }
+
+            "builtin:ObjectIsFrozen" => {
+                // Object.isFrozen(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Bool(true)); // Default to true for missing argument
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Simplified implementation: check if object has frozen marker
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(Value::Bool(frozen)) = obj.properties.get("__frozen__") {
+                                Ok(Value::Bool(*frozen))
+                            } else {
+                                Ok(Value::Bool(false)) // Not frozen by default
+                            }
+                        } else {
+                            Ok(Value::Bool(false))
+                        }
+                    }
+                    _ => {
+                        // Primitives are considered frozen
+                        Ok(Value::Bool(true))
+                    }
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -16619,6 +16829,10 @@ impl InterpreterCore {
             310 => Some("builtin:MathTrunc".to_string()),
             311 => Some("builtin:ArrayPrototypeGroupToMap".to_string()),
             312 => Some("builtin:ObjectSeal".to_string()),
+            313 => Some("builtin:StringPrototypeSubstr".to_string()),
+            314 => Some("builtin:NumberPrototypeToFixed".to_string()),
+            315 => Some("builtin:ArrayPrototypeCopyWithin".to_string()),
+            316 => Some("builtin:ObjectIsFrozen".to_string()),
 
             _ => None, // Not a recognized builtin
         }

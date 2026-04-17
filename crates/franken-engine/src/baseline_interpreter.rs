@@ -7491,6 +7491,72 @@ impl InterpreterCore {
 
                 Ok(Value::Bool(is_finite))
             }
+            "builtin:parseInt" => {
+                // parseInt global function - parses string and returns integer
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN))); // parseInt() with no args returns NaN
+                }
+
+                let string_val = self.read_reg(args.start)?;
+
+                // Convert first argument to string
+                let string_to_parse = match string_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => {
+                        if b {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }
+                    }
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Float(Float64::new(f64::NAN))), // Objects return NaN
+                };
+
+                // Get optional radix (base) argument
+                let radix = if args.count >= 2 {
+                    let radix_val = self.read_reg(args.start + 1)?;
+                    match radix_val {
+                        Value::Int(r) => {
+                            if r < 2 || r > 36 {
+                                return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
+                            }
+                            r as u32
+                        }
+                        Value::Float(f) => {
+                            let r = f.inner() as i64;
+                            if r < 2 || r > 36 {
+                                return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
+                            }
+                            r as u32
+                        }
+                        _ => 10, // Default to base 10 for non-numeric radix
+                    }
+                } else {
+                    10 // Default radix is 10
+                };
+
+                // Simple integer parsing (basic implementation)
+                let trimmed = string_to_parse.trim_start();
+                if trimmed.is_empty() {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                // Parse integer with specified radix
+                match i64::from_str_radix(
+                    &trimmed
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .collect::<String>(),
+                    radix,
+                ) {
+                    Ok(num) => Ok(Value::Int(num)),
+                    Err(_) => Ok(Value::Float(Float64::new(f64::NAN))),
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined

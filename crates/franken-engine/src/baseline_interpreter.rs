@@ -15733,52 +15733,55 @@ impl InterpreterCore {
                 // Create result array (immutable operation)
                 let result_array_id = self.alloc_object_with_prototype(None)?;
 
-                // Copy and sort elements (simplified string-based sorting)
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let mut elements_with_indices = Vec::new();
+                // Copy and sort elements (simplified string-based sorting).
+                let mut elements_with_indices =
+                    if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                        (0..length)
+                            .map(|i| {
+                                let element = obj
+                                    .properties
+                                    .get(&i.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined);
+                                (i, element)
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
 
-                    // Collect all elements
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            elements_with_indices.push((i, element.clone()));
-                        } else {
-                            elements_with_indices.push((i, Value::Undefined));
-                        }
-                    }
+                // Simple string-based sort (like default Array.sort)
+                elements_with_indices.sort_by(|(_i1, a), (_i2, b)| {
+                    let a_str = match a {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "[object Object]".to_string(),
+                    };
+                    let b_str = match b {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "[object Object]".to_string(),
+                    };
+                    a_str.cmp(&b_str)
+                });
 
-                    // Simple string-based sort (like default Array.sort)
-                    elements_with_indices.sort_by(|(_i1, a), (_i2, b)| {
-                        let a_str = match a {
-                            Value::Str(s) => s.clone(),
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => "[object Object]".to_string(),
-                        };
-                        let b_str = match b {
-                            Value::Str(s) => s.clone(),
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => "[object Object]".to_string(),
-                        };
-                        a_str.cmp(&b_str)
-                    });
-
-                    // Set sorted elements in result array
-                    for (new_index, (_original_index, element)) in
-                        elements_with_indices.iter().enumerate()
-                    {
-                        self.set_object_property(
-                            result_array_id,
-                            new_index.to_string(),
-                            element.clone(),
-                        )?;
-                    }
+                // Set sorted elements in result array
+                for (new_index, (_original_index, element)) in
+                    elements_with_indices.iter().enumerate()
+                {
+                    self.set_object_property(
+                        result_array_id,
+                        new_index.to_string(),
+                        element.clone(),
+                    )?;
                 }
 
                 self.set_object_property(
@@ -15815,6 +15818,198 @@ impl InterpreterCore {
                     Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
                 } else {
                     Ok(Value::Bool(false))
+                }
+            }
+
+            "builtin:StringPrototypeTrimStart" => {
+                // String.prototype.trimStart() implementation (ES2019)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Trim whitespace from the start (left side)
+                let trimmed = str_text.trim_start().to_string();
+                Ok(Value::Str(trimmed))
+            }
+
+            "builtin:MathImul" => {
+                // Math.imul(a, b) implementation (32-bit signed integer multiplication)
+                if args.count < 3 {
+                    return Ok(Value::Int(0));
+                }
+
+                let a_val = self.read_reg(args.start + 1)?;
+                let b_val = self.read_reg(args.start + 2)?;
+
+                let a = match a_val {
+                    Value::Int(n) => n as i32,
+                    Value::Float(f) => f.inner() as i32,
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(0.0) as i32,
+                    Value::Bool(true) => 1,
+                    Value::Bool(false) => 0,
+                    Value::Null => 0,
+                    _ => 0,
+                };
+
+                let b = match b_val {
+                    Value::Int(n) => n as i32,
+                    Value::Float(f) => f.inner() as i32,
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(0.0) as i32,
+                    Value::Bool(true) => 1,
+                    Value::Bool(false) => 0,
+                    Value::Null => 0,
+                    _ => 0,
+                };
+
+                // Perform 32-bit signed multiplication with overflow wrapping
+                let result = a.wrapping_mul(b);
+                Ok(Value::Int(result as i64))
+            }
+
+            "builtin:ArrayPrototypeToSpliced" => {
+                // Array.prototype.toSpliced(start, deleteCount, ...items) implementation (ES2023)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                let start = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n,
+                        Value::Float(f) => f.inner() as i64,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let delete_count = if args.count > 2 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => n as usize,
+                        Value::Float(f) => f.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Handle negative start index
+                let actual_start = if start < 0 {
+                    (length as i64 + start).max(0) as usize
+                } else {
+                    (start as usize).min(length)
+                };
+
+                // Calculate actual delete count
+                let actual_delete_count = delete_count.min(length - actual_start);
+
+                // Create result array (immutable operation)
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let mut result_index = 0;
+
+                // Copy elements before start
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..actual_start {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            self.set_object_property(
+                                result_array_id,
+                                result_index.to_string(),
+                                element.clone(),
+                            )?;
+                        } else {
+                            self.set_object_property(
+                                result_array_id,
+                                result_index.to_string(),
+                                Value::Undefined,
+                            )?;
+                        }
+                        result_index += 1;
+                    }
+
+                    // Add new items (if any)
+                    for i in 3..args.count {
+                        let item = self.read_reg(args.start + i)?;
+                        self.set_object_property(result_array_id, result_index.to_string(), item)?;
+                        result_index += 1;
+                    }
+
+                    // Copy elements after deleted section
+                    for i in (actual_start + actual_delete_count)..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            self.set_object_property(
+                                result_array_id,
+                                result_index.to_string(),
+                                element.clone(),
+                            )?;
+                        } else {
+                            self.set_object_property(
+                                result_array_id,
+                                result_index.to_string(),
+                                Value::Undefined,
+                            )?;
+                        }
+                        result_index += 1;
+                    }
+                }
+
+                self.set_object_property(
+                    result_array_id,
+                    "length".to_string(),
+                    Value::Int(result_index as i64),
+                )?;
+
+                Ok(Value::Object(result_array_id))
+            }
+
+            "builtin:ObjectIsExtensible" => {
+                // Object.isExtensible(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Bool(true)); // Default to true for missing argument
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(_) => {
+                        // Simplified implementation: all objects are extensible by default
+                        // In a real implementation, this would check the [[Extensible]] internal slot
+                        Ok(Value::Bool(true))
+                    }
+                    _ => {
+                        // Primitives are not extensible
+                        Ok(Value::Bool(false))
+                    }
                 }
             }
 
@@ -16085,6 +16280,10 @@ impl InterpreterCore {
             298 => Some("builtin:MathHypot".to_string()),
             299 => Some("builtin:ArrayPrototypeToSorted".to_string()),
             300 => Some("builtin:ObjectPropertyIsEnumerable".to_string()),
+            301 => Some("builtin:StringPrototypeTrimStart".to_string()),
+            302 => Some("builtin:MathImul".to_string()),
+            303 => Some("builtin:ArrayPrototypeToSpliced".to_string()),
+            304 => Some("builtin:ObjectIsExtensible".to_string()),
 
             _ => None, // Not a recognized builtin
         }

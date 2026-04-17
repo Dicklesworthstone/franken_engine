@@ -7460,6 +7460,37 @@ impl InterpreterCore {
 
                 Ok(Value::Bool(is_nan))
             }
+            "builtin:isFinite" => {
+                // isFinite global function - tests if value is finite number
+                if args.count == 0 {
+                    return Ok(Value::Bool(false)); // isFinite() with no args returns false
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let is_finite = match arg {
+                    Value::Float(f) => {
+                        let val = f.inner();
+                        val.is_finite() // Not NaN, not infinity
+                    }
+                    Value::Int(_) => true, // Integers are always finite
+                    Value::Str(s) => {
+                        // Try to convert string to number
+                        match s.parse::<f64>() {
+                            Ok(num) => num.is_finite(),
+                            Err(_) => false, // Invalid number strings are not finite
+                        }
+                    }
+                    Value::Bool(_b) => {
+                        // Booleans convert to numbers: true->1, false->0
+                        true // Both 1 and 0 are finite
+                    }
+                    Value::Null => true, // null converts to 0, which is finite
+                    Value::Undefined => false, // undefined converts to NaN, which is not finite
+                    _ => false,          // Objects and other complex types typically become NaN
+                };
+
+                Ok(Value::Bool(is_finite))
+            }
 
             _ => {
                 // Unknown builtin method - return undefined

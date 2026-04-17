@@ -15302,17 +15302,21 @@ impl InterpreterCore {
                         // Create result array
                         let result_array_id = self.alloc_object_with_prototype(None)?;
 
-                        // Copy elements
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            for i in 0..length {
-                                if let Some(element) = obj.properties.get(&i.to_string()) {
-                                    self.set_object_property(
-                                        result_array_id,
-                                        i.to_string(),
-                                        element.clone(),
-                                    )?;
-                                }
-                            }
+                        // Copy elements without holding the source object borrow across writes.
+                        let copied_elements = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            (0..length)
+                                .filter_map(|i| {
+                                    obj.properties
+                                        .get(&i.to_string())
+                                        .cloned()
+                                        .map(|element| (i, element))
+                                })
+                                .collect::<Vec<_>>()
+                        } else {
+                            Vec::new()
+                        };
+                        for (i, element) in copied_elements {
+                            self.set_object_property(result_array_id, i.to_string(), element)?;
                         }
 
                         self.set_object_property(
@@ -15466,19 +15470,29 @@ impl InterpreterCore {
                 // Create a new array with the replaced value
                 let result_array_id = self.alloc_object_with_prototype(None)?;
 
-                // Copy all elements, replacing the one at the specified index
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        let element_value = if i == actual_index {
-                            value.clone()
-                        } else {
-                            obj.properties
-                                .get(&i.to_string())
-                                .cloned()
-                                .unwrap_or(Value::Undefined)
-                        };
-                        self.set_object_property(result_array_id, i.to_string(), element_value)?;
-                    }
+                // Copy all elements, replacing the one at the specified
+                // index. Snapshot under an immutable borrow so we can call
+                // &mut self set_object_property without aliasing.
+                let original_elements: Vec<Value> =
+                    if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                        (0..length)
+                            .map(|i| {
+                                obj.properties
+                                    .get(&i.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                for (i, element) in original_elements.iter().enumerate() {
+                    let element_value = if (i as i64) == actual_index {
+                        value.clone()
+                    } else {
+                        element.clone()
+                    };
+                    self.set_object_property(result_array_id, i.to_string(), element_value)?;
                 }
 
                 self.set_object_property(
@@ -15510,6 +15524,135 @@ impl InterpreterCore {
                 }
 
                 Ok(obj_val) // Return the modified object
+            }
+
+            "builtin:StringPrototypeToLowerCase" => {
+                // String.prototype.toLowerCase() implementation
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                Ok(Value::Str(str_text.to_lowercase()))
+            }
+
+            "builtin:MathAtanh" => {
+                // Math.atanh(x) implementation (inverse hyperbolic tangent)
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                // atanh is only defined for -1 < x < 1
+                if num <= -1.0 || num >= 1.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else {
+                    Ok(Value::Float(Float64::new(num.atanh())))
+                }
+            }
+
+            "builtin:ArrayPrototypeToReversed" => {
+                // Array.prototype.toReversed() implementation (ES2023)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Create result array (immutable operation)
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                // Copy elements in reverse order
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        let reverse_index = length - 1 - i;
+                        if let Some(element) = obj.properties.get(&reverse_index.to_string()) {
+                            self.set_object_property(
+                                result_array_id,
+                                i.to_string(),
+                                element.clone(),
+                            )?;
+                        } else {
+                            self.set_object_property(
+                                result_array_id,
+                                i.to_string(),
+                                Value::Undefined,
+                            )?;
+                        }
+                    }
+                }
+
+                self.set_object_property(
+                    result_array_id,
+                    "length".to_string(),
+                    Value::Int(length as i64),
+                )?;
+
+                Ok(Value::Object(result_array_id))
+            }
+
+            "builtin:ObjectHasOwnProperty" => {
+                // Object.hasOwnProperty(property) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let obj_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Primitives don't have own properties
+                };
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_key = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Check if the object has the property
+                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
+                } else {
+                    Ok(Value::Bool(false))
+                }
             }
 
             _ => {
@@ -15771,6 +15914,10 @@ impl InterpreterCore {
             290 => Some("builtin:MathAsinh".to_string()),
             291 => Some("builtin:ArrayPrototypeWith".to_string()),
             292 => Some("builtin:ObjectSetPrototypeOf".to_string()),
+            293 => Some("builtin:StringPrototypeToLowerCase".to_string()),
+            294 => Some("builtin:MathAtanh".to_string()),
+            295 => Some("builtin:ArrayPrototypeToReversed".to_string()),
+            296 => Some("builtin:ObjectHasOwnProperty".to_string()),
 
             _ => None, // Not a recognized builtin
         }

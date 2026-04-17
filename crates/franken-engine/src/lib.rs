@@ -432,6 +432,7 @@ pub mod test_depth_gate;
 pub mod test_flake_quarantine_workflow;
 pub mod test_logging_schema;
 pub mod test_taxonomy;
+pub mod test_harness_deterministic;
 pub mod third_party_verifier;
 pub mod threshold_signing;
 pub mod tier_eligibility_substrate;

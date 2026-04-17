@@ -6932,6 +6932,28 @@ impl InterpreterCore {
                 // Simulate shifting from an empty array
                 Ok(Value::Undefined)
             }
+            "builtin:ArrayOf" => {
+                // Array.of implementation - creates new Array instance from arguments
+
+                // Create array object to hold the arguments
+                let array_id = self.alloc_object_with_prototype(None)?;
+
+                // Add each argument as an array element
+                for i in 0..args.count {
+                    let element = self.read_reg(args.start + i)?;
+                    self.set_object_property(array_id, i.to_string(), element)?;
+                }
+
+                // Set length property
+                self.set_object_property(
+                    array_id,
+                    "length".to_string(),
+                    Value::Int(args.count as i64),
+                )?;
+
+                // Return the new array object
+                Ok(Value::Object(array_id))
+            }
 
             // Object methods
             "builtin:ObjectKeys" => {

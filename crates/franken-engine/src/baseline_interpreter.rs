@@ -9105,6 +9105,157 @@ impl InterpreterCore {
 
                 Ok(Value::Undefined)
             }
+            "builtin:MathSin" => {
+                // Math.sin(x) implementation - returns sine of x in radians
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = num.sin();
+                Ok(Value::Float(Float64::new(result)))
+            }
+            "builtin:MathCos" => {
+                // Math.cos(x) implementation - returns cosine of x in radians
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = num.cos();
+                Ok(Value::Float(Float64::new(result)))
+            }
+            "builtin:StringPrototypeReplace" => {
+                // String.prototype.replace(searchValue, replaceValue) implementation (simplified)
+                if args.count < 2 {
+                    return self.read_reg(args.start); // Return original string
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(this_val),
+                };
+
+                // Get search value
+                let search_val = self.read_reg(args.start + 1)?;
+                let search_str = match search_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Str(this_str)),
+                };
+
+                // Get replace value
+                let replace_val = self.read_reg(args.start + 2)?;
+                let replace_str = match replace_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "undefined".to_string(),
+                };
+
+                // Perform simple string replacement (first occurrence only)
+                let result = this_str.replacen(&search_str, &replace_str, 1);
+                Ok(Value::Str(result))
+            }
+            "builtin:ArrayPrototypeMap" => {
+                // Array.prototype.map(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Create a new array for the result
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+
+                    // Set length property
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(length as i64));
+
+                    // Collect indexed values and process them (simplified)
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index and add to result array (simplified - just copy values)
+                    indexed_values.sort_by_key(|(index, _)| *index);
+                    for (index, value) in indexed_values {
+                        // TODO: In full implementation, would call callback and use result
+                        // For now, just copy the original values
+                        result_obj.properties.insert(index.to_string(), value);
+                    }
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -9186,15 +9337,19 @@ impl InterpreterCore {
             // Additional Math methods
             57 => Some("builtin:MathPow".to_string()),
             58 => Some("builtin:MathSqrt".to_string()),
+            59 => Some("builtin:MathSin".to_string()),
+            60 => Some("builtin:MathCos".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
             39 => Some("builtin:StringPrototypeStartsWith".to_string()),
             40 => Some("builtin:StringPrototypeEndsWith".to_string()),
+            41 => Some("builtin:StringPrototypeReplace".to_string()),
 
             // Additional Array methods
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
             22 => Some("builtin:ArrayPrototypeForEach".to_string()),
+            23 => Some("builtin:ArrayPrototypeMap".to_string()),
 
             _ => None, // Not a recognized builtin
         }

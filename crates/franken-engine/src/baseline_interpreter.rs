@@ -10119,6 +10119,208 @@ impl InterpreterCore {
                     Ok(Value::Null)
                 }
             }
+            "builtin:Symbol" => {
+                // Symbol(description) implementation (simplified)
+                let description = if args.count > 0 {
+                    let desc_val = self.read_reg(args.start)?;
+                    match desc_val {
+                        Value::Str(s) => Some(s),
+                        Value::Int(i) => Some(i.to_string()),
+                        Value::Float(f) => Some(f.inner().to_string()),
+                        Value::Bool(b) => Some(b.to_string()),
+                        Value::Null => Some("null".to_string()),
+                        Value::Undefined => None,
+                        _ => Some("Symbol".to_string()),
+                    }
+                } else {
+                    None
+                };
+
+                // Create a unique symbol object (simplified representation)
+                let symbol_id = ObjectId(self.next_object_id());
+                let mut symbol_obj = Object::new();
+
+                // Store symbol metadata
+                symbol_obj
+                    .properties
+                    .insert("__type".to_string(), Value::Str("symbol".to_string()));
+                if let Some(desc) = description {
+                    symbol_obj
+                        .properties
+                        .insert("__description".to_string(), Value::Str(desc));
+                }
+                symbol_obj
+                    .properties
+                    .insert("__id".to_string(), Value::Int(symbol_id.0 as i64));
+
+                self.heap.push(symbol_obj);
+                Ok(Value::Object(symbol_id))
+            }
+            "builtin:typeof" => {
+                // typeof operator implementation
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+
+                let type_string = match value {
+                    Value::Undefined => "undefined",
+                    Value::Bool(_) => "boolean",
+                    Value::Int(_) | Value::Float(_) => "number",
+                    Value::Str(_) => "string",
+                    Value::Object(id) => {
+                        // Check if it's a function-like object
+                        if let Some(obj) = self.heap.get(id.0 as usize) {
+                            if obj.properties.contains_key("__type") {
+                                if let Some(Value::Str(t)) = obj.properties.get("__type") {
+                                    if t == "symbol" { "symbol" } else { "object" }
+                                } else {
+                                    "object"
+                                }
+                            } else {
+                                "object"
+                            }
+                        } else {
+                            "object"
+                        }
+                    }
+                    Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
+                        "function"
+                    }
+                    Value::Null => "object", // In JavaScript, typeof null === "object"
+                    _ => "object",
+                };
+
+                Ok(Value::Str(type_string.to_string()))
+            }
+            "builtin:ArrayPrototypeFlat" => {
+                // Array.prototype.flat([depth]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let depth = if args.count > 1 {
+                    let depth_val = self.read_reg(args.start + 1)?;
+                    match depth_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Create a new flattened array
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Collect elements (simplified - one level flattening only)
+                    let mut flat_elements: Vec<Value> = Vec::new();
+                    for i in 0..length {
+                        if let Some(value) = array_obj.properties.get(&i.to_string()) {
+                            // If depth > 0 and value is an array, flatten it (simplified)
+                            if depth > 0 {
+                                if let Value::Object(inner_id) = value {
+                                    if let Some(inner_obj) = self.heap.get(inner_id.0 as usize) {
+                                        if inner_obj.properties.contains_key("length") {
+                                            // It's an array-like object, flatten its elements
+                                            let inner_length = inner_obj
+                                                .properties
+                                                .get("length")
+                                                .and_then(|v| match v {
+                                                    Value::Int(i) => Some(*i as usize),
+                                                    Value::Float(f) => Some(f.inner() as usize),
+                                                    _ => None,
+                                                })
+                                                .unwrap_or(0);
+
+                                            for j in 0..inner_length {
+                                                if let Some(inner_value) =
+                                                    inner_obj.properties.get(&j.to_string())
+                                                {
+                                                    flat_elements.push(inner_value.clone());
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            flat_elements.push(value.clone());
+                        }
+                    }
+
+                    // Set up result array
+                    for (i, value) in flat_elements.iter().enumerate() {
+                        result_obj.properties.insert(i.to_string(), value.clone());
+                    }
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(flat_elements.len() as i64));
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "builtin:StringPrototypeSearch" => {
+                // String.prototype.search(regexp) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Int(-1));
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Int(-1)),
+                };
+
+                // Get pattern (simplified - treat as literal string)
+                let pattern_val = self.read_reg(args.start + 1)?;
+                let pattern_str = match pattern_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Int(-1)),
+                };
+
+                // Find first occurrence and return index
+                if let Some(index) = this_str.find(&pattern_str) {
+                    Ok(Value::Int(index as i64))
+                } else {
+                    Ok(Value::Int(-1))
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -10227,9 +10429,11 @@ impl InterpreterCore {
             27 => Some("builtin:ArrayPrototypeReduce".to_string()),
             28 => Some("builtin:ArrayPrototypeSort".to_string()),
             29 => Some("builtin:ArrayPrototypeSplice".to_string()),
+            30 => Some("builtin:ArrayPrototypeFlat".to_string()),
 
             // Additional String methods (continued)
             45 => Some("builtin:StringPrototypeMatch".to_string()),
+            46 => Some("builtin:StringPrototypeSearch".to_string()),
 
             // Promise methods
             120 => Some("builtin:PromiseResolve".to_string()),
@@ -10243,6 +10447,12 @@ impl InterpreterCore {
             // Type conversion constructors
             140 => Some("builtin:Number".to_string()),
             141 => Some("builtin:Boolean".to_string()),
+
+            // Primitive constructors
+            150 => Some("builtin:Symbol".to_string()),
+
+            // Operators
+            160 => Some("builtin:typeof".to_string()),
 
             _ => None, // Not a recognized builtin
         }

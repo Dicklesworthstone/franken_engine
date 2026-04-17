@@ -13941,6 +13941,176 @@ impl InterpreterCore {
                 Ok(Value::Object(array_id))
             }
 
+            "builtin:StringPrototypeMatch" => {
+                // String.prototype.match(regexp) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Null);
+                }
+
+                let str_val = self.read_reg(args.start)?;
+                let str_text = match str_val {
+                    Value::Str(s) => s,
+                    _ => return Ok(Value::Null), // Non-strings return null
+                };
+
+                let regexp_val = if args.count > 0 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    return Ok(Value::Null);
+                };
+
+                // Simplified implementation: treat as string search
+                let pattern = match regexp_val {
+                    Value::Str(s) => s,
+                    _ => return Ok(Value::Null), // Invalid pattern
+                };
+
+                if str_text.contains(&pattern) {
+                    // Create result array with the match
+                    let result_array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(
+                        result_array_id,
+                        "0".to_string(),
+                        Value::Str(pattern),
+                    )?;
+                    self.set_object_property(result_array_id, "length".to_string(), Value::Int(1))?;
+                    Ok(Value::Object(result_array_id))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+
+            "builtin:MathAtan" => {
+                // Math.atan(x) implementation
+                if args.count == 0 {
+                    return Ok(Value::Float(FixedF64::from_f64(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                Ok(Value::Float(FixedF64::from_f64(num.atan())))
+            }
+
+            "builtin:ArrayPrototypeFill" => {
+                // Array.prototype.fill(value, start?, end?) implementation
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let value = if args.count > 0 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let start = if args.count > 1 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => {
+                            if n < 0 {
+                                0
+                            } else {
+                                n as usize
+                            }
+                        }
+                        Value::Float(f) => {
+                            if f.inner() < 0.0 {
+                                0
+                            } else {
+                                f.inner() as usize
+                            }
+                        }
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let end = if args.count > 2 {
+                    match self.read_reg(args.start + 3)? {
+                        Value::Int(n) => {
+                            if n < 0 {
+                                length
+                            } else {
+                                (n as usize).min(length)
+                            }
+                        }
+                        Value::Float(f) => {
+                            if f.inner() < 0.0 {
+                                length
+                            } else {
+                                (f.inner() as usize).min(length)
+                            }
+                        }
+                        _ => length,
+                    }
+                } else {
+                    length
+                };
+
+                // Fill the array with the value
+                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                    for i in start..end {
+                        array_obj.properties.insert(i.to_string(), value.clone());
+                    }
+                }
+
+                Ok(Value::Object(array_id))
+            }
+
+            "builtin:ObjectPrototypePropertyIsEnumerable" => {
+                // Object.prototype.propertyIsEnumerable(prop) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let object_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects don't have enumerable properties
+                };
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_key = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Check if the object has the property (simplified: all own properties are enumerable)
+                if let Some(obj) = self.heap.get(object_id.0 as usize) {
+                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -14156,6 +14326,10 @@ impl InterpreterCore {
             246 => Some("builtin:ArrayPrototypeConcat".to_string()),
             247 => Some("builtin:MathTan".to_string()),
             248 => Some("builtin:ArrayPrototypeSort".to_string()),
+            249 => Some("builtin:StringPrototypeMatch".to_string()),
+            250 => Some("builtin:MathAtan".to_string()),
+            251 => Some("builtin:ArrayPrototypeFill".to_string()),
+            252 => Some("builtin:ObjectPrototypePropertyIsEnumerable".to_string()),
 
             _ => None, // Not a recognized builtin
         }

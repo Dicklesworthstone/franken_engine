@@ -18402,6 +18402,99 @@ impl InterpreterCore {
                 Ok(Value::Int(-1)) // No elements found
             }
 
+            "builtin:MathSin" => {
+                // Math.sin() implementation - returns sine of a number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                let result = num.sin();
+                Ok(Value::Float(Float64::new(result)))
+            }
+
+            "builtin:MathCos" => {
+                // Math.cos() implementation - returns cosine of a number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                let result = num.cos();
+                Ok(Value::Float(Float64::new(result)))
+            }
+
+            "builtin:MathTan" => {
+                // Math.tan() implementation - returns tangent of a number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                let result = num.tan();
+                Ok(Value::Float(Float64::new(result)))
+            }
+
+            "builtin:RegExpPrototypeTest" => {
+                // RegExp.prototype.test() implementation - simplified version
+                let this_val = self.read_reg(args.start)?;
+
+                // For simplicity, treat RegExp objects as objects with a pattern property
+                let pattern_str = match this_val {
+                    Value::Object(obj_id) => {
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            obj.properties.get("pattern")
+                                .and_then(|p| match p {
+                                    Value::Str(s) => Some(s.clone()),
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| "".to_string())
+                        } else {
+                            "".to_string()
+                        }
+                    }
+                    Value::Str(s) => s, // Treat string as pattern directly
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Bool(false)); // No test string provided
+                }
+
+                let test_val = self.read_reg(args.start + 1)?;
+                let test_str = match test_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified regex test: just check if pattern is contained in string
+                let matches = test_str.contains(&pattern_str);
+                Ok(Value::Bool(matches))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -18737,6 +18830,10 @@ impl InterpreterCore {
             366 => Some("builtin:JSONParse".to_string()),
             367 => Some("builtin:ArrayPrototypeFind".to_string()),
             368 => Some("builtin:ArrayPrototypeFindIndex".to_string()),
+            369 => Some("builtin:MathSin".to_string()),
+            370 => Some("builtin:MathCos".to_string()),
+            371 => Some("builtin:MathTan".to_string()),
+            372 => Some("builtin:RegExpPrototypeTest".to_string()),
 
             _ => None, // Not a recognized builtin
         }

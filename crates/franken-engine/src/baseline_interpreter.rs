@@ -8732,6 +8732,191 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:Date" => {
+                // Date() constructor - returns new Date object with current timestamp
+                // When called with `new Date()` or `Date()`, creates/returns current date
+
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => {
+                        let millis = duration.as_millis() as f64;
+
+                        // Create a new Date object with current timestamp
+                        let date_id = ObjectId(self.next_object_id());
+                        let mut date_obj = Object::new();
+
+                        // Store internal [[DateValue]] as timestamp in milliseconds
+                        date_obj.properties.insert(
+                            "__timestamp".to_string(),
+                            Value::Float(Float64::new(millis)),
+                        );
+
+                        // Add standard Date properties/methods would go here in full implementation
+                        self.heap.push(date_obj);
+
+                        Ok(Value::Object(date_id))
+                    }
+                    Err(_) => {
+                        // Fallback - create Date with epoch time
+                        let date_id = ObjectId(self.next_object_id());
+                        let mut date_obj = Object::new();
+                        date_obj
+                            .properties
+                            .insert("__timestamp".to_string(), Value::Float(Float64::new(0.0)));
+                        self.heap.push(date_obj);
+                        Ok(Value::Object(date_id))
+                    }
+                }
+            }
+            "builtin:MathPow" => {
+                // Math.pow(base, exponent) implementation
+                if args.count < 2 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let base = self.read_reg(args.start)?;
+                let exponent = self.read_reg(args.start + 1)?;
+
+                let base_num = match base {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let exp_num = match exponent {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = base_num.powf(exp_num);
+
+                // Return as int if it's a whole number within range
+                if result.fract() == 0.0
+                    && result.is_finite()
+                    && result >= i64::MIN as f64
+                    && result <= i64::MAX as f64
+                {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(result)))
+                }
+            }
+            "builtin:StringPrototypeIncludes" => {
+                // String.prototype.includes(searchString[, position]) implementation
+                if args.count == 0 {
+                    return Ok(Value::Bool(false));
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get search string
+                let search_val = self.read_reg(args.start + 1)?;
+                let search_str = match search_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Get optional position parameter
+                let position = if args.count > 2 {
+                    let pos_val = self.read_reg(args.start + 2)?;
+                    match pos_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Check if search string exists starting from position
+                let result = if position >= this_str.len() {
+                    false
+                } else {
+                    this_str[position..].contains(&search_str)
+                };
+
+                Ok(Value::Bool(result))
+            }
+            "builtin:ArrayPrototypeReverse" => {
+                // Array.prototype.reverse() implementation - reverses array in place
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(this_val), // Non-arrays return themselves
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    if length <= 1 {
+                        return Ok(Value::Object(array_id)); // Nothing to reverse
+                    }
+
+                    // Collect indexed properties
+                    let mut indexed_props: BTreeMap<usize, Value> = BTreeMap::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_props.insert(index, value.clone());
+                            }
+                        }
+                    }
+
+                    // Remove old indexed properties
+                    array_obj
+                        .properties
+                        .retain(|k, _| k.parse::<usize>().is_err());
+
+                    // Add back in reverse order
+                    for (old_index, value) in indexed_props {
+                        let new_index = length - 1 - old_index;
+                        array_obj.properties.insert(new_index.to_string(), value);
+                    }
+
+                    Ok(Value::Object(array_id))
+                } else {
+                    Ok(this_val)
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8808,6 +8993,16 @@ impl InterpreterCore {
 
             // Date methods
             110 => Some("builtin:DateNow".to_string()),
+            111 => Some("builtin:Date".to_string()),
+
+            // Additional Math methods
+            57 => Some("builtin:MathPow".to_string()),
+
+            // Additional String methods
+            38 => Some("builtin:StringPrototypeIncludes".to_string()),
+
+            // Additional Array methods
+            21 => Some("builtin:ArrayPrototypeReverse".to_string()),
 
             _ => None, // Not a recognized builtin
         }

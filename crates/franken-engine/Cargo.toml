@@ -15,7 +15,10 @@ asupersync-integration = [
 ]
 
 [dependencies]
-frankenengine-core = { path = "../franken-core" }
+# NOTE: frankenengine-core dependency temporarily removed — franken-core crate
+# is mid-modularization (cb049273) and does not yet compile. franken-engine
+# does not reference any frankenengine_core:: paths, so the dep is currently
+# unused. Re-add once the extraction stabilizes.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"

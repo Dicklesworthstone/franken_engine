@@ -8730,6 +8730,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn top_level_await_in_module_context_parsed() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("const data = await fetchData();", ParseGoal::Module)
+            .expect("parse");
+        match &tree.body[0] {
+            Statement::VariableDeclaration(decl) => {
+                let declarator = &decl.declarations[0];
+                if let Some(init) = &declarator.initializer {
+                    match init {
+                        Expression::Await(inner) => {
+                            assert_eq!(**inner, Expression::Identifier("fetchData()".to_string()));
+                        }
+                        _ => panic!("expected await expression in initializer"),
+                    }
+                } else {
+                    panic!("expected initializer in variable declaration");
+                }
+            }
+            _ => panic!("expected variable declaration"),
+        }
+    }
+
+    #[test]
+    fn top_level_await_statement_in_module_context_parsed() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("await doSomething();", ParseGoal::Module)
+            .expect("parse");
+        match &tree.body[0] {
+            Statement::Expression(expr) => match &expr.expression {
+                Expression::Await(inner) => {
+                    assert_eq!(**inner, Expression::Identifier("doSomething()".to_string()));
+                }
+                _ => panic!("expected await expression"),
+            },
+            _ => panic!("expected expression statement"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Multi-statement / semicolons
     // -----------------------------------------------------------------------

@@ -570,10 +570,11 @@ impl FlowEnvelope {
     ) -> FlowAuthorizationAssessment {
         let flow_in_scope = self.producible_labels.contains(source)
             && self.accessible_clearances.contains(sink_clearance);
-        let envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
+        let mut envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
         let mut advisories = Vec::new();
         let mut declassification_obligation = None;
 
+        // Enforced authorization for Secret/TopSecret -> SealedSink flows
         if flow_in_scope
             && *sink_clearance == ClearanceClass::SealedSink
             && matches!(source, Label::Secret | Label::TopSecret)
@@ -581,18 +582,9 @@ impl FlowEnvelope {
             declassification_obligation =
                 self.materialize_declassification_obligation(source, sink_clearance);
 
+            // Enforce explicit authorization requirement - fail completely without it
             if declassification_obligation.is_none() {
-                let advisory = match source {
-                    Label::Secret => FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
-                        source_label: source.clone(),
-                        sink_clearance: *sink_clearance,
-                    },
-                    _ => FlowAuthorizationAdvisory::DeclassificationObligationRequired {
-                        source_label: source.clone(),
-                        sink_clearance: *sink_clearance,
-                    },
-                };
-                advisories.push(advisory);
+                envelope_authorized = false; // Hard failure without explicit authorization
             }
         }
 
@@ -2469,7 +2461,7 @@ mod tests {
     }
 
     #[test]
-    fn flow_assessment_flags_secret_to_sealed_sink_without_explicit_authorization() {
+    fn flow_assessment_rejects_secret_to_sealed_sink_without_explicit_authorization() {
         let env = FlowEnvelope {
             envelope_id: "env-secret-sealed".to_string(),
             extension_id: "ext-secret-sealed".to_string(),
@@ -2482,17 +2474,13 @@ mod tests {
         };
 
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
-        assert!(assessment.envelope_authorized);
+        // Enforced authorization: hard failure without explicit authorization
+        assert!(!assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(assessment.requires_declassification());
-        assert!(assessment.has_advisories());
-        assert_eq!(
-            assessment.advisories,
-            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
-                source_label: Label::Secret,
-                sink_clearance: ClearanceClass::SealedSink,
-            }]
-        );
+        assert!(!assessment.requires_declassification());
+        assert!(!assessment.has_advisories());
+        assert!(assessment.advisories.is_empty());
+        assert!(assessment.declassification_obligation.is_none());
     }
 
     #[test]
@@ -2553,7 +2541,7 @@ mod tests {
     }
 
     #[test]
-    fn flow_assessment_ignores_non_matching_sealed_sink_authorization_refs() {
+    fn flow_assessment_rejects_top_secret_to_sealed_sink_without_matching_authorization() {
         let env = FlowEnvelope {
             envelope_id: "env-top-secret-secret-only".to_string(),
             extension_id: "ext-top-secret-secret-only".to_string(),
@@ -2567,18 +2555,12 @@ mod tests {
 
         let assessment =
             env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
+        // TopSecret -> SealedSink fails both on clearance level (4 > 3) and missing authorization
         assert!(!assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(assessment.requires_declassification());
-        assert_eq!(
-            assessment.advisories,
-            vec![
-                FlowAuthorizationAdvisory::DeclassificationObligationRequired {
-                    source_label: Label::TopSecret,
-                    sink_clearance: ClearanceClass::SealedSink,
-                }
-            ],
-        );
+        assert!(!assessment.requires_declassification());
+        assert!(assessment.advisories.is_empty());
+        assert!(assessment.declassification_obligation.is_none());
     }
 
     #[test]

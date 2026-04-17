@@ -213,6 +213,8 @@ pub struct StaticAnalysisResult {
     pub errors: Vec<StaticError>,
     /// Whether the tree was analyzed in module goal.
     pub is_module: bool,
+    /// Whether the module contains top-level await expressions.
+    pub has_top_level_await: bool,
 }
 
 impl StaticAnalysisResult {
@@ -247,6 +249,10 @@ impl StaticAnalysisResult {
         map.insert(
             "is_module".to_string(),
             CanonicalValue::Bool(self.is_module),
+        );
+        map.insert(
+            "has_top_level_await".to_string(),
+            CanonicalValue::Bool(self.has_top_level_await),
         );
         map.insert(
             "scopes".to_string(),
@@ -381,6 +387,8 @@ struct AnalyzerState {
     in_loop: bool,
     /// Whether we are currently inside a switch statement.
     in_switch: bool,
+    /// Whether the module contains top-level await expressions.
+    has_top_level_await: bool,
 }
 
 impl AnalyzerState {
@@ -398,6 +406,7 @@ impl AnalyzerState {
             in_function: false,
             in_loop: false,
             in_switch: false,
+            has_top_level_await: false,
         }
     }
 
@@ -476,6 +485,7 @@ pub fn analyze(tree: &SyntaxTree) -> StaticAnalysisResult {
         bindings: state.bindings,
         errors: state.errors,
         is_module,
+        has_top_level_await: state.has_top_level_await,
     }
 }
 
@@ -1290,6 +1300,9 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                     "await is only valid in async functions or module top-level",
                     span.clone(),
                 );
+            } else {
+                // In module context, mark that this module uses top-level await
+                state.has_top_level_await = true;
             }
             walk_expression(state, inner, span);
         }
@@ -1989,6 +2002,21 @@ mod tests {
         );
         let result = analyze(&tree);
         assert!(result.passed());
+        assert!(result.has_top_level_await);
+    }
+
+    #[test]
+    fn module_without_await_has_no_top_level_await() {
+        let tree = make_tree(
+            ParseGoal::Module,
+            vec![expr_stmt(
+                Expression::Identifier("x".to_string()),
+                1,
+            )],
+        );
+        let result = analyze(&tree);
+        assert!(result.passed());
+        assert!(!result.has_top_level_await);
     }
 
     #[test]

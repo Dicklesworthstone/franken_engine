@@ -9937,6 +9937,10 @@ impl InterpreterCore {
                     None
                 };
 
+                // Pre-compute the result ObjectId from current heap length
+                // so we don't alias `self.heap` with the mutable borrow below.
+                let result_id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
+
                 // Get the array object from heap
                 if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
                     // Get array length
@@ -9957,8 +9961,7 @@ impl InterpreterCore {
                         (start as usize).min(length)
                     };
 
-                    // Create result array with deleted elements (simplified)
-                    let result_id = ObjectId(self.next_object_id());
+                    // Create result array with deleted elements (simplified).
                     let mut result_obj = Object::new();
                     result_obj
                         .properties
@@ -10500,24 +10503,19 @@ impl InterpreterCore {
                 // Get descriptor object (simplified - just use the value directly)
                 let descriptor_val = self.read_reg(args.start + 2)?;
 
-                // In a full implementation, we would parse the descriptor object
-                // For now, simplified approach: just set the property value
+                // In a full implementation, we would parse the descriptor object.
+                // Resolve the effective value under an immutable borrow first,
+                // then apply it with a fresh mutable borrow to avoid aliasing.
+                let effective_value = match descriptor_val {
+                    Value::Object(desc_id) => self
+                        .heap
+                        .get(desc_id.0 as usize)
+                        .and_then(|desc_obj| desc_obj.properties.get("value").cloned())
+                        .unwrap_or(Value::Undefined),
+                    other => other,
+                };
                 if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                    // Check if descriptor is an object with a 'value' property
-                    if let Value::Object(desc_id) = descriptor_val {
-                        if let Some(desc_obj) = self.heap.get(desc_id.0 as usize) {
-                            if let Some(value) = desc_obj.properties.get("value") {
-                                obj.properties.insert(prop_name, value.clone());
-                            } else {
-                                obj.properties.insert(prop_name, Value::Undefined);
-                            }
-                        } else {
-                            obj.properties.insert(prop_name, Value::Undefined);
-                        }
-                    } else {
-                        // Use descriptor value directly
-                        obj.properties.insert(prop_name, descriptor_val);
-                    }
+                    obj.properties.insert(prop_name, effective_value);
                 }
 
                 Ok(obj_val) // Return the original object
@@ -10657,30 +10655,39 @@ impl InterpreterCore {
                 let key = self.read_reg(args.start + 1)?;
                 let value = self.read_reg(args.start + 2)?;
 
-                // Get the map object and update it
-                if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
-                    // Get internal entries object
-                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
-                        if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
-                            // Use a simple key representation (simplified)
-                            let key_str = match key {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                // Resolve the internal entries ObjectId under an immutable
+                // borrow, then insert into entries and update size under
+                // separate mutable borrows.
+                let entries_id_opt: Option<ObjectId> = self
+                    .heap
+                    .get(map_id.0 as usize)
+                    .and_then(|m| m.properties.get("__entries").cloned())
+                    .and_then(|v| match v {
+                        Value::Object(id) => Some(id),
+                        _ => None,
+                    });
 
-                            entries_obj.properties.insert(key_str, value);
+                if let Some(entries_id) = entries_id_opt {
+                    // Use a simple key representation (simplified)
+                    let key_str = match key {
+                        Value::Str(s) => format!("s:{}", s),
+                        Value::Int(i) => format!("n:{}", i),
+                        Value::Float(f) => format!("n:{}", f.inner()),
+                        Value::Bool(b) => format!("b:{}", b),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(id) => format!("o:{}", id.0),
+                        _ => "other".to_string(),
+                    };
 
-                            // Update size if it's a new key
-                            if let Some(Value::Int(ref mut size)) =
-                                map_obj.properties.get_mut("size")
-                            {
-                                *size += 1; // Simplified - doesn't check if key already existed
+                    if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
+                        entries_obj.properties.insert(key_str, value);
+                    }
+
+                    if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
+                        if let Some(size_slot) = map_obj.properties.get_mut("size") {
+                            if let Value::Int(size) = size_slot {
+                                *size += 1;
                             }
                         }
                     }
@@ -10757,31 +10764,48 @@ impl InterpreterCore {
 
                 let value = self.read_reg(args.start + 1)?;
 
-                // Add the value to the set
-                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                    // Get internal values object
-                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
-                        if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
-                            // Use a simple value representation (simplified)
-                            let value_str = match value {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                // Resolve the internal values ObjectId under an immutable
+                // borrow, then insert into values and update size under
+                // separate mutable borrows.
+                let values_id_opt: Option<ObjectId> = self
+                    .heap
+                    .get(set_id.0 as usize)
+                    .and_then(|s| s.properties.get("__values").cloned())
+                    .and_then(|v| match v {
+                        Value::Object(id) => Some(id),
+                        _ => None,
+                    });
 
-                            // Check if value already exists
-                            if !values_obj.properties.contains_key(&value_str) {
-                                values_obj.properties.insert(value_str, Value::Bool(true));
+                if let Some(values_id) = values_id_opt {
+                    // Use a simple value representation (simplified)
+                    let value_str = match value {
+                        Value::Str(s) => format!("s:{}", s),
+                        Value::Int(i) => format!("n:{}", i),
+                        Value::Float(f) => format!("n:{}", f.inner()),
+                        Value::Bool(b) => format!("b:{}", b),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(id) => format!("o:{}", id.0),
+                        _ => "other".to_string(),
+                    };
 
-                                // Update size
-                                if let Some(Value::Int(ref mut size)) =
-                                    set_obj.properties.get_mut("size")
-                                {
+                    let inserted = if let Some(values_obj) =
+                        self.heap.get_mut(values_id.0 as usize)
+                    {
+                        if values_obj.properties.contains_key(&value_str) {
+                            false
+                        } else {
+                            values_obj.properties.insert(value_str, Value::Bool(true));
+                            true
+                        }
+                    } else {
+                        false
+                    };
+
+                    if inserted {
+                        if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                            if let Some(size_slot) = set_obj.properties.get_mut("size") {
+                                if let Value::Int(size) = size_slot {
                                     *size += 1;
                                 }
                             }
@@ -10837,6 +10861,201 @@ impl InterpreterCore {
                 }
 
                 Ok(Value::Bool(false))
+            }
+
+            "builtin:MapPrototypeHas" => {
+                // Map.prototype.has(key) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let map_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects can't be maps
+                };
+
+                // Check if it's actually a Map
+                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+
+                let key = self.read_reg(args.start + 1)?;
+
+                // Check if the map has the key
+                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
+                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
+                        if let Some(entries_obj) = self.heap.get(entries_id.0 as usize) {
+                            // Use the same key representation as set()
+                            let key_str = match key {
+                                Value::Str(s) => format!("s:{}", s),
+                                Value::Int(i) => format!("n:{}", i),
+                                Value::Float(f) => format!("n:{}", f.inner()),
+                                Value::Bool(b) => format!("b:{}", b),
+                                Value::Null => "null".to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Object(id) => format!("o:{}", id.0),
+                                _ => "other".to_string(),
+                            };
+
+                            if entries_obj.properties.contains_key(&key_str) {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(false))
+            }
+
+            "builtin:MapPrototypeDelete" => {
+                // Map.prototype.delete(key) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let map_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects can't be maps
+                };
+
+                // Check if it's actually a Map
+                if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                } else {
+                    return Ok(Value::Bool(false));
+                }
+
+                let key = self.read_reg(args.start + 1)?;
+
+                // Delete the key from the map
+                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
+                    if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
+                        if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
+                            // Use the same key representation as set()
+                            let key_str = match key {
+                                Value::Str(s) => format!("s:{}", s),
+                                Value::Int(i) => format!("n:{}", i),
+                                Value::Float(f) => format!("n:{}", f.inner()),
+                                Value::Bool(b) => format!("b:{}", b),
+                                Value::Null => "null".to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Object(id) => format!("o:{}", id.0),
+                                _ => "other".to_string(),
+                            };
+
+                            if entries_obj.properties.remove(&key_str).is_some() {
+                                // Update size
+                                if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
+                                    if let Some(Value::Int(size)) = map_obj.properties.get("size") {
+                                        map_obj.properties.insert("size".to_string(), Value::Int(size - 1));
+                                    }
+                                }
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(false))
+            }
+
+            "builtin:SetPrototypeDelete" => {
+                // Set.prototype.delete(value) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let set_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects can't be sets
+                };
+
+                // Check if it's actually a Set
+                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    {
+                        return Ok(Value::Bool(false));
+                    }
+                } else {
+                    return Ok(Value::Bool(false));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+
+                // Delete the value from the set
+                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
+                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
+                        if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
+                            // Use the same value representation as add()
+                            let value_str = match value {
+                                Value::Str(s) => format!("s:{}", s),
+                                Value::Int(i) => format!("n:{}", i),
+                                Value::Float(f) => format!("n:{}", f.inner()),
+                                Value::Bool(b) => format!("b:{}", b),
+                                Value::Null => "null".to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Object(id) => format!("o:{}", id.0),
+                                _ => "other".to_string(),
+                            };
+
+                            if values_obj.properties.remove(&value_str).is_some() {
+                                // Update size
+                                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                                    if let Some(Value::Int(size)) = set_obj.properties.get("size") {
+                                        set_obj.properties.insert("size".to_string(), Value::Int(size - 1));
+                                    }
+                                }
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(false))
+            }
+
+            "builtin:SetPrototypeClear" => {
+                // Set.prototype.clear() implementation
+                let this_val = self.read_reg(args.start)?;
+                let set_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be sets
+                };
+
+                // Check if it's actually a Set
+                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    {
+                        return Ok(Value::Undefined);
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                }
+
+                // Clear all values from the set
+                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
+                    if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
+                        if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
+                            values_obj.properties.clear();
+                        }
+                    }
+                }
+
+                // Reset size to 0
+                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                    set_obj.properties.insert("size".to_string(), Value::Int(0));
+                }
+
+                Ok(Value::Undefined)
             }
 
             _ => {
@@ -10986,6 +11205,10 @@ impl InterpreterCore {
             175 => Some("builtin:MapPrototypeGet".to_string()),
             176 => Some("builtin:SetPrototypeAdd".to_string()),
             177 => Some("builtin:SetPrototypeHas".to_string()),
+            178 => Some("builtin:MapPrototypeHas".to_string()),
+            179 => Some("builtin:MapPrototypeDelete".to_string()),
+            180 => Some("builtin:SetPrototypeDelete".to_string()),
+            181 => Some("builtin:SetPrototypeClear".to_string()),
 
             _ => None, // Not a recognized builtin
         }

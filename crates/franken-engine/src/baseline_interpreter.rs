@@ -7603,6 +7603,48 @@ impl InterpreterCore {
                     Ok(Value::Str("".to_string()))
                 }
             }
+            "builtin:StringPrototypeToLowerCase" => {
+                // String.prototype.toLowerCase implementation - converts string to lowercase
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                // Convert to lowercase using Unicode-aware conversion
+                let lowercase = string_val.to_lowercase();
+                Ok(Value::Str(lowercase))
+            }
+            "builtin:StringPrototypeToUpperCase" => {
+                // String.prototype.toUpperCase implementation - converts string to uppercase
+                if args.count == 0 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_arg = self.read_reg(args.start)?;
+                let string_val = match string_arg {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "".to_string(),
+                };
+
+                // Convert to uppercase using Unicode-aware conversion
+                let uppercase = string_val.to_uppercase();
+                Ok(Value::Str(uppercase))
+            }
 
             // Math methods
             "builtin:MathAbs" => {
@@ -7990,6 +8032,95 @@ impl InterpreterCore {
                     Err(_) => Ok(Value::Float(Float64::new(f64::NAN))),
                 }
             }
+            "builtin:parseFloat" => {
+                // parseFloat global function - parses string and returns floating point number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN))); // parseFloat() with no args returns NaN
+                }
+
+                let string_val = self.read_reg(args.start)?;
+
+                // Convert argument to string
+                let string_to_parse = match string_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => {
+                        if b {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }
+                    }
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Float(Float64::new(f64::NAN))), // Objects return NaN
+                };
+
+                // Parse leading numeric part
+                let trimmed = string_to_parse.trim_start();
+
+                // Handle special cases
+                if trimmed.is_empty() || trimmed.starts_with("NaN") {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+                if trimmed.starts_with("Infinity") {
+                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
+                }
+                if trimmed.starts_with("-Infinity") {
+                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
+                }
+
+                // Find the longest prefix that forms a valid number
+                let mut valid_chars = String::new();
+                let mut has_dot = false;
+                let mut chars = trimmed.chars();
+
+                // Handle optional sign
+                if let Some(first_char) = chars.clone().next() {
+                    if first_char == '+' || first_char == '-' {
+                        valid_chars.push(first_char);
+                        chars.next();
+                    }
+                }
+
+                // Parse numeric characters
+                for ch in chars {
+                    if ch.is_ascii_digit() {
+                        valid_chars.push(ch);
+                    } else if ch == '.' && !has_dot {
+                        has_dot = true;
+                        valid_chars.push(ch);
+                    } else {
+                        break; // Stop at first non-numeric character
+                    }
+                }
+
+                // Try to parse the accumulated string
+                if valid_chars.is_empty()
+                    || valid_chars == "+"
+                    || valid_chars == "-"
+                    || valid_chars == "."
+                {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else {
+                    match valid_chars.parse::<f64>() {
+                        Ok(num) => {
+                            // Check if result should be an integer for efficiency
+                            if num.fract() == 0.0
+                                && num.is_finite()
+                                && num >= i64::MIN as f64
+                                && num <= i64::MAX as f64
+                            {
+                                Ok(Value::Int(num as i64))
+                            } else {
+                                Ok(Value::Float(Float64::new(num)))
+                            }
+                        }
+                        Err(_) => Ok(Value::Float(Float64::new(f64::NAN))),
+                    }
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8027,6 +8158,8 @@ impl InterpreterCore {
             31 => Some("builtin:StringPrototypeIndexOf".to_string()),
             32 => Some("builtin:StringPrototypeSubstring".to_string()),
             33 => Some("builtin:StringPrototypeSlice".to_string()),
+            34 => Some("builtin:StringPrototypeToLowerCase".to_string()),
+            35 => Some("builtin:StringPrototypeToUpperCase".to_string()),
 
             // Math methods
             50 => Some("builtin:MathAbs".to_string()),
@@ -8039,6 +8172,12 @@ impl InterpreterCore {
             // JSON methods
             70 => Some("builtin:JsonParse".to_string()),
             71 => Some("builtin:JsonStringify".to_string()),
+
+            // Global functions
+            80 => Some("builtin:isNaN".to_string()),
+            81 => Some("builtin:isFinite".to_string()),
+            82 => Some("builtin:parseInt".to_string()),
+            83 => Some("builtin:parseFloat".to_string()),
 
             _ => None, // Not a recognized builtin
         }

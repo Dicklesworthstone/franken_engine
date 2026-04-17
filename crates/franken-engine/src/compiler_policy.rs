@@ -175,10 +175,7 @@ impl CompilerPolicyConfig {
     }
 
     fn class_policy(&self, class: &OptimizationClass) -> OptimizationClassPolicy {
-        self.class_policies
-            .get(class)
-            .cloned()
-            .unwrap_or_default()
+        self.class_policies.get(class).cloned().unwrap_or_default()
     }
 }
 

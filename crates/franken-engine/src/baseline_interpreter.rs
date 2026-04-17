@@ -14111,6 +14111,131 @@ impl InterpreterCore {
                 }
             }
 
+            "builtin:StringPrototypeConcat" => {
+                // String.prototype.concat(...strings) implementation
+                let this_val = self.read_reg(args.start)?;
+                let mut result = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                // Concatenate all additional arguments
+                for i in 1..args.count {
+                    let arg_val = self.read_reg(args.start + i)?;
+                    let arg_str = match arg_val {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "[object Object]".to_string(),
+                    };
+                    result.push_str(&arg_str);
+                }
+
+                Ok(Value::Str(result))
+            }
+
+            "builtin:MathAtan2" => {
+                // Math.atan2(y, x) implementation
+                if args.count < 3 {
+                    return Ok(Value::Float(FixedF64::from_f64(f64::NAN)));
+                }
+
+                let y_val = self.read_reg(args.start + 1)?;
+                let x_val = self.read_reg(args.start + 2)?;
+
+                let y = match y_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                Ok(Value::Float(FixedF64::from_f64(y.atan2(x))))
+            }
+
+            "builtin:ArrayPrototypeEvery" => {
+                // Array.prototype.every(callback[, thisArg]) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Bool(true)); // Empty test defaults to true
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(true)), // Non-objects default to true
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Simplified implementation: check if all elements are truthy
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            let is_truthy = match element {
+                                Value::Bool(false) | Value::Int(0) | Value::Float(f)
+                                    if f.inner() == 0.0 =>
+                                {
+                                    false
+                                }
+                                Value::Str(s) if s.is_empty() => false,
+                                Value::Null | Value::Undefined => false,
+                                _ => true,
+                            };
+                            if !is_truthy {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Bool(true))
+            }
+
+            "builtin:DatePrototypeGetTime" => {
+                // Date.prototype.getTime() implementation (simplified)
+                let this_val = self.read_reg(args.start)?;
+                match this_val {
+                    Value::Object(_) => {
+                        // For now, return a fixed timestamp (simplified implementation)
+                        // In a real implementation, this would read from the Date object's internal slot
+                        Ok(Value::Float(FixedF64::from_f64(1713355200000.0))) // 2024-04-17 12:00:00 UTC
+                    }
+                    _ => Ok(Value::Float(FixedF64::from_f64(f64::NAN))), // Non-Date objects return NaN
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -14330,6 +14455,10 @@ impl InterpreterCore {
             250 => Some("builtin:MathAtan".to_string()),
             251 => Some("builtin:ArrayPrototypeFill".to_string()),
             252 => Some("builtin:ObjectPrototypePropertyIsEnumerable".to_string()),
+            253 => Some("builtin:StringPrototypeConcat".to_string()),
+            254 => Some("builtin:MathAtan2".to_string()),
+            255 => Some("builtin:ArrayPrototypeEvery".to_string()),
+            256 => Some("builtin:DatePrototypeGetTime".to_string()),
 
             _ => None, // Not a recognized builtin
         }

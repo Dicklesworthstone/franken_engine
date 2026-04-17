@@ -12378,8 +12378,6 @@ impl InterpreterCore {
                         )?;
 
                         Ok(Value::Object(descriptor_id))
-                    } else {
-                        Ok(Value::Undefined)
                     }
                 } else {
                     Ok(Value::Undefined)
@@ -12762,6 +12760,213 @@ impl InterpreterCore {
                 Ok(Value::Str(trimmed.to_string()))
             }
 
+            "builtin:ArrayPrototypeFind" => {
+                // Array.prototype.find(callback[, thisArg]) implementation
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // Simplified implementation without function call support
+                // Return first element that exists and is truthy
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            let is_truthy = match element {
+                                Value::Bool(false) | Value::Null | Value::Undefined => false,
+                                Value::Int(0) => false,
+                                Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => false,
+                                Value::Str(s) if s.is_empty() => false,
+                                _ => true,
+                            };
+                            if is_truthy {
+                                return Ok(element.clone());
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Undefined)
+            }
+
+            "builtin:StringPrototypePadStart" => {
+                // String.prototype.padStart(targetLength[, padString]) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                let target_length = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    return Ok(Value::Str(string_val));
+                };
+
+                let pad_string = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => " ".to_string(), // Default to space
+                        _ => " ".to_string(),
+                    }
+                } else {
+                    " ".to_string() // Default to space
+                };
+
+                if pad_string.is_empty() || string_val.len() >= target_length {
+                    return Ok(Value::Str(string_val));
+                }
+
+                let chars_needed = target_length - string_val.len();
+                let mut padding = String::new();
+
+                // Repeat pad_string to fill the needed characters
+                while padding.len() < chars_needed {
+                    padding.push_str(&pad_string);
+                }
+
+                // Truncate if necessary
+                if padding.len() > chars_needed {
+                    padding.truncate(chars_needed);
+                }
+
+                Ok(Value::Str(format!("{}{}", padding, string_val)))
+            }
+
+            "builtin:StringPrototypePadEnd" => {
+                // String.prototype.padEnd(targetLength[, padString]) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                let target_length = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => 0,
+                    }
+                } else {
+                    return Ok(Value::Str(string_val));
+                };
+
+                let pad_string = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => " ".to_string(), // Default to space
+                        _ => " ".to_string(),
+                    }
+                } else {
+                    " ".to_string() // Default to space
+                };
+
+                if pad_string.is_empty() || string_val.len() >= target_length {
+                    return Ok(Value::Str(string_val));
+                }
+
+                let chars_needed = target_length - string_val.len();
+                let mut padding = String::new();
+
+                // Repeat pad_string to fill the needed characters
+                while padding.len() < chars_needed {
+                    padding.push_str(&pad_string);
+                }
+
+                // Truncate if necessary
+                if padding.len() > chars_needed {
+                    padding.truncate(chars_needed);
+                }
+
+                Ok(Value::Str(format!("{}{}", string_val, padding)))
+            }
+
+            "builtin:ObjectPrototypeHasOwnProperty" => {
+                // Object.prototype.hasOwnProperty(prop) implementation
+                let this_val = self.read_reg(args.start)?;
+                let obj_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects don't have own properties
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_name = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Check if the object has the property as an own property
+                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                    Ok(Value::Bool(obj.properties.contains_key(&prop_name)))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -12953,6 +13158,10 @@ impl InterpreterCore {
             222 => Some("builtin:StringPrototypeNormalize".to_string()),
             223 => Some("builtin:StringPrototypeTrimStart".to_string()),
             224 => Some("builtin:StringPrototypeTrimEnd".to_string()),
+            225 => Some("builtin:ArrayPrototypeFind".to_string()),
+            226 => Some("builtin:StringPrototypePadStart".to_string()),
+            227 => Some("builtin:StringPrototypePadEnd".to_string()),
+            228 => Some("builtin:ObjectPrototypeHasOwnProperty".to_string()),
 
             _ => None, // Not a recognized builtin
         }

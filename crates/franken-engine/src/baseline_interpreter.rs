@@ -11496,6 +11496,197 @@ impl InterpreterCore {
                 Ok(Value::Object(regexp_id))
             }
 
+            "builtin:ArrayPrototypeReduceRight" => {
+                // Array.prototype.reduceRight(callback, initialValue) implementation
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let initial_value = if args.count >= 3 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // For now, simplified implementation without function call support
+                // Return initial value or undefined since we can't execute callback functions yet
+                // TODO: Implement function call mechanism for full callback support
+                Ok(initial_value.unwrap_or(Value::Undefined))
+            }
+
+            "builtin:StringPrototypeSubstr" => {
+                // String.prototype.substr(start, length) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Str(String::new())),
+                        }
+                    }
+                };
+
+                let start_idx = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n as i32,
+                        Value::Float(f) => f.inner() as i32,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let length_param = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(n) => Some(n as u32),
+                        Value::Float(f) => Some(f.inner() as u32),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                let str_len = string_val.len() as i32;
+
+                // Calculate actual start position
+                let actual_start = if start_idx < 0 {
+                    0.max(str_len + start_idx) as usize
+                } else {
+                    (start_idx as usize).min(str_len as usize)
+                };
+
+                // Calculate length
+                let actual_length = if let Some(len) = length_param {
+                    if len == 0 {
+                        return Ok(Value::Str(String::new()));
+                    }
+                    len as usize
+                } else {
+                    (str_len as usize).saturating_sub(actual_start)
+                };
+
+                // Extract substring
+                let chars: Vec<char> = string_val.chars().collect();
+                let end_pos = (actual_start + actual_length).min(chars.len());
+
+                if actual_start >= chars.len() {
+                    Ok(Value::Str(String::new()))
+                } else {
+                    let result: String = chars[actual_start..end_pos].iter().collect();
+                    Ok(Value::Str(result))
+                }
+            }
+
+            "builtin:NumberPrototypeToString" => {
+                // Number.prototype.toString(radix) implementation
+                let this_val = self.read_reg(args.start)?;
+
+                let number_val = match this_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => return Ok(Value::Str("NaN".to_string())),
+                };
+
+                let radix = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(r) => r as i32,
+                        Value::Float(r) => r.inner() as i32,
+                        _ => 10,
+                    }
+                } else {
+                    10
+                };
+
+                // Validate radix (2-36)
+                if radix < 2 || radix > 36 {
+                    return Ok(Value::Str("RangeError".to_string()));
+                }
+
+                if radix == 10 {
+                    // Use standard decimal representation
+                    if number_val.is_nan() {
+                        Ok(Value::Str("NaN".to_string()))
+                    } else if number_val.is_infinite() {
+                        if number_val.is_sign_negative() {
+                            Ok(Value::Str("-Infinity".to_string()))
+                        } else {
+                            Ok(Value::Str("Infinity".to_string()))
+                        }
+                    } else {
+                        Ok(Value::Str(number_val.to_string()))
+                    }
+                } else {
+                    // For other radixes, simplified implementation
+                    // TODO: Implement proper radix conversion
+                    Ok(Value::Str(number_val.to_string()))
+                }
+            }
+
+            "builtin:PromiseAll" => {
+                // Promise.all(iterable) implementation
+                let _iterable = if args.count >= 1 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Create a resolved Promise for now (simplified implementation)
+                // TODO: Implement proper Promise.all with iterable processing
+                let promise_id = self.alloc_object_with_prototype(None)?;
+
+                // Set Promise metadata
+                self.set_object_property(
+                    promise_id,
+                    "__type".to_string(),
+                    Value::Str("Promise".to_string()),
+                )?;
+                self.set_object_property(
+                    promise_id,
+                    "__state".to_string(),
+                    Value::Str("fulfilled".to_string()),
+                )?;
+
+                // Create empty array as resolved value for now
+                let empty_array_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(
+                    empty_array_id,
+                    "length".to_string(),
+                    Value::Int(0),
+                )?;
+
+                self.set_object_property(
+                    promise_id,
+                    "__value".to_string(),
+                    Value::Object(empty_array_id),
+                )?;
+
+                Ok(Value::Object(promise_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11659,6 +11850,10 @@ impl InterpreterCore {
             191 => Some("builtin:MathAsin".to_string()),
             192 => Some("builtin:MathAcos".to_string()),
             193 => Some("builtin:RegExp".to_string()),
+            194 => Some("builtin:ArrayPrototypeReduceRight".to_string()),
+            195 => Some("builtin:StringPrototypeSubstr".to_string()),
+            196 => Some("builtin:NumberPrototypeToString".to_string()),
+            197 => Some("builtin:PromiseAll".to_string()),
 
             _ => None, // Not a recognized builtin
         }

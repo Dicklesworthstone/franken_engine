@@ -10100,24 +10100,14 @@ impl InterpreterCore {
                 // Simple pattern matching - find first occurrence
                 if let Some(index) = this_str.find(&pattern_str) {
                     // Create result array with match information
-                    let result_id = ObjectId(self.next_object_id());
-                    let mut result_obj = Object::new();
+                    let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Add the matched string
-                    result_obj
-                        .properties
-                        .insert("0".to_string(), Value::Str(pattern_str.clone()));
-                    result_obj
-                        .properties
-                        .insert("index".to_string(), Value::Int(index as i64));
-                    result_obj
-                        .properties
-                        .insert("input".to_string(), Value::Str(this_str));
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(1));
+                    self.set_object_property(result_id, "0".to_string(), Value::Str(pattern_str.clone()))?;
+                    self.set_object_property(result_id, "index".to_string(), Value::Int(index as i64))?;
+                    self.set_object_property(result_id, "input".to_string(), Value::Str(this_str))?;
+                    self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
 
-                    self.heap.push(result_obj);
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Null)
@@ -10141,23 +10131,14 @@ impl InterpreterCore {
                 };
 
                 // Create a unique symbol object (simplified representation)
-                let symbol_id = ObjectId(self.next_object_id());
-                let mut symbol_obj = Object::new();
+                let symbol_id = self.alloc_object_with_prototype(None)?;
 
                 // Store symbol metadata
-                symbol_obj
-                    .properties
-                    .insert("__type".to_string(), Value::Str("symbol".to_string()));
+                self.set_object_property(symbol_id, "__type".to_string(), Value::Str("symbol".to_string()))?;
                 if let Some(desc) = description {
-                    symbol_obj
-                        .properties
-                        .insert("__description".to_string(), Value::Str(desc));
+                    self.set_object_property(symbol_id, "__description".to_string(), Value::Str(desc))?;
                 }
-                symbol_obj
-                    .properties
-                    .insert("__id".to_string(), Value::Int(symbol_id.0 as i64));
-
-                self.heap.push(symbol_obj);
+                self.set_object_property(symbol_id, "__id".to_string(), Value::Int(symbol_id.0 as i64))?;
                 Ok(Value::Object(symbol_id))
             }
             "builtin:typeof" => {
@@ -10224,8 +10205,7 @@ impl InterpreterCore {
                 // Get the array object from heap
                 if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
                     // Create a new flattened array
-                    let result_id = ObjectId(self.next_object_id());
-                    let mut result_obj = Object::new();
+                    let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Get array length
                     let length = array_obj
@@ -10276,13 +10256,10 @@ impl InterpreterCore {
 
                     // Set up result array
                     for (i, value) in flat_elements.iter().enumerate() {
-                        result_obj.properties.insert(i.to_string(), value.clone());
+                        self.set_object_property(result_id, i.to_string(), value.clone())?;
                     }
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(flat_elements.len() as i64));
+                    self.set_object_property(result_id, "length".to_string(), Value::Int(flat_elements.len() as i64))?;
 
-                    self.heap.push(result_obj);
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -10522,30 +10499,22 @@ impl InterpreterCore {
             }
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
-                let map_id = ObjectId(self.next_object_id());
-                let mut map_obj = Object::new();
+                let map_id = self.alloc_object_with_prototype(None)?;
+                let entries_id = self.alloc_object_with_prototype(None)?;
 
                 // Mark as Map type
-                map_obj
-                    .properties
-                    .insert("__type".to_string(), Value::Str("Map".to_string()));
-                map_obj.properties.insert(
-                    "__entries".to_string(),
-                    Value::Object(ObjectId(self.next_object_id())),
-                );
-                map_obj.properties.insert("size".to_string(), Value::Int(0));
+                self.set_object_property(map_id, "__type".to_string(), Value::Str("Map".to_string()))?;
+                self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
+                self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
 
                 // Create internal entries storage
                 let entries_id = self.next_object_id() - 1;
                 let entries_obj = Object::new();
-                self.heap.push(entries_obj);
-
                 // TODO: If iterable argument provided, populate map with entries
                 if args.count > 0 {
                     // Simplified: ignore iterable for now
                 }
 
-                self.heap.push(map_obj);
                 Ok(Value::Object(map_id))
             }
             "builtin:Set" => {
@@ -11919,9 +11888,9 @@ impl InterpreterCore {
             27 => Some("builtin:ArrayPrototypeReduce".to_string()),
             28 => Some("builtin:ArrayPrototypeSort".to_string()),
             29 => Some("builtin:ArrayPrototypeSplice".to_string()),
-            30 => Some("builtin:ArrayPrototypeFlat".to_string()),
-            31 => Some("builtin:ArrayPrototypeSome".to_string()),
-            32 => Some("builtin:ArrayPrototypeEvery".to_string()),
+            202 => Some("builtin:ArrayPrototypeFlat".to_string()),
+            203 => Some("builtin:ArrayPrototypeSome".to_string()),
+            204 => Some("builtin:ArrayPrototypeEvery".to_string()),
 
             // Additional String methods (continued)
             45 => Some("builtin:StringPrototypeMatch".to_string()),

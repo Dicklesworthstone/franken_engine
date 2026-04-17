@@ -11488,7 +11488,7 @@ impl InterpreterCore {
                 };
 
                 // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
                     match obj.properties.get("length") {
                         Some(Value::Int(len)) => *len as usize,
                         Some(Value::Float(len)) => len.inner() as usize,

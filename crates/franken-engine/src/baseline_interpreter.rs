@@ -12190,6 +12190,190 @@ impl InterpreterCore {
                 Ok(Value::Int(result))
             }
 
+            "builtin:ArrayPrototypeAt" => {
+                // Array.prototype.at(index) implementation - access with negative indexing
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let index = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(idx) => idx,
+                        Value::Float(idx) => idx.inner() as i64,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len,
+                        Some(Value::Float(len)) => len.inner() as i64,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                if length == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                // Handle negative indexing
+                let actual_index = if index < 0 {
+                    length + index
+                } else {
+                    index
+                };
+
+                // Check bounds
+                if actual_index < 0 || actual_index >= length {
+                    return Ok(Value::Undefined);
+                }
+
+                // Get the element at the index
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    if let Some(element) = obj.properties.get(&actual_index.to_string()) {
+                        Ok(element.clone())
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+
+            "builtin:StringPrototypeAt" => {
+                // String.prototype.at(index) implementation - access with negative indexing
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Undefined),
+                        }
+                    }
+                };
+
+                let index = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(idx) => idx,
+                        Value::Float(idx) => idx.inner() as i64,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                let chars: Vec<char> = string_val.chars().collect();
+                let length = chars.len() as i64;
+
+                if length == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                // Handle negative indexing
+                let actual_index = if index < 0 {
+                    length + index
+                } else {
+                    index
+                };
+
+                // Check bounds
+                if actual_index < 0 || actual_index >= length {
+                    return Ok(Value::Undefined);
+                }
+
+                // Get the character at the index
+                let ch = chars[actual_index as usize];
+                Ok(Value::Str(ch.to_string()))
+            }
+
+            "builtin:ObjectGetOwnPropertyDescriptor" => {
+                // Object.getOwnPropertyDescriptor(obj, prop) implementation
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                let obj_id = match obj_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects don't have property descriptors
+                };
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_name = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    _ => return Ok(Value::Undefined),
+                };
+
+                // Check if the property exists on the object
+                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                    if let Some(value) = obj.properties.get(&prop_name) {
+                        // Create property descriptor object
+                        let descriptor_id = self.alloc_object_with_prototype(None)?;
+
+                        // Set descriptor properties (simplified - all properties are data properties)
+                        self.set_object_property(
+                            descriptor_id,
+                            "value".to_string(),
+                            value.clone(),
+                        )?;
+                        self.set_object_property(
+                            descriptor_id,
+                            "writable".to_string(),
+                            Value::Bool(true),
+                        )?;
+                        self.set_object_property(
+                            descriptor_id,
+                            "enumerable".to_string(),
+                            Value::Bool(true),
+                        )?;
+                        self.set_object_property(
+                            descriptor_id,
+                            "configurable".to_string(),
+                            Value::Bool(true),
+                        )?;
+
+                        Ok(Value::Object(descriptor_id))
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+
+            "builtin:MathClz32" => {
+                // Math.clz32(x) implementation - count leading zeros in 32-bit representation
+                if args.count == 0 {
+                    return Ok(Value::Int(32));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let x = match x_val {
+                    Value::Int(n) => n as u32,
+                    Value::Float(f) => f.inner() as u32,
+                    _ => 0,
+                };
+
+                // Count leading zeros in 32-bit representation
+                let leading_zeros = x.leading_zeros();
+                Ok(Value::Int(leading_zeros as i64))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)

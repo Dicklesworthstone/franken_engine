@@ -18505,6 +18505,124 @@ impl InterpreterCore {
                 Ok(Value::Bool(matches))
             }
 
+            "builtin:EncodeURIComponent" => {
+                // encodeURIComponent() implementation - simplified URL encoding
+                if args.count == 0 {
+                    return Ok(Value::Str("undefined".to_string()));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let input_str = match value {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified URL encoding - encode special characters
+                let encoded = input_str
+                    .chars()
+                    .map(|c| match c {
+                        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+                        _ => format!("%{:02X}", c as u32),
+                    })
+                    .collect();
+
+                Ok(Value::Str(encoded))
+            }
+
+            "builtin:DecodeURIComponent" => {
+                // decodeURIComponent() implementation - simplified URL decoding
+                if args.count == 0 {
+                    return Ok(Value::Str("undefined".to_string()));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let encoded_str = match value {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified URL decoding - decode %XX sequences
+                let mut decoded = String::new();
+                let mut chars = encoded_str.chars().peekable();
+
+                while let Some(c) = chars.next() {
+                    if c == '%' {
+                        // Try to decode %XX sequence
+                        let hex_chars: String = chars.by_ref().take(2).collect();
+                        if hex_chars.len() == 2 {
+                            if let Ok(byte_val) = u8::from_str_radix(&hex_chars, 16) {
+                                if let Some(decoded_char) = char::from_u32(byte_val as u32) {
+                                    decoded.push(decoded_char);
+                                    continue;
+                                }
+                            }
+                        }
+                        // If decoding failed, keep the % and continue
+                        decoded.push(c);
+                        decoded.push_str(&hex_chars);
+                    } else {
+                        decoded.push(c);
+                    }
+                }
+
+                Ok(Value::Str(decoded))
+            }
+
+            "builtin:SetTimeout" => {
+                // setTimeout() implementation - simplified timer scheduling
+                if args.count < 2 {
+                    return Ok(Value::Int(0)); // Invalid timer ID
+                }
+
+                let callback_val = self.read_reg(args.start + 1)?;
+                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
+                    return Ok(Value::Int(0)); // Callback is not a function
+                }
+
+                let delay = if args.count >= 3 {
+                    let delay_val = self.read_reg(args.start + 2)?;
+                    match delay_val {
+                        Value::Int(n) => n.max(0) as u64,
+                        Value::Float(f) => f.inner().max(0.0) as u64,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Simplified implementation: generate a timer ID
+                // In a real implementation, this would schedule the callback
+                let timer_id = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64;
+
+                Ok(Value::Int(timer_id))
+            }
+
+            "builtin:ClearTimeout" => {
+                // clearTimeout() implementation - simplified timer cancellation
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let _timer_id_val = self.read_reg(args.start + 1)?;
+                // In a simplified implementation, we just acknowledge the call
+                // A real implementation would cancel the scheduled timer
+
+                Ok(Value::Undefined)
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -18844,6 +18962,10 @@ impl InterpreterCore {
             370 => Some("builtin:MathCos".to_string()),
             371 => Some("builtin:MathTan".to_string()),
             372 => Some("builtin:RegExpPrototypeTest".to_string()),
+            373 => Some("builtin:EncodeURIComponent".to_string()),
+            374 => Some("builtin:DecodeURIComponent".to_string()),
+            375 => Some("builtin:SetTimeout".to_string()),
+            376 => Some("builtin:ClearTimeout".to_string()),
 
             _ => None, // Not a recognized builtin
         }

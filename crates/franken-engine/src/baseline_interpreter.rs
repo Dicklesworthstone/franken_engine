@@ -13747,6 +13747,196 @@ impl InterpreterCore {
                 Ok(Value::Float(result.into()))
             }
 
+            "builtin:MathCos" => {
+                // Math.cos(x) implementation - cosine function
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let result = x.cos();
+                Ok(Value::Float(result.into()))
+            }
+
+            "builtin:ArrayPrototypeConcat" => {
+                // Array.prototype.concat(...items) implementation
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects treated as empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                // Get original array length and elements
+                let mut result_elements = Vec::new();
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    if let Some(Value::Int(length)) = obj.properties.get("length") {
+                        for i in 0..*length as usize {
+                            if let Some(element) = obj.properties.get(&i.to_string()) {
+                                result_elements.push(element.clone());
+                            } else {
+                                result_elements.push(Value::Undefined);
+                            }
+                        }
+                    }
+                }
+
+                // Add items to concatenate
+                for i in 1..args.count {
+                    let item = self.read_reg(args.start + i)?;
+
+                    // Check if item is array-like
+                    match item {
+                        Value::Object(item_id) => {
+                            if let Some(item_obj) = self.heap.get(item_id.0 as usize) {
+                                if let Some(Value::Int(item_length)) = item_obj.properties.get("length") {
+                                    // It's array-like, spread its elements
+                                    for j in 0..*item_length as usize {
+                                        if let Some(element) = item_obj.properties.get(&j.to_string()) {
+                                            result_elements.push(element.clone());
+                                        } else {
+                                            result_elements.push(Value::Undefined);
+                                        }
+                                    }
+                                } else {
+                                    // Not array-like, add as single item
+                                    result_elements.push(item);
+                                }
+                            } else {
+                                result_elements.push(item);
+                            }
+                        }
+                        _ => {
+                            // Primitive value, add as single item
+                            result_elements.push(item);
+                        }
+                    }
+                }
+
+                // Create result array
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                // Set elements
+                for (i, element) in result_elements.iter().enumerate() {
+                    self.set_object_property(result_array_id, i.to_string(), element.clone())?;
+                }
+
+                // Set length
+                self.set_object_property(
+                    result_array_id,
+                    "length".to_string(),
+                    Value::Int(result_elements.len() as i64),
+                )?;
+
+                Ok(Value::Object(result_array_id))
+            }
+
+            "builtin:MathTan" => {
+                // Math.tan(x) implementation - tangent function
+                if args.count == 0 {
+                    return Ok(Value::Float(f64::NAN.into()));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let x = match x_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                let result = x.tan();
+                Ok(Value::Float(result.into()))
+            }
+
+            "builtin:ArrayPrototypeSort" => {
+                // Array.prototype.sort([compareFunction]) implementation (simplified)
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Object(array_id)),
+                    }
+                } else {
+                    return Ok(Value::Object(array_id));
+                };
+
+                if length <= 1 {
+                    return Ok(Value::Object(array_id)); // Nothing to sort
+                }
+
+                // Collect all elements first
+                let mut elements = Vec::new();
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            elements.push(element.clone());
+                        } else {
+                            elements.push(Value::Undefined);
+                        }
+                    }
+                }
+
+                // Simple string-based sorting (convert all to strings and sort)
+                elements.sort_by(|a, b| {
+                    let a_str = match a {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "object".to_string(),
+                    };
+
+                    let b_str = match b {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "object".to_string(),
+                    };
+
+                    a_str.cmp(&b_str)
+                });
+
+                // Set the sorted elements back
+                for (i, element) in elements.iter().enumerate() {
+                    self.set_object_property(array_id, i.to_string(), element.clone())?;
+                }
+
+                Ok(Value::Object(array_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -13958,6 +14148,10 @@ impl InterpreterCore {
             242 => Some("builtin:StringPrototypeMatch".to_string()),
             243 => Some("builtin:ArrayPrototypeReverse".to_string()),
             244 => Some("builtin:MathSin".to_string()),
+            245 => Some("builtin:MathCos".to_string()),
+            246 => Some("builtin:ArrayPrototypeConcat".to_string()),
+            247 => Some("builtin:MathTan".to_string()),
+            248 => Some("builtin:ArrayPrototypeSort".to_string()),
 
             _ => None, // Not a recognized builtin
         }

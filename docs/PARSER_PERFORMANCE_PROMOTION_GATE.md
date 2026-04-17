@@ -213,7 +213,7 @@ Replay wrapper fail-closed behavior:
   preserved bundle, replay exits non-zero immediately.
 - if the newest artifact directory is incomplete, replay warns and falls back to
   the latest complete run directory.
-- if the just-run gate invocation failed, replay states whether the surfaced
-  bundle came from the current run directory or a latest-complete fallback.
+- if the just-run gate invocation failed, replay states whether replay output reflects current run directory
+  or replay output reflects latest complete run directory.
 - replay surfaces the latest complete bundle by printing the latest manifest,
   latest events, latest commands, and latest first step log.

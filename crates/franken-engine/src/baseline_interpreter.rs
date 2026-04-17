@@ -6984,8 +6984,60 @@ impl InterpreterCore {
 
             // String methods
             "builtin:StringPrototypeCharAt" => {
-                // TODO: Implement String.prototype.charAt
-                Ok(Value::Str("".to_string()))
+                // String.prototype.charAt implementation - returns character at specified index
+                if args.count < 2 {
+                    return Ok(Value::Str("".to_string()));
+                }
+
+                let string_val = self.read_reg(args.start)?;
+                let index_val = self.read_reg(args.start + 1)?;
+
+                match (string_val, index_val) {
+                    (Value::Str(s), Value::Int(index)) => {
+                        if index < 0 {
+                            // Negative indices return empty string
+                            Ok(Value::Str("".to_string()))
+                        } else {
+                            let index_usize = index as usize;
+                            if index_usize < s.len() {
+                                // Get character at index (handling UTF-8)
+                                let chars: Vec<char> = s.chars().collect();
+                                if index_usize < chars.len() {
+                                    Ok(Value::Str(chars[index_usize].to_string()))
+                                } else {
+                                    Ok(Value::Str("".to_string()))
+                                }
+                            } else {
+                                // Index out of bounds
+                                Ok(Value::Str("".to_string()))
+                            }
+                        }
+                    }
+                    (Value::Str(_), Value::Float(f)) => {
+                        // Convert float to integer index
+                        let index = f.inner().floor() as i64;
+                        if index < 0 {
+                            Ok(Value::Str("".to_string()))
+                        } else {
+                            let string_val = self.read_reg(args.start)?;
+                            if let Value::Str(s) = string_val {
+                                let index_usize = index as usize;
+                                let chars: Vec<char> = s.chars().collect();
+                                if index_usize < chars.len() {
+                                    Ok(Value::Str(chars[index_usize].to_string()))
+                                } else {
+                                    Ok(Value::Str("".to_string()))
+                                }
+                            } else {
+                                Ok(Value::Str("".to_string()))
+                            }
+                        }
+                    }
+                    _ => {
+                        // Non-string first argument or invalid index
+                        Ok(Value::Str("".to_string()))
+                    }
+                }
             }
 
             // Math methods

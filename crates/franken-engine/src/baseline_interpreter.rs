@@ -7088,6 +7088,67 @@ impl InterpreterCore {
                     }
                 }
             }
+            "builtin:ObjectAssign" => {
+                // Object.assign implementation - copies properties from source objects to target
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let target_val = self.read_reg(args.start)?;
+                let target_obj_id = match target_val {
+                    Value::Object(obj_id) => obj_id,
+                    _ => {
+                        // If target is not an object, return it as-is
+                        return Ok(target_val);
+                    }
+                };
+
+                // Copy properties from each source object to target
+                for i in 1..args.count {
+                    let source_val = self.read_reg(args.start + i)?;
+                    if let Value::Object(source_obj_id) = source_val {
+                        // Get properties from source object
+                        if let Some(source_obj) = self.heap.get(source_obj_id.0 as usize) {
+                            let properties_to_copy: Vec<(String, Value)> = source_obj
+                                .properties
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+
+                            // Copy each property to target object
+                            for (key, value) in properties_to_copy {
+                                self.set_object_property(target_obj_id, key, value)?;
+                            }
+                        }
+                    }
+                    // Skip non-object sources (null, undefined, primitives)
+                }
+
+                // Return the target object
+                Ok(Value::Object(target_obj_id))
+            }
+            "builtin:ObjectFreeze" => {
+                // Object.freeze implementation - makes an object immutable
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // In a full implementation, we would mark the object as frozen
+                        // to prevent further modifications. For now, we just return the object.
+                        // The freezing mechanism would need to be added to the object structure.
+
+                        // TODO: Add frozen flag to ObjectInstance and check it in set_object_property
+                        Ok(Value::Object(obj_id))
+                    }
+                    _ => {
+                        // Non-object values are returned as-is (they're already "immutable")
+                        Ok(obj_val)
+                    }
+                }
+            }
 
             // String methods
             "builtin:StringPrototypeCharAt" => {

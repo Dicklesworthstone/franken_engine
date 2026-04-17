@@ -13983,7 +13983,7 @@ impl InterpreterCore {
             "builtin:MathAtan" => {
                 // Math.atan(x) implementation
                 if args.count == 0 {
-                    return Ok(Value::Float(FixedF64::from_f64(f64::NAN)));
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
                 let val = self.read_reg(args.start)?;
@@ -13997,7 +13997,7 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                Ok(Value::Float(FixedF64::from_f64(num.atan())))
+                Ok(Value::Float(Float64::new(num.atan())))
             }
 
             "builtin:ArrayPrototypeFill" => {
@@ -14145,7 +14145,7 @@ impl InterpreterCore {
             "builtin:MathAtan2" => {
                 // Math.atan2(y, x) implementation
                 if args.count < 3 {
-                    return Ok(Value::Float(FixedF64::from_f64(f64::NAN)));
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
                 let y_val = self.read_reg(args.start + 1)?;
@@ -14171,7 +14171,7 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                Ok(Value::Float(FixedF64::from_f64(y.atan2(x))))
+                Ok(Value::Float(Float64::new(y.atan2(x))))
             }
 
             "builtin:ArrayPrototypeEvery" => {
@@ -14204,11 +14204,9 @@ impl InterpreterCore {
                     for i in 0..length {
                         if let Some(element) = obj.properties.get(&i.to_string()) {
                             let is_truthy = match element {
-                                Value::Bool(false) | Value::Int(0) | Value::Float(f)
-                                    if f.inner() == 0.0 =>
-                                {
-                                    false
-                                }
+                                Value::Bool(false) => false,
+                                Value::Int(0) => false,
+                                Value::Float(f) if f.inner() == 0.0 => false,
                                 Value::Str(s) if s.is_empty() => false,
                                 Value::Null | Value::Undefined => false,
                                 _ => true,
@@ -14230,9 +14228,9 @@ impl InterpreterCore {
                     Value::Object(_) => {
                         // For now, return a fixed timestamp (simplified implementation)
                         // In a real implementation, this would read from the Date object's internal slot
-                        Ok(Value::Float(FixedF64::from_f64(1713355200000.0))) // 2024-04-17 12:00:00 UTC
+                        Ok(Value::Float(Float64::new(1713355200000.0))) // 2024-04-17 12:00:00 UTC
                     }
-                    _ => Ok(Value::Float(FixedF64::from_f64(f64::NAN))), // Non-Date objects return NaN
+                    _ => Ok(Value::Float(Float64::new(f64::NAN))), // Non-Date objects return NaN
                 }
             }
 
@@ -14279,7 +14277,7 @@ impl InterpreterCore {
             "builtin:MathLog10" => {
                 // Math.log10(x) implementation
                 if args.count == 0 {
-                    return Ok(Value::Float(FixedF64::from_f64(f64::NAN)));
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
                 let val = self.read_reg(args.start)?;
@@ -14293,7 +14291,7 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                Ok(Value::Float(FixedF64::from_f64(num.log10())))
+                Ok(Value::Float(Float64::new(num.log10())))
             }
 
             "builtin:ArrayPrototypeSome" => {
@@ -14326,11 +14324,9 @@ impl InterpreterCore {
                     for i in 0..length {
                         if let Some(element) = obj.properties.get(&i.to_string()) {
                             let is_truthy = match element {
-                                Value::Bool(false) | Value::Int(0) | Value::Float(f)
-                                    if f.inner() == 0.0 =>
-                                {
-                                    false
-                                }
+                                Value::Bool(false) => false,
+                                Value::Int(0) => false,
+                                Value::Float(f) if f.inner() == 0.0 => false,
                                 Value::Str(s) if s.is_empty() => false,
                                 Value::Null | Value::Undefined => false,
                                 _ => true,

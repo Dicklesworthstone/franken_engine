@@ -8738,36 +8738,21 @@ impl InterpreterCore {
 
                 use std::time::{SystemTime, UNIX_EPOCH};
 
-                match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(duration) => {
-                        let millis = duration.as_millis() as f64;
+                let millis = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => duration.as_millis() as f64,
+                    Err(_) => 0.0,
+                };
 
-                        // Create a new Date object with current timestamp
-                        let date_id = ObjectId(self.next_object_id());
-                        let mut date_obj = Object::new();
-
-                        // Store internal [[DateValue]] as timestamp in milliseconds
-                        date_obj.properties.insert(
-                            "__timestamp".to_string(),
-                            Value::Float(Float64::new(millis)),
-                        );
-
-                        // Add standard Date properties/methods would go here in full implementation
-                        self.heap.push(date_obj);
-
-                        Ok(Value::Object(date_id))
-                    }
-                    Err(_) => {
-                        // Fallback - create Date with epoch time
-                        let date_id = ObjectId(self.next_object_id());
-                        let mut date_obj = Object::new();
-                        date_obj
-                            .properties
-                            .insert("__timestamp".to_string(), Value::Float(Float64::new(0.0)));
-                        self.heap.push(date_obj);
-                        Ok(Value::Object(date_id))
-                    }
-                }
+                // Create a new Date object with current timestamp. Use the
+                // capability-checked allocator rather than poking the heap
+                // Vec directly.
+                let date_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(
+                    date_id,
+                    "__timestamp".to_string(),
+                    Value::Float(Float64::new(millis)),
+                )?;
+                Ok(Value::Object(date_id))
             }
             "builtin:MathPow" => {
                 // Math.pow(base, exponent) implementation
@@ -9210,47 +9195,43 @@ impl InterpreterCore {
                     None
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Create a new array for the result
-                    let result_id = ObjectId(self.next_object_id());
-                    let mut result_obj = Object::new();
-
-                    // Set length property
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(length as i64));
-
-                    // Collect indexed values and process them (simplified)
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
+                // Snapshot length + indexed values from heap under an
+                // immutable borrow so we can release it before the &mut self
+                // allocator/setter calls below.
+                let snapshot: Option<(usize, Vec<(usize, Value)>)> =
+                    self.heap.get(array_id.0 as usize).map(|array_obj| {
+                        let length = array_obj
+                            .properties
+                            .get("length")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i as usize),
+                                Value::Float(f) => Some(f.inner() as usize),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                        for (key, value) in &array_obj.properties {
+                            if let Ok(index) = key.parse::<usize>() {
+                                if index < length {
+                                    indexed_values.push((index, value.clone()));
+                                }
                             }
                         }
-                    }
+                        (length, indexed_values)
+                    });
 
-                    // Sort by index and add to result array (simplified - just copy values)
+                if let Some((length, mut indexed_values)) = snapshot {
+                    let result_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(
+                        result_id,
+                        "length".to_string(),
+                        Value::Int(length as i64),
+                    )?;
                     indexed_values.sort_by_key(|(index, _)| *index);
                     for (index, value) in indexed_values {
                         // TODO: In full implementation, would call callback and use result
-                        // For now, just copy the original values
-                        result_obj.properties.insert(index.to_string(), value);
+                        self.set_object_property(result_id, index.to_string(), value)?;
                     }
-
-                    self.heap.push(result_obj);
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -9275,51 +9256,44 @@ impl InterpreterCore {
                     None
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Create a new array for the filtered result
-                    let result_id = ObjectId(self.next_object_id());
-                    let mut result_obj = Object::new();
-
-                    // Collect indexed values (simplified - just copy all for now)
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
+                // Snapshot indexed values under an immutable borrow so we
+                // can release it before the &mut self calls.
+                let snapshot: Option<Vec<(usize, Value)>> =
+                    self.heap.get(array_id.0 as usize).map(|array_obj| {
+                        let length = array_obj
+                            .properties
+                            .get("length")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i as usize),
+                                Value::Float(f) => Some(f.inner() as usize),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                        for (key, value) in &array_obj.properties {
+                            if let Ok(index) = key.parse::<usize>() {
+                                if index < length {
+                                    indexed_values.push((index, value.clone()));
+                                }
                             }
                         }
-                    }
+                        indexed_values
+                    });
 
-                    // Sort by index and add to result array (simplified - copy all values)
+                if let Some(mut indexed_values) = snapshot {
+                    let result_id = self.alloc_object_with_prototype(None)?;
                     indexed_values.sort_by_key(|(index, _)| *index);
-                    let mut result_index = 0;
+                    let mut result_index: u64 = 0;
                     for (_index, value) in indexed_values {
                         // TODO: In full implementation, would call callback and filter
-                        // For now, just copy all values to demonstrate structure
-                        result_obj
-                            .properties
-                            .insert(result_index.to_string(), value);
+                        self.set_object_property(result_id, result_index.to_string(), value)?;
                         result_index += 1;
                     }
-
-                    // Set length property
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(result_index as i64));
-
-                    self.heap.push(result_obj);
+                    self.set_object_property(
+                        result_id,
+                        "length".to_string(),
+                        Value::Int(result_index as i64),
+                    )?;
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -9494,51 +9468,49 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined), // Non-arrays return undefined
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Create a new array for the concatenated result
-                    let result_id = ObjectId(self.next_object_id());
-                    let mut result_obj = Object::new();
-
-                    // Get original array length
-                    let original_length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Copy original array elements first
-                    let mut result_index = 0;
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < original_length {
-                                result_obj
-                                    .properties
-                                    .insert(result_index.to_string(), value.clone());
-                                result_index += 1;
+                // Snapshot original elements under an immutable borrow so
+                // we can release it before the &mut self calls below.
+                let snapshot: Option<Vec<(usize, Value)>> =
+                    self.heap.get(array_id.0 as usize).map(|array_obj| {
+                        let original_length = array_obj
+                            .properties
+                            .get("length")
+                            .and_then(|v| match v {
+                                Value::Int(i) => Some(*i as usize),
+                                Value::Float(f) => Some(f.inner() as usize),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let mut entries: Vec<(usize, Value)> = Vec::new();
+                        for (key, value) in &array_obj.properties {
+                            if let Ok(index) = key.parse::<usize>() {
+                                if index < original_length {
+                                    entries.push((index, value.clone()));
+                                }
                             }
                         }
-                    }
+                        entries.sort_by_key(|(i, _)| *i);
+                        entries
+                    });
 
-                    // Add additional arguments (simplified - just add non-array values directly)
-                    for i in 1..args.count {
-                        let item = self.read_reg(args.start + i)?;
-                        // TODO: In full implementation, would handle array arguments by spreading them
-                        // For now, just add the item directly
-                        result_obj.properties.insert(result_index.to_string(), item);
+                if let Some(entries) = snapshot {
+                    let result_id = self.alloc_object_with_prototype(None)?;
+                    let mut result_index: u64 = 0;
+                    for (_k, value) in entries {
+                        self.set_object_property(result_id, result_index.to_string(), value)?;
                         result_index += 1;
                     }
-
-                    // Set length property
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(result_index as i64));
-
-                    self.heap.push(result_obj);
+                    // Add additional arguments (simplified).
+                    for i in 1..args.count {
+                        let item = self.read_reg(args.start + i)?;
+                        self.set_object_property(result_id, result_index.to_string(), item)?;
+                        result_index += 1;
+                    }
+                    self.set_object_property(
+                        result_id,
+                        "length".to_string(),
+                        Value::Int(result_index as i64),
+                    )?;
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -9552,17 +9524,14 @@ impl InterpreterCore {
                     Value::Undefined
                 };
 
-                // Create a new Promise object (simplified - just wraps the value)
-                let promise_id = ObjectId(self.next_object_id());
-                let mut promise_obj = Object::new();
-
-                // Store the resolved value and state
-                promise_obj
-                    .properties
-                    .insert("__state".to_string(), Value::Str("fulfilled".to_string()));
-                promise_obj.properties.insert("__value".to_string(), value);
-
-                self.heap.push(promise_obj);
+                // Create a new Promise object (simplified - just wraps the value).
+                let promise_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(
+                    promise_id,
+                    "__state".to_string(),
+                    Value::Str("fulfilled".to_string()),
+                )?;
+                self.set_object_property(promise_id, "__value".to_string(), value)?;
                 Ok(Value::Object(promise_id))
             }
             "builtin:ArrayPrototypeReduce" => {
@@ -9719,6 +9688,213 @@ impl InterpreterCore {
                     Ok(Value::Bool(false))
                 }
             }
+            "builtin:ArrayPrototypeSort" => {
+                // Array.prototype.sort([compareFunction]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(this_val), // Non-arrays return themselves
+                };
+
+                let _compare_fn = if args.count > 1 {
+                    Some(self.read_reg(args.start + 1)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    if length <= 1 {
+                        return Ok(Value::Object(array_id)); // Nothing to sort
+                    }
+
+                    // Collect indexed properties
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Simple lexicographic sort (TODO: implement compareFunction support)
+                    indexed_values.sort_by(|a, b| {
+                        let a_str = match &a.1 {
+                            Value::Str(s) => s.clone(),
+                            Value::Int(i) => i.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => "".to_string(),
+                        };
+                        let b_str = match &b.1 {
+                            Value::Str(s) => s.clone(),
+                            Value::Int(i) => i.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => "".to_string(),
+                        };
+                        a_str.cmp(&b_str)
+                    });
+
+                    // Remove old indexed properties
+                    array_obj
+                        .properties
+                        .retain(|k, _| k.parse::<usize>().is_err());
+
+                    // Add back in sorted order
+                    for (new_index, (_, value)) in indexed_values.into_iter().enumerate() {
+                        array_obj.properties.insert(new_index.to_string(), value);
+                    }
+
+                    Ok(Value::Object(array_id))
+                } else {
+                    Ok(this_val)
+                }
+            }
+            "builtin:Error" => {
+                // Error(message) constructor implementation
+                let message = if args.count > 0 {
+                    let msg_val = self.read_reg(args.start)?;
+                    match msg_val {
+                        Value::Str(s) => s,
+                        Value::Int(i) => i.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => "Error".to_string(),
+                    }
+                } else {
+                    String::new()
+                };
+
+                // Create a new Error object
+                let error_id = ObjectId(self.next_object_id());
+                let mut error_obj = Object::new();
+
+                // Set standard Error properties
+                error_obj
+                    .properties
+                    .insert("name".to_string(), Value::Str("Error".to_string()));
+                error_obj
+                    .properties
+                    .insert("message".to_string(), Value::Str(message));
+
+                self.heap.push(error_obj);
+                Ok(Value::Object(error_id))
+            }
+            "builtin:StringPrototypePadEnd" => {
+                // String.prototype.padEnd(targetLength[, padString]) implementation
+                if args.count == 0 {
+                    return self.read_reg(args.start);
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(this_val),
+                };
+
+                // Get target length
+                let target_length = if args.count > 1 {
+                    let len_val = self.read_reg(args.start + 1)?;
+                    match len_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => this_str.len(),
+                    }
+                } else {
+                    this_str.len()
+                };
+
+                // Get pad string
+                let pad_str = if args.count > 2 {
+                    let pad_val = self.read_reg(args.start + 2)?;
+                    match pad_val {
+                        Value::Str(s) => s,
+                        Value::Int(i) => i.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => " ".to_string(),
+                        _ => " ".to_string(),
+                    }
+                } else {
+                    " ".to_string()
+                };
+
+                if target_length <= this_str.len() {
+                    Ok(Value::Str(this_str))
+                } else {
+                    let pad_needed = target_length - this_str.len();
+                    let mut padding = String::new();
+
+                    // Repeat pad string until we have enough padding
+                    while padding.len() < pad_needed {
+                        padding.push_str(&pad_str);
+                    }
+
+                    // Truncate to exact length needed
+                    padding.truncate(pad_needed);
+                    let result = format!("{}{}", this_str, padding);
+                    Ok(Value::Str(result))
+                }
+            }
+            "builtin:MathTrunc" => {
+                // Math.trunc(x) implementation - truncates decimal part of number
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => return Ok(Value::Int(i)), // Already truncated
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                if num.is_nan() || num.is_infinite() {
+                    Ok(Value::Float(Float64::new(num)))
+                } else {
+                    let truncated = num.trunc();
+                    // Return as int if it fits in i64 range
+                    if truncated >= i64::MIN as f64 && truncated <= i64::MAX as f64 {
+                        Ok(Value::Int(truncated as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(truncated)))
+                    }
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -9806,6 +9982,7 @@ impl InterpreterCore {
             62 => Some("builtin:MathExp".to_string()),
             63 => Some("builtin:MathTan".to_string()),
             64 => Some("builtin:MathPI".to_string()),
+            65 => Some("builtin:MathTrunc".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
@@ -9814,6 +9991,7 @@ impl InterpreterCore {
             41 => Some("builtin:StringPrototypeReplace".to_string()),
             42 => Some("builtin:StringPrototypeRepeat".to_string()),
             43 => Some("builtin:StringPrototypePadStart".to_string()),
+            44 => Some("builtin:StringPrototypePadEnd".to_string()),
 
             // Additional Array methods
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
@@ -9823,12 +10001,16 @@ impl InterpreterCore {
             25 => Some("builtin:ArrayPrototypeFind".to_string()),
             26 => Some("builtin:ArrayPrototypeConcat".to_string()),
             27 => Some("builtin:ArrayPrototypeReduce".to_string()),
+            28 => Some("builtin:ArrayPrototypeSort".to_string()),
 
             // Promise methods
             120 => Some("builtin:PromiseResolve".to_string()),
 
             // Additional Object methods
             6 => Some("builtin:ObjectHasOwnProperty".to_string()),
+
+            // Error constructors
+            130 => Some("builtin:Error".to_string()),
 
             _ => None, // Not a recognized builtin
         }

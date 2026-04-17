@@ -6879,8 +6879,40 @@ impl InterpreterCore {
 
             // JSON methods
             "builtin:JsonStringify" => {
-                // TODO: Implement JSON.stringify
-                Ok(Value::Str("\"\"".to_string()))
+                // JSON.stringify implementation - converts value to JSON string
+                if args.count == 0 {
+                    return Ok(Value::Str("undefined".to_string()));
+                }
+
+                let value = self.read_reg(args.start)?;
+                let json_str = match value {
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => {
+                        let val = f.inner();
+                        if val.is_nan() || val.is_infinite() {
+                            "null".to_string()
+                        } else {
+                            val.to_string()
+                        }
+                    },
+                    Value::Str(s) => format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\")),
+                    Value::Object(_) => "{}".to_string(), // Basic object stringification
+                    Value::Function(_) => "undefined".to_string(),
+                    Value::Closure(_) => "undefined".to_string(),
+                    Value::Iterator(_) => "{}".to_string(),
+                    Value::GeneratorFunction(_) => "undefined".to_string(),
+                    Value::Promise(_) => "{}".to_string(),
+                    Value::Generator(_) => "{}".to_string(),
+                    Value::AsyncFunction(_) => "undefined".to_string(),
+                    Value::AsyncFunctionObject(_) => "{}".to_string(),
+                    Value::AsyncGeneratorFunction(_) => "undefined".to_string(),
+                    Value::AsyncGeneratorObject(_) => "{}".to_string(),
+                    Value::BuiltinFunction(_) => "undefined".to_string(),
+                };
+                Ok(Value::Str(json_str))
             }
 
             _ => {

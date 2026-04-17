@@ -181,8 +181,8 @@ impl PolicyExplanationCardView {
             decision_id: normalize_non_empty(input.decision_id),
             policy_id: normalize_non_empty(input.policy_id),
             selected_action: normalize_non_empty(input.selected_action),
-            confidence_millionths: input.confidence_millionths.unwrap(),
-            expected_loss_millionths: input.expected_loss_millionths.unwrap(),
+            confidence_millionths: input.confidence_millionths.unwrap_or(0),
+            expected_loss_millionths: input.expected_loss_millionths.unwrap_or(0),
             action_candidates: input.action_candidates,
             key_drivers: input.key_drivers,
         }
@@ -230,7 +230,7 @@ impl ControlDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap(),
+            security_epoch: input.security_epoch.unwrap_or(0),
             runtime_mode: normalize_non_empty(input.runtime_mode),
             metrics: input.metrics,
             extension_rows: input.extension_rows,
@@ -624,8 +624,8 @@ impl ControlPlaneInvariantsDashboardView {
             rule.description = normalize_non_empty(std::mem::take(&mut rule.description));
         }
 
-        let refresh_policy = input.refresh_policy.unwrap().normalized();
-        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap();
+        let refresh_policy = input.refresh_policy.unwrap_or_default().normalized();
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or(0);
         let evidence_stream_last_updated_unix_ms = input
             .evidence_stream_last_updated_unix_ms
             .or_else(|| evidence_stream.last().map(|entry| entry.timestamp_unix_ms))
@@ -643,13 +643,13 @@ impl ControlPlaneInvariantsDashboardView {
         let region_lifecycle = input
             .region_lifecycle
             .unwrap_or_else(|| summarize_region_lifecycle(&region_rows));
-        let replay_health = input.replay_health.unwrap();
-        let schema_version = input.schema_version.unwrap();
+        let replay_health = input.replay_health.unwrap_or_default();
+        let schema_version = input.schema_version.unwrap_or_default();
         let benchmark_trends = BenchmarkTrendsPanelView {
             points: benchmark_points,
-            throughput_floor_tps: input.throughput_floor_tps.unwrap(),
-            latency_p95_ceiling_ms: input.latency_p95_ceiling_ms.unwrap(),
-            memory_peak_ceiling_mb: input.memory_peak_ceiling_mb.unwrap(),
+            throughput_floor_tps: input.throughput_floor_tps.unwrap_or(0),
+            latency_p95_ceiling_ms: input.latency_p95_ceiling_ms.unwrap_or(0),
+            memory_peak_ceiling_mb: input.memory_peak_ceiling_mb.unwrap_or(0),
         };
 
         Self {

@@ -22,14 +22,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 use crate::react_compile_verification::CompileMode;
-use crate::react_package_cohort::{CohortMatrix, ReactPackage};
+use crate::react_package_cohort::ReactPackage;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -56,9 +55,6 @@ pub const DEFAULT_COMPATIBILITY_THRESHOLD: u64 = 950_000;
 
 /// Maximum number of ecosystem patterns to test per run.
 const MAX_ECOSYSTEM_PATTERNS: usize = 10_000;
-
-/// Maximum number of package configurations per test.
-const MAX_PACKAGE_CONFIGURATIONS: usize = 1_000;
 
 // ---------------------------------------------------------------------------
 // EcosystemMode
@@ -422,29 +418,33 @@ impl Default for CompatibilityMetrics {
 impl CompatibilityMetrics {
     /// Computes the overall compatibility score.
     pub fn compute_compatibility_score(&self) -> u64 {
-        // Simple scoring: average of all success rates
-        let total_operations = self.packages_resolved
-            + self.entry_points_loaded
-            + self.subpaths_resolved
-            + self.compilations_successful
-            + self.runtime_operations_successful;
+        // Simple scoring: equal weight for each category that had any operations attempted
+        let mut total_score = 0u64;
+        let mut categories_with_operations = 0;
 
-        if total_operations == 0 {
-            return 0;
+        // Count non-zero categories and sum their contributions
+        if self.packages_resolved > 0 {
+            categories_with_operations += 1;
+            total_score += MILLIONTHS / 5; // 200,000 millionths per category
+        }
+        if self.entry_points_loaded > 0 {
+            categories_with_operations += 1;
+            total_score += MILLIONTHS / 5;
+        }
+        if self.subpaths_resolved > 0 {
+            categories_with_operations += 1;
+            total_score += MILLIONTHS / 5;
+        }
+        if self.compilations_successful > 0 {
+            categories_with_operations += 1;
+            total_score += MILLIONTHS / 5;
+        }
+        if self.runtime_operations_successful > 0 {
+            categories_with_operations += 1;
+            total_score += MILLIONTHS / 5;
         }
 
-        // Each category contributes equally to the score
-        let package_weight = MILLIONTHS / 5;
-        let entry_weight = MILLIONTHS / 5;
-        let subpath_weight = MILLIONTHS / 5;
-        let compile_weight = MILLIONTHS / 5;
-        let runtime_weight = MILLIONTHS / 5;
-
-        self.packages_resolved as u64 * package_weight
-            + self.entry_points_loaded as u64 * entry_weight
-            + self.subpaths_resolved as u64 * subpath_weight
-            + self.compilations_successful as u64 * compile_weight
-            + self.runtime_operations_successful as u64 * runtime_weight
+        total_score
     }
 }
 

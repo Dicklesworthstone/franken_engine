@@ -15,8 +15,6 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
-
 use frankenengine_engine::react_compile_verification::CompileMode;
 use frankenengine_engine::react_ecosystem_compatibility::*;
 use frankenengine_engine::react_package_cohort::ReactPackage;

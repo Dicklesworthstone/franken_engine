@@ -54,7 +54,7 @@ pub enum TestIsolationLevel {
     Process,
 }
 
-/// Deterministic test fixture generator
+/// Deterministic test fixture generatorerator
 #[derive(Debug, Clone)]
 pub struct TestFixtureGenerator {
     seed: u64,
@@ -62,7 +62,7 @@ pub struct TestFixtureGenerator {
 }
 
 impl TestFixtureGenerator {
-    /// Create a new fixture generator with deterministic seed
+    /// Create a new fixture generatorerator with deterministic seed
     pub fn new(seed: u64) -> Self {
         Self { seed, counter: 0 }
     }
@@ -82,11 +82,12 @@ impl TestFixtureGenerator {
             ),
         };
 
+        let checksum = self.compute_checksum(&content);
         TestSource {
             id: format!("test_source_{}", self.counter),
             content,
             complexity,
-            checksum: self.compute_checksum(&content),
+            checksum,
         }
     }
 
@@ -104,7 +105,7 @@ impl TestFixtureGenerator {
         TestData {
             id: format!("test_data_{}", self.counter),
             entries: data,
-            generation_seed: self.seed,
+            generatoreration_seed: self.seed,
         }
     }
 
@@ -113,7 +114,7 @@ impl TestFixtureGenerator {
     }
 }
 
-/// Source complexity levels for test generation
+/// Source complexity levels for test generatoreration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceComplexity {
@@ -136,7 +137,7 @@ pub struct TestSource {
 pub struct TestData {
     pub id: String,
     pub entries: BTreeMap<String, u64>,
-    pub generation_seed: u64,
+    pub generatoreration_seed: u64,
 }
 
 /// Runtime test harness for execution validation
@@ -224,8 +225,11 @@ impl ParserTestHarness {
     pub fn execute_parser_test(&mut self, test_spec: ParserTestSpec) -> TestResult {
         let start_time = std::time::Instant::now();
 
+        // Extract needed fields before any moves
+        let source_complexity = test_spec.source_complexity;
+
         // Generate deterministic parser test cases
-        let source = self.fixture_generator.generate_source(test_spec.source_complexity);
+        let source = self.fixture_generator.generate_source(source_complexity);
 
         // Execute parser validation (mock implementation)
         let success = self.mock_parser_validation(&source, &test_spec);
@@ -456,11 +460,11 @@ mod tests {
 
     #[test]
     fn test_fixture_generator_deterministic() {
-        let mut gen1 = TestFixtureGenerator::new(42);
-        let mut gen2 = TestFixtureGenerator::new(42);
+        let mut generator1 = TestFixtureGenerator::new(42);
+        let mut generator2 = TestFixtureGenerator::new(42);
 
-        let source1 = gen1.generate_source(SourceComplexity::Simple);
-        let source2 = gen2.generate_source(SourceComplexity::Simple);
+        let source1 = generator1.generate_source(SourceComplexity::Simple);
+        let source2 = generator2.generate_source(SourceComplexity::Simple);
 
         assert_eq!(source1.content, source2.content);
         assert_eq!(source1.checksum, source2.checksum);
@@ -468,33 +472,33 @@ mod tests {
 
     #[test]
     fn test_fixture_generator_different_seeds() {
-        let mut gen1 = TestFixtureGenerator::new(42);
-        let mut gen2 = TestFixtureGenerator::new(43);
+        let mut generator1 = TestFixtureGenerator::new(42);
+        let mut generator2 = TestFixtureGenerator::new(43);
 
-        let source1 = gen1.generate_source(SourceComplexity::Simple);
-        let source2 = gen2.generate_source(SourceComplexity::Simple);
+        let source1 = generator1.generate_source(SourceComplexity::Simple);
+        let source2 = generator2.generate_source(SourceComplexity::Simple);
 
         assert_ne!(source1.content, source2.content);
     }
 
     #[test]
     fn test_fixture_generator_sequence() {
-        let mut gen = TestFixtureGenerator::new(100);
+        let mut generator = TestFixtureGenerator::new(100);
 
-        let source1 = gen.generate_source(SourceComplexity::Simple);
-        let source2 = gen.generate_source(SourceComplexity::Simple);
+        let source1 = generator.generate_source(SourceComplexity::Simple);
+        let source2 = generator.generate_source(SourceComplexity::Simple);
 
         assert_ne!(source1.id, source2.id);
         assert_ne!(source1.content, source2.content);
     }
 
     #[test]
-    fn test_test_data_generation() {
-        let mut gen = TestFixtureGenerator::new(200);
-        let data = gen.generate_test_data(5);
+    fn test_test_data_generatoreration() {
+        let mut generator = TestFixtureGenerator::new(200);
+        let data = generator.generate_test_data(5);
 
         assert_eq!(data.entries.len(), 5);
-        assert_eq!(data.generation_seed, 200);
+        assert_eq!(data.generatoreration_seed, 200);
         assert!(data.id.starts_with("test_data_"));
     }
 
@@ -628,11 +632,11 @@ mod tests {
 
     #[test]
     fn test_source_complexity_variants() {
-        let mut gen = TestFixtureGenerator::new(333);
+        let mut generator = TestFixtureGenerator::new(333);
 
-        let simple = gen.generate_source(SourceComplexity::Simple);
-        let moderate = gen.generate_source(SourceComplexity::Moderate);
-        let complex = gen.generate_source(SourceComplexity::Complex);
+        let simple = generator.generate_source(SourceComplexity::Simple);
+        let moderate = generator.generate_source(SourceComplexity::Moderate);
+        let complex = generator.generate_source(SourceComplexity::Complex);
 
         assert!(simple.content.contains("const"));
         assert!(moderate.content.contains("function"));
@@ -715,19 +719,19 @@ mod tests {
 
     #[test]
     fn test_empty_test_data() {
-        let mut gen = TestFixtureGenerator::new(0);
-        let data = gen.generate_test_data(0);
+        let mut generator = TestFixtureGenerator::new(0);
+        let data = generator.generate_test_data(0);
 
         assert!(data.entries.is_empty());
-        assert_eq!(data.generation_seed, 0);
+        assert_eq!(data.generatoreration_seed, 0);
     }
 
     #[test]
     fn test_large_test_data() {
-        let mut gen = TestFixtureGenerator::new(1000);
-        let data = gen.generate_test_data(100);
+        let mut generator = TestFixtureGenerator::new(1000);
+        let data = generator.generate_test_data(100);
 
         assert_eq!(data.entries.len(), 100);
-        assert_eq!(data.generation_seed, 1000);
+        assert_eq!(data.generatoreration_seed, 1000);
     }
 }

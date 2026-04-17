@@ -9052,7 +9052,7 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined), // Non-arrays are ignored
                 };
 
-                let callback = self.read_reg(args.start + 1)?;
+                let _callback = self.read_reg(args.start + 1)?;
                 let _this_arg = if args.count > 2 {
                     Some(self.read_reg(args.start + 2)?)
                 } else {
@@ -10202,13 +10202,9 @@ impl InterpreterCore {
                     1
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Create a new flattened array
-                    let result_id = self.alloc_object_with_prototype(None)?;
-
-                    // Get array length
-                    let length = array_obj
+                // Get array length first
+                let length = if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    array_obj
                         .properties
                         .get("length")
                         .and_then(|v| match v {
@@ -10216,7 +10212,14 @@ impl InterpreterCore {
                             Value::Float(f) => Some(f.inner() as usize),
                             _ => None,
                         })
-                        .unwrap_or(0);
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+
+                if length > 0 {
+                    // Create a new flattened array
+                    let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Collect elements (simplified - one level flattening only)
                     let mut flat_elements: Vec<Value> = Vec::new();
@@ -10508,8 +10511,8 @@ impl InterpreterCore {
                 self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
 
                 // Create internal entries storage
-                let entries_id = self.next_object_id() - 1;
-                let entries_obj = Object::new();
+                let _entries_id = self.next_object_id() - 1;
+                let _entries_obj = Object::new();
                 // TODO: If iterable argument provided, populate map with entries
                 if args.count > 0 {
                     // Simplified: ignore iterable for now
@@ -10533,7 +10536,7 @@ impl InterpreterCore {
                 set_obj.properties.insert("size".to_string(), Value::Int(0));
 
                 // Create internal values storage
-                let values_id = self.next_object_id() - 1;
+                let _values_id = self.next_object_id() - 1;
                 let values_obj = Object::new();
                 self.heap.push(values_obj);
 
@@ -10560,7 +10563,7 @@ impl InterpreterCore {
                 );
 
                 // Create internal entries storage (simplified - using regular object)
-                let entries_id = self.next_object_id() - 1;
+                let _entries_id = self.next_object_id() - 1;
                 let entries_obj = Object::new();
                 self.heap.push(entries_obj);
 
@@ -10588,7 +10591,7 @@ impl InterpreterCore {
                 );
 
                 // Create internal values storage (simplified - using regular object)
-                let values_id = self.next_object_id() - 1;
+                let _values_id = self.next_object_id() - 1;
                 let values_obj = Object::new();
                 self.heap.push(values_obj);
 
@@ -11144,7 +11147,7 @@ impl InterpreterCore {
                 let _callback = self.read_reg(args.start + 1)?;
 
                 // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
                     match obj.properties.get("length") {
                         Some(Value::Int(len)) => *len as usize,
                         Some(Value::Float(len)) => len.inner() as usize,

@@ -11780,6 +11780,244 @@ impl InterpreterCore {
                 Ok(Value::Str("Invalid Date".to_string()))
             }
 
+            "builtin:ObjectPrototypeValueOf" => {
+                // Object.prototype.valueOf() implementation
+                let this_val = self.read_reg(args.start)?;
+
+                // For objects, return the object itself (by reference)
+                // For primitives, return the primitive value
+                match this_val {
+                    Value::Object(obj_id) => {
+                        // For most objects, valueOf returns the object itself
+                        // Special handling could be added for Date, Number wrapper objects, etc.
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            // Check for special object types that have primitive values
+                            if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
+                                match type_val.as_str() {
+                                    "Number" => {
+                                        // For Number wrapper objects, return the primitive number
+                                        if let Some(value) = obj.properties.get("__value") {
+                                            return Ok(value.clone());
+                                        }
+                                    }
+                                    "String" => {
+                                        // For String wrapper objects, return the primitive string
+                                        if let Some(value) = obj.properties.get("__value") {
+                                            return Ok(value.clone());
+                                        }
+                                    }
+                                    "Boolean" => {
+                                        // For Boolean wrapper objects, return the primitive boolean
+                                        if let Some(value) = obj.properties.get("__value") {
+                                            return Ok(value.clone());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        // Default: return the object itself
+                        Ok(Value::Object(obj_id))
+                    }
+                    // For primitives, return the value as-is
+                    _ => Ok(this_val),
+                }
+            }
+
+            "builtin:ArrayPrototypeFlatMap" => {
+                // Array.prototype.flatMap(callback) implementation
+                if args.count < 2 {
+                    // Return empty array if no callback provided
+                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(
+                        empty_array_id,
+                        "length".to_string(),
+                        Value::Int(0),
+                    )?;
+                    return Ok(Value::Object(empty_array_id));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => {
+                        // Non-objects can't be arrays, return empty array
+                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        self.set_object_property(
+                            empty_array_id,
+                            "length".to_string(),
+                            Value::Int(0),
+                        )?;
+                        return Ok(Value::Object(empty_array_id));
+                    }
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+
+                // Get array length
+                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // For now, simplified implementation without function call support
+                // Return empty array since we can't execute callback functions yet
+                // TODO: Implement function call mechanism for full flatMap support
+                let empty_array_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(
+                    empty_array_id,
+                    "length".to_string(),
+                    Value::Int(0),
+                )?;
+                Ok(Value::Object(empty_array_id))
+            }
+
+            "builtin:MathHypot" => {
+                // Math.hypot(...values) implementation - Euclidean distance
+                if args.count == 0 {
+                    return Ok(Value::Float(0.0.into()));
+                }
+
+                let mut sum_of_squares = 0.0;
+                let mut has_infinity = false;
+                let mut has_nan = false;
+
+                // Process all arguments
+                for i in 0..args.count {
+                    let arg_val = self.read_reg(args.start + i)?;
+                    let num_val = match arg_val {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f.inner(),
+                        _ => f64::NAN,
+                    };
+
+                    if num_val.is_nan() {
+                        has_nan = true;
+                    } else if num_val.is_infinite() {
+                        has_infinity = true;
+                    } else {
+                        sum_of_squares += num_val * num_val;
+                    }
+                }
+
+                let result = if has_nan {
+                    f64::NAN
+                } else if has_infinity {
+                    f64::INFINITY
+                } else {
+                    sum_of_squares.sqrt()
+                };
+
+                Ok(Value::Float(result.into()))
+            }
+
+            "builtin:ArrayPrototypeCopyWithin" => {
+                // Array.prototype.copyWithin(target, start, end) implementation
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as i32,
+                        Some(Value::Float(len)) => len.inner() as i32,
+                        _ => return Ok(Value::Object(array_id)),
+                    }
+                } else {
+                    return Ok(Value::Object(array_id));
+                };
+
+                if length == 0 {
+                    return Ok(Value::Object(array_id));
+                }
+
+                let target = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(t) => t as i32,
+                        Value::Float(t) => t.inner() as i32,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let start = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(s) => s as i32,
+                        Value::Float(s) => s.inner() as i32,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let end = if args.count >= 4 {
+                    match self.read_reg(args.start + 3)? {
+                        Value::Int(e) => e as i32,
+                        Value::Float(e) => e.inner() as i32,
+                        _ => length,
+                    }
+                } else {
+                    length
+                };
+
+                // Normalize negative indices
+                let target_idx = if target < 0 {
+                    (length + target).max(0) as usize
+                } else {
+                    (target as usize).min(length as usize)
+                };
+
+                let start_idx = if start < 0 {
+                    (length + start).max(0) as usize
+                } else {
+                    (start as usize).min(length as usize)
+                };
+
+                let end_idx = if end < 0 {
+                    (length + end).max(0) as usize
+                } else {
+                    (end as usize).min(length as usize)
+                };
+
+                // Copy elements within bounds
+                if start_idx < end_idx && target_idx < length as usize {
+                    let copy_length = (end_idx - start_idx).min(length as usize - target_idx);
+
+                    // Create a temporary copy of the elements to move
+                    let mut elements_to_copy = Vec::new();
+                    if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                        for i in 0..copy_length {
+                            let source_idx = start_idx + i;
+                            if let Some(element) = obj.properties.get(&source_idx.to_string()) {
+                                elements_to_copy.push(element.clone());
+                            } else {
+                                elements_to_copy.push(Value::Undefined);
+                            }
+                        }
+                    }
+
+                    // Copy the elements to the target location
+                    for (i, element) in elements_to_copy.into_iter().enumerate() {
+                        self.set_object_property(
+                            array_id,
+                            (target_idx + i).to_string(),
+                            element,
+                        )?;
+                    }
+                }
+
+                Ok(Value::Object(array_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11951,6 +12189,10 @@ impl InterpreterCore {
             199 => Some("builtin:StringPrototypeLocaleCompare".to_string()),
             200 => Some("builtin:DatePrototypeGetTime".to_string()),
             201 => Some("builtin:DatePrototypeToString".to_string()),
+            205 => Some("builtin:ObjectPrototypeValueOf".to_string()),
+            206 => Some("builtin:ArrayPrototypeFlatMap".to_string()),
+            207 => Some("builtin:MathHypot".to_string()),
+            208 => Some("builtin:ArrayPrototypeCopyWithin".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -1955,6 +1955,136 @@ fn parse_react_contract_command(args: &[String]) -> Result<CommandSpec, String> 
     })))
 }
 
+// New consolidated subcommand parsing functions
+fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Gates));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Gates)),
+        "zero-placeholder" => {
+            // Simplified parsing - in full implementation, parse --out-dir and --waivers
+            let out_dir = PathBuf::from("artifacts/gates/zero_placeholder");
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::ZeroPlaceholder { out_dir, waivers: None },
+            }))
+        }
+        "signature-drift" => {
+            let out_dir = PathBuf::from("artifacts/gates/signature_drift");
+            Ok(CommandSpec::Gates(GatesArgs {
+                mode: GatesMode::SignatureDrift { out_dir, config: None },
+            }))
+        }
+        other => Err(format!("unknown gates subcommand `{other}`")),
+    }
+}
+
+fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Reports));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Reports)),
+        "parser-oracle" => {
+            Ok(CommandSpec::Reports(ReportsArgs {
+                mode: ReportsMode::ParserOracle { config: None, out: None },
+            }))
+        }
+        "lowering-gap" => {
+            Ok(CommandSpec::Reports(ReportsArgs {
+                mode: ReportsMode::LoweringGap { out: None },
+            }))
+        }
+        other => Err(format!("unknown reports subcommand `{other}`")),
+    }
+}
+
+fn parse_test_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Test));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Test)),
+        "test262" => {
+            let out_dir = PathBuf::from("artifacts/test/test262");
+            Ok(CommandSpec::Test(TestArgs {
+                mode: TestMode::Test262 { out_dir, suite_path: None },
+            }))
+        }
+        "lockstep" => {
+            Ok(CommandSpec::Test(TestArgs {
+                mode: TestMode::Lockstep { config: None, out: None },
+            }))
+        }
+        other => Err(format!("unknown test subcommand `{other}`")),
+    }
+}
+
+fn parse_synth_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Synth));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Synth)),
+        "kernel-contract" => {
+            let out_dir = PathBuf::from("artifacts/synth/kernel_contract");
+            Ok(CommandSpec::Synth(SynthArgs {
+                mode: SynthMode::KernelContract { out_dir },
+            }))
+        }
+        "law-mining" => {
+            Ok(CommandSpec::Synth(SynthArgs {
+                mode: SynthMode::LawMining { out: None },
+            }))
+        }
+        other => Err(format!("unknown synth subcommand `{other}`")),
+    }
+}
+
+fn parse_orchestrate_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Orchestrate));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Orchestrate)),
+        "context-refactor" => {
+            Ok(CommandSpec::Orchestrate(OrchestrateArgs {
+                mode: OrchestrateMode::ContextRefactor { out: None },
+            }))
+        }
+        "tail-latency" => {
+            let out_dir = PathBuf::from("artifacts/orchestrate/tail_latency");
+            Ok(CommandSpec::Orchestrate(OrchestrateArgs {
+                mode: OrchestrateMode::TailLatency { out_dir },
+            }))
+        }
+        other => Err(format!("unknown orchestrate subcommand `{other}`")),
+    }
+}
+
+fn parse_runtime_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Runtime));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Runtime)),
+        "diagnostics" => {
+            // Simplified parsing - in full implementation, parse --input, --out-dir, --summary
+            let input = PathBuf::from("runtime_input.json");
+            Ok(CommandSpec::Runtime(RuntimeArgs {
+                mode: RuntimeMode::Diagnostics { input, out_dir: None, summary: false },
+            }))
+        }
+        other => Err(format!("unknown runtime subcommand `{other}`")),
+    }
+}
+
 fn has_help_flag(args: &[String]) -> bool {
     args.iter()
         .any(|value| matches!(value.as_str(), "--help" | "-h"))

@@ -185,6 +185,19 @@ To verify the artifact contract:
 
 See [`docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md`](./docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md) for the complete contract specification.
 
+## Lowering Gap Truth Invariant
+
+The lowering gap truth invariant defines the authoritative relationship between lowering status fields and execution-readiness flags. This contract ensures that `status`, `parser_ready_syntax`, `execution_ready_semantics`, and prose fields cannot report mutually incompatible states in the lowering gap inventory.
+
+To verify the invariant contract:
+
+```bash
+./scripts/run_lowering_gap_truth_invariant.sh ci
+./scripts/e2e/lowering_gap_truth_invariant_replay.sh ci
+```
+
+See [`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`](./docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md) for the complete invariant specification.
+
 ## Installation
 
 ### Option 1: One-Line Installer

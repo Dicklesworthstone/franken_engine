@@ -748,9 +748,7 @@ pub struct ThresholdEvent {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 17 compile errors from the signing-key Result migration.
-// Disable until rewritten; integration tests still cover this module.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -759,7 +757,7 @@ mod tests {
 
     fn make_share_keys(count: usize) -> Vec<SigningKey> {
         (0..count)
-            .map(|i| SigningKey::from_bytes([(i + 10) as u8; 32]))
+            .map(|i| SigningKey::from_bytes([(i + 10) as u8; 32]).unwrap())
             .collect()
     }
 
@@ -910,7 +908,7 @@ mod tests {
         let policy = create_test_policy(2, &keys);
         let holder = ShareHolderId::from_verification_key(&keys[0].verification_key());
         assert!(policy.is_authorized(&holder));
-        let rogue = ShareHolderId(*VerificationKey::from_bytes([0xFF; 32]).as_bytes());
+        let rogue = ShareHolderId(*VerificationKey::from_bytes([0xFF; 32]).unwrap().as_bytes());
         assert!(!policy.is_authorized(&rogue));
     }
 
@@ -1056,7 +1054,7 @@ mod tests {
         )
         .unwrap();
 
-        let rogue_key = SigningKey::from_bytes([0xFF; 32]);
+        let rogue_key = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let result =
             ceremony.submit_partial(&rogue_key, TEST_PREIMAGE, DeterministicTimestamp(1001));
         assert!(matches!(
@@ -1239,7 +1237,7 @@ mod tests {
         let new_keys = make_share_keys(3)
             .into_iter()
             .enumerate()
-            .map(|(i, _)| SigningKey::from_bytes([(i + 50) as u8; 32]))
+            .map(|(i, _)| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
             .collect::<Vec<_>>();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -1275,7 +1273,7 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -1307,7 +1305,7 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]))
+            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).unwrap())
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -1388,7 +1386,7 @@ mod tests {
         )
         .unwrap();
 
-        let rogue = SigningKey::from_bytes([0xFF; 32]);
+        let rogue = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let _ = ceremony.submit_partial(&rogue, TEST_PREIMAGE, DeterministicTimestamp(1001));
 
         let events = ceremony.drain_events();
@@ -1525,7 +1523,7 @@ mod tests {
 
     #[test]
     fn share_holder_display() {
-        let sk = SigningKey::from_bytes([0x42; 32]);
+        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
         let holder = ShareHolderId::from_verification_key(&sk.verification_key());
         let display = holder.to_string();
         assert!(display.starts_with("share:"));
@@ -1917,7 +1915,7 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]))
+            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]).unwrap())
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -2037,7 +2035,7 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]))
+            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]).unwrap())
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();

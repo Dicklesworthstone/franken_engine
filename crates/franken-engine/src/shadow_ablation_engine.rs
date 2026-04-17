@@ -1623,10 +1623,7 @@ where
     Ok(SearchStepOutcome::Stable)
 }
 
-// NOTE: API drift - 54 compile errors tied to the signing-key surface
-// migration. Disable until the in-module unit tests are rewritten; the
-// integration tests in `tests/shadow_ablation_engine*.rs` still cover this.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1739,7 +1736,7 @@ mod tests {
 
     #[test]
     fn transcript_sign_verify_roundtrip() {
-        let signing_key = SigningKey::from_bytes([0x41; 32]);
+        let signing_key = SigningKey::from_bytes([0x41; 32]).unwrap();
         let report_id = EngineObjectId([0xAA; 32]);
         let mut initial = BTreeSet::new();
         initial.insert(cap("clock"));
@@ -2175,7 +2172,7 @@ mod tests {
     // ── Transcript tamper detection ────────────────────────────────
     #[test]
     fn tampered_transcript_fails_verification() {
-        let signing_key = SigningKey::from_bytes([0x42; 32]);
+        let signing_key = SigningKey::from_bytes([0x42; 32]).unwrap();
         let input = ShadowAblationTranscriptInput {
             trace_id: "trace-tamper".to_string(),
             decision_id: "decision-tamper".to_string(),
@@ -2224,7 +2221,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::new());
-        let signing_key = SigningKey::from_bytes([0x01; 32]);
+        let signing_key = SigningKey::from_bytes([0x01; 32]).unwrap();
         let err = engine
             .run(&report, &signing_key, |_| unreachable!())
             .unwrap_err();
@@ -2240,7 +2237,7 @@ mod tests {
         let config = config_with_seed(1);
         let engine = ShadowAblationEngine::new(config, SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report("wrong-ext", BTreeSet::from([cap("fs_read")]));
-        let signing_key = SigningKey::from_bytes([0x01; 32]);
+        let signing_key = SigningKey::from_bytes([0x01; 32]).unwrap();
         let err = engine
             .run(&report, &signing_key, |_| unreachable!())
             .unwrap_err();
@@ -2257,7 +2254,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("fs_read"), cap("net")]),
         );
-        let signing_key = SigningKey::from_bytes([0x01; 32]);
+        let signing_key = SigningKey::from_bytes([0x01; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Err(ShadowAblationError::Budget {
@@ -2286,7 +2283,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("fs_read"), cap("net")]),
         );
-        let signing_key = SigningKey::from_bytes([0x01; 32]);
+        let signing_key = SigningKey::from_bytes([0x01; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -2331,7 +2328,7 @@ mod tests {
             cap("h"),
         ]);
         let report = test_static_report(&config.extension_id, caps.clone());
-        let signing_key = SigningKey::from_bytes([0x02; 32]);
+        let signing_key = SigningKey::from_bytes([0x02; 32]).unwrap();
         // Oracle that rejects single removals but accepts block removals (>= 2),
         // so that single-phase leaves caps intact and block phase actually runs.
         let result = engine
@@ -2370,7 +2367,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only_cap")]));
-        let signing_key = SigningKey::from_bytes([0x02; 32]);
+        let signing_key = SigningKey::from_bytes([0x02; 32]).unwrap();
         // Correctness below threshold => regression
         let result = engine
             .run(&report, &signing_key, |_| {
@@ -2404,7 +2401,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only_cap")]));
-        let signing_key = SigningKey::from_bytes([0x02; 32]);
+        let signing_key = SigningKey::from_bytes([0x02; 32]).unwrap();
         // Risk above threshold
         let result = engine
             .run(&report, &signing_key, |_| {
@@ -2442,7 +2439,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x03; 32]);
+        let signing_key = SigningKey::from_bytes([0x03; 32]).unwrap();
         let call_count = std::cell::Cell::new(0u32);
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -2477,7 +2474,7 @@ mod tests {
     // ── Unsigned bytes deterministic ───────────────────────────────
     #[test]
     fn transcript_unsigned_bytes_deterministic() {
-        let signing_key = SigningKey::from_bytes([0x50; 32]);
+        let signing_key = SigningKey::from_bytes([0x50; 32]).unwrap();
         let input = || ShadowAblationTranscriptInput {
             trace_id: "trace-bytes".to_string(),
             decision_id: "decision-bytes".to_string(),
@@ -2693,7 +2690,7 @@ mod tests {
                 fallback: None,
                 budget_utilization: BTreeMap::new(),
                 transcript_hash: ContentHash::compute(b"test-hash"),
-                signer: SigningKey::from_bytes([1u8; 32]).verification_key(),
+                signer: SigningKey::from_bytes([1u8; 32]).unwrap().verification_key(),
                 signature: Signature::from_bytes([0u8; 64]),
             },
         };
@@ -2726,7 +2723,7 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
             transcript_hash: ContentHash::compute(b"tx-hash-2"),
-            signer: SigningKey::from_bytes([2u8; 32]).verification_key(),
+            signer: SigningKey::from_bytes([2u8; 32]).unwrap().verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
         let json = serde_json::to_string(&transcript).unwrap();
@@ -3097,7 +3094,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x04; 32]);
+        let signing_key = SigningKey::from_bytes([0x04; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3129,7 +3126,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x05; 32]);
+        let signing_key = SigningKey::from_bytes([0x05; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3164,7 +3161,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("essential"), cap("removable")]),
         );
-        let signing_key = SigningKey::from_bytes([0x06; 32]);
+        let signing_key = SigningKey::from_bytes([0x06; 32]).unwrap();
         // Oracle: accept removal of "removable", reject removal of "essential"
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -3216,7 +3213,7 @@ mod tests {
 
     #[test]
     fn transcript_hash_sensitive_to_trace_id() {
-        let key = SigningKey::from_bytes([0x60; 32]);
+        let key = SigningKey::from_bytes([0x60; 32]).unwrap();
         let make_input = |trace: &str| ShadowAblationTranscriptInput {
             trace_id: trace.to_string(),
             decision_id: "d".to_string(),
@@ -3242,7 +3239,7 @@ mod tests {
 
     #[test]
     fn transcript_hash_sensitive_to_seed() {
-        let key = SigningKey::from_bytes([0x61; 32]);
+        let key = SigningKey::from_bytes([0x61; 32]).unwrap();
         let make_input = |seed: u64| ShadowAblationTranscriptInput {
             trace_id: "t".to_string(),
             decision_id: "d".to_string(),
@@ -3366,7 +3363,7 @@ mod tests {
 
     #[test]
     fn transcript_id_format_starts_with_prefix() {
-        let signing_key = SigningKey::from_bytes([0x70; 32]);
+        let signing_key = SigningKey::from_bytes([0x70; 32]).unwrap();
         let input = ShadowAblationTranscriptInput {
             trace_id: "t-prefix".to_string(),
             decision_id: "d".to_string(),
@@ -3467,7 +3464,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x07; 32]);
+        let signing_key = SigningKey::from_bytes([0x07; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3521,7 +3518,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x08; 32]);
+        let signing_key = SigningKey::from_bytes([0x08; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3556,7 +3553,7 @@ mod tests {
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x09; 32]);
+        let signing_key = SigningKey::from_bytes([0x09; 32]).unwrap();
         let pair_count = std::cell::Cell::new(0u32);
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -3619,7 +3616,7 @@ mod tests {
 
     #[test]
     fn transcript_as_unsigned_input_roundtrip() {
-        let signing_key = SigningKey::from_bytes([0x0A; 32]);
+        let signing_key = SigningKey::from_bytes([0x0A; 32]).unwrap();
         let original_input = ShadowAblationTranscriptInput {
             trace_id: "trace-roundtrip".to_string(),
             decision_id: "decision-roundtrip".to_string(),
@@ -3654,7 +3651,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("x"), cap("y")]));
-        let signing_key = SigningKey::from_bytes([0x0B; 32]);
+        let signing_key = SigningKey::from_bytes([0x0B; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 // Reject all removals
@@ -3720,7 +3717,7 @@ mod tests {
         let engine =
             ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).unwrap();
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x0C; 32]);
+        let signing_key = SigningKey::from_bytes([0x0C; 32]).unwrap();
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {

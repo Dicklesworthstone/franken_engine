@@ -2047,9 +2047,7 @@ fn more_severe_containment_action(
     }
 }
 
-// NOTE: API drift - 17 compile errors from the signing-key Result migration.
-// Disable until rewritten; integration tests still cover this module.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
@@ -2241,7 +2239,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let artifact =
             artifact_with_required_declassification("trace-allow", "obl-allow", "decision-allow");
-        let signing_key = SigningKey::from_bytes([17u8; 32]);
+        let signing_key = SigningKey::from_bytes([17u8; 32]).unwrap();
         let receipt = signed_receipt("trace-allow", "decision-allow", &signing_key);
 
         orch.trust_declassification_authorizer_for_contract(
@@ -2265,7 +2263,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let artifact =
             artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
-        let signing_key = SigningKey::from_bytes([18u8; 32]);
+        let signing_key = SigningKey::from_bytes([18u8; 32]).unwrap();
         let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
         let staged_key = ("trace-block".to_string(), "obl-block".to_string());
 
@@ -2339,7 +2337,7 @@ mod tests {
                 reason: "dynamic_capability".to_string(),
             },
         );
-        let signing_key = SigningKey::from_bytes([19u8; 32]);
+        let signing_key = SigningKey::from_bytes([19u8; 32]).unwrap();
         let receipt = signed_receipt("trace-partial", "decision-partial", &signing_key);
         let staged_key = ("trace-partial".to_string(), "obl-partial".to_string());
 
@@ -3262,6 +3260,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // Zero instructions should yield maximum reward (no cost).
@@ -3462,6 +3461,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.extension_id, "test-ext-1");
@@ -3503,6 +3503,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(2));
         assert_eq!(ev.distinct_capabilities, 3);
@@ -3544,6 +3545,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert!(reward > 0, "reward for 1 instruction should be positive");
@@ -3705,6 +3707,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         // Division by zero for hostcall_rate should be handled (returns 0).
@@ -3735,6 +3738,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 2 hostcalls => penalty = 2 * 25_000 = 50_000. Reward = 1M - 0 - 50_000 = 950_000.
@@ -3759,6 +3763,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 100 hostcalls => penalty = min(100*25_000, 300_000) = 300_000. Reward = 700_000.
@@ -3875,6 +3880,7 @@ mod tests {
             requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
+            console_output: Vec::new(),
         };
         for raw_epoch in [1u64, 100, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(raw_epoch);

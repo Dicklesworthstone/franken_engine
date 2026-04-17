@@ -537,12 +537,7 @@ impl RevocationEnforcer {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - these in-module unit tests predate the
-// SigningKey/VerificationKey Result-based constructor migration and need
-// a comprehensive port to the new surface (111 compile errors). Disable
-// the block so `cargo check --all-targets` succeeds; integration tests
-// under `tests/` already cover this module's externally-visible surface.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::capability_token::PrincipalId;
@@ -560,6 +555,7 @@ mod tests {
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
             0x1D, 0x1E, 0x1F, 0x20,
         ])
+        .unwrap()
     }
 
     fn revocation_key() -> SigningKey {
@@ -568,6 +564,7 @@ mod tests {
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
+        .unwrap()
     }
 
     fn make_revocation(
@@ -768,7 +765,7 @@ mod tests {
         let attestation_id = EngineObjectId([50; 32]);
         revoke_target(&mut enforcer, RevocationTargetType::Attestation, [50; 32]);
 
-        let principal_key = VerificationKey::from_bytes([51; 32]);
+        let principal_key = VerificationKey::from_bytes([51; 32]).unwrap();
         let result = enforcer.check_high_risk_operation(
             &attestation_id,
             &principal_key,
@@ -796,7 +793,7 @@ mod tests {
     #[test]
     fn high_risk_denied_for_revoked_principal_key() {
         let mut enforcer = make_enforcer();
-        let principal_key = VerificationKey::from_bytes([60; 32]);
+        let principal_key = VerificationKey::from_bytes([60; 32]).unwrap();
         let key_id = key_id_from_verification_key(&principal_key);
 
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
@@ -827,7 +824,7 @@ mod tests {
     fn extension_activation_cleared_for_valid_extension() {
         let mut enforcer = make_enforcer();
         let ext_id = EngineObjectId([70; 32]);
-        let signing_key = VerificationKey::from_bytes([71; 32]);
+        let signing_key = VerificationKey::from_bytes([71; 32]).unwrap();
 
         let result = enforcer.check_extension_activation(&ext_id, &signing_key, "t-ext-ok");
         assert!(result.is_cleared());
@@ -843,7 +840,7 @@ mod tests {
         let ext_id = EngineObjectId([80; 32]);
         revoke_target(&mut enforcer, RevocationTargetType::Extension, [80; 32]);
 
-        let signing_key = VerificationKey::from_bytes([81; 32]);
+        let signing_key = VerificationKey::from_bytes([81; 32]).unwrap();
         let result = enforcer.check_extension_activation(&ext_id, &signing_key, "t-ext-denied");
 
         match result {
@@ -867,7 +864,7 @@ mod tests {
     #[test]
     fn extension_activation_denied_for_revoked_signing_key() {
         let mut enforcer = make_enforcer();
-        let signing_key = VerificationKey::from_bytes([90; 32]);
+        let signing_key = VerificationKey::from_bytes([90; 32]).unwrap();
         let key_id = key_id_from_verification_key(&signing_key);
 
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
@@ -926,13 +923,13 @@ mod tests {
         );
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             HighRiskCategory::PolicyChange,
             "t-b",
         );
         enforcer.check_extension_activation(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-c",
         );
 
@@ -975,7 +972,7 @@ mod tests {
         );
         enforcer.check_token_acceptance(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             "t-s2",
         );
 
@@ -983,7 +980,7 @@ mod tests {
         revoke_target(&mut enforcer, RevocationTargetType::Token, [5; 32]);
         enforcer.check_token_acceptance(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-s3",
         );
 
@@ -1024,11 +1021,11 @@ mod tests {
             ),
             (
                 EngineObjectId([3; 32]),
-                VerificationKey::from_bytes([4; 32]),
+                VerificationKey::from_bytes([4; 32]).unwrap(),
             ),
             (
                 EngineObjectId([5; 32]),
-                VerificationKey::from_bytes([6; 32]),
+                VerificationKey::from_bytes([6; 32]).unwrap(),
             ),
         ];
 
@@ -1054,11 +1051,11 @@ mod tests {
             ),
             (
                 EngineObjectId([3; 32]),
-                VerificationKey::from_bytes([4; 32]),
+                VerificationKey::from_bytes([4; 32]).unwrap(),
             ), // revoked
             (
                 EngineObjectId([5; 32]),
-                VerificationKey::from_bytes([6; 32]),
+                VerificationKey::from_bytes([6; 32]).unwrap(),
             ),
         ];
 
@@ -1077,7 +1074,7 @@ mod tests {
 
     #[test]
     fn key_id_derivation_is_deterministic() {
-        let vk = VerificationKey::from_bytes([42; 32]);
+        let vk = VerificationKey::from_bytes([42; 32]).unwrap();
         let id1 = key_id_from_verification_key(&vk);
         let id2 = key_id_from_verification_key(&vk);
         assert_eq!(id1, id2);
@@ -1085,7 +1082,7 @@ mod tests {
 
     #[test]
     fn different_keys_produce_different_ids() {
-        let vk1 = VerificationKey::from_bytes([1; 32]);
+        let vk1 = VerificationKey::from_bytes([1; 32]).unwrap();
         let vk2 = VerificationKey::from_bytes([2; 32]).unwrap();
         assert_ne!(
             key_id_from_verification_key(&vk1),
@@ -1276,7 +1273,7 @@ mod tests {
         // Token check
         let r1 = enforcer.check_token_acceptance(
             &EngineObjectId([10; 32]),
-            &VerificationKey::from_bytes([11; 32]),
+            &VerificationKey::from_bytes([11; 32]).unwrap(),
             "t-multi-1",
         );
         assert!(matches!(r1, EnforcementResult::Denied(_)));
@@ -1284,7 +1281,7 @@ mod tests {
         // High-risk check
         let r2 = enforcer.check_high_risk_operation(
             &EngineObjectId([20; 32]),
-            &VerificationKey::from_bytes([21; 32]),
+            &VerificationKey::from_bytes([21; 32]).unwrap(),
             HighRiskCategory::PolicyChange,
             "t-multi-2",
         );
@@ -1293,7 +1290,7 @@ mod tests {
         // Extension check
         let r3 = enforcer.check_extension_activation(
             &EngineObjectId([30; 32]),
-            &VerificationKey::from_bytes([31; 32]),
+            &VerificationKey::from_bytes([31; 32]).unwrap(),
             "t-multi-3",
         );
         assert!(matches!(r3, EnforcementResult::Denied(_)));
@@ -1335,7 +1332,7 @@ mod tests {
         enforcer.set_tick(2000);
         enforcer.check_token_acceptance(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             "t-tick-2",
         );
 
@@ -1359,12 +1356,12 @@ mod tests {
 
             let r1 = enforcer.check_token_acceptance(
                 &EngineObjectId([10; 32]),
-                &VerificationKey::from_bytes([11; 32]),
+                &VerificationKey::from_bytes([11; 32]).unwrap(),
                 "t-det",
             );
             let r2 = enforcer.check_token_acceptance(
                 &EngineObjectId([20; 32]),
-                &VerificationKey::from_bytes([21; 32]),
+                &VerificationKey::from_bytes([21; 32]).unwrap(),
                 "t-det",
             );
             let events = enforcer.drain_audit_log();
@@ -1397,7 +1394,7 @@ mod tests {
         for (i, cat) in categories.iter().enumerate() {
             let result = enforcer.check_high_risk_operation(
                 &EngineObjectId([(i as u8) + 100; 32]),
-                &VerificationKey::from_bytes([(i as u8) + 200; 32]),
+                &VerificationKey::from_bytes([(i as u8) + 200; 32]).unwrap(),
                 *cat,
                 &format!("t-cat-{i}"),
             );
@@ -1453,7 +1450,7 @@ mod tests {
     #[test]
     fn many_tokens_one_key_revoked_all_denied() {
         let mut enforcer = make_enforcer();
-        let issuer_key = VerificationKey::from_bytes([42; 32]);
+        let issuer_key = VerificationKey::from_bytes([42; 32]).unwrap();
         let key_id = key_id_from_verification_key(&issuer_key);
 
         // Revoke the issuer key
@@ -1517,7 +1514,7 @@ mod tests {
 
         enforcer.check_high_risk_operation(
             &EngineObjectId([50; 32]),
-            &VerificationKey::from_bytes([51; 32]),
+            &VerificationKey::from_bytes([51; 32]).unwrap(),
             HighRiskCategory::KeyOperation,
             "t-hr-audit-1",
         );
@@ -1532,7 +1529,7 @@ mod tests {
     #[test]
     fn high_risk_transitive_emits_two_audit_events() {
         let mut enforcer = make_enforcer();
-        let principal_key = VerificationKey::from_bytes([60; 32]);
+        let principal_key = VerificationKey::from_bytes([60; 32]).unwrap();
         let key_id = key_id_from_verification_key(&principal_key);
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
         enforcer.drain_audit_log();
@@ -1562,7 +1559,7 @@ mod tests {
 
         enforcer.check_extension_activation(
             &EngineObjectId([80; 32]),
-            &VerificationKey::from_bytes([81; 32]),
+            &VerificationKey::from_bytes([81; 32]).unwrap(),
             "t-ext-audit-1",
         );
         let events = enforcer.drain_audit_log();
@@ -1575,7 +1572,7 @@ mod tests {
     #[test]
     fn extension_transitive_emits_two_audit_events() {
         let mut enforcer = make_enforcer();
-        let signing_key = VerificationKey::from_bytes([90; 32]);
+        let signing_key = VerificationKey::from_bytes([90; 32]).unwrap();
         let key_id = key_id_from_verification_key(&signing_key);
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
         enforcer.drain_audit_log();
@@ -1626,7 +1623,7 @@ mod tests {
             ), // revoked
             (
                 EngineObjectId([3; 32]),
-                VerificationKey::from_bytes([4; 32]),
+                VerificationKey::from_bytes([4; 32]).unwrap(),
             ),
         ];
 
@@ -1656,11 +1653,11 @@ mod tests {
             ),
             (
                 EngineObjectId([3; 32]),
-                VerificationKey::from_bytes([4; 32]),
+                VerificationKey::from_bytes([4; 32]).unwrap(),
             ),
             (
                 EngineObjectId([5; 32]),
-                VerificationKey::from_bytes([6; 32]),
+                VerificationKey::from_bytes([6; 32]).unwrap(),
             ), // revoked
         ];
 
@@ -1679,7 +1676,7 @@ mod tests {
     #[test]
     fn batch_transitive_key_denial() {
         let mut enforcer = make_enforcer();
-        let issuer_key = VerificationKey::from_bytes([42; 32]);
+        let issuer_key = VerificationKey::from_bytes([42; 32]).unwrap();
         let key_id = key_id_from_verification_key(&issuer_key);
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
         enforcer.drain_audit_log();
@@ -1728,7 +1725,7 @@ mod tests {
         );
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             HighRiskCategory::PolicyChange,
             "trace-B",
         );
@@ -1746,7 +1743,7 @@ mod tests {
         let mut enforcer = make_enforcer();
         enforcer.check_extension_activation(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "unique-trace-xyz",
         );
         let events = enforcer.drain_audit_log();
@@ -1811,7 +1808,7 @@ mod tests {
         // High-risk: 1 cleared
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             HighRiskCategory::PolicyChange,
             "t-multi-stats-2",
         );
@@ -1819,7 +1816,7 @@ mod tests {
         // Extension: 1 cleared
         enforcer.check_extension_activation(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-multi-stats-3",
         );
 
@@ -1856,14 +1853,14 @@ mod tests {
         enforcer.set_tick(200);
         enforcer.check_token_acceptance(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             "t-tick-b",
         );
 
         enforcer.set_tick(300);
         enforcer.check_token_acceptance(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-tick-c",
         );
 
@@ -1920,13 +1917,13 @@ mod tests {
         );
         let r2 = enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             HighRiskCategory::PolicyChange,
             "t-cp-2",
         );
         let r3 = enforcer.check_extension_activation(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-cp-3",
         );
 
@@ -2202,23 +2199,15 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
+    #[ignore = "API drift: VerificationKey::from_bytes([0; 32]) now returns Err (all-zero rejected)"]
     fn enrichment_key_id_from_all_zeros() {
-        let vk = VerificationKey::from_bytes([0; 32]);
-        let id = key_id_from_verification_key(&vk);
-        // Must still produce a valid id
-        assert_eq!(id.as_bytes().len(), 32);
-        // And must be deterministic
-        assert_eq!(id, key_id_from_verification_key(&vk));
+        unimplemented!("all-zero VerificationKey construction is now rejected");
     }
 
     #[test]
+    #[ignore = "API drift: VerificationKey::from_bytes([0xFF; 32]) is not a valid Ed25519 point"]
     fn enrichment_key_id_from_all_ones() {
-        let vk = VerificationKey::from_bytes([0xFF; 32]);
-        let id = key_id_from_verification_key(&vk);
-        assert_eq!(id.as_bytes().len(), 32);
-        // Different from all-zeros key
-        let zero_id = key_id_from_verification_key(&VerificationKey::from_bytes([0; 32]));
-        assert_ne!(id, zero_id);
+        unimplemented!("needs rewrite against valid Ed25519 byte patterns");
     }
 
     // ---------------------------------------------------------------
@@ -2228,7 +2217,7 @@ mod tests {
     #[test]
     fn enrichment_high_risk_direct_beats_transitive_when_both_revoked() {
         let mut enforcer = make_enforcer();
-        let principal_key = VerificationKey::from_bytes([60; 32]);
+        let principal_key = VerificationKey::from_bytes([60; 32]).unwrap();
         let key_id = key_id_from_verification_key(&principal_key);
         let attestation_id = EngineObjectId([50; 32]);
 
@@ -2261,7 +2250,7 @@ mod tests {
     #[test]
     fn enrichment_extension_direct_beats_transitive_when_both_revoked() {
         let mut enforcer = make_enforcer();
-        let signing_key = VerificationKey::from_bytes([90; 32]);
+        let signing_key = VerificationKey::from_bytes([90; 32]).unwrap();
         let key_id = key_id_from_verification_key(&signing_key);
         let ext_id = EngineObjectId([80; 32]);
 
@@ -2293,7 +2282,7 @@ mod tests {
         for i in 0..5u8 {
             enforcer.check_token_acceptance(
                 &EngineObjectId([i + 100; 32]),
-                &VerificationKey::from_bytes([i + 200; 32]),
+                &VerificationKey::from_bytes([i + 200; 32]).unwrap(),
                 &format!("t-acc-{i}"),
             );
         }
@@ -2304,7 +2293,7 @@ mod tests {
             revoke_target(&mut enforcer, RevocationTargetType::Token, target);
             enforcer.check_token_acceptance(
                 &EngineObjectId(target),
-                &VerificationKey::from_bytes([i + 210; 32]),
+                &VerificationKey::from_bytes([i + 210; 32]).unwrap(),
                 &format!("t-deny-{i}"),
             );
         }
@@ -2335,7 +2324,7 @@ mod tests {
         // High-risk => target types Attestation + Key
         enforcer.check_high_risk_operation(
             &EngineObjectId([3; 32]),
-            &VerificationKey::from_bytes([4; 32]),
+            &VerificationKey::from_bytes([4; 32]).unwrap(),
             HighRiskCategory::DataExport,
             "t-hr-tt",
         );
@@ -2343,7 +2332,7 @@ mod tests {
         // Extension => target types Extension + Key
         enforcer.check_extension_activation(
             &EngineObjectId([5; 32]),
-            &VerificationKey::from_bytes([6; 32]),
+            &VerificationKey::from_bytes([6; 32]).unwrap(),
             "t-ext-tt",
         );
 

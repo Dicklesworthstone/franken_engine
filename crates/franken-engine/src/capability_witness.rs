@@ -3490,10 +3490,7 @@ impl WitnessPublicationPipeline {
 // Tests
 // ===========================================================================
 
-// NOTE: API drift - 54 compile errors in in-module unit tests. Disable
-// until rewritten; integration tests in `tests/capability_witness*.rs`
-// exercise the crate's external surface.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::SigningKey;
@@ -3507,7 +3504,7 @@ mod tests {
         for (i, b) in key.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
         }
-        SigningKey::from_bytes(key)
+        SigningKey::from_bytes(key).unwrap()
     }
 
     fn test_extension_id() -> EngineObjectId {
@@ -4249,7 +4246,7 @@ mod tests {
     #[test]
     fn verify_signature_fails_wrong_key() {
         let witness = build_test_witness();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).verification_key();
+        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
         let err = witness
             .verify_synthesizer_signature(&wrong_key)
             .unwrap_err();
@@ -4538,7 +4535,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_publish_emits_artifact_and_ledgers() {
-        let head_signing_key = SigningKey::from_bytes([17u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([17u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(500),
             head_signing_key.clone(),
@@ -4570,7 +4567,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_second_publish_has_consistency_chain() {
-        let head_signing_key = SigningKey::from_bytes([21u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([21u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(600),
             head_signing_key.clone(),
@@ -4609,7 +4606,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_revocation_appends_signed_entry() {
-        let head_signing_key = SigningKey::from_bytes([33u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([33u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(700),
             head_signing_key.clone(),
@@ -4649,7 +4646,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_query_filters() {
-        let head_signing_key = SigningKey::from_bytes([44u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([44u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(800),
             head_signing_key,
@@ -4689,7 +4686,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_detects_tampered_inclusion_root() {
-        let head_signing_key = SigningKey::from_bytes([55u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([55u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(900),
             head_signing_key.clone(),
@@ -5972,7 +5969,7 @@ mod tests {
 
     #[test]
     fn publish_draft_witness_rejected() {
-        let head_key = SigningKey::from_bytes([60u8; 32]);
+        let head_key = SigningKey::from_bytes([60u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6000,7 +5997,7 @@ mod tests {
 
     #[test]
     fn publish_duplicate_witness_rejected() {
-        let head_key = SigningKey::from_bytes([61u8; 32]);
+        let head_key = SigningKey::from_bytes([61u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6018,7 +6015,7 @@ mod tests {
 
     #[test]
     fn revoke_empty_reason_rejected() {
-        let head_key = SigningKey::from_bytes([62u8; 32]);
+        let head_key = SigningKey::from_bytes([62u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6037,7 +6034,7 @@ mod tests {
 
     #[test]
     fn revoke_unpublished_witness_rejected() {
-        let head_key = SigningKey::from_bytes([63u8; 32]);
+        let head_key = SigningKey::from_bytes([63u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6055,7 +6052,7 @@ mod tests {
 
     #[test]
     fn revoke_already_revoked_rejected() {
-        let head_key = SigningKey::from_bytes([64u8; 32]);
+        let head_key = SigningKey::from_bytes([64u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6075,7 +6072,7 @@ mod tests {
 
     #[test]
     fn pipeline_zero_checkpoint_interval_rejected() {
-        let head_key = SigningKey::from_bytes([65u8; 32]);
+        let head_key = SigningKey::from_bytes([65u8; 32]).unwrap();
         let err = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6091,7 +6088,7 @@ mod tests {
 
     #[test]
     fn pipeline_empty_policy_id_rejected() {
-        let head_key = SigningKey::from_bytes([66u8; 32]);
+        let head_key = SigningKey::from_bytes([66u8; 32]).unwrap();
         let err = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6404,7 +6401,7 @@ mod tests {
 
     #[test]
     fn publication_query_exclude_revoked() {
-        let head_key = SigningKey::from_bytes([67u8; 32]);
+        let head_key = SigningKey::from_bytes([67u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6438,7 +6435,7 @@ mod tests {
 
     #[test]
     fn verify_publication_from_pipeline() {
-        let head_key = SigningKey::from_bytes([68u8; 32]);
+        let head_key = SigningKey::from_bytes([68u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
@@ -6458,7 +6455,7 @@ mod tests {
 
     #[test]
     fn verify_publication_not_found() {
-        let head_key = SigningKey::from_bytes([69u8; 32]);
+        let head_key = SigningKey::from_bytes([69u8; 32]).unwrap();
         let pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
@@ -6484,7 +6481,7 @@ mod tests {
 
     #[test]
     fn pipeline_events_emitted_on_publish_and_revoke() {
-        let head_key = SigningKey::from_bytes([70u8; 32]);
+        let head_key = SigningKey::from_bytes([70u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6504,7 +6501,7 @@ mod tests {
 
     #[test]
     fn pipeline_checkpoints_at_interval() {
-        let head_key = SigningKey::from_bytes([71u8; 32]);
+        let head_key = SigningKey::from_bytes([71u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6539,7 +6536,7 @@ mod tests {
 
     #[test]
     fn published_witness_artifact_is_revoked_reflects_state() {
-        let head_key = SigningKey::from_bytes([72u8; 32]);
+        let head_key = SigningKey::from_bytes([72u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -7312,7 +7309,7 @@ mod tests {
 
     #[test]
     fn pipeline_publish_active_witness_accepted() {
-        let head_key = SigningKey::from_bytes([73u8; 32]);
+        let head_key = SigningKey::from_bytes([73u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
@@ -7338,7 +7335,7 @@ mod tests {
 
     #[test]
     fn verify_artifact_rejects_revocation_witness_id_mismatch() {
-        let head_key = SigningKey::from_bytes([74u8; 32]);
+        let head_key = SigningKey::from_bytes([74u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
@@ -7601,7 +7598,7 @@ mod tests {
 
     #[test]
     fn pipeline_query_by_policy_id() {
-        let head_signing_key = SigningKey::from_bytes([77u8; 32]);
+        let head_signing_key = SigningKey::from_bytes([77u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(500),
             head_signing_key,
@@ -7682,7 +7679,7 @@ mod tests {
 
     #[test]
     fn pipeline_log_entries_populated_after_publish() {
-        let head_key = SigningKey::from_bytes([90u8; 32]);
+        let head_key = SigningKey::from_bytes([90u8; 32]).unwrap();
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,

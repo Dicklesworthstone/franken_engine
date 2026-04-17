@@ -1240,15 +1240,13 @@ impl std::error::Error for IfcValidationError {}
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 12 compile errors from the SigningKey Result migration.
-// Disable until rewritten; external integration tests cover this module.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::SignatureError;
 
     fn test_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32])
+        SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
     fn sentinel_sig() -> Signature {
@@ -1484,7 +1482,7 @@ mod tests {
     #[test]
     fn flow_policy_verify_fails_wrong_key() {
         let key = test_key();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]);
+        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
         let mut policy = make_flow_policy();
         policy.sign(&key).unwrap();
         assert!(policy.verify(&wrong_key.verification_key()).is_err());

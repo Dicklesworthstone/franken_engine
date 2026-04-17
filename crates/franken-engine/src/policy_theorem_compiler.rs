@@ -1012,9 +1012,7 @@ impl std::error::Error for CompilerError {}
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 13 compile errors tied to the SigningKey Result
-// migration. Disable until rewritten.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1541,7 +1539,7 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
         let result = compiler.compile(&ir).unwrap();
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -1563,7 +1561,7 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
         let result = compiler.compile(&ir).unwrap();
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -1586,7 +1584,7 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
         let result = compiler.compile(&ir).unwrap();
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -2196,7 +2194,7 @@ mod tests {
         let ir = valid_policy();
         let result = compiler.compile(&ir).unwrap();
 
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let vk = sk.verification_key();
         let mut receipt = PolicyValidationReceipt::from_compilation(
             &result,
@@ -2215,7 +2213,7 @@ mod tests {
         let ir = valid_policy();
         let result = compiler.compile(&ir).unwrap();
 
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let vk = sk.verification_key();
         let receipt = PolicyValidationReceipt::from_compilation(
             &result,

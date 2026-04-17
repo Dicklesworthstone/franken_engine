@@ -94,9 +94,7 @@ fn hex_digit(b: u8) -> Option<u8> {
 // Tests — golden vector generation and validation
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 13 compile errors tied to the signing-key Result
-// migration. Disable until rewritten.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::capability_token::PrincipalId;
@@ -598,9 +596,9 @@ mod tests {
 
     #[test]
     fn golden_multisig_ordering_deterministic() {
-        let sk1 = SigningKey::from_bytes([0x01; 32]);
-        let sk2 = SigningKey::from_bytes([0x02; 32]);
-        let sk3 = SigningKey::from_bytes([0x03; 32]);
+        let sk1 = SigningKey::from_bytes([0x01; 32]).unwrap();
+        let sk2 = SigningKey::from_bytes([0x02; 32]).unwrap();
+        let sk3 = SigningKey::from_bytes([0x03; 32]).unwrap();
         let preimage = b"multisig-golden-payload";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -628,8 +626,8 @@ mod tests {
     #[test]
     fn golden_multisig_ordering_stable() {
         // Create the same set twice, verify identical ordering.
-        let sk1 = SigningKey::from_bytes([0x10; 32]);
-        let sk2 = SigningKey::from_bytes([0x20; 32]);
+        let sk1 = SigningKey::from_bytes([0x10; 32]).unwrap();
+        let sk2 = SigningKey::from_bytes([0x20; 32]).unwrap();
         let preimage = b"multisig-stable-test";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -712,7 +710,7 @@ mod tests {
     }
 
     fn golden_revocation_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0xA1; 32])
+        SigningKey::from_bytes([0xA1; 32]).unwrap()
     }
 
     #[test]

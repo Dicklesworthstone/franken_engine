@@ -5020,10 +5020,7 @@ fn install_global_properties(
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - 15 compile errors tied to the Result-returning
-// SigningKey/VerificationKey constructors and other renames. Disable
-// until rewritten.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -7185,9 +7182,13 @@ mod tests {
         let mut heap = crate::object_model::ObjectHeap::new();
 
         // This test validates that the Promise.all builtin ID is registered
-        let all_fn = env.registry.lookup(BuiltinId::PromiseAll);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseAll);
         assert!(
-            all_fn.is_some(),
+            registered,
             "Promise.all should be registered in builtin registry"
         );
     }
@@ -7198,9 +7199,13 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
 
-        let race_fn = env.registry.lookup(BuiltinId::PromiseRace);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseRace);
         assert!(
-            race_fn.is_some(),
+            registered,
             "Promise.race should be registered in builtin registry"
         );
     }
@@ -7211,9 +7216,13 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
 
-        let all_settled_fn = env.registry.lookup(BuiltinId::PromiseAllSettled);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseAllSettled);
         assert!(
-            all_settled_fn.is_some(),
+            registered,
             "Promise.allSettled should be registered in builtin registry"
         );
     }
@@ -7224,9 +7233,13 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
 
-        let any_fn = env.registry.lookup(BuiltinId::PromiseAny);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseAny);
         assert!(
-            any_fn.is_some(),
+            registered,
             "Promise.any should be registered in builtin registry"
         );
     }
@@ -7240,7 +7253,7 @@ mod tests {
         // Verify Promise constructor is installed on global
         let promise_prop = heap.get_property(env.global_object, &PropertyKey::from("Promise"));
         assert!(
-            promise_prop.is_some(),
+            promise_prop.is_ok(),
             "Promise should be available on global object"
         );
     }
@@ -7252,9 +7265,13 @@ mod tests {
         let env = install_stdlib(&mut heap);
 
         // Verify Promise.prototype has then method
-        let then_fn = env.registry.lookup(BuiltinId::PromiseThen);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseThen);
         assert!(
-            then_fn.is_some(),
+            registered,
             "Promise.prototype.then should be registered"
         );
     }
@@ -7266,9 +7283,13 @@ mod tests {
         let env = install_stdlib(&mut heap);
 
         // Verify Promise.prototype has catch method
-        let catch_fn = env.registry.lookup(BuiltinId::PromiseCatch);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseCatch);
         assert!(
-            catch_fn.is_some(),
+            registered,
             "Promise.prototype.catch should be registered"
         );
     }
@@ -7280,9 +7301,13 @@ mod tests {
         let env = install_stdlib(&mut heap);
 
         // Verify Promise.prototype has finally method
-        let finally_fn = env.registry.lookup(BuiltinId::PromiseFinally);
+        let registered = env
+            .registry
+            .entries()
+            .iter()
+            .any(|(_, id)| *id == BuiltinId::PromiseFinally);
         assert!(
-            finally_fn.is_some(),
+            registered,
             "Promise.prototype.finally should be registered"
         );
     }

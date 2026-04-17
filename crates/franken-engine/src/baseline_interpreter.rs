@@ -15086,6 +15086,139 @@ impl InterpreterCore {
                 Ok(obj_val) // Return the modified object
             }
 
+            "builtin:StringPrototypeAt" => {
+                // String.prototype.at(index) implementation (ES2022)
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => "[object Object]".to_string(),
+                };
+
+                let index = if args.count > 1 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(n) => n,
+                        Value::Float(f) => f.inner() as i64,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let chars: Vec<char> = str_text.chars().collect();
+                let len = chars.len() as i64;
+
+                // Handle negative indices (count from end)
+                let actual_index = if index < 0 { len + index } else { index };
+
+                if actual_index >= 0 && (actual_index as usize) < chars.len() {
+                    Ok(Value::Str(chars[actual_index as usize].to_string()))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+
+            "builtin:MathFround" => {
+                // Math.fround(x) implementation (round to nearest 32-bit float)
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let val = self.read_reg(args.start)?;
+                let num = match val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    _ => f64::NAN,
+                };
+
+                // Convert to f32 and back to f64 to simulate 32-bit float rounding
+                let rounded = num as f32 as f64;
+                Ok(Value::Float(Float64::new(rounded)))
+            }
+
+            "builtin:ArrayPrototypeAt" => {
+                // Array.prototype.at(index) implementation (ES2022)
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let index = match self.read_reg(args.start + 1)? {
+                    Value::Int(n) => n,
+                    Value::Float(f) => f.inner() as i64,
+                    _ => return Ok(Value::Undefined),
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len,
+                        Some(Value::Float(len)) => len.inner() as i64,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // Handle negative indices (count from end)
+                let actual_index = if index < 0 { length + index } else { index };
+
+                if actual_index >= 0 && actual_index < length {
+                    if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                        if let Some(element) = obj.properties.get(&(actual_index.to_string())) {
+                            return Ok(element.clone());
+                        }
+                    }
+                }
+
+                Ok(Value::Undefined)
+            }
+
+            "builtin:ObjectGetPrototypeOf" => {
+                // Object.getPrototypeOf(obj) implementation (simplified)
+                if args.count < 2 {
+                    return Ok(Value::Null);
+                }
+
+                let obj_val = self.read_reg(args.start + 1)?;
+                match obj_val {
+                    Value::Object(obj_id) => {
+                        // Simplified implementation: check if object has prototype reference
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if let Some(proto) = obj.properties.get("__proto__") {
+                                Ok(proto.clone())
+                            } else {
+                                // Default object prototype (simplified)
+                                Ok(Value::Null)
+                            }
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    Value::Null | Value::Undefined => {
+                        // Primitive null/undefined throw TypeError in real JS, here return null
+                        Ok(Value::Null)
+                    }
+                    _ => {
+                        // Primitives have their corresponding prototype objects (simplified)
+                        Ok(Value::Null)
+                    }
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -15333,6 +15466,10 @@ impl InterpreterCore {
             278 => Some("builtin:MathClz32".to_string()),
             279 => Some("builtin:ArrayPrototypeFlatMap".to_string()),
             280 => Some("builtin:ObjectDefineProperty".to_string()),
+            281 => Some("builtin:StringPrototypeAt".to_string()),
+            282 => Some("builtin:MathFround".to_string()),
+            283 => Some("builtin:ArrayPrototypeAt".to_string()),
+            284 => Some("builtin:ObjectGetPrototypeOf".to_string()),
 
             _ => None, // Not a recognized builtin
         }

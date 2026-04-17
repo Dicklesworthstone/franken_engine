@@ -130,6 +130,12 @@ enum HelpTopic {
     ReactBuild,
     ReactDoctor,
     ReactContract,
+    Gates,
+    Reports,
+    Test,
+    Synth,
+    Orchestrate,
+    Runtime,
 }
 
 impl HelpTopic {
@@ -153,6 +159,12 @@ impl HelpTopic {
             Self::ReactBuild => react_build_usage(),
             Self::ReactDoctor => react_doctor_usage(),
             Self::ReactContract => react_contract_usage(),
+            Self::Gates => gates_usage(),
+            Self::Reports => reports_usage(),
+            Self::Test => test_usage(),
+            Self::Synth => synth_usage(),
+            Self::Orchestrate => orchestrate_usage(),
+            Self::Runtime => runtime_usage(),
         }
     }
 }
@@ -5147,6 +5159,108 @@ fn react_contract_usage() -> String {
         "behavior:",
         "  prints the machine-readable React compile/build CLI contract synthesized from",
         "  docs/rgc_react_capability_contract_v1.json.",
+    ]
+    .join("\n")
+}
+
+// New consolidated subcommand group usage functions
+fn gates_usage() -> String {
+    [
+        "gates usage:",
+        "  frankenctl gates zero-placeholder --out-dir <dir> [--waivers <file>]",
+        "  frankenctl gates signature-drift --out-dir <dir> [--config <file>]",
+        "  frankenctl gates adversarial-campaign --out-dir <dir>",
+        "  frankenctl gates ambient-mock-guard --out-dir <dir>",
+        "  frankenctl gates ifc-conformance --out-dir <dir>",
+        "  frankenctl gates security-conformance --out-dir <dir>",
+        "  frankenctl gates artifact-validator --input <file> [--out <file>]",
+        "  frankenctl gates placeholder-scan --out-dir <dir>",
+        "",
+        "behavior:",
+        "  validation gates for quality assurance and release gating.",
+    ]
+    .join("\n")
+}
+
+fn reports_usage() -> String {
+    [
+        "reports usage:",
+        "  frankenctl reports parser-oracle [--config <file>] [--out <file>]",
+        "  frankenctl reports parser-phase0 [--out <file>]",
+        "  frankenctl reports lowering-gap [--out <file>]",
+        "  frankenctl reports parser-gap [--out <file>]",
+        "  frankenctl reports control-plane-benchmark [--out <file>]",
+        "  frankenctl reports control-plane-mock [--out <file>]",
+        "  frankenctl reports control-plane-policy --out-dir <dir>",
+        "  frankenctl reports engine-blocker-ledger --out-dir <dir>",
+        "  frankenctl reports metadata-evidence --out-dir <dir>",
+        "  frankenctl reports npm-compatibility --out-dir <dir>",
+        "  frankenctl reports observability-bundle --out-dir <dir>",
+        "  frankenctl reports rgc-planning [--out <file>]",
+        "",
+        "behavior:",
+        "  generate analysis reports and evidence artifacts.",
+    ]
+    .join("\n")
+}
+
+fn test_usage() -> String {
+    [
+        "test usage:",
+        "  frankenctl test test262 --out-dir <dir> [--suite-path <path>]",
+        "  frankenctl test lockstep [--config <file>] [--out <file>]",
+        "  frankenctl test multi-engine-parser --out-dir <dir>",
+        "  frankenctl test s3fifo-baseline [--out <file>]",
+        "  frankenctl test frx-oracle [--out <file>]",
+        "  frankenctl test seqlock-candidate [--out <file>]",
+        "  frankenctl test seqlock-reader-writer [--out <file>]",
+        "  frankenctl test seqlock-rollout [--out <file>]",
+        "  frankenctl test shipped-path-parity --out-dir <dir>",
+        "  frankenctl test verify-general --input <file> [--out <file>]",
+        "",
+        "behavior:",
+        "  testing and verification tools for correctness validation.",
+    ]
+    .join("\n")
+}
+
+fn synth_usage() -> String {
+    [
+        "synth usage:",
+        "  frankenctl synth kernel-contract --out-dir <dir>",
+        "  frankenctl synth shape-lattice --out-dir <dir>",
+        "  frankenctl synth law-mining [--out <file>]",
+        "  frankenctl synth evidence-stitching --out-dir <dir>",
+        "  frankenctl synth cache-contract [--out <file>]",
+        "  frankenctl synth cold-start --out-dir <dir>",
+        "",
+        "behavior:",
+        "  synthesis and generation tools for runtime artifacts.",
+    ]
+    .join("\n")
+}
+
+fn orchestrate_usage() -> String {
+    [
+        "orchestrate usage:",
+        "  frankenctl orchestrate context-refactor [--out <file>]",
+        "  frankenctl orchestrate react-cohort [--out <file>]",
+        "  frankenctl orchestrate asupersync-matrix --out-dir <dir>",
+        "  frankenctl orchestrate tail-latency --out-dir <dir>",
+        "",
+        "behavior:",
+        "  orchestration and execution management tools.",
+    ]
+    .join("\n")
+}
+
+fn runtime_usage() -> String {
+    [
+        "runtime usage:",
+        "  frankenctl runtime diagnostics --input <file> [--out-dir <dir>] [--summary]",
+        "",
+        "behavior:",
+        "  runtime diagnostic and analysis tools.",
     ]
     .join("\n")
 }

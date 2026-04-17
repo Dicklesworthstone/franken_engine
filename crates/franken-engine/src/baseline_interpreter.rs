@@ -17768,6 +17768,175 @@ impl InterpreterCore {
                 Ok(Value::Object(filtered_array_id))
             }
 
+            "builtin:MathFloor" => {
+                // Math.floor() implementation - returns largest integer <= x
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "floored"
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                if num.is_nan() || num.is_infinite() {
+                    Ok(Value::Float(Float64::new(num)))
+                } else {
+                    let floored = num.floor();
+                    // Return Int if in i64 range, otherwise Float
+                    if floored >= i64::MIN as f64 && floored <= i64::MAX as f64 {
+                        Ok(Value::Int(floored as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(floored)))
+                    }
+                }
+            }
+
+            "builtin:MathCeil" => {
+                // Math.ceil() implementation - returns smallest integer >= x
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "ceiling"
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                if num.is_nan() || num.is_infinite() {
+                    Ok(Value::Float(Float64::new(num)))
+                } else {
+                    let ceiled = num.ceil();
+                    // Return Int if in i64 range, otherwise Float
+                    if ceiled >= i64::MIN as f64 && ceiled <= i64::MAX as f64 {
+                        Ok(Value::Int(ceiled as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(ceiled)))
+                    }
+                }
+            }
+
+            "builtin:MathRound" => {
+                // Math.round() implementation - returns nearest integer
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let num = match value {
+                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "rounded"
+                    Value::Float(f) => f.inner(),
+                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+                };
+
+                if num.is_nan() || num.is_infinite() {
+                    Ok(Value::Float(Float64::new(num)))
+                } else {
+                    let rounded = num.round();
+                    // Return Int if in i64 range, otherwise Float
+                    if rounded >= i64::MIN as f64 && rounded <= i64::MAX as f64 {
+                        Ok(Value::Int(rounded as i64))
+                    } else {
+                        Ok(Value::Float(Float64::new(rounded)))
+                    }
+                }
+            }
+
+            "builtin:StringPrototypeSplit" => {
+                // String.prototype.split() implementation - splits string into array
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                if args.count < 2 {
+                    // No separator provided - split each character
+                    let chars: Vec<String> = str_text.chars().map(|c| c.to_string()).collect();
+                    for (index, char_str) in chars.iter().enumerate() {
+                        self.set_object_property(
+                            result_array_id,
+                            index.to_string(),
+                            Value::Str(char_str.clone()),
+                        )?;
+                    }
+                    self.set_object_property(
+                        result_array_id,
+                        "length".to_string(),
+                        Value::Int(chars.len() as i64),
+                    )?;
+                } else {
+                    let separator_val = self.read_reg(args.start + 1)?;
+                    match separator_val {
+                        Value::Str(sep) => {
+                            let parts: Vec<&str> = if sep.is_empty() {
+                                // Empty separator splits each character
+                                vec![] // We'll handle this case below
+                            } else {
+                                str_text.split(&sep).collect()
+                            };
+
+                            if sep.is_empty() {
+                                // Split each character
+                                let chars: Vec<String> = str_text.chars().map(|c| c.to_string()).collect();
+                                for (index, char_str) in chars.iter().enumerate() {
+                                    self.set_object_property(
+                                        result_array_id,
+                                        index.to_string(),
+                                        Value::Str(char_str.clone()),
+                                    )?;
+                                }
+                                self.set_object_property(
+                                    result_array_id,
+                                    "length".to_string(),
+                                    Value::Int(chars.len() as i64),
+                                )?;
+                            } else {
+                                // Normal split
+                                for (index, part) in parts.iter().enumerate() {
+                                    self.set_object_property(
+                                        result_array_id,
+                                        index.to_string(),
+                                        Value::Str(part.to_string()),
+                                    )?;
+                                }
+                                self.set_object_property(
+                                    result_array_id,
+                                    "length".to_string(),
+                                    Value::Int(parts.len() as i64),
+                                )?;
+                            }
+                        }
+                        _ => {
+                            // Non-string separator - return array with original string
+                            self.set_object_property(
+                                result_array_id,
+                                "0".to_string(),
+                                Value::Str(str_text),
+                            )?;
+                            self.set_object_property(
+                                result_array_id,
+                                "length".to_string(),
+                                Value::Int(1),
+                            )?;
+                        }
+                    }
+                }
+
+                Ok(Value::Object(result_array_id))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)

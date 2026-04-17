@@ -7449,7 +7449,7 @@ impl InterpreterCore {
                             Err(_) => true, // Invalid number strings are NaN
                         }
                     }
-                    Value::Bool(b) => {
+                    Value::Bool(_b) => {
                         // Booleans convert to numbers: true->1, false->0
                         false // Neither 1 nor 0 is NaN
                     }

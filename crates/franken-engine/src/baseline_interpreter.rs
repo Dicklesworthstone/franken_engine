@@ -17691,6 +17691,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 if args.count < 2 {
@@ -17706,6 +17707,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 // Simplified lexicographic comparison (ignoring locale specifics)
@@ -17857,6 +17859,7 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
                 let result_array_id = self.alloc_object_with_prototype(None)?;
@@ -18087,6 +18090,7 @@ impl InterpreterCore {
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.to_string(),
                         Value::Object(_) => "[object Object]".to_string(),
+                        _ => "[object Object]".to_string(),
                     }
                 } else {
                     "undefined".to_string()
@@ -18176,7 +18180,7 @@ impl InterpreterCore {
                                 if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
                                     if let Some(concat_length_prop) = concat_obj.properties.get("length") {
                                         let concat_length = match concat_length_prop {
-                                            Value::Int(n) => n.max(0) as usize,
+                                            Value::Int(n) => (*n).max(0) as usize,
                                             _ => 0,
                                         };
 
@@ -18597,6 +18601,10 @@ impl InterpreterCore {
             362 => Some("builtin:DateNow".to_string()),
             363 => Some("builtin:ArrayPrototypeConcat".to_string()),
             364 => Some("builtin:StringPrototypeMatch".to_string()),
+            365 => Some("builtin:JSONStringify".to_string()),
+            366 => Some("builtin:JSONParse".to_string()),
+            367 => Some("builtin:ArrayPrototypeFind".to_string()),
+            368 => Some("builtin:ArrayPrototypeFindIndex".to_string()),
 
             _ => None, // Not a recognized builtin
         }

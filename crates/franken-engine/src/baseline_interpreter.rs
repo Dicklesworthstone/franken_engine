@@ -9544,6 +9544,181 @@ impl InterpreterCore {
                     Ok(Value::Undefined)
                 }
             }
+            "builtin:PromiseResolve" => {
+                // Promise.resolve(value) implementation (simplified)
+                let value = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Create a new Promise object (simplified - just wraps the value)
+                let promise_id = ObjectId(self.next_object_id());
+                let mut promise_obj = Object::new();
+
+                // Store the resolved value and state
+                promise_obj
+                    .properties
+                    .insert("__state".to_string(), Value::Str("fulfilled".to_string()));
+                promise_obj.properties.insert("__value".to_string(), value);
+
+                self.heap.push(promise_obj);
+                Ok(Value::Object(promise_id))
+            }
+            "builtin:ArrayPrototypeReduce" => {
+                // Array.prototype.reduce(callback[, initialValue]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let initial_value = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Collect indexed values
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index
+                    indexed_values.sort_by_key(|(index, _)| *index);
+
+                    // Simplified reduce - just return initial value or first element
+                    if let Some(init) = initial_value {
+                        // TODO: In full implementation, would call callback for each element
+                        Ok(init)
+                    } else if let Some((_index, first_value)) = indexed_values.first() {
+                        // TODO: In full implementation, would use callback starting from second element
+                        Ok(first_value.clone())
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "builtin:StringPrototypePadStart" => {
+                // String.prototype.padStart(targetLength[, padString]) implementation
+                if args.count == 0 {
+                    return self.read_reg(args.start);
+                }
+
+                // Get the this value (should be a string)
+                let this_val = self.read_reg(args.start)?;
+                let this_str = match this_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(this_val),
+                };
+
+                // Get target length
+                let target_length = if args.count > 1 {
+                    let len_val = self.read_reg(args.start + 1)?;
+                    match len_val {
+                        Value::Int(i) => i.max(0) as usize,
+                        Value::Float(f) => f.inner().max(0.0) as usize,
+                        _ => this_str.len(),
+                    }
+                } else {
+                    this_str.len()
+                };
+
+                // Get pad string
+                let pad_str = if args.count > 2 {
+                    let pad_val = self.read_reg(args.start + 2)?;
+                    match pad_val {
+                        Value::Str(s) => s,
+                        Value::Int(i) => i.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => " ".to_string(),
+                        _ => " ".to_string(),
+                    }
+                } else {
+                    " ".to_string()
+                };
+
+                if target_length <= this_str.len() {
+                    Ok(Value::Str(this_str))
+                } else {
+                    let pad_needed = target_length - this_str.len();
+                    let mut padding = String::new();
+
+                    // Repeat pad string until we have enough padding
+                    while padding.len() < pad_needed {
+                        padding.push_str(&pad_str);
+                    }
+
+                    // Truncate to exact length needed
+                    padding.truncate(pad_needed);
+                    let result = format!("{}{}", padding, this_str);
+                    Ok(Value::Str(result))
+                }
+            }
+            "builtin:ObjectHasOwnProperty" => {
+                // Object.prototype.hasOwnProperty(property) implementation
+                if args.count < 2 {
+                    return Ok(Value::Bool(false));
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let obj_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Bool(false)), // Non-objects return false
+                };
+
+                // Get property name
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_name = match prop_val {
+                    Value::Str(s) => s,
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    _ => return Ok(Value::Bool(false)),
+                };
+
+                // Check if object has the property
+                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                    let has_property = obj.properties.contains_key(&prop_name);
+                    Ok(Value::Bool(has_property))
+                } else {
+                    Ok(Value::Bool(false))
+                }
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -9638,6 +9813,7 @@ impl InterpreterCore {
             40 => Some("builtin:StringPrototypeEndsWith".to_string()),
             41 => Some("builtin:StringPrototypeReplace".to_string()),
             42 => Some("builtin:StringPrototypeRepeat".to_string()),
+            43 => Some("builtin:StringPrototypePadStart".to_string()),
 
             // Additional Array methods
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
@@ -9646,6 +9822,13 @@ impl InterpreterCore {
             24 => Some("builtin:ArrayPrototypeFilter".to_string()),
             25 => Some("builtin:ArrayPrototypeFind".to_string()),
             26 => Some("builtin:ArrayPrototypeConcat".to_string()),
+            27 => Some("builtin:ArrayPrototypeReduce".to_string()),
+
+            // Promise methods
+            120 => Some("builtin:PromiseResolve".to_string()),
+
+            // Additional Object methods
+            6 => Some("builtin:ObjectHasOwnProperty".to_string()),
 
             _ => None, // Not a recognized builtin
         }

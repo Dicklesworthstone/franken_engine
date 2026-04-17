@@ -172,6 +172,19 @@ Use the provided verification script to test both modes:
 
 See [`docs/DEPENDENCY_AUDIT.md`](./docs/DEPENDENCY_AUDIT.md) for detailed dependency information.
 
+## Parser Phase0 Artifact Contract
+
+The parser phase0 performance artifact contract defines truthful performance evidence requirements and degraded-mode receipt handling. This contract ensures placeholder artifacts are rejected and real capture failures are explicitly documented.
+
+To verify the artifact contract:
+
+```bash
+./scripts/run_parser_phase0_artifact_contract.sh ci
+./scripts/e2e/parser_phase0_artifact_contract_replay.sh ci
+```
+
+See [`docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md`](./docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md) for the complete contract specification.
+
 ## Installation
 
 ### Option 1: One-Line Installer

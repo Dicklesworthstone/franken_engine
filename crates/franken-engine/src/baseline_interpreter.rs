@@ -16915,53 +16915,51 @@ impl InterpreterCore {
                     0
                 };
 
-                // Simplified implementation: return array of [index, value] pairs
-                let entries_array_id = self.alloc_object_with_prototype(None)?;
-
+                // Collect key-value pairs first without holding immutable borrow
+                let mut pairs = Vec::new();
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let mut entry_index = 0;
                     for i in 0..length {
                         if let Some(element) = obj.properties.get(&i.to_string()) {
-                            // Create [index, value] pair
-                            let pair_array_id = self.alloc_object_with_prototype(None)?;
-                            self.set_object_property(
-                                pair_array_id,
-                                "0".to_string(),
-                                Value::Int(i as i64),
-                            )?;
-                            self.set_object_property(
-                                pair_array_id,
-                                "1".to_string(),
-                                element.clone(),
-                            )?;
-                            self.set_object_property(
-                                pair_array_id,
-                                "length".to_string(),
-                                Value::Int(2),
-                            )?;
-
-                            // Add pair to entries array
-                            self.set_object_property(
-                                entries_array_id,
-                                entry_index.to_string(),
-                                Value::Object(pair_array_id),
-                            )?;
-                            entry_index += 1;
+                            pairs.push((i, element.clone()));
                         }
                     }
+                }
 
+                // Create entries array with mutable operations
+                let entries_array_id = self.alloc_object_with_prototype(None)?;
+
+                for (entry_index, (i, element)) in pairs.iter().enumerate() {
+                    // Create [index, value] pair
+                    let pair_array_id = self.alloc_object_with_prototype(None)?;
                     self.set_object_property(
-                        entries_array_id,
-                        "length".to_string(),
-                        Value::Int(entry_index as i64),
+                        pair_array_id,
+                        "0".to_string(),
+                        Value::Int(*i as i64),
                     )?;
-                } else {
+                    self.set_object_property(
+                        pair_array_id,
+                        "1".to_string(),
+                        element.clone(),
+                    )?;
+                    self.set_object_property(
+                        pair_array_id,
+                        "length".to_string(),
+                        Value::Int(2),
+                    )?;
+
+                    // Add pair to entries array
                     self.set_object_property(
                         entries_array_id,
-                        "length".to_string(),
-                        Value::Int(0),
+                        entry_index.to_string(),
+                        Value::Object(pair_array_id),
                     )?;
                 }
+
+                self.set_object_property(
+                    entries_array_id,
+                    "length".to_string(),
+                    Value::Int(pairs.len() as i64),
+                )?;
 
                 Ok(Value::Object(entries_array_id))
             }
@@ -16999,6 +16997,108 @@ impl InterpreterCore {
                 } else {
                     Ok(Value::Undefined)
                 }
+            }
+
+            "builtin:ArrayPrototypeReverse" => {
+                // Array.prototype.reverse() implementation - reverses array in place
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(this_val), // Non-objects return as-is
+                };
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length = match length_prop {
+                        Value::Int(n) => n.max(0) as usize,
+                        _ => 0,
+                    };
+
+                    if length > 1 {
+                        // Collect elements in order
+                        let mut elements: Vec<(usize, Value)> = Vec::new();
+                        for i in 0..length {
+                            if let Some(element) = obj.properties.get(&i.to_string()) {
+                                elements.push((i, element.clone()));
+                            }
+                        }
+
+                        // Clear existing numeric properties
+                        if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
+                            for i in 0..length {
+                                obj_mut.properties.remove(&i.to_string());
+                            }
+                        }
+
+                        // Reverse and reassign elements
+                        elements.reverse();
+                        for (new_index, (_, value)) in elements.into_iter().enumerate() {
+                            self.set_object_property(array_id, new_index.to_string(), value)?;
+                        }
+                    }
+                }
+
+                Ok(this_val) // Array methods return the array itself for reverse()
+            }
+
+            "builtin:StringPrototypeToLowerCase" => {
+                // String.prototype.toLowerCase() implementation
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                Ok(Value::Str(str_text.to_lowercase()))
+            }
+
+            "builtin:StringPrototypeToUpperCase" => {
+                // String.prototype.toUpperCase() implementation
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                Ok(Value::Str(str_text.to_uppercase()))
+            }
+
+            "builtin:ObjectPrototypeToString" => {
+                // Object.prototype.toString() implementation
+                let this_val = self.read_reg(args.start)?;
+                let result = match this_val {
+                    Value::Null => "[object Null]".to_string(),
+                    Value::Undefined => "[object Undefined]".to_string(),
+                    Value::Bool(_) => "[object Boolean]".to_string(),
+                    Value::Int(_) => "[object Number]".to_string(),
+                    Value::Float(_) => "[object Number]".to_string(),
+                    Value::Str(_) => "[object String]".to_string(),
+                    Value::Object(obj_id) => {
+                        // Check if it's an array by looking for length property and numeric indices
+                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
+                            if obj.properties.contains_key("length") {
+                                // Simple heuristic: if it has length property, consider it array-like
+                                "[object Array]".to_string()
+                            } else {
+                                "[object Object]".to_string()
+                            }
+                        } else {
+                            "[object Object]".to_string()
+                        }
+                    }
+                };
+
+                Ok(Value::Str(result))
             }
 
             _ => {
@@ -17296,6 +17396,10 @@ impl InterpreterCore {
             326 => Some("builtin:NumberPrototypeValueOf".to_string()),
             327 => Some("builtin:ArrayPrototypeEntries".to_string()),
             328 => Some("builtin:WeakMapPrototypeGet".to_string()),
+            329 => Some("builtin:ArrayPrototypeReverse".to_string()),
+            330 => Some("builtin:StringPrototypeToLowerCase".to_string()),
+            331 => Some("builtin:StringPrototypeToUpperCase".to_string()),
+            332 => Some("builtin:ObjectPrototypeToString".to_string()),
 
             _ => None, // Not a recognized builtin
         }

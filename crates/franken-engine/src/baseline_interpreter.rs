@@ -13807,10 +13807,14 @@ impl InterpreterCore {
                     match item {
                         Value::Object(item_id) => {
                             if let Some(item_obj) = self.heap.get(item_id.0 as usize) {
-                                if let Some(Value::Int(item_length)) = item_obj.properties.get("length") {
+                                if let Some(Value::Int(item_length)) =
+                                    item_obj.properties.get("length")
+                                {
                                     // It's array-like, spread its elements
                                     for j in 0..*item_length as usize {
-                                        if let Some(element) = item_obj.properties.get(&j.to_string()) {
+                                        if let Some(element) =
+                                            item_obj.properties.get(&j.to_string())
+                                        {
                                             result_elements.push(element.clone());
                                         } else {
                                             result_elements.push(Value::Undefined);

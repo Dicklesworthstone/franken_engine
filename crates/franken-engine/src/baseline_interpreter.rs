@@ -17602,12 +17602,12 @@ impl InterpreterCore {
                     )?;
                 }
 
-                    self.set_object_property(
-                        names_array_id,
-                        "length".to_string(),
-                        Value::Int(index as i64),
-                    )?;
-                }
+                // Set the length property
+                self.set_object_property(
+                    names_array_id,
+                    "length".to_string(),
+                    Value::Int(keys.len() as i64),
+                )?;
 
                 Ok(Value::Object(names_array_id))
             }
@@ -18106,6 +18106,166 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
+            "builtin:MathRandom" => {
+                // Math.random() implementation - returns pseudo-random number between 0 and 1
+                // For deterministic execution, use a simple PRNG based on a seed
+                // This is a simplified implementation for runtime compatibility
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+
+                let mut hasher = DefaultHasher::new();
+                // Use current timestamp as seed for pseudo-randomness
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+                    .hash(&mut hasher);
+
+                let hash_val = hasher.finish();
+                let random_val = (hash_val as f64) / (u64::MAX as f64);
+                Ok(Value::Float(Float64::new(random_val)))
+            }
+
+            "builtin:DateNow" => {
+                // Date.now() implementation - returns current timestamp in milliseconds
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+
+                // Convert to f64 to handle large timestamp values
+                Ok(Value::Float(Float64::new(now as f64)))
+            }
+
+            "builtin:ArrayPrototypeConcat" => {
+                // Array.prototype.concat() implementation - concatenates arrays
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects return undefined
+                };
+
+                let result_array_id = self.alloc_object_with_prototype(None)?;
+
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length = match length_prop {
+                        Value::Int(n) => n.max(0) as usize,
+                        _ => 0,
+                    };
+
+                    // Copy elements from original array
+                    let mut result_index = 0;
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            self.set_object_property(
+                                result_array_id,
+                                result_index.to_string(),
+                                element.clone(),
+                            )?;
+                            result_index += 1;
+                        }
+                    }
+
+                    // Concatenate additional arguments
+                    for arg_idx in 1..args.count {
+                        let arg_val = self.read_reg(args.start + arg_idx)?;
+                        match arg_val {
+                            Value::Object(concat_id) => {
+                                // If it's an array, concatenate its elements
+                                if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
+                                    if let Some(concat_length_prop) = concat_obj.properties.get("length") {
+                                        let concat_length = match concat_length_prop {
+                                            Value::Int(n) => n.max(0) as usize,
+                                            _ => 0,
+                                        };
+
+                                        for i in 0..concat_length {
+                                            if let Some(element) = concat_obj.properties.get(&i.to_string()) {
+                                                self.set_object_property(
+                                                    result_array_id,
+                                                    result_index.to_string(),
+                                                    element.clone(),
+                                                )?;
+                                                result_index += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Non-array values are added as single elements
+                                self.set_object_property(
+                                    result_array_id,
+                                    result_index.to_string(),
+                                    arg_val,
+                                )?;
+                                result_index += 1;
+                            }
+                        }
+                    }
+
+                    self.set_object_property(
+                        result_array_id,
+                        "length".to_string(),
+                        Value::Int(result_index as i64),
+                    )?;
+                }
+
+                Ok(Value::Object(result_array_id))
+            }
+
+            "builtin:StringPrototypeMatch" => {
+                // String.prototype.match() implementation - simplified version
+                let this_val = self.read_reg(args.start)?;
+                let str_text = match this_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                if args.count < 2 {
+                    return Ok(Value::Null); // No pattern provided
+                }
+
+                let pattern_val = self.read_reg(args.start + 1)?;
+                let pattern_str = match pattern_val {
+                    Value::Str(s) => s,
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                };
+
+                // Simplified implementation: check if pattern exists in string
+                if str_text.contains(&pattern_str) {
+                    let matches_array_id = self.alloc_object_with_prototype(None)?;
+
+                    // Add the matched string as first element
+                    self.set_object_property(
+                        matches_array_id,
+                        "0".to_string(),
+                        Value::Str(pattern_str),
+                    )?;
+
+                    self.set_object_property(
+                        matches_array_id,
+                        "length".to_string(),
+                        Value::Int(1),
+                    )?;
+
+                    Ok(Value::Object(matches_array_id))
+                } else {
+                    Ok(Value::Null) // No match found
+                }
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -18433,6 +18593,10 @@ impl InterpreterCore {
             358 => Some("builtin:MathSqrt".to_string()),
             359 => Some("builtin:MathPow".to_string()),
             360 => Some("builtin:StringPrototypeReplace".to_string()),
+            361 => Some("builtin:MathRandom".to_string()),
+            362 => Some("builtin:DateNow".to_string()),
+            363 => Some("builtin:ArrayPrototypeConcat".to_string()),
+            364 => Some("builtin:StringPrototypeMatch".to_string()),
 
             _ => None, // Not a recognized builtin
         }

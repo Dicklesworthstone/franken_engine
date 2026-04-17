@@ -267,6 +267,18 @@ pub enum BuiltinId {
     ClearTimeout,
     ClearInterval,
     SetImmediate,
+
+    // -- Proxy --
+    ProxyConstructor,
+    ProxyRevocable,
+
+    // -- Reflect --
+    ReflectGet,
+    ReflectSet,
+    ReflectHas,
+    ReflectDeleteProperty,
+    ReflectApply,
+    ReflectConstruct,
 }
 
 impl BuiltinId {
@@ -456,6 +468,14 @@ impl BuiltinId {
             Self::ClearTimeout => "clearTimeout",
             Self::ClearInterval => "clearInterval",
             Self::SetImmediate => "setImmediate",
+            Self::ProxyConstructor => "Proxy",
+            Self::ProxyRevocable => "Proxy.revocable",
+            Self::ReflectGet => "Reflect.get",
+            Self::ReflectSet => "Reflect.set",
+            Self::ReflectHas => "Reflect.has",
+            Self::ReflectDeleteProperty => "Reflect.deleteProperty",
+            Self::ReflectApply => "Reflect.apply",
+            Self::ReflectConstruct => "Reflect.construct",
         }
     }
 }

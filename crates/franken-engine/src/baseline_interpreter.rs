@@ -9256,6 +9256,171 @@ impl InterpreterCore {
                     Ok(Value::Undefined)
                 }
             }
+            "builtin:ArrayPrototypeFilter" => {
+                // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Create a new array for the filtered result
+                    let result_id = ObjectId(self.next_object_id());
+                    let mut result_obj = Object::new();
+
+                    // Collect indexed values (simplified - just copy all for now)
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index and add to result array (simplified - copy all values)
+                    indexed_values.sort_by_key(|(index, _)| *index);
+                    let mut result_index = 0;
+                    for (_index, value) in indexed_values {
+                        // TODO: In full implementation, would call callback and filter
+                        // For now, just copy all values to demonstrate structure
+                        result_obj
+                            .properties
+                            .insert(result_index.to_string(), value);
+                        result_index += 1;
+                    }
+
+                    // Set length property
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(result_index as i64));
+
+                    self.heap.push(result_obj);
+                    Ok(Value::Object(result_id))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "builtin:ArrayPrototypeFind" => {
+                // Array.prototype.find(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Collect indexed values
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index and return first element (simplified)
+                    indexed_values.sort_by_key(|(index, _)| *index);
+                    if let Some((_index, value)) = indexed_values.first() {
+                        // TODO: In full implementation, would call callback and test condition
+                        // For now, just return first element to demonstrate structure
+                        Ok(value.clone())
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            "builtin:MathLog" => {
+                // Math.log(x) implementation - returns natural logarithm of x
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = if num < 0.0 { f64::NAN } else { num.ln() };
+
+                Ok(Value::Float(Float64::new(result)))
+            }
+            "builtin:MathExp" => {
+                // Math.exp(x) implementation - returns e raised to the power of x
+                if args.count == 0 {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
+                }
+
+                let arg = self.read_reg(args.start)?;
+                let num = match arg {
+                    Value::Int(i) => i as f64,
+                    Value::Float(f) => f.inner(),
+                    Value::Bool(true) => 1.0,
+                    Value::Bool(false) => 0.0,
+                    Value::Null => 0.0,
+                    Value::Undefined => f64::NAN,
+                    _ => f64::NAN,
+                };
+
+                let result = num.exp();
+                Ok(Value::Float(Float64::new(result)))
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -9339,6 +9504,8 @@ impl InterpreterCore {
             58 => Some("builtin:MathSqrt".to_string()),
             59 => Some("builtin:MathSin".to_string()),
             60 => Some("builtin:MathCos".to_string()),
+            61 => Some("builtin:MathLog".to_string()),
+            62 => Some("builtin:MathExp".to_string()),
 
             // Additional String methods
             38 => Some("builtin:StringPrototypeIncludes".to_string()),
@@ -9350,6 +9517,8 @@ impl InterpreterCore {
             21 => Some("builtin:ArrayPrototypeReverse".to_string()),
             22 => Some("builtin:ArrayPrototypeForEach".to_string()),
             23 => Some("builtin:ArrayPrototypeMap".to_string()),
+            24 => Some("builtin:ArrayPrototypeFilter".to_string()),
+            25 => Some("builtin:ArrayPrototypeFind".to_string()),
 
             _ => None, // Not a recognized builtin
         }

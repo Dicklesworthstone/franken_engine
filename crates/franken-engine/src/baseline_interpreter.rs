@@ -13595,9 +13595,15 @@ impl InterpreterCore {
                             // Simple reduction: add numbers together
                             accumulator = match (&accumulator, element) {
                                 (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-                                (Value::Int(a), Value::Float(b)) => Value::Float((*a as f64 + b.inner()).into()),
-                                (Value::Float(a), Value::Int(b)) => Value::Float((a.inner() + *b as f64).into()),
-                                (Value::Float(a), Value::Float(b)) => Value::Float((a.inner() + b.inner()).into()),
+                                (Value::Int(a), Value::Float(b)) => {
+                                    Value::Float((*a as f64 + b.inner()).into())
+                                }
+                                (Value::Float(a), Value::Int(b)) => {
+                                    Value::Float((a.inner() + *b as f64).into())
+                                }
+                                (Value::Float(a), Value::Float(b)) => {
+                                    Value::Float((a.inner() + b.inner()).into())
+                                }
                                 _ => accumulator, // Keep accumulator unchanged for non-numeric
                             };
                         }
@@ -13646,9 +13652,21 @@ impl InterpreterCore {
                     let result_id = self.alloc_object_with_prototype(None)?;
 
                     // Add the matched string
-                    self.set_object_property(result_id, "0".to_string(), Value::Str(pattern_str.clone()))?;
-                    self.set_object_property(result_id, "index".to_string(), Value::Int(index as i64))?;
-                    self.set_object_property(result_id, "input".to_string(), Value::Str(string_val))?;
+                    self.set_object_property(
+                        result_id,
+                        "0".to_string(),
+                        Value::Str(pattern_str.clone()),
+                    )?;
+                    self.set_object_property(
+                        result_id,
+                        "index".to_string(),
+                        Value::Int(index as i64),
+                    )?;
+                    self.set_object_property(
+                        result_id,
+                        "input".to_string(),
+                        Value::Str(string_val),
+                    )?;
                     self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
 
                     Ok(Value::Object(result_id))

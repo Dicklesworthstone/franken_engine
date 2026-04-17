@@ -11687,6 +11687,130 @@ impl InterpreterCore {
                 Ok(Value::Object(promise_id))
             }
 
+            "builtin:FunctionPrototypeApply" => {
+                // Function.prototype.apply(thisArg, argsArray) implementation
+                // For now, simplified implementation without full function call support
+                // TODO: Implement proper function call mechanism with context binding and argument spreading
+
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                // The first argument is the function to call, second is thisArg, third is args array
+                let _function = self.read_reg(args.start)?;
+                let _this_arg = if args.count >= 2 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+                let _args_array = if args.count >= 3 {
+                    self.read_reg(args.start + 2)?
+                } else {
+                    Value::Undefined
+                };
+
+                // For now, return undefined since we don't have full function call support
+                // This is a foundation for future function call implementation with argument arrays
+                Ok(Value::Undefined)
+            }
+
+            "builtin:StringPrototypeLocaleCompare" => {
+                // String.prototype.localeCompare(that) implementation
+                let this_val = self.read_reg(args.start)?;
+                let this_string = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Int(0)),
+                        }
+                    }
+                };
+
+                let that_string = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Str(s) => s,
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.inner().to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        _ => String::new(),
+                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                // Simplified locale-aware comparison (using standard string comparison for now)
+                let result = this_string.cmp(&that_string);
+                let comparison_result = match result {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                };
+
+                Ok(Value::Int(comparison_result))
+            }
+
+            "builtin:DatePrototypeGetTime" => {
+                // Date.prototype.getTime() implementation
+                let this_val = self.read_reg(args.start)?;
+                let date_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Float(f64::NAN.into())), // Non-objects can't be dates
+                };
+
+                // Check if it's actually a Date
+                if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
+                    if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
+                        if type_val == "Date" {
+                            // Get the timestamp value
+                            if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                                return Ok(Value::Float(*timestamp));
+                            } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                                return Ok(Value::Int(*timestamp));
+                            }
+                        }
+                    }
+                }
+
+                // Invalid date or not a date object
+                Ok(Value::Float(f64::NAN.into()))
+            }
+
+            "builtin:DatePrototypeToString" => {
+                // Date.prototype.toString() implementation
+                let this_val = self.read_reg(args.start)?;
+                let date_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Str("Invalid Date".to_string())), // Non-objects can't be dates
+                };
+
+                // Check if it's actually a Date
+                if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
+                    if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
+                        if type_val == "Date" {
+                            // Get the timestamp and format it
+                            if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                                // Simplified date formatting (ISO-8601 style for now)
+                                // TODO: Implement proper locale-aware date formatting
+                                return Ok(Value::Str(format!("Date({})", timestamp.inner())));
+                            } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                                return Ok(Value::Str(format!("Date({})", timestamp)));
+                            }
+                        }
+                    }
+                }
+
+                // Invalid date or not a date object
+                Ok(Value::Str("Invalid Date".to_string()))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -11854,6 +11978,10 @@ impl InterpreterCore {
             195 => Some("builtin:StringPrototypeSubstr".to_string()),
             196 => Some("builtin:NumberPrototypeToString".to_string()),
             197 => Some("builtin:PromiseAll".to_string()),
+            198 => Some("builtin:FunctionPrototypeApply".to_string()),
+            199 => Some("builtin:StringPrototypeLocaleCompare".to_string()),
+            200 => Some("builtin:DatePrototypeGetTime".to_string()),
+            201 => Some("builtin:DatePrototypeToString".to_string()),
 
             _ => None, // Not a recognized builtin
         }

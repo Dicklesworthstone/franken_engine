@@ -8042,6 +8042,31 @@ impl InterpreterCore {
                     Ok(Value::Float(Float64::new(min_val)))
                 }
             }
+            "builtin:MathRandom" => {
+                // Math.random implementation - returns pseudo-random number between 0 and 1
+
+                // Generate a pseudo-random number between 0 and 1
+                // In a real implementation, this should use a proper PRNG
+                // For now, we'll use a simple deterministic approach for reproducibility
+                // TODO: Integrate with proper PRNG system for deterministic execution
+
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+
+                // Create a simple seed based on current execution state
+                // This is not cryptographically secure but provides deterministic behavior
+                let mut hasher = DefaultHasher::new();
+
+                // Use some execution state as seed (simplified)
+                // In practice, this should use a proper PRNG state
+                self.stack.len().hash(&mut hasher);
+                self.heap.len().hash(&mut hasher);
+
+                let hash = hasher.finish();
+                let normalized = (hash % 1_000_000_000) as f64 / 1_000_000_000.0;
+
+                Ok(Value::Float(Float64::new(normalized)))
+            }
 
             // JSON methods
             "builtin:JsonStringify" => {
@@ -8367,6 +8392,67 @@ impl InterpreterCore {
                     _ => Ok(Value::Bool(false)), // Number.isFinite only returns true for finite numbers, not type coerced
                 }
             }
+            "builtin:ConsoleLog" => {
+                // console.log implementation - prints arguments to stdout/console
+                let mut output_parts = Vec::new();
+
+                // Convert all arguments to strings and collect them
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    let str_representation = self.value_to_string(&arg);
+                    output_parts.push(str_representation);
+                }
+
+                // Join with spaces (standard console.log behavior)
+                let output = output_parts.join(" ");
+
+                // In a real implementation, this would go to the console/logger
+                // For now, we'll store it or handle it appropriately
+                // TODO: Integrate with actual console output system
+                println!("console.log: {}", output);
+
+                Ok(Value::Undefined)
+            }
+            "builtin:ConsoleError" => {
+                // console.error implementation - prints error arguments to stderr/console
+                let mut output_parts = Vec::new();
+
+                // Convert all arguments to strings and collect them
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    let str_representation = self.value_to_string(&arg);
+                    output_parts.push(str_representation);
+                }
+
+                // Join with spaces
+                let output = output_parts.join(" ");
+
+                // In a real implementation, this would go to stderr/error logger
+                // TODO: Integrate with actual console error output system
+                eprintln!("console.error: {}", output);
+
+                Ok(Value::Undefined)
+            }
+            "builtin:ConsoleWarn" => {
+                // console.warn implementation - prints warning arguments to console
+                let mut output_parts = Vec::new();
+
+                // Convert all arguments to strings and collect them
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    let str_representation = self.value_to_string(&arg);
+                    output_parts.push(str_representation);
+                }
+
+                // Join with spaces
+                let output = output_parts.join(" ");
+
+                // In a real implementation, this would go to warning logger
+                // TODO: Integrate with actual console warning output system
+                eprintln!("console.warn: {}", output);
+
+                Ok(Value::Undefined)
+            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -8417,6 +8503,7 @@ impl InterpreterCore {
             53 => Some("builtin:MathRound".to_string()),
             54 => Some("builtin:MathMax".to_string()),
             55 => Some("builtin:MathMin".to_string()),
+            56 => Some("builtin:MathRandom".to_string()),
 
             // JSON methods
             70 => Some("builtin:JsonParse".to_string()),
@@ -8431,6 +8518,11 @@ impl InterpreterCore {
             // Number methods
             90 => Some("builtin:NumberIsNaN".to_string()),
             91 => Some("builtin:NumberIsFinite".to_string()),
+
+            // Console methods
+            100 => Some("builtin:ConsoleLog".to_string()),
+            101 => Some("builtin:ConsoleError".to_string()),
+            102 => Some("builtin:ConsoleWarn".to_string()),
 
             _ => None, // Not a recognized builtin
         }

@@ -72,6 +72,9 @@ frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 
 # 5) Execute the same source through the orchestrator
 frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
+
+# 6) Replay execution with validation mode
+frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json
 ```
 
 ## Design Philosophy
@@ -253,6 +256,24 @@ jq empty docs/rgc_cross_platform_matrix_v1.json
 Matrix artifacts are generated at `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json` for each verification run.
 
 See [`docs/RGC_CROSS_PLATFORM_MATRIX_V1.md`](./docs/RGC_CROSS_PLATFORM_MATRIX_V1.md) for the complete contract specification.
+
+## RGC Docs and Help Surface Audit
+
+The docs and help surface audit ensures that README.md and frankenctl --help output accurately reflect the commands that actually parse and run in the shipped implementation. This audit prevents aspirational copy from diverging from runtime behavior.
+
+To verify the docs and help surface contract:
+
+```bash
+./scripts/run_rgc_docs_help_surface_audit.sh ci
+./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci
+jq empty docs/rgc_docs_help_surface_audit_v1.json
+```
+
+The replay wrapper resolves the latest complete audit bundle, warns on incomplete runs, and validates that help output matches the audited contract surface.
+
+Audit artifacts are generated at `artifacts/rgc_docs_help_surface_audit/<timestamp>/docs_help_surface_report.json` for each verification run.
+
+See [`docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md`](./docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md) for the complete contract specification.
 
 ## Installation
 

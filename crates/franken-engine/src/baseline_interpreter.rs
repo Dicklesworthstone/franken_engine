@@ -12018,6 +12018,175 @@ impl InterpreterCore {
                 Ok(Value::Object(array_id))
             }
 
+            "builtin:ArrayPrototypeFill" => {
+                // Array.prototype.fill(value, start, end) implementation
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let fill_value = if args.count >= 2 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as i32,
+                        Some(Value::Float(len)) => len.inner() as i32,
+                        _ => return Ok(Value::Object(array_id)),
+                    }
+                } else {
+                    return Ok(Value::Object(array_id));
+                };
+
+                if length <= 0 {
+                    return Ok(Value::Object(array_id));
+                }
+
+                let start = if args.count >= 3 {
+                    match self.read_reg(args.start + 2)? {
+                        Value::Int(s) => s as i32,
+                        Value::Float(s) => s.inner() as i32,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let end = if args.count >= 4 {
+                    match self.read_reg(args.start + 3)? {
+                        Value::Int(e) => e as i32,
+                        Value::Float(e) => e.inner() as i32,
+                        _ => length,
+                    }
+                } else {
+                    length
+                };
+
+                // Normalize negative indices
+                let start_idx = if start < 0 {
+                    (length + start).max(0) as usize
+                } else {
+                    (start as usize).min(length as usize)
+                };
+
+                let end_idx = if end < 0 {
+                    (length + end).max(0) as usize
+                } else {
+                    (end as usize).min(length as usize)
+                };
+
+                // Fill the array elements
+                if start_idx < end_idx {
+                    for i in start_idx..end_idx {
+                        self.set_object_property(
+                            array_id,
+                            i.to_string(),
+                            fill_value.clone(),
+                        )?;
+                    }
+                }
+
+                Ok(Value::Object(array_id))
+            }
+
+            "builtin:StringPrototypeCodePointAt" => {
+                // String.prototype.codePointAt(index) implementation
+                let this_val = self.read_reg(args.start)?;
+                let string_val = match this_val {
+                    Value::Str(s) => s,
+                    _ => {
+                        // Try to convert to string
+                        match this_val {
+                            Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.inner().to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            _ => return Ok(Value::Undefined),
+                        }
+                    }
+                };
+
+                let index = if args.count >= 2 {
+                    match self.read_reg(args.start + 1)? {
+                        Value::Int(idx) => idx as usize,
+                        Value::Float(idx) => idx.inner() as usize,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Get Unicode code point at index
+                let chars: Vec<char> = string_val.chars().collect();
+                if index < chars.len() {
+                    let code_point = chars[index] as u32;
+                    Ok(Value::Int(code_point as i64))
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+
+            "builtin:StringFromCodePoint" => {
+                // String.fromCodePoint(...codePoints) implementation
+                let mut result = String::new();
+
+                // Iterate through all provided code points
+                for i in 0..args.count {
+                    let code_point_val = self.read_reg(args.start + i)?;
+                    let code_point = match code_point_val {
+                        Value::Int(n) => n as u32,
+                        Value::Float(f) => f.inner() as u32,
+                        _ => return Ok(Value::Str(result)), // Invalid code point, return partial result
+                    };
+
+                    // Validate Unicode code point range (0 to 0x10FFFF)
+                    if code_point > 0x10FFFF {
+                        return Ok(Value::Str(result)); // RangeError equivalent, return partial result
+                    }
+
+                    // Convert to character
+                    if let Some(ch) = std::char::from_u32(code_point) {
+                        result.push(ch);
+                    } else {
+                        return Ok(Value::Str(result)); // Invalid code point, return partial result
+                    }
+                }
+
+                Ok(Value::Str(result))
+            }
+
+            "builtin:MathImul" => {
+                // Math.imul(x, y) implementation - 32-bit integer multiplication
+                if args.count < 2 {
+                    return Ok(Value::Int(0));
+                }
+
+                let x_val = self.read_reg(args.start)?;
+                let y_val = self.read_reg(args.start + 1)?;
+
+                let x = match x_val {
+                    Value::Int(n) => n as i32,
+                    Value::Float(f) => f.inner() as i32,
+                    _ => 0,
+                };
+
+                let y = match y_val {
+                    Value::Int(n) => n as i32,
+                    Value::Float(f) => f.inner() as i32,
+                    _ => 0,
+                };
+
+                // Perform 32-bit integer multiplication
+                let result = x.wrapping_mul(y) as i64;
+                Ok(Value::Int(result))
+            }
+
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -12193,6 +12362,10 @@ impl InterpreterCore {
             206 => Some("builtin:ArrayPrototypeFlatMap".to_string()),
             207 => Some("builtin:MathHypot".to_string()),
             208 => Some("builtin:ArrayPrototypeCopyWithin".to_string()),
+            209 => Some("builtin:ArrayPrototypeFill".to_string()),
+            210 => Some("builtin:StringPrototypeCodePointAt".to_string()),
+            211 => Some("builtin:StringFromCodePoint".to_string()),
+            212 => Some("builtin:MathImul".to_string()),
 
             _ => None, // Not a recognized builtin
         }

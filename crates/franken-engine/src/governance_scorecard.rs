@@ -1267,8 +1267,7 @@ impl From<SignatureError> for GovernanceScorecardError {
     }
 }
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::dp_budget_accountant::{AccountantConfig, BudgetAccountant};
@@ -1382,7 +1381,7 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32])
+        SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
     fn test_ledger() -> GovernanceAuditLedger {

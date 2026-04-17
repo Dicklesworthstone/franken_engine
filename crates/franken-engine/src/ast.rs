@@ -1975,8 +1975,7 @@ impl std::fmt::Display for Expression {
     }
 }
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 

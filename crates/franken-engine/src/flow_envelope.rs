@@ -892,8 +892,7 @@ pub struct FlowEnvelopeRef {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -923,7 +922,7 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0] = 0x42;
         bytes[31] = 0xFF;
-        SigningKey::from_bytes(bytes)
+        SigningKey::from_bytes(bytes).unwrap()
     }
 
     fn valid_input() -> EnvelopeInput {
@@ -1053,7 +1052,7 @@ mod tests {
         let key = test_signing_key();
         let mut envelope = FlowEnvelope::build(valid_input()).unwrap();
         envelope.sign(&key).expect("sign");
-        let wrong = SigningKey::from_bytes([0xBB; 32]);
+        let wrong = SigningKey::from_bytes([0xBB; 32]).unwrap();
         assert!(envelope.verify(&wrong.verification_key()).is_err());
     }
 

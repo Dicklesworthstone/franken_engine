@@ -1138,8 +1138,7 @@ fn lazy_static_schema_hash(hash: &SchemaHash) -> &'static SchemaHash {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::slot_registry::SlotCapability;
@@ -1174,11 +1173,11 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32])
+        SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
     fn test_signing_key_2() -> SigningKey {
-        SigningKey::from_bytes([99u8; 32])
+        SigningKey::from_bytes([99u8; 32]).unwrap()
     }
 
     fn test_behavior_hash() -> [u8; 32] {
@@ -2247,7 +2246,7 @@ mod tests {
 
     #[test]
     fn signer_entry_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([42u8; 32]);
+        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
         let entry = SignerEntry {
             role: "admin".to_string(),
             verification_key: sk.verification_key(),

@@ -638,14 +638,13 @@ impl fmt::Display for CheckpointEventType {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32])
+        SigningKey::from_bytes([seed; 32]).unwrap()
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -957,7 +956,7 @@ mod tests {
     fn quorum_fails_with_wrong_keys() {
         let sk1 = make_sk(1);
         let sk2 = make_sk(2);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
         let cp = build_genesis(&[sk1, sk2]);
 
         let err = verify_checkpoint_quorum(&cp, 2, &[wrong_vk]).unwrap_err();

@@ -1185,8 +1185,7 @@ impl std::error::Error for DemotionError {}
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hash_tiers::ContentHash;
@@ -1204,7 +1203,7 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32])
+        SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
     fn test_promotion_receipt() -> ReplacementReceipt {
@@ -2348,7 +2347,7 @@ mod tests {
         assert!(receipt.verify_signature(&vk).is_ok());
 
         // Wrong key should fail.
-        let wrong_vk = VerificationKey([0xAB; 32]);
+        let wrong_vk = VerificationKey::from_bytes([0xAB; 32]).unwrap();
         assert!(receipt.verify_signature(&wrong_vk).is_err());
     }
 

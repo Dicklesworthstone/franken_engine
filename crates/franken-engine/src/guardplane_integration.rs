@@ -589,8 +589,7 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 

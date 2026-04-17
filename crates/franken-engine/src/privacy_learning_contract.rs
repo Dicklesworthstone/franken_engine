@@ -3143,15 +3143,14 @@ pub struct ContractEvent {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const TEST_ZONE: &str = "test-zone";
 
     fn governance_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x01; 32])
+        SigningKey::from_bytes([0x01; 32]).unwrap()
     }
 
     fn governance_vk() -> VerificationKey {
@@ -4159,7 +4158,7 @@ mod tests {
     #[test]
     fn verify_governance_signature_wrong_key_fails() {
         let contract = create_test_contract();
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let wrong_vk = wrong_sk.verification_key();
         let result = contract.verify_governance_signature(&wrong_vk);
         assert!(matches!(
@@ -4274,7 +4273,7 @@ mod tests {
     fn registry_wrong_signature_rejected() {
         let mut registry = ContractRegistry::new();
         let contract = create_test_contract();
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]);
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
         let wrong_vk = wrong_sk.verification_key();
         let result = registry.register(contract, &wrong_vk, "t-sig");
         assert!(matches!(

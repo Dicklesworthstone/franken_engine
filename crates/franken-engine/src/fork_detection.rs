@@ -902,8 +902,7 @@ impl ForkDetector {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hash_tiers::ContentHash;
@@ -914,7 +913,7 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32])
+        SigningKey::from_bytes([seed; 32]).unwrap()
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {

@@ -878,8 +878,7 @@ fn append_gate_event(buf: &mut Vec<u8>, event: &GateEvent) {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::control_plane::mocks::{MockBudget, MockCx};
@@ -1446,6 +1445,7 @@ mod tests {
                 "unexpected timeout under exact budget: {reason}"
             ),
             Verdict::Pass => {}
+            Verdict::PassWithException { .. } => {}
         }
     }
 

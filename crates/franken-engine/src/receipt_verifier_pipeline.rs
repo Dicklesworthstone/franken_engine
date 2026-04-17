@@ -897,8 +897,7 @@ fn map_platform(platform: PlatformKind) -> Option<TeePlatform> {
     }
 }
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1099,7 +1098,7 @@ mod tests {
         let consistency_proof = mmr.consistency_proof(2).expect("consistency");
         let current_root = mmr.root_hash().expect("root");
 
-        let operator_signing_key = SigningKey::from_bytes([9u8; 32]);
+        let operator_signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
         let operator_verification_key = operator_signing_key.verification_key();
         let checkpoint = SignedLogCheckpoint {
             checkpoint_seq: 1,
@@ -2001,7 +2000,7 @@ mod tests {
     fn log_operator_key_serde_roundtrip() {
         let key = LogOperatorKey {
             key_id: "op-key-1".to_string(),
-            verification_key: SigningKey::from_bytes([3u8; 32]).verification_key(),
+            verification_key: SigningKey::from_bytes([3u8; 32]).unwrap().verification_key(),
             revoked: false,
         };
         let json = serde_json::to_string(&key).unwrap();

@@ -486,8 +486,7 @@ pub fn replay_transcript(transcript: &ScheduleTranscript) -> Vec<LabEvent> {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 

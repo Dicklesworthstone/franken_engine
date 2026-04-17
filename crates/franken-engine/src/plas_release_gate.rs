@@ -931,8 +931,7 @@ fn compute_decision_hash(
     Ok(ContentHash::compute(&payload))
 }
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -944,8 +943,8 @@ mod tests {
 
     fn trust_anchors() -> PlasReleaseGateTrustAnchors {
         PlasReleaseGateTrustAnchors {
-            witness_verification_key: VerificationKey::from_bytes([1u8; 32]),
-            transparency_log_verification_key: VerificationKey::from_bytes([2u8; 32]),
+            witness_verification_key: VerificationKey::from_bytes([1u8; 32]).unwrap(),
+            transparency_log_verification_key: VerificationKey::from_bytes([2u8; 32]).unwrap(),
         }
     }
 

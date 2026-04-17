@@ -1322,8 +1322,7 @@ pub fn attestation_health_from_verdict(
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::control_plane::mocks::{
@@ -2313,7 +2312,7 @@ mod tests {
     use crate::receipt_verifier_pipeline::LayerResult;
 
     fn make_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32])
+        SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
     fn attestation_request(

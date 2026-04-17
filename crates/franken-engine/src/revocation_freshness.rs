@@ -704,8 +704,7 @@ impl RevocationFreshnessController {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -717,6 +716,7 @@ mod tests {
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
+        .unwrap()
     }
 
     fn make_config() -> FreshnessConfig {
@@ -1002,7 +1002,7 @@ mod tests {
         ctrl.update_expected_head(10, "t-degrade");
 
         let override_token = make_override(OperationType::ExtensionActivation, 2000);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
 
         let result = ctrl.evaluate_with_override(
             OperationType::ExtensionActivation,

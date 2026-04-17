@@ -1467,8 +1467,7 @@ impl BundleVerifier {
 // Tests
 // ===========================================================================
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::causal_replay::{
@@ -1487,7 +1486,7 @@ mod tests {
         for (i, b) in key.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
         }
-        SigningKey::from_bytes(key)
+        SigningKey::from_bytes(key).unwrap()
     }
 
     fn test_verification_key() -> VerificationKey {
@@ -1927,7 +1926,7 @@ mod tests {
     #[test]
     fn verify_signature_fails_with_wrong_key() {
         let bundle = build_test_bundle();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).verification_key();
+        let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap().verification_key();
         let verifier = BundleVerifier::new();
         let report = verifier.verify_signature(&bundle, &wrong_key, 6000);
 

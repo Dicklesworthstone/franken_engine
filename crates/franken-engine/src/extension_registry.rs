@@ -1357,8 +1357,7 @@ impl ExtensionRegistry {
 // Tests
 // ===========================================================================
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::{SigningKey, sign_preimage};
@@ -1372,7 +1371,7 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(3);
         }
-        SigningKey(bytes)
+        SigningKey::from_bytes(bytes).unwrap()
     }
 
     fn test_verification_key_from(sk: &SigningKey) -> VerificationKey {
@@ -1384,7 +1383,7 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(13).wrapping_add(17);
         }
-        SigningKey(bytes)
+        SigningKey::from_bytes(bytes).unwrap()
     }
 
     fn test_build_descriptor() -> BuildDescriptor {
@@ -2278,7 +2277,7 @@ mod tests {
         let vr = VerificationResult {
             valid: false,
             package_id: EngineObjectId([20; 32]),
-            publisher_key: VerificationKey([21; 32]),
+            publisher_key: VerificationKey::from_bytes([21; 32]).unwrap(),
             publisher_active: true,
             package_active: false,
             structure_valid: true,

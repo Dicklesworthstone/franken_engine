@@ -381,8 +381,7 @@ fn chain_hash(links: &[CapabilityToken], leaf_delegate: &PrincipalId) -> Content
     ContentHash::compute(&material)
 }
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -394,7 +393,7 @@ mod tests {
     use crate::signature_preimage::{Signature, SigningKey};
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32])
+        SigningKey::from_bytes([seed; 32]).unwrap()
     }
 
     fn make_principal(seed: u8) -> PrincipalId {

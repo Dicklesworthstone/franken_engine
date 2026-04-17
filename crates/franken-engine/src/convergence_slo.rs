@@ -569,8 +569,7 @@ fn compute_percentile(sorted_values: &[u64], percentile: f64) -> u64 {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

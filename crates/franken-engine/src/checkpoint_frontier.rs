@@ -615,8 +615,7 @@ impl<B: PersistenceBackend> CheckpointFrontierManager<B> {
 // Tests
 // ---------------------------------------------------------------------------
 
-// NOTE: API drift - disabled pending port.
-#[cfg(any())]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hash_tiers::ContentHash;
@@ -626,7 +625,7 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32])
+        SigningKey::from_bytes([seed; 32]).unwrap()
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -980,7 +979,7 @@ mod tests {
     #[test]
     fn quorum_failure_rejects_acceptance() {
         let sk = make_sk(1);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
         let genesis = build_genesis(&[sk], "zone-a");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());

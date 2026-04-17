@@ -7222,6 +7222,27 @@ impl InterpreterCore {
                     Ok(Value::Float(Float64::new(f64::NAN)))
                 }
             }
+            "builtin:MathCeil" => {
+                // Math.ceil implementation - returns ceiling (smallest integer >= x)
+                if args.count > 0 {
+                    let arg = self.read_reg(args.start)?;
+                    match arg {
+                        Value::Int(n) => Ok(Value::Int(n)), // Integer is already its own ceiling
+                        Value::Float(f) => {
+                            let val = f.inner().ceil();
+                            // Check if the result fits in an integer range
+                            if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+                                Ok(Value::Int(val as i64))
+                            } else {
+                                Ok(Value::Float(Float64::new(val)))
+                            }
+                        }
+                        _ => Ok(Value::Float(Float64::new(f64::NAN))),
+                    }
+                } else {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                }
+            }
 
             // JSON methods
             "builtin:JsonStringify" => {

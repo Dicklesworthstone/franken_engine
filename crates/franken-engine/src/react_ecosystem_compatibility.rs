@@ -330,6 +330,132 @@ impl EcosystemPattern {
 // CompatibilityTestResult
 // ---------------------------------------------------------------------------
 
+/// Compatibility failure category used for deterministic triage routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatibilityFailureKind {
+    /// A required React package was not represented by shipped cohort evidence.
+    PackageResolution,
+    /// A required entry point did not resolve through shipped export-map rules.
+    EntryPointLoading,
+    /// A required runtime subpath did not resolve through shipped export-map rules.
+    SubpathResolution,
+    /// JSX compilation prerequisites or entrygraph resolution failed.
+    Compilation,
+    /// Runtime-mode prerequisites for SSR/client/hydration failed.
+    RuntimeOperation,
+}
+
+impl CompatibilityFailureKind {
+    const fn owner_route(self) -> &'static str {
+        match self {
+            Self::PackageResolution => "react-package-cohort",
+            Self::EntryPointLoading | Self::SubpathResolution => "react-entrygraph-resolution",
+            Self::Compilation => "react-compile-verification",
+            Self::RuntimeOperation => "react-runtime-entrygraph",
+        }
+    }
+}
+
+/// Minimal deterministic repro payload for a failed React ecosystem pattern.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MinimizedReactEcosystemRepro {
+    /// Pattern identifier.
+    pub pattern_id: String,
+    /// Rendering/runtime mode under test.
+    pub mode: EcosystemMode,
+    /// JSX compile mode under test.
+    pub compile_mode: CompileMode,
+    /// Export-map resolution strategy under test.
+    pub resolution_strategy: ModuleResolutionStrategy,
+    /// The smallest concrete specifier tied to the failure, when available.
+    pub failing_specifier: Option<String>,
+    /// Required package cohort for the repro.
+    pub required_packages: Vec<ReactPackage>,
+    /// Required entry points for the repro.
+    pub entry_points: Vec<String>,
+    /// Required runtime subpath imports for the repro.
+    pub subpath_imports: Vec<String>,
+}
+
+impl MinimizedReactEcosystemRepro {
+    fn from_pattern(pattern: &EcosystemPattern, failing_specifier: Option<&str>) -> Self {
+        Self {
+            pattern_id: pattern.pattern_id.clone(),
+            mode: pattern.mode,
+            compile_mode: pattern.compile_mode,
+            resolution_strategy: pattern.resolution_strategy,
+            failing_specifier: failing_specifier.map(str::to_string),
+            required_packages: pattern.required_packages.clone(),
+            entry_points: pattern.entry_points.clone(),
+            subpath_imports: pattern.subpath_imports.clone(),
+        }
+    }
+}
+
+/// Owner routing for a failed compatibility check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactEcosystemOwnerRoute {
+    /// Owning compatibility component.
+    pub component: String,
+    /// Stable route for the subsystem that owns the failure.
+    pub route: String,
+    /// Bead that owns the compatibility lane.
+    pub bead_id: String,
+    /// Human-facing owner label for triage.
+    pub owner: String,
+}
+
+/// Shipped-path status for a failed React ecosystem check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReactShippedPathStatus {
+    /// The specifier resolves to a checked-in shipped path.
+    Shipped,
+    /// The React package is absent from the checked-in cohort matrix.
+    MissingPackage,
+    /// The specifier is outside the supported React ecosystem surface.
+    UnrecognizedSpecifier,
+    /// The package exists, but the requested subpath does not resolve.
+    UnresolvedSubpath,
+    /// A pattern-level prerequisite failed rather than a concrete shipped path.
+    RuntimePrerequisite,
+}
+
+/// Shipped-path classification attached to an unresolved compatibility failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactShippedPathClassification {
+    /// Classification status.
+    pub status: ReactShippedPathStatus,
+    /// Original specifier, when the failure is tied to one.
+    pub specifier: Option<String>,
+    /// Parsed React package, when available.
+    pub package: Option<ReactPackage>,
+    /// Parsed React subpath, when available.
+    pub subpath: Option<String>,
+    /// Export conditions used for the resolution attempt.
+    pub conditions: Vec<ExportCondition>,
+    /// Resolved shipped path for failures caused by higher-level prerequisites.
+    pub resolved_path: Option<String>,
+    /// Deterministic explanation for operator triage.
+    pub reason: String,
+}
+
+/// Fully routed unresolved React ecosystem failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompatibilityFailureTriage {
+    /// Failure category.
+    pub failure_kind: CompatibilityFailureKind,
+    /// User-facing failure message.
+    pub failure: String,
+    /// Smallest repro payload for this failed pattern.
+    pub minimized_repro: MinimizedReactEcosystemRepro,
+    /// Owning route for follow-up work.
+    pub owner_route: ReactEcosystemOwnerRoute,
+    /// Shipped-path classification for the failed specifier or prerequisite.
+    pub shipped_path_classification: ReactShippedPathClassification,
+}
+
 /// Result of testing an ecosystem pattern for compatibility.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompatibilityTestResult {
@@ -341,6 +467,8 @@ pub struct CompatibilityTestResult {
     pub metrics: CompatibilityMetrics,
     /// Any errors encountered during testing.
     pub errors: Vec<String>,
+    /// Structured triage records for unresolved compatibility failures.
+    pub unresolved_failures: Vec<CompatibilityFailureTriage>,
     /// Diagnostic messages from the test run.
     pub diagnostics: Vec<String>,
     /// Test execution time in milliseconds.
@@ -358,6 +486,7 @@ impl CompatibilityTestResult {
             passed,
             metrics: CompatibilityMetrics::default(),
             errors: Vec::new(),
+            unresolved_failures: Vec::new(),
             diagnostics: Vec::new(),
             execution_time_ms: 0,
             input_hash,
@@ -367,6 +496,14 @@ impl CompatibilityTestResult {
     /// Adds an error to the test result.
     pub fn with_error(mut self, error: String) -> Self {
         self.errors.push(error);
+        self
+    }
+
+    /// Adds an unresolved failure with deterministic repro, owner, and
+    /// shipped-path triage metadata.
+    pub fn with_unresolved_failure(mut self, failure: CompatibilityFailureTriage) -> Self {
+        self.errors.push(failure.failure.clone());
+        self.unresolved_failures.push(failure);
         self
     }
 
@@ -724,7 +861,14 @@ impl EcosystemCompatibilityValidator {
             if self.test_package_resolution(*package, pattern)? {
                 metrics.packages_resolved += 1;
             } else {
-                result = result.with_error(format!("Package resolution failed: {:?}", package));
+                let failure = format!("Package resolution failed: {:?}", package);
+                result = result.with_unresolved_failure(compatibility_failure_triage(
+                    CompatibilityFailureKind::PackageResolution,
+                    pattern,
+                    failure,
+                    None,
+                    Some(*package),
+                ));
             }
         }
 
@@ -733,7 +877,14 @@ impl EcosystemCompatibilityValidator {
             if self.test_entry_point_loading(entry_point, pattern)? {
                 metrics.entry_points_loaded += 1;
             } else {
-                result = result.with_error(format!("Entry point loading failed: {}", entry_point));
+                let failure = format!("Entry point loading failed: {}", entry_point);
+                result = result.with_unresolved_failure(compatibility_failure_triage(
+                    CompatibilityFailureKind::EntryPointLoading,
+                    pattern,
+                    failure,
+                    Some(entry_point),
+                    None,
+                ));
             }
         }
 
@@ -742,7 +893,14 @@ impl EcosystemCompatibilityValidator {
             if self.test_subpath_resolution(subpath, pattern)? {
                 metrics.subpaths_resolved += 1;
             } else {
-                result = result.with_error(format!("Subpath resolution failed: {}", subpath));
+                let failure = format!("Subpath resolution failed: {}", subpath);
+                result = result.with_unresolved_failure(compatibility_failure_triage(
+                    CompatibilityFailureKind::SubpathResolution,
+                    pattern,
+                    failure,
+                    Some(subpath),
+                    None,
+                ));
             }
         }
 
@@ -750,14 +908,28 @@ impl EcosystemCompatibilityValidator {
         if self.test_compilation(pattern)? {
             metrics.compilations_successful += 1;
         } else {
-            result = result.with_error("Compilation test failed".to_string());
+            let failure = "Compilation test failed".to_string();
+            result = result.with_unresolved_failure(compatibility_failure_triage(
+                CompatibilityFailureKind::Compilation,
+                pattern,
+                failure,
+                failing_compile_specifier(pattern),
+                None,
+            ));
         }
 
         // Test runtime operations
         if self.test_runtime_operations(pattern)? {
             metrics.runtime_operations_successful += 1;
         } else {
-            result = result.with_error("Runtime operations test failed".to_string());
+            let failure = "Runtime operations test failed".to_string();
+            result = result.with_unresolved_failure(compatibility_failure_triage(
+                CompatibilityFailureKind::RuntimeOperation,
+                pattern,
+                failure,
+                failing_runtime_specifier(pattern),
+                None,
+            ));
         }
 
         // Compute final score
@@ -878,6 +1050,221 @@ impl EcosystemCompatibilityValidator {
 
         Ok(has_server_runtime && has_client_runtime)
     }
+}
+
+
+fn compatibility_failure_triage(
+    failure_kind: CompatibilityFailureKind,
+    pattern: &EcosystemPattern,
+    failure: String,
+    failing_specifier: Option<&str>,
+    package: Option<ReactPackage>,
+) -> CompatibilityFailureTriage {
+    CompatibilityFailureTriage {
+        failure_kind,
+        failure,
+        minimized_repro: MinimizedReactEcosystemRepro::from_pattern(pattern, failing_specifier),
+        owner_route: owner_route_for_failure(failure_kind),
+        shipped_path_classification: classify_react_shipped_path(
+            failure_kind,
+            pattern,
+            failing_specifier,
+            package,
+        ),
+    }
+}
+
+fn owner_route_for_failure(failure_kind: CompatibilityFailureKind) -> ReactEcosystemOwnerRoute {
+    ReactEcosystemOwnerRoute {
+        component: COMPONENT.to_string(),
+        route: failure_kind.owner_route().to_string(),
+        bead_id: BEAD_ID.to_string(),
+        owner: format!("{}::{}", COMPONENT, failure_kind.owner_route()),
+    }
+}
+
+fn classify_react_shipped_path(
+    failure_kind: CompatibilityFailureKind,
+    pattern: &EcosystemPattern,
+    failing_specifier: Option<&str>,
+    package: Option<ReactPackage>,
+) -> ReactShippedPathClassification {
+    let conditions = export_conditions_for_strategy(pattern.resolution_strategy);
+
+    if let Some(specifier) = failing_specifier {
+        return classify_specifier_shipped_path(specifier, pattern, conditions);
+    }
+
+    if let Some(package) = package {
+        return classify_package_shipped_path(package, conditions);
+    }
+
+    ReactShippedPathClassification {
+        status: ReactShippedPathStatus::RuntimePrerequisite,
+        specifier: None,
+        package: None,
+        subpath: None,
+        conditions,
+        resolved_path: None,
+        reason: format!(
+            "{} failed because the pattern-level {:?} prerequisite did not hold",
+            pattern.pattern_id, failure_kind
+        ),
+    }
+}
+
+fn classify_specifier_shipped_path(
+    specifier: &str,
+    pattern: &EcosystemPattern,
+    conditions: Vec<ExportCondition>,
+) -> ReactShippedPathClassification {
+    let Some((package, subpath)) = react_specifier_package_and_subpath(specifier) else {
+        return ReactShippedPathClassification {
+            status: ReactShippedPathStatus::UnrecognizedSpecifier,
+            specifier: Some(specifier.to_string()),
+            package: None,
+            subpath: None,
+            conditions,
+            resolved_path: None,
+            reason: format!("{specifier} is not part of the declared React ecosystem surface"),
+        };
+    };
+
+    let matrix = franken_engine_react_cohort_manifest();
+    let Some(manifest) = matrix.find_manifest(package) else {
+        return ReactShippedPathClassification {
+            status: ReactShippedPathStatus::MissingPackage,
+            specifier: Some(specifier.to_string()),
+            package: Some(package),
+            subpath: Some(subpath.to_string()),
+            conditions,
+            resolved_path: None,
+            reason: format!("{} is missing from the checked-in React cohort matrix", package),
+        };
+    };
+
+    match resolve_subpath_with_fallbacks(manifest, subpath, &conditions) {
+        Ok(entry) => ReactShippedPathClassification {
+            status: ReactShippedPathStatus::Shipped,
+            specifier: Some(specifier.to_string()),
+            package: Some(package),
+            subpath: Some(subpath.to_string()),
+            conditions,
+            resolved_path: Some(entry.resolved_path.clone()),
+            reason: format!(
+                "{specifier} resolves to shipped path {} for pattern {}",
+                entry.resolved_path, pattern.pattern_id
+            ),
+        },
+        Err(source) => ReactShippedPathClassification {
+            status: ReactShippedPathStatus::UnresolvedSubpath,
+            specifier: Some(specifier.to_string()),
+            package: Some(package),
+            subpath: Some(subpath.to_string()),
+            conditions,
+            resolved_path: None,
+            reason: format!("{specifier} did not resolve through shipped export-map evidence: {source}"),
+        },
+    }
+}
+
+fn classify_package_shipped_path(
+    package: ReactPackage,
+    conditions: Vec<ExportCondition>,
+) -> ReactShippedPathClassification {
+    let matrix = franken_engine_react_cohort_manifest();
+    let Some(manifest) = matrix.find_manifest(package) else {
+        return ReactShippedPathClassification {
+            status: ReactShippedPathStatus::MissingPackage,
+            specifier: None,
+            package: Some(package),
+            subpath: None,
+            conditions,
+            resolved_path: None,
+            reason: format!("{} is missing from the checked-in React cohort matrix", package),
+        };
+    };
+
+    let alias_loop_count = detect_alias_loops(manifest).len();
+    let format_issue_count = verify_format_consistency(manifest).len();
+    if manifest.subpath_count() == 0 || alias_loop_count > 0 || format_issue_count > 0 {
+        return ReactShippedPathClassification {
+            status: ReactShippedPathStatus::UnresolvedSubpath,
+            specifier: None,
+            package: Some(package),
+            subpath: None,
+            conditions,
+            resolved_path: None,
+            reason: format!(
+                "{} cohort evidence has subpaths={}, alias_loops={}, format_issues={}",
+                package,
+                manifest.subpath_count(),
+                alias_loop_count,
+                format_issue_count
+            ),
+        };
+    }
+
+    ReactShippedPathClassification {
+        status: ReactShippedPathStatus::Shipped,
+        specifier: None,
+        package: Some(package),
+        subpath: None,
+        conditions,
+        resolved_path: None,
+        reason: format!("{} has checked-in shipped cohort evidence", package),
+    }
+}
+
+fn failing_compile_specifier(pattern: &EcosystemPattern) -> Option<&str> {
+    if pattern.compile_mode == CompileMode::Automatic {
+        if let Some(runtime_import) = pattern.subpath_imports.iter().find(|subpath| {
+            matches!(
+                subpath.as_str(),
+                "react/jsx-runtime" | "react/jsx-dev-runtime"
+            ) && !react_specifier_resolves(subpath, pattern)
+        }) {
+            return Some(runtime_import.as_str());
+        }
+
+        if !pattern.subpath_imports.iter().any(|subpath| {
+            matches!(
+                subpath.as_str(),
+                "react/jsx-runtime" | "react/jsx-dev-runtime"
+            )
+        }) {
+            return Some("react/jsx-runtime");
+        }
+    }
+
+    pattern
+        .entry_points
+        .iter()
+        .chain(pattern.subpath_imports.iter())
+        .find(|specifier| !react_specifier_resolves(specifier, pattern))
+        .map(String::as_str)
+}
+
+fn failing_runtime_specifier(pattern: &EcosystemPattern) -> Option<&str> {
+    if pattern.mode.requires_server_capabilities()
+        && (!pattern
+            .required_packages
+            .contains(&ReactPackage::ReactDomServer)
+            || !pattern
+                .entry_points
+                .iter()
+                .any(|entry_point| entry_point == "react-dom/server"))
+    {
+        return Some("react-dom/server");
+    }
+
+    if pattern.mode.requires_client_hydration()
+        && !pattern.required_packages.contains(&ReactPackage::ReactDom)
+    {
+        return Some("react-dom/client");
+    }
+
+    None
 }
 
 fn react_specifier_resolves(specifier: &str, pattern: &EcosystemPattern) -> bool {

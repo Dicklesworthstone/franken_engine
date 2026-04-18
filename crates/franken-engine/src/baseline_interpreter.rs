@@ -18962,7 +18962,17 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Function(_) => "[object Function]".to_string(),
+                    Value::Closure(_) => "[object Function]".to_string(),
+                    Value::Iterator(_) => "[object Iterator]".to_string(),
+                    Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
+                    Value::Generator(_) => "[object Generator]".to_string(),
+                    Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
+                    Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
+                    Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+                    Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
+                    Value::Promise(_) => "[object Promise]".to_string(),
+                    Value::BuiltinFunction(_) => "[object Function]".to_string(),
                 };
 
                 // Simplified: use standard lowercase (full locale support would require ICU)
@@ -18980,7 +18990,17 @@ impl InterpreterCore {
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.to_string(),
                     Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                    Value::Function(_) => "[object Function]".to_string(),
+                    Value::Closure(_) => "[object Function]".to_string(),
+                    Value::Iterator(_) => "[object Iterator]".to_string(),
+                    Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
+                    Value::Generator(_) => "[object Generator]".to_string(),
+                    Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
+                    Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
+                    Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+                    Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
+                    Value::Promise(_) => "[object Promise]".to_string(),
+                    Value::BuiltinFunction(_) => "[object Function]".to_string(),
                 };
 
                 // Simplified: use standard uppercase (full locale support would require ICU)

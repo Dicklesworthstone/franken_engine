@@ -44,6 +44,9 @@ jobs:
       - name: Enforce one-lever performance policy gate
         run: ./scripts/check_one_lever.sh ci
 
+      - name: Enforce zero-placeholder semantics gate
+        run: ./scripts/run_rgc_zero_placeholder_gate.sh ci
+
       - name: Run control-plane benchmark split gate suite
         run: ./scripts/run_control_plane_benchmark_split_gate_suite.sh ci
 

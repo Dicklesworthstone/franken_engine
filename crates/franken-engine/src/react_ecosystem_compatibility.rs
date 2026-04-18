@@ -1522,12 +1522,14 @@ mod tests {
 
     #[test]
     fn test_compatibility_metrics_score_computation() {
-        let mut metrics = CompatibilityMetrics::default();
-        metrics.packages_resolved = 5;
-        metrics.entry_points_loaded = 3;
-        metrics.subpaths_resolved = 2;
-        metrics.compilations_successful = 1;
-        metrics.runtime_operations_successful = 1;
+        let metrics = CompatibilityMetrics {
+            packages_resolved: 5,
+            entry_points_loaded: 3,
+            subpaths_resolved: 2,
+            compilations_successful: 1,
+            runtime_operations_successful: 1,
+            ..Default::default()
+        };
 
         let score = metrics.compute_compatibility_score();
 
@@ -1600,8 +1602,10 @@ mod tests {
             CompileMode::Automatic,
         );
 
-        let mut metrics = CompatibilityMetrics::default();
-        metrics.packages_resolved = 1;
+        let metrics = CompatibilityMetrics {
+            packages_resolved: 1,
+            ..Default::default()
+        };
 
         let result = CompatibilityTestResult::new(pattern, true).with_metrics(metrics);
 

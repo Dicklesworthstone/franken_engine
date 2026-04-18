@@ -236,6 +236,8 @@ run_mode() {
         cargo test -p frankenengine-engine --test arbitrary_js_ts_workload_corpus
       run_step "cargo clippy -p frankenengine-engine --test arbitrary_js_ts_workload_corpus -- -D warnings" \
         cargo clippy -p frankenengine-engine --test arbitrary_js_ts_workload_corpus -- -D warnings
+      run_step "cargo run -p frankenengine-engine --bin franken_workload_corpus_gate -- --out-dir ${run_dir}/gate_artifacts" \
+        cargo run -p frankenengine-engine --bin franken_workload_corpus_gate -- --out-dir "${run_dir}/gate_artifacts"
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2

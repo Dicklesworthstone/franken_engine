@@ -47,6 +47,9 @@ jobs:
       - name: Enforce zero-placeholder semantics gate
         run: ./scripts/run_rgc_zero_placeholder_gate.sh ci
 
+      - name: Run arbitrary JS/TS workload corpus behavior-equivalence gate
+        run: ./scripts/run_rgc_arbitrary_js_ts_workload_corpus.sh ci
+
       - name: Run control-plane benchmark split gate suite
         run: ./scripts/run_control_plane_benchmark_split_gate_suite.sh ci
 

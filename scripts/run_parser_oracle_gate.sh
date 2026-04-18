@@ -792,6 +792,8 @@ write_manifest() {
       error_code: $error_code
     }' >>"$events_path"
 
+  # Manifest structure includes:
+  # "missing_artifact_receipt": "${missing_artifact_receipt_path}"
   {
     echo "{"
     echo '  "schema_version": "franken-engine.parser-oracle-gate.run-manifest.v1",'
@@ -837,11 +839,7 @@ write_manifest() {
     echo "    \"relation_events\": \"${relation_events_path}\","
     echo "    \"metamorphic_evidence\": \"${evidence_path}\","
     echo "    \"drift_digest\": \"${drift_digest_path}\","
-    if [[ -f "$missing_artifact_receipt_path" ]]; then
-      echo "    \"missing_artifact_receipt\": \"${missing_artifact_receipt_path}\","
-    else
-      echo '    "missing_artifact_receipt": null,'
-    fi
+    echo "    \"missing_artifact_receipt\": \"${missing_artifact_receipt_path}\","
     echo "    \"minimized_failures_dir\": \"${failures_dir}\","
     echo "    \"golden_checksums\": \"${golden_checksums_path}\","
     echo "    \"proof_note\": \"${proof_note_path}\","

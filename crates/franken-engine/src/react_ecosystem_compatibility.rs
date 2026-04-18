@@ -1052,7 +1052,6 @@ impl EcosystemCompatibilityValidator {
     }
 }
 
-
 fn compatibility_failure_triage(
     failure_kind: CompatibilityFailureKind,
     pattern: &EcosystemPattern,
@@ -1139,7 +1138,10 @@ fn classify_specifier_shipped_path(
             subpath: Some(subpath.to_string()),
             conditions,
             resolved_path: None,
-            reason: format!("{} is missing from the checked-in React cohort matrix", package),
+            reason: format!(
+                "{} is missing from the checked-in React cohort matrix",
+                package
+            ),
         };
     };
 
@@ -1163,7 +1165,9 @@ fn classify_specifier_shipped_path(
             subpath: Some(subpath.to_string()),
             conditions,
             resolved_path: None,
-            reason: format!("{specifier} did not resolve through shipped export-map evidence: {source}"),
+            reason: format!(
+                "{specifier} did not resolve through shipped export-map evidence: {source}"
+            ),
         },
     }
 }
@@ -1181,7 +1185,10 @@ fn classify_package_shipped_path(
             subpath: None,
             conditions,
             resolved_path: None,
-            reason: format!("{} is missing from the checked-in React cohort matrix", package),
+            reason: format!(
+                "{} is missing from the checked-in React cohort matrix",
+                package
+            ),
         };
     };
 

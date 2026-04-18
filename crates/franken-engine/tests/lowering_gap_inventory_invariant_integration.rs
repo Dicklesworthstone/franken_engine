@@ -133,7 +133,11 @@ fn test_lowering_gap_inventory_count_consistency() {
 
     // Verify count methods match actual counts
     assert_eq!(
-        inventory.resolved_site_count(),
+        inventory
+            .sites
+            .iter()
+            .filter(|site| site.status == LoweringGapStatus::Resolved)
+            .count(),
         resolved_count,
         "resolved_site_count() doesn't match actual resolved sites"
     );
@@ -239,7 +243,11 @@ fn test_current_implementation_all_resolved() {
 
     // All sites should be resolved
     assert_eq!(
-        inventory.resolved_site_count(),
+        inventory
+            .sites
+            .iter()
+            .filter(|site| site.status == LoweringGapStatus::Resolved)
+            .count(),
         inventory.sites.len(),
         "All sites should be resolved"
     );

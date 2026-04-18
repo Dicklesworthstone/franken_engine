@@ -136,7 +136,7 @@ fn test_parser_oracle_rejects_placeholder_backfills() {
         assert!(receipt["reason_id"].is_string());
         assert!(receipt["consumer_action"].is_string());
         assert!(receipt["missing_artifacts"].is_array());
-        assert_eq!(receipt["placeholder_rejected"].as_bool().unwrap(), true);
+        assert!(receipt["placeholder_rejected"].as_bool().unwrap());
 
         // Verify reason_code is one of the valid ones from the contract
         let reason_code = receipt["reason_code"].as_str().unwrap();

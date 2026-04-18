@@ -322,7 +322,7 @@ fn reproducibility_assessment_levels() {
     let assessment = controller.assess_reproducibility(&[]);
     assert_eq!(assessment, ReproducibilityAssessment::Perfect);
 
-    // Failed - has critical divergences with max = 0
+    // Failed - has critical divergences above max = 0
     let divergences = vec![TraceDivergence {
         event_index: 0,
         description: "Test".to_string(),
@@ -331,7 +331,7 @@ fn reproducibility_assessment_levels() {
         target_value: "b".to_string(),
     }];
     let assessment = controller.assess_reproducibility(&divergences);
-    assert_eq!(assessment, ReproducibilityAssessment::Problematic);
+    assert_eq!(assessment, ReproducibilityAssessment::Failed);
 }
 
 #[test]

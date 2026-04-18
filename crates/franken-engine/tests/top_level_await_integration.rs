@@ -18,11 +18,13 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
-
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
-use frankenengine_engine::parser::parse;
+use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseResult};
 use frankenengine_engine::static_semantics::analyze;
+
+fn parse(source: &str, goal: ParseGoal) -> ParseResult<SyntaxTree> {
+    CanonicalEs2020Parser.parse(source, goal)
+}
 
 // ---------------------------------------------------------------------------
 // Basic TLA parsing tests
@@ -93,9 +95,9 @@ fn tla_rejected_in_script_context() {
     );
 
     // Check that we have the right error
-    let errors = result.errors();
+    let errors = &result.errors;
     assert!(!errors.is_empty());
-    assert!(errors[0].message().contains("await"));
+    assert!(errors[0].message.contains("await"));
 }
 
 #[test]
@@ -220,7 +222,7 @@ fn tla_await_in_function_still_requires_async() {
 
     // Static semantics should reject await in non-async function,
     // even though top-level await is allowed
-    let result = analyze(&tree);
+    let _result = analyze(&tree);
     // TODO: This might need more sophisticated error detection
     // For now, just verify it parses
     assert!(tree.body.len() > 0);

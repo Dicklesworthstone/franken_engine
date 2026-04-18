@@ -75,7 +75,7 @@ fn test_replay_gate_script_exists() {
 #[test]
 fn test_gate_consolidation_coverage() {
     // Verify we can consolidate the major script patterns
-    let script_patterns = vec![
+    let script_patterns = [
         "run_*_gate.sh",
         "run_*_suite.sh",
         "*_replay.sh",
@@ -95,7 +95,7 @@ fn test_gate_consolidation_coverage() {
 fn test_run_gate_script_syntax() {
     // Test that the script has valid bash syntax
     let output = Command::new("bash")
-        .args(&["-n", "scripts/run_gate.sh"])
+        .args(["-n", "scripts/run_gate.sh"])
         .output()
         .expect("Failed to run bash syntax check");
 
@@ -110,7 +110,7 @@ fn test_run_gate_script_syntax() {
 fn test_replay_gate_script_syntax() {
     // Test that the script has valid bash syntax
     let output = Command::new("bash")
-        .args(&["-n", "scripts/replay_gate.sh"])
+        .args(["-n", "scripts/replay_gate.sh"])
         .output()
         .expect("Failed to run bash syntax check");
 
@@ -230,7 +230,7 @@ fn test_environment_bootstrap_support() {
     assert!(content.contains("env_bootstrap = \"scripts/e2e/parser_deterministic_env.sh\""));
 
     // The bootstrap script should exist
-    let bootstrap_path = PathBuf::from("scripts/e2e/parser_deterministic_env.sh");
+    let _bootstrap_path = PathBuf::from("scripts/e2e/parser_deterministic_env.sh");
     // Note: We don't assert existence here since we're focusing on configuration structure
 }
 

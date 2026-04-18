@@ -53,7 +53,7 @@ fn test_parser_phase0_generates_performance_receipt() {
     assert!(receipt["reason_id"].is_string());
     assert!(receipt["stage"].is_string());
     assert!(receipt["consumer_action"].is_string());
-    assert_eq!(receipt["placeholder_rejected"].as_bool().unwrap(), true);
+    assert!(receipt["placeholder_rejected"].as_bool().unwrap());
     assert!(receipt["outcome"].is_string());
     assert!(receipt["error_code"].is_string());
 
@@ -201,16 +201,16 @@ fn test_no_placeholder_signatures_in_artifacts() {
         let entry = entry.expect("Should be able to read directory entry");
         let path = entry.path();
 
-        if path.is_file() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                for signature in &forbidden_signatures {
-                    assert!(
-                        !content.contains(signature),
-                        "File {:?} should not contain forbidden placeholder signature: {}",
-                        path,
-                        signature
-                    );
-                }
+        if path.is_file()
+            && let Ok(content) = fs::read_to_string(&path)
+        {
+            for signature in &forbidden_signatures {
+                assert!(
+                    !content.contains(signature),
+                    "File {:?} should not contain forbidden placeholder signature: {}",
+                    path,
+                    signature
+                );
             }
         }
     }

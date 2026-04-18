@@ -297,7 +297,11 @@ fn test_runner_config_custom() {
 fn test_runner_creation() {
     let config = RunnerConfig::default();
     let runner = Test262Runner::new(config);
-    assert_eq!(runner.config.max_tests, 1000);
+    let report = runner
+        .run_conformance(SecurityEpoch::from_raw(1))
+        .expect("runner should produce a conformance report");
+    assert_eq!(report.total_discovered, 10_000);
+    assert!(report.is_sample);
 }
 
 #[test]

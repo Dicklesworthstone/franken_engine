@@ -218,7 +218,10 @@ fn test_test_fixture_generator_integration() {
     assert_eq!(small_data.entries.len(), 3);
     assert_eq!(large_data.entries.len(), 20);
     assert_ne!(small_data.id, large_data.id);
-    assert_eq!(small_data.generation_seed, large_data.generation_seed);
+    assert_eq!(
+        small_data.generatoreration_seed,
+        large_data.generatoreration_seed
+    );
 }
 
 #[test]

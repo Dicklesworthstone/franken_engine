@@ -17,9 +17,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 

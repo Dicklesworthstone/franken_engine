@@ -1,6 +1,7 @@
 use frankenengine_engine::composable_gate_framework::{
-    BEAD_ID, COMPONENT, ExampleEvidence, ExampleGate, ExamplePolicy, Gate, GatePolicy, GateRunner,
-    GateSeverity, GateVerdict, GateViolation, MILLIONTHS, SCHEMA_VERSION,
+    BEAD_ID, COMPONENT, ExampleEvidence, ExampleGate, ExamplePolicy, Gate, GateEvidence,
+    GatePolicy, GateReceipt, GateRunner, GateSeverity, GateVerdict, GateViolation, MILLIONTHS,
+    SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -394,7 +395,7 @@ fn test_receipt_serialization_roundtrip() {
 
     // Serialize and deserialize
     let json = serde_json::to_string(&receipt).unwrap();
-    let deserialized = serde_json::from_str(&json).unwrap();
+    let deserialized: GateReceipt = serde_json::from_str(&json).unwrap();
 
     // Compare key fields
     assert_eq!(receipt.verdict, deserialized.verdict);

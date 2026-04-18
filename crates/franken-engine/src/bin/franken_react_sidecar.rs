@@ -161,8 +161,14 @@ fn main() {
             println!("FrankenReact Sidecar completed successfully!");
             println!("Components processed: {}", result.component_count);
             println!("DOM operations generated: {}", result.dom_operations.len());
-            println!("VDOM operations avoided: {}", result.performance_metrics.vdom_operations_avoided);
-            println!("Memory saved: {} bytes", result.performance_metrics.memory_saved_bytes);
+            println!(
+                "VDOM operations avoided: {}",
+                result.performance_metrics.vdom_operations_avoided
+            );
+            println!(
+                "Memory saved: {} bytes",
+                result.performance_metrics.memory_saved_bytes
+            );
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -223,7 +229,9 @@ fn run_franken_react_sidecar(
     Ok(result)
 }
 
-fn parse_react_components(source_code: &str) -> Result<Vec<ReactComponent>, Box<dyn std::error::Error>> {
+fn parse_react_components(
+    source_code: &str,
+) -> Result<Vec<ReactComponent>, Box<dyn std::error::Error>> {
     // Placeholder implementation - would integrate with actual JSX parser
     // For now, simulate finding React components
     let mut components = Vec::new();
@@ -232,13 +240,11 @@ fn parse_react_components(source_code: &str) -> Result<Vec<ReactComponent>, Box<
         components.push(ReactComponent {
             name: "ExampleComponent".to_string(),
             props: BTreeMap::new(),
-            jsx_elements: vec![
-                JsxElementInfo {
-                    tag: "div".to_string(),
-                    attributes: BTreeMap::new(),
-                    children: vec!["Hello from FrankenReact!".to_string()],
-                }
-            ],
+            jsx_elements: vec![JsxElementInfo {
+                tag: "div".to_string(),
+                attributes: BTreeMap::new(),
+                children: vec!["Hello from FrankenReact!".to_string()],
+            }],
         });
     }
 

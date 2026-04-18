@@ -16111,10 +16111,7 @@ impl InterpreterCore {
                                 _ => "object".to_string(),
                             };
 
-                            groups
-                                .entry(key)
-                                .or_default()
-                                .push(element.clone());
+                            groups.entry(key).or_default().push(element.clone());
                         }
                     }
 
@@ -16281,10 +16278,7 @@ impl InterpreterCore {
                             }
                             .to_string();
 
-                            groups
-                                .entry(type_key)
-                                .or_default()
-                                .push(element.clone());
+                            groups.entry(type_key).or_default().push(element.clone());
                         }
                     }
 
@@ -16936,16 +16930,8 @@ impl InterpreterCore {
                         "0".to_string(),
                         Value::Int(*i as i64),
                     )?;
-                    self.set_object_property(
-                        pair_array_id,
-                        "1".to_string(),
-                        element.clone(),
-                    )?;
-                    self.set_object_property(
-                        pair_array_id,
-                        "length".to_string(),
-                        Value::Int(2),
-                    )?;
+                    self.set_object_property(pair_array_id, "1".to_string(), element.clone())?;
+                    self.set_object_property(pair_array_id, "length".to_string(), Value::Int(2))?;
 
                     // Add pair to entries array
                     self.set_object_property(
@@ -17008,7 +16994,11 @@ impl InterpreterCore {
                 };
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17140,7 +17130,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17270,7 +17264,11 @@ impl InterpreterCore {
                     0
                 };
 
-                let result = str_text.chars().nth(index).map(|c| c.to_string()).unwrap_or_default();
+                let result = str_text
+                    .chars()
+                    .nth(index)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
                 Ok(Value::Str(result))
             }
 
@@ -17292,7 +17290,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17330,7 +17332,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17503,8 +17509,16 @@ impl InterpreterCore {
                     len
                 };
 
-                let (actual_start, actual_end) = if start <= end { (start, end) } else { (end, start) };
-                let result = str_text.chars().skip(actual_start).take(actual_end - actual_start).collect();
+                let (actual_start, actual_end) = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                let result = str_text
+                    .chars()
+                    .skip(actual_start)
+                    .take(actual_end - actual_start)
+                    .collect();
                 Ok(Value::Str(result))
             }
 
@@ -17526,7 +17540,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let _length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17639,7 +17657,11 @@ impl InterpreterCore {
                 }
 
                 // Return Int if result is whole number in i64 range
-                if max.fract() == 0.0 && !max.is_infinite() && max >= i64::MIN as f64 && max <= i64::MAX as f64 {
+                if max.fract() == 0.0
+                    && !max.is_infinite()
+                    && max >= i64::MIN as f64
+                    && max <= i64::MAX as f64
+                {
                     Ok(Value::Int(max as i64))
                 } else {
                     Ok(Value::Float(Float64::new(max)))
@@ -17673,7 +17695,11 @@ impl InterpreterCore {
                 }
 
                 // Return Int if result is whole number in i64 range
-                if min.fract() == 0.0 && !min.is_infinite() && min >= i64::MIN as f64 && min <= i64::MAX as f64 {
+                if min.fract() == 0.0
+                    && !min.is_infinite()
+                    && min >= i64::MIN as f64
+                    && min <= i64::MAX as f64
+                {
                     Ok(Value::Int(min as i64))
                 } else {
                     Ok(Value::Float(Float64::new(min)))
@@ -17740,7 +17766,11 @@ impl InterpreterCore {
                 let filtered_array_id = self.alloc_object_with_prototype(None)?;
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17894,7 +17924,8 @@ impl InterpreterCore {
 
                             if sep.is_empty() {
                                 // Split each character
-                                let chars: Vec<String> = str_text.chars().map(|c| c.to_string()).collect();
+                                let chars: Vec<String> =
+                                    str_text.chars().map(|c| c.to_string()).collect();
                                 for (index, char_str) in chars.iter().enumerate() {
                                     self.set_object_property(
                                         result_array_id,
@@ -17962,7 +17993,11 @@ impl InterpreterCore {
                 let mapped_array_id = self.alloc_object_with_prototype(None)?;
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -17971,15 +18006,19 @@ impl InterpreterCore {
                     // Simplified implementation: copy all existing elements (identity mapping)
                     // (Full implementation would require callback execution)
                     let elements: Vec<_> = (0..length)
-                        .map(|i| (i, obj.properties.get(&i.to_string()).cloned().unwrap_or(Value::Undefined)))
+                        .map(|i| {
+                            (
+                                i,
+                                obj.properties
+                                    .get(&i.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined),
+                            )
+                        })
                         .collect();
 
                     for (i, element) in elements {
-                        self.set_object_property(
-                            mapped_array_id,
-                            i.to_string(),
-                            element,
-                        )?;
+                        self.set_object_property(mapped_array_id, i.to_string(), element)?;
                     }
 
                     self.set_object_property(
@@ -18042,8 +18081,12 @@ impl InterpreterCore {
                 let result = base.powf(exponent);
 
                 // Return Int if result is whole number in i64 range
-                if result.fract() == 0.0 && !result.is_infinite() && !result.is_nan()
-                   && result >= i64::MIN as f64 && result <= i64::MAX as f64 {
+                if result.fract() == 0.0
+                    && !result.is_infinite()
+                    && !result.is_nan()
+                    && result >= i64::MIN as f64
+                    && result <= i64::MAX as f64
+                {
                     Ok(Value::Int(result as i64))
                 } else {
                     Ok(Value::Float(Float64::new(result)))
@@ -18152,7 +18195,11 @@ impl InterpreterCore {
                 let result_array_id = self.alloc_object_with_prototype(None)?;
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -18179,26 +18226,31 @@ impl InterpreterCore {
                         match arg_val {
                             Value::Object(concat_id) => {
                                 // If it's an array, concatenate its elements
-                                let elements_to_add = if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
-                                    if let Some(concat_length_prop) = concat_obj.properties.get("length") {
-                                        let concat_length = match concat_length_prop {
-                                            Value::Int(n) => (*n).max(0) as usize,
-                                            _ => 0,
-                                        };
+                                let elements_to_add =
+                                    if let Some(concat_obj) = self.heap.get(concat_id.0 as usize) {
+                                        if let Some(concat_length_prop) =
+                                            concat_obj.properties.get("length")
+                                        {
+                                            let concat_length = match concat_length_prop {
+                                                Value::Int(n) => (*n).max(0) as usize,
+                                                _ => 0,
+                                            };
 
-                                        let mut elements = Vec::new();
-                                        for i in 0..concat_length {
-                                            if let Some(element) = concat_obj.properties.get(&i.to_string()) {
-                                                elements.push(element.clone());
+                                            let mut elements = Vec::new();
+                                            for i in 0..concat_length {
+                                                if let Some(element) =
+                                                    concat_obj.properties.get(&i.to_string())
+                                                {
+                                                    elements.push(element.clone());
+                                                }
                                             }
+                                            elements
+                                        } else {
+                                            Vec::new()
                                         }
-                                        elements
                                     } else {
                                         Vec::new()
-                                    }
-                                } else {
-                                    Vec::new()
-                                };
+                                    };
 
                                 for element in elements_to_add {
                                     self.set_object_property(
@@ -18325,7 +18377,7 @@ impl InterpreterCore {
                 } else if trimmed == "false" {
                     Ok(Value::Bool(false))
                 } else if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-                    let unquoted = &trimmed[1..trimmed.len()-1];
+                    let unquoted = &trimmed[1..trimmed.len() - 1];
                     Ok(Value::Str(unquoted.replace("\\\"", "\"")))
                 } else if let Ok(int_val) = trimmed.parse::<i64>() {
                     Ok(Value::Int(int_val))
@@ -18358,7 +18410,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -18394,7 +18450,11 @@ impl InterpreterCore {
                 }
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -18471,7 +18531,8 @@ impl InterpreterCore {
                 let pattern_str = match this_val {
                     Value::Object(obj_id) => {
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            obj.properties.get("pattern")
+                            obj.properties
+                                .get("pattern")
                                 .and_then(|p| match p {
                                     Value::Str(s) => Some(s.clone()),
                                     _ => None,
@@ -18749,7 +18810,10 @@ impl InterpreterCore {
 
                 if let Ok(parsed) = result_str.parse::<f64>() {
                     // Return Int if it's a whole number
-                    if parsed.fract() == 0.0 && parsed >= i64::MIN as f64 && parsed <= i64::MAX as f64 {
+                    if parsed.fract() == 0.0
+                        && parsed >= i64::MIN as f64
+                        && parsed <= i64::MAX as f64
+                    {
                         Ok(Value::Int(parsed as i64))
                     } else {
                         Ok(Value::Float(Float64::new(parsed)))
@@ -18910,7 +18974,11 @@ impl InterpreterCore {
                 };
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
+                    let length_prop = obj
+                        .properties
+                        .get("length")
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
                     let length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
@@ -18944,7 +19012,11 @@ impl InterpreterCore {
                     }
 
                     for (new_index, (_, sorted_value)) in elements.into_iter().enumerate() {
-                        self.set_object_property(array_id, new_index.to_string(), Value::Str(sorted_value))?;
+                        self.set_object_property(
+                            array_id,
+                            new_index.to_string(),
+                            Value::Str(sorted_value),
+                        )?;
                     }
                 }
 
@@ -18969,7 +19041,9 @@ impl InterpreterCore {
                     Value::Generator(_) => "[object Generator]".to_string(),
                     Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
                     Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+                    Value::AsyncGeneratorFunction(_) => {
+                        "[object AsyncGeneratorFunction]".to_string()
+                    }
                     Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
                     Value::BuiltinFunction(_) => "[object Function]".to_string(),
@@ -18997,7 +19071,9 @@ impl InterpreterCore {
                     Value::Generator(_) => "[object Generator]".to_string(),
                     Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
                     Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+                    Value::AsyncGeneratorFunction(_) => {
+                        "[object AsyncGeneratorFunction]".to_string()
+                    }
                     Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
                     Value::BuiltinFunction(_) => "[object Function]".to_string(),

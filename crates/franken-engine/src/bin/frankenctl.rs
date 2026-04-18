@@ -4459,10 +4459,7 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
 // New consolidated subcommand execution functions
 fn execute_gates(args: GatesArgs) -> Result<i32, String> {
     match args.mode {
-        GatesMode::ZeroPlaceholder {
-            out_dir,
-            waivers,
-        } => {
+        GatesMode::ZeroPlaceholder { out_dir, waivers } => {
             use std::process::Command;
 
             // Create output directory
@@ -4472,10 +4469,16 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             // Call the existing zero-placeholder gate binary
             let mut cmd = Command::new("cargo");
             cmd.args([
-                "run", "-p", "frankenengine-engine",
-                "--bin", "franken_zero_placeholder_gate", "--",
-                "--out-dir", out_dir.to_str().unwrap(),
-                "--epoch", "100"
+                "run",
+                "-p",
+                "frankenengine-engine",
+                "--bin",
+                "franken_zero_placeholder_gate",
+                "--",
+                "--out-dir",
+                out_dir.to_str().unwrap(),
+                "--epoch",
+                "100",
             ]);
 
             // Add waivers file if specified
@@ -4484,7 +4487,8 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
             }
 
             // Execute the command
-            let status = cmd.status()
+            let status = cmd
+                .status()
                 .map_err(|e| format!("Failed to execute zero-placeholder gate: {e}"))?;
 
             if status.success() {
@@ -4493,7 +4497,9 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
                 Ok(0)
             } else {
                 let code = status.code().unwrap_or(-1);
-                Err(format!("Zero-placeholder gate failed with exit code: {code}"))
+                Err(format!(
+                    "Zero-placeholder gate failed with exit code: {code}"
+                ))
             }
         }
         GatesMode::SignatureDrift { out_dir, config: _ } => {
@@ -4517,8 +4523,12 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             // Call the existing parser oracle report binary
             let mut cmd = Command::new("cargo");
             cmd.args([
-                "run", "-p", "frankenengine-engine",
-                "--bin", "franken_parser_oracle_report", "--"
+                "run",
+                "-p",
+                "frankenengine-engine",
+                "--bin",
+                "franken_parser_oracle_report",
+                "--",
             ]);
 
             // Add config file if specified
@@ -4532,7 +4542,8 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             }
 
             // Execute the command
-            let status = cmd.status()
+            let status = cmd
+                .status()
                 .map_err(|e| format!("Failed to execute parser oracle report: {e}"))?;
 
             if status.success() {
@@ -4543,7 +4554,9 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
                 Ok(0)
             } else {
                 let code = status.code().unwrap_or(-1);
-                Err(format!("Parser oracle report failed with exit code: {code}"))
+                Err(format!(
+                    "Parser oracle report failed with exit code: {code}"
+                ))
             }
         }
         ReportsMode::LoweringGap { out } => {
@@ -4575,9 +4588,14 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             // Call the existing test262 runner binary
             let mut cmd = Command::new("cargo");
             cmd.args([
-                "run", "-p", "frankenengine-engine",
-                "--bin", "franken_test262_runner", "--",
-                "--out-dir", out_dir.to_str().unwrap()
+                "run",
+                "-p",
+                "frankenengine-engine",
+                "--bin",
+                "franken_test262_runner",
+                "--",
+                "--out-dir",
+                out_dir.to_str().unwrap(),
             ]);
 
             // Add suite path if specified
@@ -4586,7 +4604,8 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             }
 
             // Execute the command
-            let status = cmd.status()
+            let status = cmd
+                .status()
                 .map_err(|e| format!("Failed to execute test262 runner: {e}"))?;
 
             if status.success() {
@@ -4773,7 +4792,10 @@ fn execute_orchestrate(args: OrchestrateArgs) -> Result<i32, String> {
 
             if let Some(path) = out {
                 write_json_file(&path, &refactor_analysis)?;
-                println!("✅ Context refactor analysis written to: {}", path.display());
+                println!(
+                    "✅ Context refactor analysis written to: {}",
+                    path.display()
+                );
             } else {
                 print_json(&refactor_analysis)?;
             }

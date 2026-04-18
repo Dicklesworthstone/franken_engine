@@ -69,15 +69,23 @@ function App() {
             "--source",
             source_file.to_str().unwrap(),
             "--output",
-            output_dir.to_str().unwrap()
+            output_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run franken-react-sidecar");
 
-    assert!(output.status.success(), "Sidecar failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Sidecar failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify output artifacts exist
-    assert!(output_dir.join("franken_react_sidecar_result.json").exists());
+    assert!(
+        output_dir
+            .join("franken_react_sidecar_result.json")
+            .exists()
+    );
     assert!(output_dir.join("execution_trace.txt").exists());
     assert!(output_dir.join("dom_operations.json").exists());
 
@@ -120,7 +128,7 @@ function SimpleComponent() {
             source_file.to_str().unwrap(),
             "--output",
             output_dir.to_str().unwrap(),
-            "--alien-artifact"
+            "--alien-artifact",
         ])
         .output()
         .expect("Failed to run franken-react-sidecar");
@@ -162,12 +170,17 @@ function TestComponent() {
                 "--output",
                 output_dir.to_str().unwrap(),
                 "--dom-strategy",
-                strategy
+                strategy,
             ])
             .output()
             .expect("Failed to run franken-react-sidecar");
 
-        assert!(output.status.success(), "Strategy {} failed: {}", strategy, String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "Strategy {} failed: {}",
+            strategy,
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         // Verify strategy is mentioned in trace
         let trace = fs::read_to_string(output_dir.join("execution_trace.txt"))
@@ -205,7 +218,7 @@ function ComponentWithAttributes() {
             "--source",
             source_file.to_str().unwrap(),
             "--output",
-            output_dir.to_str().unwrap()
+            output_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run franken-react-sidecar");
@@ -216,17 +229,17 @@ function ComponentWithAttributes() {
     let operations_json = fs::read_to_string(output_dir.join("dom_operations.json"))
         .expect("Failed to read DOM operations JSON");
 
-    let operations: serde_json::Value = serde_json::from_str(&operations_json)
-        .expect("Failed to parse DOM operations JSON");
+    let operations: serde_json::Value =
+        serde_json::from_str(&operations_json).expect("Failed to parse DOM operations JSON");
 
     assert!(operations.is_array());
     let ops_array = operations.as_array().unwrap();
     assert!(!ops_array.is_empty());
 
     // Verify we have CreateElement operations
-    let has_create_element = ops_array.iter().any(|op| {
-        op.get("type").and_then(|t| t.as_str()) == Some("CreateElement")
-    });
+    let has_create_element = ops_array
+        .iter()
+        .any(|op| op.get("type").and_then(|t| t.as_str()) == Some("CreateElement"));
     assert!(has_create_element, "Should have CreateElement operations");
 }
 
@@ -253,7 +266,7 @@ function PerformanceTestComponent() {
             "--source",
             source_file.to_str().unwrap(),
             "--output",
-            output_dir.to_str().unwrap()
+            output_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run franken-react-sidecar");
@@ -264,11 +277,13 @@ function PerformanceTestComponent() {
     let result_json = fs::read_to_string(output_dir.join("franken_react_sidecar_result.json"))
         .expect("Failed to read result JSON");
 
-    let result: serde_json::Value = serde_json::from_str(&result_json)
-        .expect("Failed to parse result JSON");
+    let result: serde_json::Value =
+        serde_json::from_str(&result_json).expect("Failed to parse result JSON");
 
     // Verify performance metrics structure
-    let metrics = result.get("performance_metrics").expect("Missing performance_metrics");
+    let metrics = result
+        .get("performance_metrics")
+        .expect("Missing performance_metrics");
     assert!(metrics.get("parse_time_us").is_some());
     assert!(metrics.get("generation_time_us").is_some());
     assert!(metrics.get("vdom_operations_avoided").is_some());
@@ -321,7 +336,7 @@ function ComplexComponent() {
             "--source",
             complex_source.to_str().unwrap(),
             "--output",
-            complex_output.to_str().unwrap()
+            complex_output.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run sidecar on complex component");
@@ -331,8 +346,8 @@ function ComplexComponent() {
     // Parse complex result
     let complex_json = fs::read_to_string(complex_output.join("franken_react_sidecar_result.json"))
         .expect("Failed to read complex result");
-    let complex_result: serde_json::Value = serde_json::from_str(&complex_json)
-        .expect("Failed to parse complex result");
+    let complex_result: serde_json::Value =
+        serde_json::from_str(&complex_json).expect("Failed to parse complex result");
 
     let complex_avoided = complex_result
         .get("performance_metrics")
@@ -343,7 +358,10 @@ function ComplexComponent() {
         .unwrap();
 
     // More components should mean more avoided operations
-    assert!(complex_avoided > 0, "Should avoid some VDOM operations for complex component");
+    assert!(
+        complex_avoided > 0,
+        "Should avoid some VDOM operations for complex component"
+    );
 }
 
 #[test]
@@ -362,7 +380,7 @@ fn sidecar_error_handling_invalid_source() {
             "--source",
             nonexistent_file.to_str().unwrap(),
             "--output",
-            output_dir.to_str().unwrap()
+            output_dir.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to run franken-react-sidecar");
@@ -401,7 +419,7 @@ function DeterministicComponent() {
                 "--source",
                 source_file.to_str().unwrap(),
                 "--output",
-                output_dir.to_str().unwrap()
+                output_dir.to_str().unwrap(),
             ])
             .output()
             .expect("Failed to run franken-react-sidecar");
@@ -414,6 +432,12 @@ function DeterministicComponent() {
     }
 
     // All traces should be identical (deterministic execution)
-    assert_eq!(traces[0], traces[1], "First and second traces should be identical");
-    assert_eq!(traces[1], traces[2], "Second and third traces should be identical");
+    assert_eq!(
+        traces[0], traces[1],
+        "First and second traces should be identical"
+    );
+    assert_eq!(
+        traces[1], traces[2],
+        "Second and third traces should be identical"
+    );
 }

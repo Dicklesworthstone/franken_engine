@@ -17,11 +17,12 @@
     clippy::manual_abs_diff
 )]
 
+use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use frankenengine_engine::rgc_cross_arch_reproducibility::{
     ArchitectureId, CrossArchComparison, CrossArchConfig, CrossArchController, CrossArchError,
-    DivergenceSeverity, ReproducibilityAssessment, TraceDivergence, verify_cross_arch_reproducibility,
+    DivergenceSeverity, ReproducibilityAssessment, TraceDivergence,
+    verify_cross_arch_reproducibility,
 };
-use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 
 // ---------------------------------------------------------------------------
 // Architecture identification tests
@@ -71,8 +72,16 @@ fn cross_arch_config_default_values() {
     let config = CrossArchConfig::default();
 
     assert_eq!(config.target_architectures.len(), 2);
-    assert!(config.target_architectures.contains(&ArchitectureId::X86_64));
-    assert!(config.target_architectures.contains(&ArchitectureId::Aarch64));
+    assert!(
+        config
+            .target_architectures
+            .contains(&ArchitectureId::X86_64)
+    );
+    assert!(
+        config
+            .target_architectures
+            .contains(&ArchitectureId::Aarch64)
+    );
     assert_eq!(config.replay_iterations, 3);
     assert!(config.capture_fp_divergences);
     assert!(config.strict_determinism);
@@ -131,11 +140,9 @@ fn cross_arch_controller_record_and_compare() {
     controller.record_reference_trace("test-session".to_string(), reference_trace.clone());
 
     // Compare against identical trace
-    let result = controller.compare_trace(
-        "test-session",
-        &reference_trace,
-        ArchitectureId::X86_64,
-    ).unwrap();
+    let result = controller
+        .compare_trace("test-session", &reference_trace, ArchitectureId::X86_64)
+        .unwrap();
 
     assert!(result.traces_identical);
     assert_eq!(result.matching_events, 1);
@@ -168,11 +175,9 @@ fn cross_arch_controller_detects_divergence() {
 
     controller.record_reference_trace("test-session".to_string(), reference_trace);
 
-    let result = controller.compare_trace(
-        "test-session",
-        &target_trace,
-        ArchitectureId::Aarch64,
-    ).unwrap();
+    let result = controller
+        .compare_trace("test-session", &target_trace, ArchitectureId::Aarch64)
+        .unwrap();
 
     assert!(!result.traces_identical);
     assert_eq!(result.matching_events, 0);
@@ -197,12 +202,7 @@ fn cross_arch_controller_missing_events() {
         100,
         "component1",
     );
-    reference_trace.capture(
-        NondeterminismSource::TimerRead,
-        vec![2],
-        200,
-        "component2",
-    );
+    reference_trace.capture(NondeterminismSource::TimerRead, vec![2], 200, "component2");
 
     // Target trace with only one event
     let mut target_trace = NondeterminismTrace::new("test-session");
@@ -215,11 +215,9 @@ fn cross_arch_controller_missing_events() {
 
     controller.record_reference_trace("test-session".to_string(), reference_trace);
 
-    let result = controller.compare_trace(
-        "test-session",
-        &target_trace,
-        ArchitectureId::Aarch64,
-    ).unwrap();
+    let result = controller
+        .compare_trace("test-session", &target_trace, ArchitectureId::Aarch64)
+        .unwrap();
 
     assert!(!result.traces_identical);
     assert_eq!(result.matching_events, 1);
@@ -253,20 +251,13 @@ fn cross_arch_controller_extra_events() {
         100,
         "component1",
     );
-    target_trace.capture(
-        NondeterminismSource::TimerRead,
-        vec![2],
-        200,
-        "component2",
-    );
+    target_trace.capture(NondeterminismSource::TimerRead, vec![2], 200, "component2");
 
     controller.record_reference_trace("test-session".to_string(), reference_trace);
 
-    let result = controller.compare_trace(
-        "test-session",
-        &target_trace,
-        ArchitectureId::Aarch64,
-    ).unwrap();
+    let result = controller
+        .compare_trace("test-session", &target_trace, ArchitectureId::Aarch64)
+        .unwrap();
 
     assert!(!result.traces_identical);
     assert_eq!(result.matching_events, 1);
@@ -480,9 +471,18 @@ fn cross_arch_config_serialization() {
     let serialized = serde_json::to_string(&config).unwrap();
     let deserialized: CrossArchConfig = serde_json::from_str(&serialized).unwrap();
 
-    assert_eq!(config.target_architectures, deserialized.target_architectures);
+    assert_eq!(
+        config.target_architectures,
+        deserialized.target_architectures
+    );
     assert_eq!(config.replay_iterations, deserialized.replay_iterations);
-    assert_eq!(config.capture_fp_divergences, deserialized.capture_fp_divergences);
+    assert_eq!(
+        config.capture_fp_divergences,
+        deserialized.capture_fp_divergences
+    );
     assert_eq!(config.strict_determinism, deserialized.strict_determinism);
-    assert_eq!(config.max_divergent_events, deserialized.max_divergent_events);
+    assert_eq!(
+        config.max_divergent_events,
+        deserialized.max_divergent_events
+    );
 }

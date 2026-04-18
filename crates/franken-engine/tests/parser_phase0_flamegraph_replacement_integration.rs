@@ -1,7 +1,7 @@
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::env;
 
 fn repo_root() -> PathBuf {
     // From crates/franken-engine, go up two levels to repo root

@@ -164,7 +164,8 @@ impl CrossArchController {
         target_trace: &NondeterminismTrace,
         target_arch: ArchitectureId,
     ) -> Result<CrossArchComparison, CrossArchError> {
-        let reference_trace = self.reference_traces
+        let reference_trace = self
+            .reference_traces
             .get(session_id)
             .ok_or(CrossArchError::MissingReferenceTrace)?;
 
@@ -190,7 +191,7 @@ impl CrossArchController {
                             target_value: format!("{:?}", target_event),
                         });
                     }
-                },
+                }
                 (Some(_), None) => {
                     divergences.push(TraceDivergence {
                         event_index: i,
@@ -199,7 +200,7 @@ impl CrossArchController {
                         reference_value: "present".to_string(),
                         target_value: "missing".to_string(),
                     });
-                },
+                }
                 (None, Some(_)) => {
                     divergences.push(TraceDivergence {
                         event_index: i,
@@ -208,7 +209,7 @@ impl CrossArchController {
                         reference_value: "missing".to_string(),
                         target_value: "present".to_string(),
                     });
-                },
+                }
                 (None, None) => break,
             }
         }
@@ -249,7 +250,8 @@ impl CrossArchController {
             return ReproducibilityAssessment::Perfect;
         }
 
-        let critical_count = divergences.iter()
+        let critical_count = divergences
+            .iter()
             .filter(|d| d.severity == DivergenceSeverity::Critical)
             .count();
 
@@ -266,7 +268,8 @@ impl CrossArchController {
 
     /// Generate reproducibility report for the session.
     pub fn generate_report(&self, session_id: &str) -> Result<CrossArchReport, CrossArchError> {
-        let reference_trace = self.reference_traces
+        let reference_trace = self
+            .reference_traces
             .get(session_id)
             .ok_or(CrossArchError::MissingReferenceTrace)?;
 
@@ -275,7 +278,8 @@ impl CrossArchController {
             &format!("cross-arch-report-{}", session_id),
             &cross_arch_schema(),
             session_id.as_bytes(),
-        ).map_err(|e| CrossArchError::IdGeneration(format!("{:?}", e)))?;
+        )
+        .map_err(|e| CrossArchError::IdGeneration(format!("{:?}", e)))?;
 
         Ok(CrossArchReport {
             object_id,

@@ -19,6 +19,12 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOp
 use frankenengine_engine::rgc_test_harness::{
     DeterministicTestContext, EventInput, HarnessLane, HarnessRunManifest, write_artifact_triad,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::shipped_path_matrix::{
+    ArtifactKind, CapturedArtifact, ClassifiedMismatch, MatrixCell, MatrixConfig, MatrixReport,
+    MismatchClass, MismatchSeverity, Surface, WorkloadClass, compare_artifacts,
+    compute_cell_verdict, evaluate_matrix,
+};
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, SourceLanguage, prepare_source_entry_for_public_entrypoints,
 };
@@ -387,6 +393,7 @@ struct CliOutputSummary {
     trace_ids_path: String,
     mismatch_catalog_path: String,
     operator_summary_path: String,
+    matrix_report_path: String,
     specimen_count: u64,
     match_count: u64,
     mismatch_count: u64,
@@ -604,6 +611,11 @@ fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
         .count() as u64;
     let contract_satisfied = mismatch_count == 0;
 
+    // Generate matrix report using matrix infrastructure
+    let matrix_report = create_parity_matrix_report(&specimens)?;
+    let matrix_report_path = run_dir.join("parity_matrix_report.json");
+    write_json_file(&matrix_report_path, &matrix_report)?;
+
     events.push(context.event(EventInput {
         sequence: (specimens.len() as u64) + 2,
         component: PARITY_COMPONENT,
@@ -674,6 +686,7 @@ fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
         trace_ids_path: trace_ids_path.display().to_string(),
         mismatch_catalog_path: mismatch_catalog_path.display().to_string(),
         operator_summary_path: operator_summary_path.display().to_string(),
+        matrix_report_path: matrix_report_path.display().to_string(),
         specimen_count: report.specimen_count,
         match_count: report.match_count,
         mismatch_count: report.mismatch_count,
@@ -1681,6 +1694,157 @@ fn current_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[derive(Serialize)]
+struct MatrixArtifactPayload<'a> {
+    specimen_id: &'a str,
+    command_family: &'a str,
+    expected_outcome: ExpectedOutcome,
+    success: bool,
+    exit_code: i32,
+    failure_class: Option<FailureClass>,
+    compile: Option<&'a CompileComparable>,
+    run: Option<&'a RunComparable>,
+    verify_compile_artifact: Option<&'a VerifyCompileArtifactComparable>,
+}
+
+#[derive(Default)]
+struct MatrixCellParts {
+    artifacts_a: Vec<CapturedArtifact>,
+    artifacts_b: Vec<CapturedArtifact>,
+    semantic_mismatches: Vec<ClassifiedMismatch>,
+}
+
+fn create_parity_matrix_report(specimens: &[SpecimenParityRecord]) -> Result<MatrixReport, String> {
+    let config = parity_matrix_config();
+    let mut cell_parts = BTreeMap::<WorkloadClass, MatrixCellParts>::new();
+
+    for specimen in specimens {
+        let workload_class = matrix_workload_class(specimen.source_language);
+        let artifact_kind = matrix_artifact_kind(specimen.command_family.as_str());
+        let library_payload = matrix_artifact_payload(specimen, &specimen.library)?;
+        let cli_payload = matrix_artifact_payload(specimen, &specimen.cli)?;
+        let parts = cell_parts.entry(workload_class).or_default();
+
+        parts.artifacts_a.push(CapturedArtifact::new(
+            artifact_kind,
+            Surface::Library,
+            &library_payload,
+            workload_class,
+        ));
+        parts.artifacts_b.push(CapturedArtifact::new(
+            artifact_kind,
+            Surface::Cli,
+            &cli_payload,
+            workload_class,
+        ));
+
+        if specimen.verdict == ParityVerdict::Mismatch {
+            parts.semantic_mismatches.push(matrix_semantic_mismatch(
+                specimen,
+                artifact_kind,
+                workload_class,
+            ));
+        }
+    }
+
+    let cells = cell_parts
+        .into_iter()
+        .map(|(workload_class, parts)| {
+            let mut mismatches = compare_artifacts(&parts.artifacts_a, &parts.artifacts_b, &config);
+            mismatches.extend(parts.semantic_mismatches);
+            let verdict = compute_cell_verdict(&mismatches, &config);
+            MatrixCell::new(
+                workload_class,
+                parts.artifacts_a,
+                parts.artifacts_b,
+                mismatches,
+                verdict,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let security_epoch = SecurityEpoch::from_raw(1);
+    let timestamp = current_unix_ms();
+    evaluate_matrix(&cells, &config, &security_epoch, timestamp)
+        .map_err(|error| format!("failed to evaluate shipped-path parity matrix: {error}"))
+}
+
+fn parity_matrix_config() -> MatrixConfig {
+    MatrixConfig {
+        required_workload_classes: [WorkloadClass::PureJs, WorkloadClass::PureTs]
+            .into_iter()
+            .collect(),
+        max_size_divergence_millionths: 100_000,
+        require_source_maps: false,
+        require_binding_traces: false,
+        severity_threshold: MismatchSeverity::Major,
+    }
+}
+
+const fn matrix_workload_class(source_language: SourceLanguage) -> WorkloadClass {
+    match source_language {
+        SourceLanguage::JavaScript => WorkloadClass::PureJs,
+        SourceLanguage::TypeScript => WorkloadClass::PureTs,
+    }
+}
+
+fn matrix_artifact_kind(command_family: &str) -> ArtifactKind {
+    match command_family {
+        "compile" => ArtifactKind::CompiledOutput,
+        "run" => ArtifactKind::BindingTrace,
+        "verify_compile_artifact" => ArtifactKind::Diagnostic,
+        _ => ArtifactKind::Diagnostic,
+    }
+}
+
+fn matrix_artifact_payload(
+    specimen: &SpecimenParityRecord,
+    invocation: &InvocationRecord,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&MatrixArtifactPayload {
+        specimen_id: specimen.specimen_id.as_str(),
+        command_family: specimen.command_family.as_str(),
+        expected_outcome: specimen.expected_outcome,
+        success: invocation.success,
+        exit_code: invocation.exit_code,
+        failure_class: invocation.failure_class,
+        compile: invocation.compile.as_ref(),
+        run: invocation.run.as_ref(),
+        verify_compile_artifact: invocation.verify_compile_artifact.as_ref(),
+    })
+    .map_err(|error| {
+        format!(
+            "failed to serialize parity matrix payload for `{}`: {error}",
+            specimen.specimen_id
+        )
+    })
+}
+
+fn matrix_semantic_mismatch(
+    specimen: &SpecimenParityRecord,
+    artifact_kind: ArtifactKind,
+    workload_class: WorkloadClass,
+) -> ClassifiedMismatch {
+    ClassifiedMismatch {
+        class: MismatchClass::SemanticDivergence,
+        severity: MismatchSeverity::Major,
+        surface: Surface::Cli,
+        artifact_kind,
+        workload_class,
+        detail: format!(
+            "specimen `{}` diverged for {}: {}",
+            specimen.specimen_id,
+            specimen.command_family,
+            specimen
+                .mismatch_kind
+                .map(MismatchKind::as_str)
+                .unwrap_or("unclassified")
+        ),
+        content_hash_a: None,
+        content_hash_b: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1838,6 +2002,26 @@ mod tests {
         command_family: ParityCommandFamily,
         source_language: SourceLanguage,
     ) -> SpecimenParityRecord {
+        parity_matrix_specimen_record(
+            specimen_id,
+            verdict,
+            mismatch_kind,
+            command_family,
+            source_language,
+            compile_record_with_hash("library"),
+            compile_record_with_hash("cli"),
+        )
+    }
+
+    fn parity_matrix_specimen_record(
+        specimen_id: &str,
+        verdict: ParityVerdict,
+        mismatch_kind: Option<MismatchKind>,
+        command_family: ParityCommandFamily,
+        source_language: SourceLanguage,
+        library: InvocationRecord,
+        cli: InvocationRecord,
+    ) -> SpecimenParityRecord {
         SpecimenParityRecord {
             specimen_id: specimen_id.to_string(),
             description: format!("specimen {specimen_id}"),
@@ -1846,8 +2030,8 @@ mod tests {
             expected_outcome: ExpectedOutcome::Success,
             verdict,
             mismatch_kind,
-            library: compile_record_with_hash("library"),
-            cli: compile_record_with_hash("cli"),
+            library,
+            cli,
         }
     }
 
@@ -2006,5 +2190,91 @@ mod tests {
                 Some(MismatchKind::UnexpectedOutcome)
             )
         );
+    }
+
+    #[test]
+    fn parity_matrix_report_passes_matching_core_command_families() {
+        use frankenengine_engine::shipped_path_matrix::CellVerdict;
+
+        let report = create_parity_matrix_report(&[
+            parity_matrix_specimen_record(
+                "compile-js",
+                ParityVerdict::Match,
+                None,
+                ParityCommandFamily::Compile,
+                SourceLanguage::JavaScript,
+                compile_record_with_hash("same"),
+                compile_record_with_hash("same"),
+            ),
+            parity_matrix_specimen_record(
+                "run-ts",
+                ParityVerdict::Match,
+                None,
+                ParityCommandFamily::Run,
+                SourceLanguage::TypeScript,
+                run_record_with_value("5"),
+                run_record_with_value("5"),
+            ),
+        ])
+        .expect("matching specimens should produce a matrix report");
+
+        assert_eq!(report.overall_verdict, CellVerdict::Pass);
+        assert_eq!(report.total_mismatches, 0);
+        assert_eq!(report.cells.len(), 2);
+        assert!(report.cells.iter().any(|cell| {
+            cell.workload_class == WorkloadClass::PureJs
+                && cell
+                    .artifacts_a
+                    .iter()
+                    .any(|artifact| artifact.kind == ArtifactKind::CompiledOutput)
+        }));
+        assert!(report.cells.iter().any(|cell| {
+            cell.workload_class == WorkloadClass::PureTs
+                && cell
+                    .artifacts_b
+                    .iter()
+                    .any(|artifact| artifact.kind == ArtifactKind::BindingTrace)
+        }));
+    }
+
+    #[test]
+    fn parity_matrix_report_classifies_semantic_mismatches() {
+        use frankenengine_engine::shipped_path_matrix::CellVerdict;
+
+        let report = create_parity_matrix_report(&[
+            parity_matrix_specimen_record(
+                "compile-js-unexpected",
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::UnexpectedOutcome),
+                ParityCommandFamily::Compile,
+                SourceLanguage::JavaScript,
+                compile_record_with_hash("same"),
+                compile_record_with_hash("same"),
+            ),
+            parity_matrix_specimen_record(
+                "run-ts-match",
+                ParityVerdict::Match,
+                None,
+                ParityCommandFamily::Run,
+                SourceLanguage::TypeScript,
+                run_record_with_value("5"),
+                run_record_with_value("5"),
+            ),
+        ])
+        .expect("semantic mismatches should still produce a matrix report");
+
+        assert_eq!(report.overall_verdict, CellVerdict::Fail);
+        assert_eq!(report.total_mismatches, 1);
+        let js_cell = report
+            .cells
+            .iter()
+            .find(|cell| cell.workload_class == WorkloadClass::PureJs)
+            .expect("javascript cell should exist");
+        assert_eq!(js_cell.verdict, CellVerdict::Fail);
+        assert!(js_cell.mismatches.iter().any(|mismatch| {
+            mismatch.class == MismatchClass::SemanticDivergence
+                && mismatch.detail.contains("compile-js-unexpected")
+                && mismatch.detail.contains("unexpected_outcome")
+        }));
     }
 }

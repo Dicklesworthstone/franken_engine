@@ -15,6 +15,8 @@ run_dir_is_complete() {
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/parity_report.json" ]] || return 1
+  [[ -f "${candidate}/parity_matrix_report.json" ]] || return 1
+  [[ -f "${candidate}/parity_matrix_report.json" ]] || return 1
   [[ -f "${candidate}/shipped_path_mismatch_catalog.json" ]] || return 1
   [[ -f "${candidate}/shipped_path_operator_summary.json" ]] || return 1
 }
@@ -106,6 +108,8 @@ echo "[franken-shipped-path-parity] latest commands: ${latest_run_dir}/commands.
 cat "${latest_run_dir}/commands.txt"
 echo "[franken-shipped-path-parity] latest parity report: ${latest_run_dir}/parity_report.json"
 cat "${latest_run_dir}/parity_report.json"
+echo "[franken-shipped-path-parity] latest parity matrix report: ${latest_run_dir}/parity_matrix_report.json"
+cat "${latest_run_dir}/parity_matrix_report.json"
 echo "[franken-shipped-path-parity] latest mismatch catalog: ${latest_run_dir}/shipped_path_mismatch_catalog.json"
 cat "${latest_run_dir}/shipped_path_mismatch_catalog.json"
 echo "[franken-shipped-path-parity] latest operator summary: ${latest_run_dir}/shipped_path_operator_summary.json"

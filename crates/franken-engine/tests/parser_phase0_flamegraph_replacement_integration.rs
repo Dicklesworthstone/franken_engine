@@ -1,20 +1,33 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::env;
+
+fn repo_root() -> PathBuf {
+    // From crates/franken-engine, go up two levels to repo root
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn run_phase0_script() -> std::process::Output {
+    let root = repo_root();
+    let script_path = root.join("scripts/generate_parser_phase0_artifacts.sh");
+    Command::new(&script_path)
+        .current_dir(&root)
+        .output()
+        .expect("Failed to run parser phase0 artifacts script")
+}
 
 #[test]
 fn test_parser_phase0_generates_performance_receipt() {
     // Verify that the script generates a performance receipt instead of placeholder flamegraph
 
-    let output = Command::new("scripts/generate_parser_phase0_artifacts.sh")
-        .output()
-        .expect("Failed to run parser phase0 artifacts script");
+    let output = run_phase0_script();
 
     if !output.status.success() {
         panic!("Script failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 
-    let artifact_dir = PathBuf::from("artifacts/parser_phase0");
+    let artifact_dir = repo_root().join("artifacts/parser_phase0");
     assert!(artifact_dir.exists(), "Artifact directory should exist");
 
     // Check that performance receipt exists instead of flamegraph.svg
@@ -72,14 +85,12 @@ fn test_parser_phase0_generates_performance_receipt() {
 fn test_performance_receipt_content_validation() {
     // Test that the performance receipt content follows the contract
 
-    let artifact_dir = PathBuf::from("artifacts/parser_phase0");
+    let artifact_dir = repo_root().join("artifacts/parser_phase0");
     let receipt_path = artifact_dir.join("parser_phase0_performance_artifact_receipt.json");
 
     if !receipt_path.exists() {
         // Run the script first if artifacts don't exist
-        let output = Command::new("scripts/generate_parser_phase0_artifacts.sh")
-            .output()
-            .expect("Failed to run parser phase0 artifacts script");
+        let output = run_phase0_script();
         assert!(output.status.success(), "Script should succeed");
     }
 
@@ -124,14 +135,12 @@ fn test_performance_receipt_content_validation() {
 fn test_manifest_references_performance_receipt() {
     // Verify that manifest.json correctly references the performance receipt
 
-    let artifact_dir = PathBuf::from("artifacts/parser_phase0");
+    let artifact_dir = repo_root().join("artifacts/parser_phase0");
     let manifest_path = artifact_dir.join("manifest.json");
 
     if !manifest_path.exists() {
         // Run the script first if artifacts don't exist
-        let output = Command::new("scripts/generate_parser_phase0_artifacts.sh")
-            .output()
-            .expect("Failed to run parser phase0 artifacts script");
+        let output = run_phase0_script();
         assert!(output.status.success(), "Script should succeed");
     }
 
@@ -173,12 +182,10 @@ fn test_manifest_references_performance_receipt() {
 fn test_no_placeholder_signatures_in_artifacts() {
     // Verify that none of the artifacts contain forbidden placeholder signatures
 
-    let artifact_dir = PathBuf::from("artifacts/parser_phase0");
+    let artifact_dir = repo_root().join("artifacts/parser_phase0");
     if !artifact_dir.exists() {
         // Run the script first if artifacts don't exist
-        let output = Command::new("scripts/generate_parser_phase0_artifacts.sh")
-            .output()
-            .expect("Failed to run parser phase0 artifacts script");
+        let output = run_phase0_script();
         assert!(output.status.success(), "Script should succeed");
     }
 
@@ -213,14 +220,12 @@ fn test_no_placeholder_signatures_in_artifacts() {
 fn test_golden_checksums_includes_performance_receipt() {
     // Verify that golden_checksums.txt includes the performance receipt
 
-    let artifact_dir = PathBuf::from("artifacts/parser_phase0");
+    let artifact_dir = repo_root().join("artifacts/parser_phase0");
     let checksums_path = artifact_dir.join("golden_checksums.txt");
 
     if !checksums_path.exists() {
         // Run the script first if artifacts don't exist
-        let output = Command::new("scripts/generate_parser_phase0_artifacts.sh")
-            .output()
-            .expect("Failed to run parser phase0 artifacts script");
+        let output = run_phase0_script();
         assert!(output.status.success(), "Script should succeed");
     }
 

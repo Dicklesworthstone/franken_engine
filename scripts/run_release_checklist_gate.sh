@@ -51,6 +51,11 @@ run_clippy() {
     cargo clippy -p frankenengine-engine --test release_checklist_gate -- -D warnings
 }
 
+run_zero_placeholder_gate() {
+  run_step "zero-placeholder gate security validation" \
+    ./scripts/run_rgc_zero_placeholder_gate.sh ci
+}
+
 run_mode() {
   case "$mode" in
     check)
@@ -62,13 +67,17 @@ run_mode() {
     clippy)
       run_clippy
       ;;
+    zero-placeholder)
+      run_zero_placeholder_gate
+      ;;
     ci)
       run_check
       run_test
       run_clippy
+      run_zero_placeholder_gate
       ;;
     *)
-      echo "usage: $0 [check|test|clippy|ci]" >&2
+      echo "usage: $0 [check|test|clippy|zero-placeholder|ci]" >&2
       exit 2
       ;;
   esac
@@ -133,7 +142,9 @@ write_manifest() {
     echo "    \"events\": \"${events_path}\","
     echo '    "module": "crates/franken-engine/src/release_checklist_gate.rs",'
     echo '    "tests": "crates/franken-engine/tests/release_checklist_gate.rs",'
-    echo '    "suite_script": "scripts/run_release_checklist_gate.sh"'
+    echo '    "suite_script": "scripts/run_release_checklist_gate.sh",'
+    echo '    "zero_placeholder_gate": "scripts/run_rgc_zero_placeholder_gate.sh",'
+    echo '    "zero_placeholder_module": "crates/franken-engine/src/zero_placeholder_gate.rs"'
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\","

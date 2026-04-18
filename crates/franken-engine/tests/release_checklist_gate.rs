@@ -929,3 +929,21 @@ fn checklist_id_starts_with_rchk_prefix() {
     let decision = run_release_checklist_gate(&mut adapter, &checklist);
     assert!(decision.checklist_id.as_ref().unwrap().starts_with("rchk_"));
 }
+
+#[test]
+fn required_items_include_zero_placeholder_gate() {
+    let required_items = required_checklist_items();
+    let zero_placeholder_item = required_items
+        .iter()
+        .find(|item| item.item_id == "security.zero_placeholder_gate");
+
+    assert!(
+        zero_placeholder_item.is_some(),
+        "Required checklist items must include security.zero_placeholder_gate"
+    );
+    assert_eq!(
+        zero_placeholder_item.unwrap().category,
+        ChecklistCategory::Security,
+        "Zero placeholder gate must be in Security category"
+    );
+}

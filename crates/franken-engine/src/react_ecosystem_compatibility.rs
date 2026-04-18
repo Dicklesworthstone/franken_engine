@@ -33,7 +33,10 @@ use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 use crate::react_compile_verification::CompileMode;
-use crate::react_package_cohort::ReactPackage;
+use crate::react_package_cohort::{
+    ExportCondition, ReactPackage, detect_alias_loops, franken_engine_react_cohort_manifest,
+    resolve_subpath_with_fallbacks, verify_format_consistency,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -776,55 +779,159 @@ impl EcosystemCompatibilityValidator {
         Ok(result)
     }
 
-    /// Tests package resolution for a specific package.
+    /// Tests package resolution for a specific package against the checked-in
+    /// React cohort export-map matrix.
     fn test_package_resolution(
         &self,
-        _package: ReactPackage,
+        package: ReactPackage,
         _pattern: &EcosystemPattern,
     ) -> Result<bool, EcosystemCompatibilityError> {
-        // TODO: Implement actual package resolution testing
-        // This would integrate with the react_package_cohort module
-        Ok(true)
+        let matrix = franken_engine_react_cohort_manifest();
+        let Some(manifest) = matrix.find_manifest(package) else {
+            return Ok(false);
+        };
+
+        Ok(manifest.subpath_count() > 0
+            && detect_alias_loops(manifest).is_empty()
+            && verify_format_consistency(manifest).is_empty())
     }
 
-    /// Tests loading of an entry point.
+    /// Tests loading of an entry point through the same export-map rules used by
+    /// the React package cohort matrix.
     fn test_entry_point_loading(
         &self,
-        _entry_point: &str,
-        _pattern: &EcosystemPattern,
+        entry_point: &str,
+        pattern: &EcosystemPattern,
     ) -> Result<bool, EcosystemCompatibilityError> {
-        // TODO: Implement actual entry point loading testing
-        Ok(true)
+        let Some((package, _)) = react_specifier_package_and_subpath(entry_point) else {
+            return Ok(false);
+        };
+        Ok(pattern.required_packages.contains(&package)
+            && react_specifier_resolves(entry_point, pattern))
     }
 
-    /// Tests subpath resolution.
+    /// Tests subpath resolution through the same export-map rules used by the
+    /// React package cohort matrix.
     fn test_subpath_resolution(
         &self,
-        _subpath: &str,
-        _pattern: &EcosystemPattern,
+        subpath: &str,
+        pattern: &EcosystemPattern,
     ) -> Result<bool, EcosystemCompatibilityError> {
-        // TODO: Implement actual subpath resolution testing
-        Ok(true)
+        let Some((package, _)) = react_specifier_package_and_subpath(subpath) else {
+            return Ok(false);
+        };
+        Ok(pattern.required_packages.contains(&package)
+            && react_specifier_resolves(subpath, pattern))
     }
 
-    /// Tests compilation for the pattern.
+    /// Tests compile-mode prerequisites and entrygraph resolvability.
     fn test_compilation(
         &self,
-        _pattern: &EcosystemPattern,
+        pattern: &EcosystemPattern,
     ) -> Result<bool, EcosystemCompatibilityError> {
-        // TODO: Implement actual compilation testing
-        // This would integrate with react_compile_verification
-        Ok(true)
+        let compile_runtime_available = match pattern.compile_mode {
+            CompileMode::Classic => pattern.required_packages.contains(&ReactPackage::React),
+            CompileMode::Automatic => {
+                let has_runtime_package = pattern.required_packages.iter().any(|package| {
+                    matches!(
+                        package,
+                        ReactPackage::ReactJsxRuntime | ReactPackage::ReactJsxDevRuntime
+                    )
+                });
+                let has_runtime_import = pattern.subpath_imports.iter().any(|subpath| {
+                    matches!(
+                        subpath.as_str(),
+                        "react/jsx-runtime" | "react/jsx-dev-runtime"
+                    )
+                });
+                has_runtime_package && has_runtime_import
+            }
+        };
+
+        Ok(compile_runtime_available
+            && pattern
+                .entry_points
+                .iter()
+                .all(|entry_point| react_specifier_resolves(entry_point, pattern))
+            && pattern
+                .subpath_imports
+                .iter()
+                .all(|subpath| react_specifier_resolves(subpath, pattern)))
     }
 
-    /// Tests runtime operations for the pattern.
+    /// Tests runtime-mode prerequisites for SSR, CSR, SSG, and hydration-adjacent
+    /// React entrygraphs.
     fn test_runtime_operations(
         &self,
-        _pattern: &EcosystemPattern,
+        pattern: &EcosystemPattern,
     ) -> Result<bool, EcosystemCompatibilityError> {
-        // TODO: Implement actual runtime testing
-        // This would integrate with react_ssr_verification for SSR patterns
-        Ok(true)
+        let has_server_runtime = !pattern.mode.requires_server_capabilities()
+            || (pattern
+                .required_packages
+                .contains(&ReactPackage::ReactDomServer)
+                && pattern
+                    .entry_points
+                    .iter()
+                    .any(|entry_point| entry_point == "react-dom/server"));
+        let has_client_runtime = !pattern.mode.requires_client_hydration()
+            || pattern.required_packages.contains(&ReactPackage::ReactDom);
+
+        Ok(has_server_runtime && has_client_runtime)
+    }
+}
+
+fn react_specifier_resolves(specifier: &str, pattern: &EcosystemPattern) -> bool {
+    let Some((package, subpath)) = react_specifier_package_and_subpath(specifier) else {
+        return false;
+    };
+    let matrix = franken_engine_react_cohort_manifest();
+    let Some(manifest) = matrix.find_manifest(package) else {
+        return false;
+    };
+    let conditions = export_conditions_for_strategy(pattern.resolution_strategy);
+    resolve_subpath_with_fallbacks(manifest, subpath, &conditions).is_ok()
+}
+
+fn react_specifier_package_and_subpath(specifier: &str) -> Option<(ReactPackage, &'static str)> {
+    match specifier {
+        "react" => Some((ReactPackage::React, ".")),
+        "react-dom" => Some((ReactPackage::ReactDom, ".")),
+        "react-dom/client" => Some((ReactPackage::ReactDom, "./client")),
+        "react-dom/server" => Some((ReactPackage::ReactDomServer, ".")),
+        "react/jsx-runtime" => Some((ReactPackage::ReactJsxRuntime, ".")),
+        "react/jsx-dev-runtime" => Some((ReactPackage::ReactJsxDevRuntime, ".")),
+        "scheduler" => Some((ReactPackage::Scheduler, ".")),
+        "react-reconciler" => Some((ReactPackage::ReactReconciler, ".")),
+        _ => None,
+    }
+}
+
+fn export_conditions_for_strategy(strategy: ModuleResolutionStrategy) -> Vec<ExportCondition> {
+    let mut conditions = Vec::new();
+    for condition in strategy.resolution_conditions() {
+        let Some(mapped) = export_condition_from_key(condition) else {
+            continue;
+        };
+        if !conditions.contains(&mapped) {
+            conditions.push(mapped);
+        }
+    }
+    if !conditions.contains(&ExportCondition::Default) {
+        conditions.push(ExportCondition::Default);
+    }
+    conditions
+}
+
+fn export_condition_from_key(condition: &str) -> Option<ExportCondition> {
+    match condition {
+        "import" => Some(ExportCondition::Import),
+        "require" => Some(ExportCondition::Require),
+        "default" | "main" => Some(ExportCondition::Default),
+        "browser" | "webpack" => Some(ExportCondition::Browser),
+        "node" => Some(ExportCondition::Node),
+        "react-server" => Some(ExportCondition::ReactServer),
+        "react-native" => Some(ExportCondition::ReactNative),
+        _ => None,
     }
 }
 

@@ -219,6 +219,10 @@ const REQUIRED_CHECKLIST_ITEMS: &[RequiredChecklistItem] = &[
         category: ChecklistCategory::Security,
     },
     RequiredChecklistItem {
+        item_id: "security.zero_placeholder_gate",
+        category: ChecklistCategory::Security,
+    },
+    RequiredChecklistItem {
         item_id: "performance.benchmark_suite",
         category: ChecklistCategory::Performance,
     },

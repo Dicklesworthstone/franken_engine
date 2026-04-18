@@ -898,3 +898,84 @@ fn ecosystem_compatibility_report_hash_consistency() {
     assert_eq!(hash2, hash3);
     assert_eq!(report.report_hash, hash1);
 }
+
+// ---------------------------------------------------------------------------
+// Cohort-backed validator regressions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn validator_accepts_standard_patterns_against_checked_in_react_cohort() {
+    let epoch = SecurityEpoch::from_raw(405);
+    let validator = EcosystemCompatibilityValidator::new(epoch);
+    let patterns = create_standard_ecosystem_patterns();
+
+    let report = validator.validate_patterns(&patterns).unwrap();
+
+    assert!(report.gate_passed);
+    assert_eq!(report.test_results.len(), patterns.len());
+    assert!(
+        report
+            .test_results
+            .iter()
+            .all(|result| result.passed && result.errors.is_empty())
+    );
+    assert!(report.overall_metrics.packages_resolved >= patterns.len());
+    assert!(report.overall_metrics.entry_points_loaded >= patterns.len());
+    assert!(report.overall_metrics.subpaths_resolved >= 3);
+}
+
+#[test]
+fn validator_fails_closed_on_unknown_react_entrypoint() {
+    let epoch = SecurityEpoch::from_raw(405);
+    let validator = EcosystemCompatibilityValidator::new(epoch);
+    let pattern = EcosystemPattern::new(
+        "unknown_entrypoint".to_string(),
+        "Unknown React entry point must not be treated as compatible".to_string(),
+        EcosystemMode::ClientSideRendering,
+        CompileMode::Classic,
+    )
+    .with_package(ReactPackage::React)
+    .with_entry_point("react/not-a-real-entry".to_string());
+
+    let report = validator.validate_patterns(&[pattern]).unwrap();
+
+    assert!(!report.gate_passed);
+    assert_eq!(report.test_results.len(), 1);
+    let result = &report.test_results[0];
+    assert!(!result.passed);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.contains("Entry point loading failed"))
+    );
+}
+
+#[test]
+fn automatic_compile_requires_declared_jsx_runtime_import() {
+    let epoch = SecurityEpoch::from_raw(405);
+    let validator = EcosystemCompatibilityValidator::new(epoch);
+    let pattern = EcosystemPattern::new(
+        "automatic_without_runtime_import".to_string(),
+        "Automatic JSX mode must declare the runtime import it depends on".to_string(),
+        EcosystemMode::ClientSideRendering,
+        CompileMode::Automatic,
+    )
+    .with_package(ReactPackage::React)
+    .with_package(ReactPackage::ReactDom)
+    .with_package(ReactPackage::ReactJsxRuntime)
+    .with_entry_point("react".to_string())
+    .with_entry_point("react-dom".to_string());
+
+    let report = validator.validate_patterns(&[pattern]).unwrap();
+
+    assert!(!report.gate_passed);
+    let result = &report.test_results[0];
+    assert!(!result.passed);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error == "Compilation test failed")
+    );
+}

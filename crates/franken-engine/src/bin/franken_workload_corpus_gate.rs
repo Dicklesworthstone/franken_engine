@@ -246,7 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match action {
         CliAction::Help => {
             print_help();
-            return Ok(());
+            Ok(())
         }
         CliAction::Run {
             out_dir,
@@ -348,7 +348,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
 
             // Write commands log
-            let commands = vec![
+            let commands = [
                 format!(
                     "franken_workload_corpus_gate --out-dir {}",
                     out_dir.display()

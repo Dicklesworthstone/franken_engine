@@ -376,7 +376,7 @@ pub struct TestResult {
 /// Test suite runner for coordinated test execution
 #[derive(Debug)]
 pub struct TestSuiteRunner {
-    config: TestHarnessConfig,
+    pub config: TestHarnessConfig,
     runtime_harness: RuntimeTestHarness,
     parser_harness: ParserTestHarness,
     security_harness: SecurityTestHarness,
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_security_levels() {
-        let levels = vec![
+        let levels = [
             SecurityLevel::Low,
             SecurityLevel::Medium,
             SecurityLevel::High,
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn test_syntax_features() {
-        let features = vec![
+        let features = [
             SyntaxFeature::ArrowFunctions,
             SyntaxFeature::AsyncAwait,
             SyntaxFeature::Classes,
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_threat_vectors() {
-        let threats = vec![
+        let threats = [
             ThreatVector::CodeInjection,
             ThreatVector::PrototypePollution,
             ThreatVector::PathTraversal,
@@ -702,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_execution_modes() {
-        let modes = vec![
+        let modes = [
             TestExecutionMode::Unit,
             TestExecutionMode::Integration,
             TestExecutionMode::E2E,
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_isolation_levels() {
-        let levels = vec![
+        let levels = [
             TestIsolationLevel::Complete,
             TestIsolationLevel::Shared,
             TestIsolationLevel::Process,
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn test_test_outcomes() {
-        let outcomes = vec![
+        let outcomes = [
             TestOutcome::Success,
             TestOutcome::Failure,
             TestOutcome::Timeout,

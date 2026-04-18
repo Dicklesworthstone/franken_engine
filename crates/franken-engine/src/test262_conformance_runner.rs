@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn test_mock_conformance_run() {
         let config = RunnerConfig::default();
-        let mut runner = Test262Runner::new(config);
+        let runner = Test262Runner::new(config);
         let epoch = SecurityEpoch::from_raw(1);
 
         let result = runner.run_conformance(epoch);

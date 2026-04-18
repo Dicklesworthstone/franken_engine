@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Arg, Command};
@@ -343,7 +343,7 @@ fn generate_execution_trace(
 
 fn write_sidecar_artifacts(
     result: &NoVdomExecutionResult,
-    output_dir: &PathBuf,
+    output_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Write execution result
     let result_path = output_dir.join("franken_react_sidecar_result.json");

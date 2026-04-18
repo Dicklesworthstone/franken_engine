@@ -245,7 +245,10 @@ impl CrossArchController {
     }
 
     /// Assess overall reproducibility based on divergences.
-    fn assess_reproducibility(&self, divergences: &[TraceDivergence]) -> ReproducibilityAssessment {
+    pub fn assess_reproducibility(
+        &self,
+        divergences: &[TraceDivergence],
+    ) -> ReproducibilityAssessment {
         if divergences.is_empty() {
             return ReproducibilityAssessment::Perfect;
         }
@@ -385,8 +388,10 @@ mod tests {
 
     #[test]
     fn failed_reproducibility_with_critical_divergences() {
-        let mut config = CrossArchConfig::default();
-        config.max_divergent_events = 0;
+        let config = CrossArchConfig {
+            max_divergent_events: 0,
+            ..Default::default()
+        };
         let controller = CrossArchController::new(config);
 
         let divergences = vec![TraceDivergence {

@@ -19,6 +19,7 @@ use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use frankenengine_engine::react_ecosystem_compatibility::EcosystemCompatibilityReport;
 use frankenengine_engine::react_package_cohort::{
     CohortError, CohortMatrix, CohortValidationReport, EdgeCase, ExportCondition, ModuleFormat,
     PackageManifest, REACT_COHORT_BEAD_ID, REACT_COHORT_COMPONENT,
@@ -875,6 +876,7 @@ fn write_bundle_creates_expected_files_and_manifest() {
     assert!(artifacts.events_path.exists());
     assert!(artifacts.commands_path.exists());
     assert!(artifacts.trace_ids_path.exists());
+    assert!(artifacts.compat_report_path.exists());
     assert_eq!(artifacts.package_count, 7);
 
     let manifest: ReactCohortRunManifest =
@@ -892,10 +894,21 @@ fn write_bundle_creates_expected_files_and_manifest() {
         manifest.artifact_paths.react_package_cohort_matrix,
         "react_package_cohort_matrix.json"
     );
+    assert_eq!(
+        manifest.artifact_paths.react_ecosystem_compat_report,
+        "react_ecosystem_compat_report.json"
+    );
     assert_eq!(manifest.artifact_paths.run_manifest, "run_manifest.json");
     assert_eq!(manifest.artifact_paths.events_jsonl, "events.jsonl");
     assert_eq!(manifest.artifact_paths.commands_txt, "commands.txt");
     assert_eq!(manifest.artifact_paths.trace_ids, "trace_ids.json");
+
+    let compat_report: EcosystemCompatibilityReport = serde_json::from_slice(
+        &fs::read(&artifacts.compat_report_path).expect("read compatibility report"),
+    )
+    .expect("parse compatibility report");
+    assert!(compat_report.gate_passed);
+    assert!(!compat_report.test_results.is_empty());
 }
 
 #[test]
@@ -1046,6 +1059,16 @@ fn franken_react_package_cohort_cli_writes_bundle() {
         summary["commands_txt"].as_str(),
         Some(out_dir.join("commands.txt").to_str().unwrap())
     );
+    assert_eq!(
+        summary["react_ecosystem_compat_report"].as_str(),
+        Some(
+            out_dir
+                .join("react_ecosystem_compat_report.json")
+                .to_str()
+                .unwrap()
+        )
+    );
+    assert!(out_dir.join("react_ecosystem_compat_report.json").exists());
 
     let manifest: ReactCohortRunManifest = serde_json::from_slice(
         &fs::read(out_dir.join("run_manifest.json")).expect("read manifest"),

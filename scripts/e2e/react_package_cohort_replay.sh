@@ -24,5 +24,7 @@ echo "[react-package-cohort] latest manifest: ${latest_run_dir}/run_manifest.jso
 cat "${latest_run_dir}/run_manifest.json"
 echo "[react-package-cohort] latest trace ids: ${latest_run_dir}/trace_ids.json"
 cat "${latest_run_dir}/trace_ids.json"
+echo "[react-package-cohort] latest React ecosystem compatibility report: ${latest_run_dir}/react_ecosystem_compat_report.json"
+cat "${latest_run_dir}/react_ecosystem_compat_report.json"
 echo "[react-package-cohort] latest events: ${latest_run_dir}/events.jsonl"
 cat "${latest_run_dir}/events.jsonl"

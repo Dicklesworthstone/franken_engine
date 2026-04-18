@@ -155,6 +155,7 @@ run_mode() {
 generate_bundle
 
 test -f "$run_dir/react_package_cohort_matrix.json"
+test -f "$run_dir/react_ecosystem_compat_report.json"
 test -f "$run_dir/run_manifest.json"
 test -f "$run_dir/events.jsonl"
 test -f "$run_dir/commands.txt"

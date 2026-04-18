@@ -29,6 +29,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
+use crate::react_ecosystem_compatibility::{
+    EcosystemCompatibilityError, EcosystemCompatibilityValidator,
+    create_standard_ecosystem_patterns,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -568,6 +572,7 @@ impl fmt::Display for CohortValidationReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReactCohortArtifactPaths {
     pub react_package_cohort_matrix: String,
+    pub react_ecosystem_compat_report: String,
     pub run_manifest: String,
     pub events_jsonl: String,
     pub commands_txt: String,
@@ -625,6 +630,7 @@ pub struct ReactCohortBundleArtifacts {
     pub events_path: PathBuf,
     pub commands_path: PathBuf,
     pub trace_ids_path: PathBuf,
+    pub compat_report_path: PathBuf,
     pub matrix_hash: String,
     pub package_count: usize,
     pub edge_case_count: usize,
@@ -646,6 +652,12 @@ pub enum ReactCohortWriteError {
     },
     #[error("bundle output directory is already locked by another writer: `{path}`")]
     Busy { path: String },
+    #[error("failed to build React ecosystem compatibility report `{path}`: {source}")]
+    CompatibilityReport {
+        path: String,
+        #[source]
+        source: EcosystemCompatibilityError,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1306,6 +1318,7 @@ pub fn write_react_package_cohort_bundle(
     let events_path = out_dir.join("events.jsonl");
     let commands_path = out_dir.join("commands.txt");
     let trace_ids_path = out_dir.join("trace_ids.json");
+    let compat_report_path = out_dir.join("react_ecosystem_compat_report.json");
 
     let matrix_bytes = canonical_json_bytes(&matrix, &matrix_path)?;
     let matrix_hash = sha256_hex(&matrix_bytes);
@@ -1319,6 +1332,13 @@ pub fn write_react_package_cohort_bundle(
         policy_id: REACT_COHORT_POLICY_ID.to_string(),
     };
     let trace_ids_bytes = canonical_json_bytes(&trace_ids, &trace_ids_path)?;
+    let compat_report = EcosystemCompatibilityValidator::new(matrix.epoch)
+        .validate_patterns(&create_standard_ecosystem_patterns())
+        .map_err(|source| ReactCohortWriteError::CompatibilityReport {
+            path: compat_report_path.display().to_string(),
+            source,
+        })?;
+    let compat_report_bytes = canonical_json_bytes(&compat_report, &compat_report_path)?;
 
     let manifest = ReactCohortRunManifest {
         schema_version: REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -1335,6 +1355,7 @@ pub fn write_react_package_cohort_bundle(
         contract_satisfied: report.passed,
         artifact_paths: ReactCohortArtifactPaths {
             react_package_cohort_matrix: "react_package_cohort_matrix.json".to_string(),
+            react_ecosystem_compat_report: "react_ecosystem_compat_report.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
             commands_txt: "commands.txt".to_string(),
@@ -1364,6 +1385,7 @@ pub fn write_react_package_cohort_bundle(
     remove_commit_marker(&run_manifest_path)?;
     write_atomic(&matrix_path, &matrix_bytes)?;
     write_atomic(&trace_ids_path, &trace_ids_bytes)?;
+    write_atomic(&compat_report_path, &compat_report_bytes)?;
     write_atomic(&events_path, events_jsonl.as_bytes())?;
     write_atomic(&commands_path, commands_buf.as_bytes())?;
     write_atomic(&run_manifest_path, &manifest_bytes)?;
@@ -1375,6 +1397,7 @@ pub fn write_react_package_cohort_bundle(
         events_path,
         commands_path,
         trace_ids_path,
+        compat_report_path,
         matrix_hash,
         package_count: matrix.package_count(),
         edge_case_count: matrix.edge_cases.len(),

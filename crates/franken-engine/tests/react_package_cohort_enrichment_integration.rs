@@ -836,6 +836,7 @@ fn enrichment_run_manifest_serde_roundtrip() {
         contract_satisfied: true,
         artifact_paths: ReactCohortArtifactPaths {
             react_package_cohort_matrix: "matrix.json".to_string(),
+            react_ecosystem_compat_report: "react_ecosystem_compat_report.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
             commands_txt: "commands.txt".to_string(),
@@ -865,6 +866,7 @@ fn enrichment_trace_ids_serde_roundtrip() {
 fn enrichment_artifact_paths_serde_roundtrip() {
     let ap = ReactCohortArtifactPaths {
         react_package_cohort_matrix: "matrix.json".to_string(),
+        react_ecosystem_compat_report: "react_ecosystem_compat_report.json".to_string(),
         run_manifest: "run_manifest.json".to_string(),
         events_jsonl: "events.jsonl".to_string(),
         commands_txt: "commands.txt".to_string(),
@@ -948,6 +950,7 @@ fn enrichment_write_bundle_artifact_paths_match_manifest() {
     assert!(artifacts.events_path.exists());
     assert!(artifacts.commands_path.exists());
     assert!(artifacts.trace_ids_path.exists());
+    assert!(artifacts.compat_report_path.exists());
 
     // Run manifest references correct artifact paths
     let rm_bytes = std::fs::read(&artifacts.run_manifest_path).unwrap();
@@ -955,6 +958,15 @@ fn enrichment_write_bundle_artifact_paths_match_manifest() {
     assert!(rm.contract_satisfied);
     assert_eq!(rm.package_count, 7);
     assert_eq!(rm.pass_rate_millionths, 1_000_000);
+    assert_eq!(
+        rm.artifact_paths.react_package_cohort_matrix,
+        "react_package_cohort_matrix.json"
+    );
+    assert_eq!(
+        rm.artifact_paths.react_ecosystem_compat_report,
+        "react_ecosystem_compat_report.json"
+    );
+    assert_eq!(rm.artifact_paths.run_manifest, "run_manifest.json");
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

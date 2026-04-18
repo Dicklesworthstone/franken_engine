@@ -16113,7 +16113,7 @@ impl InterpreterCore {
 
                             groups
                                 .entry(key)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(element.clone());
                         }
                     }
@@ -16283,7 +16283,7 @@ impl InterpreterCore {
 
                             groups
                                 .entry(type_key)
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .push(element.clone());
                         }
                     }
@@ -16734,8 +16734,8 @@ impl InterpreterCore {
 
                 let precision = if args.count > 1 {
                     match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => Some(((n as usize).max(1)).min(21)), // 1-21 range
-                        Value::Float(f) => Some(((f.inner() as usize).max(1)).min(21)),
+                        Value::Int(n) => Some((n as usize).clamp(1, 21)), // 1-21 range
+                        Value::Float(f) => Some((f.inner() as usize).clamp(1, 21)),
                         _ => None,
                     }
                 } else {
@@ -17385,8 +17385,8 @@ impl InterpreterCore {
                 let radix = if args.count >= 2 {
                     let radix_val = self.read_reg(args.start + 1)?;
                     match radix_val {
-                        Value::Int(n) => n.max(2).min(36) as u32,
-                        Value::Float(f) => f.inner().max(2.0).min(36.0) as u32,
+                        Value::Int(n) => n.clamp(2, 36) as u32,
+                        Value::Float(f) => f.inner().clamp(2.0, 36.0) as u32,
                         _ => 10,
                     }
                 } else {
@@ -17400,7 +17400,7 @@ impl InterpreterCore {
                         } else {
                             // Convert integer to specified radix
                             let mut result = String::new();
-                            let mut num = n.abs() as u64;
+                            let mut num = n.unsigned_abs();
                             let radix = radix as u64;
 
                             if num == 0 {
@@ -18645,8 +18645,8 @@ impl InterpreterCore {
                 let radix = if args.count >= 3 {
                     let radix_val = self.read_reg(args.start + 2)?;
                     match radix_val {
-                        Value::Int(n) => n.max(2).min(36) as u32,
-                        Value::Float(f) => f.inner().max(2.0).min(36.0) as u32,
+                        Value::Int(n) => n.clamp(2, 36) as u32,
+                        Value::Float(f) => f.inner().clamp(2.0, 36.0) as u32,
                         _ => 10,
                     }
                 } else {

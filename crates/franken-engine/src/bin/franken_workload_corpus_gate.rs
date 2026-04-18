@@ -1,21 +1,20 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::workload_corpus_gate::{
-    WorkloadCorpus, WorkloadCorpusGate, GateReport, WorkloadFamily,
-    WorkloadSpecimen, Provenance, InputLanguage, LicenseStatus,
-    EquivalenceResult, BaselineRuntime, DivergenceClass, GateConfig,
+    BaselineRuntime, DivergenceClass, EquivalenceResult, GateConfig, GateVerdict, InputLanguage,
+    LicenseStatus, ObservabilityMode, WorkloadCorpus, WorkloadCorpusGate, WorkloadFamily,
+    WorkloadOrigin, WorkloadProvenance, WorkloadSpecimen,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 const OUTPUT_SCHEMA_VERSION: &str = "franken-engine.franken_workload_corpus_gate.v1";
 const CORPUS_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.workload-corpus-manifest.v1";
-const GATE_REPORT_SCHEMA_VERSION: &str = "franken-engine.workload-corpus-gate-report.v1";
 const RUN_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.workload-corpus-gate.run-manifest.v1";
 const EVENT_SCHEMA_VERSION: &str = "franken-engine.workload-corpus-gate.event.v1";
 const COMPONENT: &str = "franken_workload_corpus_gate";
@@ -62,9 +61,12 @@ struct RunManifest {
 
 #[derive(Debug, Clone, Serialize)]
 struct GateConfigSummary {
+    min_families: usize,
     min_per_family: usize,
-    min_equivalence_rate_millionths: u64,
-    require_all_families: bool,
+    equivalence_threshold: u64,
+    max_divergence_ratio: u64,
+    require_publishable_licenses: bool,
+    require_observability_coverage: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,38 +151,56 @@ fn print_help() {
 fn build_seed_corpus() -> WorkloadCorpus {
     let mut corpus = WorkloadCorpus::new();
 
-    // Add seed specimens for each family
     for family in WorkloadFamily::ALL {
         let id = format!("seed_{}", family.as_str());
+        let mut observability_modes = BTreeSet::new();
+        observability_modes.insert(ObservabilityMode::BudgetedDefault);
+
+        let mut tags = BTreeSet::new();
+        tags.insert("seed".to_string());
+        tags.insert(family.as_str().to_string());
+
         let specimen = WorkloadSpecimen {
             id: id.clone(),
+            name: format!("Seed {} workload", family.as_str()),
             family: *family,
-            secondary_families: vec![],
-            provenance: Provenance {
-                origin: format!("seed corpus for {}", family.as_str()),
-                license: LicenseStatus::PermissiveMit,
-                selection_rationale: format!("Representative {} workload", family.as_str()),
-                user_value_justification: format!("Critical for {} performance validation", family.as_str()),
-                added_at_utc: chrono::Utc::now().to_rfc3339(),
-            },
+            secondary_families: BTreeSet::new(),
             language: InputLanguage::JavaScript,
-            source_code: format!("// Seed workload for {}\nconsole.log('{}');", family.as_str(), family.as_str()),
-            expected_outputs: BTreeMap::new(),
-            metadata: BTreeMap::new(),
+            provenance: WorkloadProvenance {
+                origin: WorkloadOrigin::InternalFixture,
+                source_url: format!("internal://workload-corpus/{}", family.as_str()),
+                license: LicenseStatus::Permissive,
+                spdx_id: Some("MIT".to_string()),
+                source_version: "seed-v1".to_string(),
+                selection_rationale: format!("Representative {} workload", family.as_str()),
+                content_hash: ContentHash::compute(id.as_bytes()),
+            },
+            observability_modes,
+            approximate_lines: 2,
+            requires_native_addons: *family == WorkloadFamily::NativeAddon,
+            exercises_async: matches!(
+                family,
+                WorkloadFamily::AsyncHeavy | WorkloadFamily::HostcallSpike
+            ),
+            tags,
         };
 
         if let Err(e) = corpus.add_specimen(specimen) {
-            eprintln!("Warning: Failed to add seed specimen for {}: {:?}", family.as_str(), e);
+            eprintln!(
+                "Warning: Failed to add seed specimen for {}: {:?}",
+                family.as_str(),
+                e
+            );
         } else {
-            // Add equivalence result for the seed specimen
             let equiv = EquivalenceResult {
                 specimen_id: id,
-                baseline_runtime: BaselineRuntime::NodeJs,
+                baseline: BaselineRuntime::NodeJs,
                 divergence_class: DivergenceClass::Identical,
-                output_hash: ContentHash::compute(b"seed-output"),
-                baseline_hash: ContentHash::compute(b"seed-output"),
-                verified_at_utc: chrono::Utc::now().to_rfc3339(),
-                verifier_metadata: BTreeMap::new(),
+                divergence_description: String::new(),
+                output_hash_matches: true,
+                franken_output_hash: ContentHash::compute(b"seed-output"),
+                baseline_output_hash: ContentHash::compute(b"seed-output"),
+                evidence_path: Some("internal://workload-corpus/seed-equivalence".to_string()),
             };
             corpus.record_equivalence(equiv);
         }
@@ -189,7 +209,11 @@ fn build_seed_corpus() -> WorkloadCorpus {
     corpus
 }
 
-fn write_event(events_file: &Path, event_type: &str, data: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
+fn write_event(
+    events_file: &Path,
+    event_type: &str,
+    data: serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error>> {
     let event = Event {
         schema_version: EVENT_SCHEMA_VERSION.to_string(),
         timestamp_utc: chrono::Utc::now().to_rfc3339(),
@@ -199,8 +223,21 @@ fn write_event(events_file: &Path, event_type: &str, data: serde_json::Value) ->
     };
 
     let event_json = serde_json::to_string(&event)?;
-    fs::write(events_file, format!("{}\n", event_json))?;
+    use std::io::Write;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(events_file)?;
+    writeln!(file, "{event_json}")?;
     Ok(())
+}
+
+fn verdict_label(verdict: &GateVerdict) -> &'static str {
+    match verdict {
+        GateVerdict::Pass => "pass",
+        GateVerdict::Fail { .. } => "fail",
+        GateVerdict::InsufficientData { .. } => "insufficient_data",
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -227,16 +264,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let commands_path = out_dir.join("commands.txt");
 
             // Write initial event
-            write_event(&events_path, "gate_start", serde_json::json!({
-                "out_dir": out_dir.display().to_string()
-            }))?;
+            write_event(
+                &events_path,
+                "gate_start",
+                serde_json::json!({
+                    "out_dir": out_dir.display().to_string()
+                }),
+            )?;
 
             // Build or load corpus
             let corpus = build_seed_corpus();
-            write_event(&events_path, "corpus_built", serde_json::json!({
-                "total_specimens": corpus.specimens().len(),
-                "families_covered": corpus.family_coverage().len()
-            }))?;
+            write_event(
+                &events_path,
+                "corpus_built",
+                serde_json::json!({
+                    "total_specimens": corpus.specimens.len(),
+                    "families_covered": corpus.family_coverage.len()
+                }),
+            )?;
 
             // Configure gate
             let mut config = GateConfig::default();
@@ -244,18 +289,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.min_per_family = min;
             }
             if let Some(rate) = min_equivalence_rate {
-                config.min_equivalence_rate_millionths = rate;
+                config.equivalence_threshold = rate;
             }
 
             // Run gate evaluation
             let gate = WorkloadCorpusGate::new(config.clone());
             let report = gate.evaluate(&corpus);
 
-            write_event(&events_path, "gate_evaluated", serde_json::json!({
-                "verdict": report.verdict.as_str(),
-                "total_specimens": report.total_specimens,
-                "families_covered": report.families_covered
-            }))?;
+            write_event(
+                &events_path,
+                "gate_evaluated",
+                serde_json::json!({
+                    "verdict": verdict_label(&report.verdict),
+                    "total_specimens": report.total_specimens,
+                    "families_covered": report.families_covered
+                }),
+            )?;
 
             // Write gate report
             let gate_report_json = serde_json::to_string_pretty(&report)?;
@@ -264,12 +313,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Write corpus manifest
             let corpus_manifest = serde_json::json!({
                 "schema_version": CORPUS_MANIFEST_SCHEMA_VERSION,
-                "total_specimens": corpus.specimens().len(),
-                "families_covered": corpus.family_coverage().len(),
-                "specimens": corpus.specimens().keys().collect::<Vec<_>>(),
-                "family_coverage": corpus.family_coverage()
+                "total_specimens": corpus.specimens.len(),
+                "families_covered": corpus.family_coverage.len(),
+                "specimens": corpus.specimens.keys().collect::<Vec<_>>(),
+                "family_coverage": corpus.family_coverage
             });
-            fs::write(&corpus_manifest_path, serde_json::to_string_pretty(&corpus_manifest)?)?;
+            fs::write(
+                &corpus_manifest_path,
+                serde_json::to_string_pretty(&corpus_manifest)?,
+            )?;
 
             // Write run manifest
             let run_manifest = RunManifest {
@@ -280,18 +332,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 out_dir: out_dir.display().to_string(),
                 total_specimens: report.total_specimens,
                 families_covered: report.families_covered,
-                verdict: report.verdict.as_str().to_string(),
+                verdict: verdict_label(&report.verdict).to_string(),
                 gate_config: GateConfigSummary {
                     min_per_family: config.min_per_family,
-                    min_equivalence_rate_millionths: config.min_equivalence_rate_millionths,
-                    require_all_families: config.require_all_families,
+                    min_families: config.min_families,
+                    equivalence_threshold: config.equivalence_threshold,
+                    max_divergence_ratio: config.max_divergence_ratio,
+                    require_publishable_licenses: config.require_publishable_licenses,
+                    require_observability_coverage: config.require_observability_coverage,
                 },
             };
-            fs::write(&run_manifest_path, serde_json::to_string_pretty(&run_manifest)?)?;
+            fs::write(
+                &run_manifest_path,
+                serde_json::to_string_pretty(&run_manifest)?,
+            )?;
 
             // Write commands log
             let commands = vec![
-                format!("franken_workload_corpus_gate --out-dir {}", out_dir.display()),
+                format!(
+                    "franken_workload_corpus_gate --out-dir {}",
+                    out_dir.display()
+                ),
                 "# Corpus evaluation completed".to_string(),
             ];
             fs::write(&commands_path, commands.join("\n"))?;
@@ -301,11 +362,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let report_hash = ContentHash::compute(gate_report_json.as_bytes());
 
             // Write final event
-            write_event(&events_path, "gate_complete", serde_json::json!({
-                "verdict": report.verdict.as_str(),
-                "corpus_hash": corpus_hash.to_string(),
-                "report_hash": report_hash.to_string()
-            }))?;
+            write_event(
+                &events_path,
+                "gate_complete",
+                serde_json::json!({
+                    "verdict": verdict_label(&report.verdict),
+                    "corpus_hash": corpus_hash.to_string(),
+                    "report_hash": report_hash.to_string()
+                }),
+            )?;
 
             // Output final summary
             let output = CommandOutput {
@@ -318,10 +383,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands_txt: commands_path.display().to_string(),
                 corpus_hash: corpus_hash.to_string(),
                 report_hash: report_hash.to_string(),
-                verdict: report.verdict.as_str().to_string(),
+                verdict: verdict_label(&report.verdict).to_string(),
                 total_specimens: report.total_specimens,
                 families_covered: report.families_covered,
-                overall_equivalence_rate: report.overall_equivalence_rate_millionths,
+                overall_equivalence_rate: report.aggregate_equivalence_rate_millionths,
             };
 
             println!("{}", serde_json::to_string_pretty(&output)?);

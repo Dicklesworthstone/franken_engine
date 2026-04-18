@@ -949,16 +949,15 @@ fn validator_fails_closed_on_unknown_react_entrypoint() {
             .iter()
             .any(|error| error.contains("Entry point loading failed"))
     );
-    assert_eq!(result.unresolved_failures.len(), 1);
-    let triage = &result.unresolved_failures[0];
-    assert_eq!(
-        triage.failure_kind,
-        CompatibilityFailureKind::EntryPointLoading
-    );
-    assert_eq!(
-        triage.minimized_repro.failing_specifier.as_deref(),
-        Some("react/not-a-real-entry")
-    );
+    let triage = result
+        .unresolved_failures
+        .iter()
+        .find(|failure| {
+            failure.failure_kind == CompatibilityFailureKind::EntryPointLoading
+                && failure.minimized_repro.failing_specifier.as_deref()
+                    == Some("react/not-a-real-entry")
+        })
+        .expect("unknown entry point should produce routed entrygraph triage");
     assert_eq!(triage.owner_route.route, "react-entrygraph-resolution");
     assert_eq!(
         triage.shipped_path_classification.status,

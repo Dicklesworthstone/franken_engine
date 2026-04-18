@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="160" viewBox="0 0 1280 160" role="img" aria-label="parser phase0 flamegraph placeholder">
-  <rect x="0" y="0" width="1280" height="160" fill="#111827" />
-  <rect x="40" y="72" width="1200" height="24" fill="#22c55e" />
-  <text x="52" y="89" fill="#f9fafb" font-size="14" font-family="monospace">
-    parser_phase0 scalar_reference baseline lane (placeholder flamegraph artifact)
-  </text>
-</svg>

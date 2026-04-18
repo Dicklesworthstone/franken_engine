@@ -21,9 +21,9 @@
 
 ## Latency Snapshot (local reference only)
 
-- p50_ns: 146272
-- p95_ns: 230740
-- p99_ns: 286113
+- p50_ns: 158064
+- p95_ns: 276976
+- p99_ns: 317040
 
 ## Isomorphism / Safety Notes
 

@@ -1,13 +1,13 @@
 {
   "schema_version": "franken-engine.parser-phase0.provenance.v1",
-  "generated_at_utc": "2026-04-17T15:20:48Z",
+  "generated_at_utc": "2026-04-18T01:29:34Z",
   "claim_id": "claim.parser.scalar_reference_deterministic",
   "demo_id": "demo.parser.scalar_reference",
   "artifact_hashes": {
-    "baseline_json": "sha256:673fc50caf946a651adc6c85a809d455edb508a73d3c72a37fb71052b487f182",
-    "performance_receipt": "sha256:653c606b4194d6f395ecb9e67673b4304bc4e7a1e7f6eef5f3fcb6e2a89106e0",
+    "baseline_json": "sha256:5278c03bc854aaae362b7c57f28f6ebb08bfae52c639964c7eeca96049d9bee5",
+    "performance_receipt": "sha256:ce06acd5411e3437facc644b06242941cd5cd65259e15db79964b3a430ea262b",
     "fixture_catalog": "sha256:bf9e3ce2c5f5053eba20d2f2bec739116baeb38bcd7c8eb6816874e9c9885fd7",
-    "proof_note": "sha256:7ef369f7ceef7e3f3b505a1b16dd79cfa71bc285b3fcacb6646b35022971e9b7"
+    "proof_note": "sha256:0730fda179f5df08b13b6deb69f558b4e72566eb0e15e97914e7c0c54ac53068"
   },
   "evidence_links": {
     "fixture_suite": "crates/franken-engine/tests/parser_phase0_semantic_fixtures.rs",

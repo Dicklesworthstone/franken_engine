@@ -1,10 +1,10 @@
 {
   "schema_version": "franken-engine.repro-lock.v1",
   "schema_hash": "sha256:repro-lock-schema-v1",
-  "generated_at_utc": "2026-04-17T15:20:48Z",
+  "generated_at_utc": "2026-04-18T01:29:34Z",
   "lock_id": "parser-phase0-lock-v1",
   "manifest_id": "parser-phase0-manifest-v1",
-  "source_commit": "bebc96bd7593fc8d30f405fee920f73a298ae69f",
+  "source_commit": "73d61ea13a2b836a6073159e826d07dafd757118",
   "determinism": {
     "allow_network": false,
     "allow_wall_clock": false,
@@ -25,12 +25,12 @@
   "expected_outputs": [
     {
       "path": "artifacts/parser_phase0/baseline.json",
-      "sha256": "sha256:673fc50caf946a651adc6c85a809d455edb508a73d3c72a37fb71052b487f182",
+      "sha256": "sha256:5278c03bc854aaae362b7c57f28f6ebb08bfae52c639964c7eeca96049d9bee5",
       "kind": "output"
     },
     {
       "path": "artifacts/parser_phase0/provenance.json",
-      "sha256": "sha256:e73972a6475a6797793592f3f177117226a42bba4533233de0b27ee37bfa8732",
+      "sha256": "sha256:dbcad01450abdf58b469e0aa66a5ff371f32ecbd63caae8d6a56ca00b3051a16",
       "kind": "output"
     }
   ],

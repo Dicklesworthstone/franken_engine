@@ -17527,7 +17527,7 @@ impl InterpreterCore {
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
                     let length_prop = obj.properties.get("length").cloned().unwrap_or(Value::Int(0));
-                    let length = match length_prop {
+                    let _length = match length_prop {
                         Value::Int(n) => n.max(0) as usize,
                         _ => 0,
                     };

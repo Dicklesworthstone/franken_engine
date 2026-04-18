@@ -360,7 +360,9 @@ fn write_sidecar_artifacts(
 
 #[derive(Debug)]
 struct ReactComponent {
+    #[allow(dead_code)]
     name: String,
+    #[allow(dead_code)]
     props: BTreeMap<String, String>,
     jsx_elements: Vec<JsxElementInfo>,
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.parser-phase0.baseline.v1",
-  "generated_at_utc": "2026-04-17T15:20:48Z",
+  "generated_at_utc": "2026-04-18T01:29:34Z",
   "parser_mode": "scalar_reference",
   "fixture_catalog_path": "crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json",
   "fixture_catalog_schema": "franken-engine.parser-phase0.semantic-fixtures.v1",
@@ -21,8 +21,8 @@
   "latency": {
     "sample_count": 2688,
     "repetitions": 128,
-    "p50_ns": 146272,
-    "p95_ns": 230740,
-    "p99_ns": 286113
+    "p50_ns": 158064,
+    "p95_ns": 276976,
+    "p99_ns": 317040
   }
 }

@@ -4429,3 +4429,489 @@ fn bare_require_index_mjs_package_root_relative_import_evidence_matches_matrix_c
         );
     }
 }
+
+// Edge case verification tests for specific Node/Bun compatibility matrix cases
+
+#[test]
+fn cjs_require_esm_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "cjs-require-esm" - A CommonJS require attempts to load an ES module entry point
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "throw_err_require_esm"),
+        (CompatibilityMode::NodeCompat, "throw_err_require_esm"),
+        (CompatibilityMode::BunCompat, "allow_via_sync_bridge"),
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "cjs-require-esm",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("cjs-require-esm should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "cjs-require-esm should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn conditional_exports_condition_order_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "conditional-exports-condition-order" - Package exports with import/require/default branches
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "conditional-exports-condition-order",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "resolve_condition_import_require_default",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("conditional-exports-condition-order should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "conditional-exports-condition-order should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn exports_fallback_target_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "exports-fallback-target" - Package exports with fallback target resolution
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-fallback-target",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "resolve_exports_via_fallback_target",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("exports-fallback-target should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "exports-fallback-target should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn dual_mode_exports_map_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "dual-mode-exports-map" - Dual-mode package with import/require targets
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "dual-mode-exports-map",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "resolve_exports_by_import_style",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("dual-mode-exports-map should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "dual-mode-exports-map should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn exports_exact_over_wildcard_precedence_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "exports-exact-over-wildcard-precedence" - Exact exports vs wildcard
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-exact-over-wildcard-precedence",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "prefer_exact_exports_over_wildcard",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("exports-exact-over-wildcard-precedence should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "exports-exact-over-wildcard-precedence should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn scoped_exports_more_specific_wildcard_precedence_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "scoped-exports-more-specific-wildcard-precedence" - Scoped wildcard precedence
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "scoped-exports-more-specific-wildcard-precedence",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "prefer_more_specific_scoped_wildcard_export",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("scoped-exports-more-specific-wildcard-precedence should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "scoped-exports-more-specific-wildcard-precedence should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn exports_unexported_subpath_fail_closed_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "exports-unexported-subpath-fail-closed" - Reject unexported subpaths
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-unexported-subpath-fail-closed",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "reject_unexported_subpath_before_legacy_fallback",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("exports-unexported-subpath-fail-closed should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "exports-unexported-subpath-fail-closed should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn exports_target_must_not_escape_package_root_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "exports-target-must-not-escape-package-root" - Package root security
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-target-must-not-escape-package-root",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "reject_exports_target_outside_package_root",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("exports-target-must-not-escape-package-root should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "exports-target-must-not-escape-package-root should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn esm_import_cjs_default_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "esm-import-cjs-default" - ESM imports CJS with default projection
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "esm-import-cjs-default",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "namespace_default_projection",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("esm-import-cjs-default should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "esm-import-cjs-default should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn esm_cjs_cycle_live_binding_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "esm-cjs-cycle-live-binding" - Mixed cyclic graph with live bindings
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "throw_err_require_esm"),
+        (CompatibilityMode::NodeCompat, "throw_err_require_esm"),
+        (
+            CompatibilityMode::BunCompat,
+            "preserve_live_bindings_through_cycle",
+        ),
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "esm-cjs-cycle-live-binding",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "esm-cjs-cycle-live-binding should evaluate against matrix for {mode:?}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "esm-cjs-cycle-live-binding should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn external_extension_probe_package_root_relative_require_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "external-extension-probe-package-root-relative-require" - Package root anchoring
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-extension-probe-package-root-relative-require",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "resolve_relative_require_from_package_root",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("external-extension-probe-package-root-relative-require should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "external-extension-probe-package-root-relative-require should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn external_package_relative_traversal_fail_closed_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "external-package-relative-traversal-fail-closed" - Prevent package escaping
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-package-relative-traversal-fail-closed",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "reject_external_relative_escape_before_probe",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("external-package-relative-traversal-fail-closed should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "external-package-relative-traversal-fail-closed should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn package_type_module_extensionless_relative_case_verification() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Test case: "package-type-module-extensionless-relative" - Type=module extensionless imports
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "reject_extensionless_relative"),
+        (
+            CompatibilityMode::NodeCompat,
+            "reject_extensionless_relative",
+        ),
+        (
+            CompatibilityMode::BunCompat,
+            "resolve_extensionless_relative",
+        ),
+    ] {
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "package-type-module-extensionless-relative",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!("package-type-module-extensionless-relative should evaluate against matrix for {mode:?}: {err}")
+            });
+        assert!(
+            outcome.matched,
+            "package-type-module-extensionless-relative should match matrix contract for {mode:?}"
+        );
+    }
+}
+
+#[test]
+fn matrix_covers_all_json_defined_cases() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    // Verify that all case IDs from the JSON matrix are covered
+    let expected_cases = vec![
+        "cjs-require-esm",
+        "bare-require-package-index-mjs",
+        "scoped-bare-require-package-index-mjs",
+        "bare-require-package-index-mjs-relative-import-package-root",
+        "conditional-exports-condition-order",
+        "exports-fallback-target",
+        "dual-mode-exports-map",
+        "exports-exact-over-wildcard-precedence",
+        "scoped-exports-more-specific-wildcard-precedence",
+        "exports-unexported-subpath-fail-closed",
+        "exports-target-must-not-escape-package-root",
+        "esm-import-cjs-default",
+        "esm-cjs-cycle-live-binding",
+        "external-extension-probe-package-root-relative-require",
+        "external-package-relative-traversal-fail-closed",
+        "package-type-module-extensionless-relative",
+    ];
+
+    let entries = m.entries();
+    let case_ids: BTreeSet<String> = entries.iter().map(|e| e.case_id.to_string()).collect();
+
+    for expected_case in &expected_cases {
+        assert!(
+            case_ids.contains(*expected_case),
+            "Matrix should contain case: {expected_case}"
+        );
+    }
+
+    // Verify that key divergences are properly documented
+    let divergent_cases: Vec<&str> = entries
+        .iter()
+        .filter(|e| e.divergence.is_some())
+        .map(|e| e.case_id.as_str())
+        .collect();
+
+    assert!(
+        divergent_cases.contains(&"cjs-require-esm"),
+        "CJS require ESM should document Bun divergence"
+    );
+    assert!(
+        divergent_cases.contains(&"esm-cjs-cycle-live-binding"),
+        "ESM-CJS cycle should document Bun divergence"
+    );
+    assert!(
+        divergent_cases.contains(&"package-type-module-extensionless-relative"),
+        "Extensionless relative should document Bun divergence"
+    );
+}

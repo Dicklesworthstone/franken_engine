@@ -38,6 +38,11 @@ const MAX_REWRITE_RULES: usize = 1024;
 /// Maximum e-graph nodes before saturation is force-stopped.
 const MAX_EGRAPH_NODES: usize = 1_000_000;
 
+/// Early cutoff threshold for pathological growth detection (nodes per iteration).
+/// If node growth exceeds this rate, saturation is cutoff early to prevent
+/// pathological pass costs while preserving pass witness obligations.
+const PATHOLOGICAL_GROWTH_THRESHOLD: u64 = 10_000;
+
 /// Maximum optimization campaigns that can compose.
 const MAX_CAMPAIGNS: usize = 64;
 
@@ -335,6 +340,57 @@ pub struct EGraphSnapshot {
     pub elapsed_ms: u64,
     /// Peak memory usage in bytes.
     pub peak_memory_bytes: u64,
+}
+
+impl EGraphSnapshot {
+    /// Create a new e-graph snapshot with pathological growth detection.
+    pub fn new(
+        class_count: u64,
+        node_count: u64,
+        iteration_count: u64,
+        rewrite_count: u64,
+        outcome: SaturationOutcome,
+        state_hash: ContentHash,
+        elapsed_ms: u64,
+        peak_memory_bytes: u64,
+    ) -> Self {
+        Self {
+            class_count,
+            node_count,
+            iteration_count,
+            rewrite_count,
+            outcome,
+            state_hash,
+            elapsed_ms,
+            peak_memory_bytes,
+        }
+    }
+
+    /// Check if this snapshot indicates pathological growth compared to baseline.
+    /// Returns true if node growth rate exceeds threshold, triggering early cutoff
+    /// to reduce pathological pass costs while preserving pass witness obligations.
+    pub fn is_pathological_growth(&self, baseline: &EGraphSnapshot) -> bool {
+        let iteration_delta = self.iteration_count.saturating_sub(baseline.iteration_count);
+        if iteration_delta == 0 {
+            return false;
+        }
+
+        let node_delta = self.node_count.saturating_sub(baseline.node_count);
+        let growth_rate = node_delta / iteration_delta;
+
+        growth_rate > PATHOLOGICAL_GROWTH_THRESHOLD
+    }
+
+    /// Get the node growth rate compared to another snapshot.
+    pub fn node_growth_rate(&self, baseline: &EGraphSnapshot) -> u64 {
+        let iteration_delta = self.iteration_count.saturating_sub(baseline.iteration_count);
+        if iteration_delta == 0 {
+            return 0;
+        }
+
+        let node_delta = self.node_count.saturating_sub(baseline.node_count);
+        node_delta / iteration_delta
+    }
 }
 
 // ---------------------------------------------------------------------------

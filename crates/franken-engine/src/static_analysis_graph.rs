@@ -699,6 +699,12 @@ pub struct AnalysisEvent {
 impl StaticAnalysisGraph {
     /// Create a new empty analysis graph.
     pub fn new() -> Self {
+        Self::with_capacity(0, 0)
+    }
+
+    /// Create a new analysis graph with preallocated capacity for nodes and edges.
+    /// This optimization removes repeated map growth during analysis graph assembly.
+    pub fn with_capacity(expected_nodes: usize, expected_edges: usize) -> Self {
         Self {
             schema_version: STATIC_ANALYSIS_SCHEMA_VERSION.to_string(),
             nodes: BTreeMap::new(),
@@ -706,8 +712,8 @@ impl StaticAnalysisGraph {
             components: BTreeMap::new(),
             forward_adj: BTreeMap::new(),
             reverse_adj: BTreeMap::new(),
-            cycles: Vec::new(),
-            events: Vec::new(),
+            cycles: Vec::with_capacity(expected_nodes.saturating_div(10)), // Estimate cycle capacity
+            events: Vec::with_capacity(expected_nodes.saturating_add(expected_edges)), // Events = nodes + edges
             next_event_seq: 0,
         }
     }
@@ -727,6 +733,11 @@ impl StaticAnalysisGraph {
             return Err(AnalysisError::DuplicateNode(node.id.clone()));
         }
         self.emit_event(AnalysisEventKind::NodeAdded, &key, "");
+
+        // Preallocate adjacency list slots for this node to avoid Vec growth on first edge
+        self.forward_adj.entry(key.clone()).or_insert_with(|| Vec::with_capacity(8));
+        self.reverse_adj.entry(key.clone()).or_insert_with(|| Vec::with_capacity(8));
+
         self.nodes.insert(key, node);
         Ok(())
     }
@@ -752,13 +763,15 @@ impl StaticAnalysisGraph {
         let source_key = edge.source.0.clone();
         let target_key = edge.target.0.clone();
         self.emit_event(AnalysisEventKind::EdgeAdded, &key, "");
+
+        // Preallocate adjacency list capacity based on graph density heuristics
         self.forward_adj
             .entry(source_key)
-            .or_default()
+            .or_insert_with(|| Vec::with_capacity(8)) // Typical fanout: 2-8 edges per node
             .push(key.clone());
         self.reverse_adj
             .entry(target_key)
-            .or_default()
+            .or_insert_with(|| Vec::with_capacity(8)) // Typical fanin: 2-8 edges per node
             .push(key.clone());
         self.edges.insert(key, edge);
         Ok(())

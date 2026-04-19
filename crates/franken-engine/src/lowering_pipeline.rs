@@ -471,14 +471,20 @@ pub fn lower_ir0_to_ir1(
     }
 
     let ir0_hash = ir0.content_hash();
-    let mut ir1 = Ir1Module::new(ir0_hash, ir0.header.source_label.clone());
+
+    // Estimate ops capacity based on AST size for higher lowering throughput
+    let estimated_ops = ir0.tree.body.len().saturating_mul(8); // ~8 ops per statement
+    let mut ir1 = Ir1Module::with_capacity(ir0_hash, ir0.header.source_label.clone(), estimated_ops);
     let mut binding_index = 0u32;
     let root_scope_id = ScopeId { depth: 0, index: 0 };
     let root_scope_kind = match ir0.tree.goal {
         ParseGoal::Script => ScopeKind::Global,
         ParseGoal::Module => ScopeKind::Module,
     };
-    let mut bindings = Vec::<ResolvedBinding>::new();
+
+    // Preallocate capacity based on AST size for higher lowering throughput
+    let estimated_bindings = ir0.tree.body.len().saturating_mul(4); // ~4 bindings per statement
+    let mut bindings = Vec::<ResolvedBinding>::with_capacity(estimated_bindings);
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
     let declared_root_bindings =
         reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);

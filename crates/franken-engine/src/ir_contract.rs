@@ -1070,6 +1070,16 @@ pub struct Ir1Module {
 
 impl Ir1Module {
     pub fn new(source_hash: ContentHash, source_label: impl Into<String>) -> Self {
+        Self::with_capacity(source_hash, source_label, 0)
+    }
+
+    /// Create a new IR1 module with preallocated capacity for ops.
+    /// This optimization improves lowering throughput by reducing Vec growth.
+    pub fn with_capacity(
+        source_hash: ContentHash,
+        source_label: impl Into<String>,
+        ops_capacity: usize,
+    ) -> Self {
         Self {
             header: IrHeader {
                 schema_version: IrSchemaVersion::CURRENT,
@@ -1078,7 +1088,7 @@ impl Ir1Module {
                 source_label: source_label.into(),
             },
             scopes: Vec::new(),
-            ops: Vec::new(),
+            ops: Vec::with_capacity(ops_capacity),
         }
     }
 

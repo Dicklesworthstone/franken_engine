@@ -342,27 +342,31 @@ pub struct EGraphSnapshot {
     pub peak_memory_bytes: u64,
 }
 
+/// Constructor payload for [`EGraphSnapshot`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EGraphSnapshotParts {
+    pub class_count: u64,
+    pub node_count: u64,
+    pub iteration_count: u64,
+    pub rewrite_count: u64,
+    pub outcome: SaturationOutcome,
+    pub state_hash: ContentHash,
+    pub elapsed_ms: u64,
+    pub peak_memory_bytes: u64,
+}
+
 impl EGraphSnapshot {
     /// Create a new e-graph snapshot with pathological growth detection.
-    pub fn new(
-        class_count: u64,
-        node_count: u64,
-        iteration_count: u64,
-        rewrite_count: u64,
-        outcome: SaturationOutcome,
-        state_hash: ContentHash,
-        elapsed_ms: u64,
-        peak_memory_bytes: u64,
-    ) -> Self {
+    pub fn new(parts: EGraphSnapshotParts) -> Self {
         Self {
-            class_count,
-            node_count,
-            iteration_count,
-            rewrite_count,
-            outcome,
-            state_hash,
-            elapsed_ms,
-            peak_memory_bytes,
+            class_count: parts.class_count,
+            node_count: parts.node_count,
+            iteration_count: parts.iteration_count,
+            rewrite_count: parts.rewrite_count,
+            outcome: parts.outcome,
+            state_hash: parts.state_hash,
+            elapsed_ms: parts.elapsed_ms,
+            peak_memory_bytes: parts.peak_memory_bytes,
         }
     }
 
@@ -370,7 +374,9 @@ impl EGraphSnapshot {
     /// Returns true if node growth rate exceeds threshold, triggering early cutoff
     /// to reduce pathological pass costs while preserving pass witness obligations.
     pub fn is_pathological_growth(&self, baseline: &EGraphSnapshot) -> bool {
-        let iteration_delta = self.iteration_count.saturating_sub(baseline.iteration_count);
+        let iteration_delta = self
+            .iteration_count
+            .saturating_sub(baseline.iteration_count);
         if iteration_delta == 0 {
             return false;
         }
@@ -383,7 +389,9 @@ impl EGraphSnapshot {
 
     /// Get the node growth rate compared to another snapshot.
     pub fn node_growth_rate(&self, baseline: &EGraphSnapshot) -> u64 {
-        let iteration_delta = self.iteration_count.saturating_sub(baseline.iteration_count);
+        let iteration_delta = self
+            .iteration_count
+            .saturating_sub(baseline.iteration_count);
         if iteration_delta == 0 {
             return 0;
         }

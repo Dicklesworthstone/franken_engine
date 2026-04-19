@@ -474,7 +474,8 @@ pub fn lower_ir0_to_ir1(
 
     // Estimate ops capacity based on AST size for higher lowering throughput
     let estimated_ops = ir0.tree.body.len().saturating_mul(8); // ~8 ops per statement
-    let mut ir1 = Ir1Module::with_capacity(ir0_hash, ir0.header.source_label.clone(), estimated_ops);
+    let mut ir1 =
+        Ir1Module::with_capacity(ir0_hash, ir0.header.source_label.clone(), estimated_ops);
     let mut binding_index = 0u32;
     let root_scope_id = ScopeId { depth: 0, index: 0 };
     let root_scope_kind = match ir0.tree.goal {

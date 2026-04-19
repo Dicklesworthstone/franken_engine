@@ -735,8 +735,12 @@ impl StaticAnalysisGraph {
         self.emit_event(AnalysisEventKind::NodeAdded, &key, "");
 
         // Preallocate adjacency list slots for this node to avoid Vec growth on first edge
-        self.forward_adj.entry(key.clone()).or_insert_with(|| Vec::with_capacity(8));
-        self.reverse_adj.entry(key.clone()).or_insert_with(|| Vec::with_capacity(8));
+        self.forward_adj
+            .entry(key.clone())
+            .or_insert_with(|| Vec::with_capacity(8));
+        self.reverse_adj
+            .entry(key.clone())
+            .or_insert_with(|| Vec::with_capacity(8));
 
         self.nodes.insert(key, node);
         Ok(())

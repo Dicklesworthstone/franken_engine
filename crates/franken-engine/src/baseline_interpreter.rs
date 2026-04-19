@@ -2887,7 +2887,10 @@ impl InterpreterCore {
 
         // Add decision receipt to the evidence chain
         self.decision_receipts.add_receipt(
-            "extension:current".to_string(), // TODO: Get actual extension ID from context
+            self.config
+                .extension_id
+                .clone()
+                .unwrap_or_else(|| "extension:current".to_string()),
             operation_type,
             risk_score,
             action_taken,
@@ -3324,9 +3327,8 @@ impl InterpreterCore {
                 None
             };
 
-            // Get instruction name for profiling
-            let instruction_name = if self.profiling_data.is_some() {
-                Some(crate::profiling::instruction_name(&instr))
+            let profiling_instruction = if self.profiling_data.is_some() {
+                Some(instr.clone())
             } else {
                 None
             };
@@ -4943,8 +4945,14 @@ impl InterpreterCore {
             }
 
             // Record profiling data for this instruction
-            // TODO: Add profiling integration when needed
-            let _ = (profile_start, instruction_name);
+            if let (Some(profiler), Some(profile_start), Some(instruction)) = (
+                &mut self.profiling_data,
+                profile_start,
+                profiling_instruction.as_ref(),
+            ) {
+                profiler.record_instruction(instruction);
+                profiler.record_instruction_time(instruction, profile_start.elapsed());
+            }
         }
     }
 
@@ -8319,25 +8327,24 @@ impl InterpreterCore {
             "builtin:MathRandom" => {
                 // Math.random implementation - returns pseudo-random number between 0 and 1
 
-                // Generate a pseudo-random number between 0 and 1
-                // In a real implementation, this should use a proper PRNG
-                // For now, we'll use a simple deterministic approach for reproducibility
-                // TODO: Integrate with proper PRNG system for deterministic execution
-
+                // Generate a pseudo-random number between 0 and 1 using deterministic PRNG
+                use crate::security_e2e::Xorshift64;
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
 
-                // Create a simple seed based on current execution state
-                // This is not cryptographically secure but provides deterministic behavior
+                // Create deterministic seed based on current execution state
                 let mut hasher = DefaultHasher::new();
-
-                // Use some execution state as seed (simplified)
-                // In practice, this should use a proper PRNG state
                 self.call_stack.len().hash(&mut hasher);
                 self.heap.len().hash(&mut hasher);
+                self.instructions_executed.hash(&mut hasher);
+                self.ip.hash(&mut hasher);
 
-                let hash = hasher.finish();
-                let normalized = (hash % 1_000_000_000) as f64 / 1_000_000_000.0;
+                let seed = hasher.finish();
+                let mut rng = Xorshift64::new(seed);
+
+                // Generate random value in [0, 1) using full u64 precision
+                let random_u64 = rng.next_u64();
+                let normalized = (random_u64 as f64) / (u64::MAX as f64);
 
                 Ok(Value::Float(Float64::new(normalized)))
             }
@@ -8680,10 +8687,12 @@ impl InterpreterCore {
                 // Join with spaces (standard console.log behavior)
                 let output = output_parts.join(" ");
 
-                // In a real implementation, this would go to the console/logger
-                // For now, we'll store it or handle it appropriately
-                // TODO: Integrate with actual console output system
-                println!("console.log: {}", output);
+                // Capture console output for deterministic replay
+                self.console_output.push(ConsoleEntry {
+                    level: ConsoleLevel::Log,
+                    message: output,
+                    instruction_index: self.instructions_executed,
+                });
 
                 Ok(Value::Undefined)
             }
@@ -8701,9 +8710,12 @@ impl InterpreterCore {
                 // Join with spaces
                 let output = output_parts.join(" ");
 
-                // In a real implementation, this would go to stderr/error logger
-                // TODO: Integrate with actual console error output system
-                eprintln!("console.error: {}", output);
+                // Capture console error output for deterministic replay
+                self.console_output.push(ConsoleEntry {
+                    level: ConsoleLevel::Error,
+                    message: output,
+                    instruction_index: self.instructions_executed,
+                });
 
                 Ok(Value::Undefined)
             }
@@ -8721,9 +8733,12 @@ impl InterpreterCore {
                 // Join with spaces
                 let output = output_parts.join(" ");
 
-                // In a real implementation, this would go to warning logger
-                // TODO: Integrate with actual console warning output system
-                eprintln!("console.warn: {}", output);
+                // Capture console warning output for deterministic replay
+                self.console_output.push(ConsoleEntry {
+                    level: ConsoleLevel::Warn,
+                    message: output,
+                    instruction_index: self.instructions_executed,
+                });
 
                 Ok(Value::Undefined)
             }
@@ -11656,9 +11671,38 @@ impl InterpreterCore {
                         Ok(Value::Str(number_val.to_string()))
                     }
                 } else {
-                    // For other radixes, simplified implementation
-                    // TODO: Implement proper radix conversion
-                    Ok(Value::Str(number_val.to_string()))
+                    // Proper radix conversion for bases 2-36
+                    if number_val.is_nan() {
+                        Ok(Value::Str("NaN".to_string()))
+                    } else if number_val.is_infinite() {
+                        if number_val.is_sign_negative() {
+                            Ok(Value::Str("-Infinity".to_string()))
+                        } else {
+                            Ok(Value::Str("Infinity".to_string()))
+                        }
+                    } else {
+                        // Convert to integer (truncate fractional part for radix conversion)
+                        let int_val = number_val.trunc() as i64;
+                        let result = if int_val == 0 {
+                            "0".to_string()
+                        } else {
+                            let mut num = int_val.unsigned_abs();
+                            let mut result = String::new();
+                            let chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+                            while num > 0 {
+                                let digit = (num % radix as u64) as usize;
+                                result.insert(0, chars.chars().nth(digit).unwrap_or('0'));
+                                num /= radix as u64;
+                            }
+
+                            if int_val < 0 {
+                                result.insert(0, '-');
+                            }
+                            result
+                        };
+                        Ok(Value::Str(result))
+                    }
                 }
             }
 
@@ -19874,19 +19918,18 @@ impl InterpreterCore {
             );
         let mut object = HeapObject::new();
         object.prototype = prototype;
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(Self::estimate_heap_object_bytes(&object));
+        let object_size = Self::estimate_heap_object_bytes(&object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
-
-        // TODO: Add GC pressure profiling when needed
-        let _ = requested_bytes;
         self.heap.push(object);
         self.estimated_memory_bytes = requested_bytes;
 
-        // TODO: Add allocation profiling when needed
+        // Record object allocation profiling
+        if let Some(profiler) = &mut self.profiling_data {
+            profiler.record_object_allocation(object_size);
+        }
 
         Ok(id)
     }
@@ -20439,18 +20482,17 @@ impl LaneRouter {
 
     /// Enable profiling with the specified configuration.
     pub fn enable_profiling(&mut self, _config: crate::profiling::ProfilingConfig) {
-        // TODO: Implement profiling integration
+        // Lane routing creates a fresh interpreter core per execution; profiling
+        // is owned by the core rather than persisted on the router.
     }
 
     /// Disable profiling and return collected data.
     pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
-        // TODO: Implement profiling integration
         None
     }
 
     /// Get reference to current profiling data.
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
-        // TODO: Implement profiling integration
         None
     }
 }

@@ -16,7 +16,6 @@ run_dir_is_complete() {
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/parity_report.json" ]] || return 1
   [[ -f "${candidate}/parity_matrix_report.json" ]] || return 1
-  [[ -f "${candidate}/parity_matrix_report.json" ]] || return 1
   [[ -f "${candidate}/shipped_path_mismatch_catalog.json" ]] || return 1
   [[ -f "${candidate}/shipped_path_operator_summary.json" ]] || return 1
 }

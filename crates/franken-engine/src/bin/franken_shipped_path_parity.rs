@@ -329,6 +329,8 @@ struct MismatchCatalogEntry {
     command_family: String,
     source_language: SourceLanguage,
     mismatch_kind: String,
+    triage_category: String,
+    owner_route: String,
     expected_outcome: ExpectedOutcome,
     library_entrypoint: String,
     cli_entrypoint: String,
@@ -378,6 +380,8 @@ struct OperatorSummary {
     match_count: u64,
     mismatch_count: u64,
     mismatch_kind_counts: BTreeMap<String, u64>,
+    triage_category_counts: BTreeMap<String, u64>,
+    owner_route_counts: BTreeMap<String, u64>,
     mismatched_command_families: BTreeMap<String, u64>,
     mismatched_source_languages: BTreeMap<String, u64>,
     blocking_specimens: Vec<String>,
@@ -699,27 +703,32 @@ fn build_mismatch_catalog(report: &ParityReport) -> MismatchCatalog {
         .specimens
         .iter()
         .filter(|specimen| specimen.verdict == ParityVerdict::Mismatch)
-        .map(|specimen| MismatchCatalogEntry {
-            specimen_id: specimen.specimen_id.clone(),
-            description: specimen.description.clone(),
-            command_family: specimen.command_family.clone(),
-            source_language: specimen.source_language,
-            mismatch_kind: specimen
-                .mismatch_kind
-                .map(MismatchKind::as_str)
-                .unwrap_or("unclassified")
-                .to_string(),
-            expected_outcome: specimen.expected_outcome,
-            library_entrypoint: specimen.library.entrypoint.clone(),
-            cli_entrypoint: specimen.cli.entrypoint.clone(),
-            library_exit_code: specimen.library.exit_code,
-            cli_exit_code: specimen.cli.exit_code,
-            library_failure_class: specimen.library.failure_class,
-            cli_failure_class: specimen.cli.failure_class,
-            library_error_detail: specimen.library.error_detail.clone(),
-            cli_error_detail: specimen.cli.error_detail.clone(),
-            library_artifact_path: specimen.library.artifact_path.clone(),
-            cli_artifact_path: specimen.cli.artifact_path.clone(),
+        .map(|specimen| {
+            let route = classify_mismatch_route(specimen);
+            MismatchCatalogEntry {
+                specimen_id: specimen.specimen_id.clone(),
+                description: specimen.description.clone(),
+                command_family: specimen.command_family.clone(),
+                source_language: specimen.source_language,
+                mismatch_kind: specimen
+                    .mismatch_kind
+                    .map(MismatchKind::as_str)
+                    .unwrap_or("unclassified")
+                    .to_string(),
+                triage_category: route.triage_category.to_string(),
+                owner_route: route.owner_route.to_string(),
+                expected_outcome: specimen.expected_outcome,
+                library_entrypoint: specimen.library.entrypoint.clone(),
+                cli_entrypoint: specimen.cli.entrypoint.clone(),
+                library_exit_code: specimen.library.exit_code,
+                cli_exit_code: specimen.cli.exit_code,
+                library_failure_class: specimen.library.failure_class,
+                cli_failure_class: specimen.cli.failure_class,
+                library_error_detail: specimen.library.error_detail.clone(),
+                cli_error_detail: specimen.cli.error_detail.clone(),
+                library_artifact_path: specimen.library.artifact_path.clone(),
+                cli_artifact_path: specimen.cli.artifact_path.clone(),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -733,6 +742,80 @@ fn build_mismatch_catalog(report: &ParityReport) -> MismatchCatalog {
         policy_id: report.policy_id.clone(),
         mismatch_count: mismatches.len() as u64,
         mismatches,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MismatchRoute {
+    triage_category: &'static str,
+    owner_route: &'static str,
+}
+
+fn classify_mismatch_route(specimen: &SpecimenParityRecord) -> MismatchRoute {
+    let failure_classes = [specimen.library.failure_class, specimen.cli.failure_class];
+    let has_failure_class = |target: FailureClass| {
+        failure_classes
+            .iter()
+            .flatten()
+            .any(|failure_class| *failure_class == target)
+    };
+
+    if specimen.mismatch_kind == Some(MismatchKind::ArtifactMissing)
+        || has_failure_class(FailureClass::Infrastructure)
+        || has_failure_class(FailureClass::Io)
+    {
+        return route_for_category("infrastructure");
+    }
+
+    if specimen.mismatch_kind == Some(MismatchKind::VerificationPassed)
+        || specimen.mismatch_kind == Some(MismatchKind::VerificationErrors)
+        || specimen.command_family == ParityCommandFamily::VerifyCompileArtifact.as_str()
+    {
+        return route_for_category("docs_ux");
+    }
+
+    if specimen.mismatch_kind == Some(MismatchKind::SourceIngestion)
+        || has_failure_class(FailureClass::SourceIngestion)
+        || (specimen.source_language == SourceLanguage::TypeScript
+            && specimen.command_family == ParityCommandFamily::Compile.as_str())
+    {
+        return route_for_category("ts_lane");
+    }
+
+    if specimen.command_family == ParityCommandFamily::Run.as_str()
+        || specimen.mismatch_kind == Some(MismatchKind::ExecutionValue)
+        || specimen.mismatch_kind == Some(MismatchKind::Lane)
+        || specimen.mismatch_kind == Some(MismatchKind::ContainmentAction)
+        || has_failure_class(FailureClass::Runtime)
+    {
+        return route_for_category("runtime");
+    }
+
+    if specimen.command_family == ParityCommandFamily::Compile.as_str()
+        || specimen.mismatch_kind == Some(MismatchKind::ParseGoal)
+        || specimen.mismatch_kind == Some(MismatchKind::Hashes)
+        || specimen.mismatch_kind == Some(MismatchKind::LoweringCounts)
+        || has_failure_class(FailureClass::Parse)
+        || has_failure_class(FailureClass::Lowering)
+    {
+        return route_for_category("module");
+    }
+
+    route_for_category("infrastructure")
+}
+
+fn route_for_category(triage_category: &'static str) -> MismatchRoute {
+    let owner_route = match triage_category {
+        "ts_lane" => "typescript_normalization_owner",
+        "module" => "module_semantics_owner",
+        "runtime" => "runtime_execution_owner",
+        "docs_ux" => "operator_docs_ux_owner",
+        "infrastructure" => "parity_infrastructure_owner",
+        _ => "parity_infrastructure_owner",
+    };
+    MismatchRoute {
+        triage_category,
+        owner_route,
     }
 }
 
@@ -753,12 +836,19 @@ fn build_operator_summary(
     mismatch_catalog: &MismatchCatalog,
 ) -> OperatorSummary {
     let mut mismatch_kind_counts = BTreeMap::new();
+    let mut triage_category_counts = BTreeMap::new();
+    let mut owner_route_counts = BTreeMap::new();
     let mut mismatched_command_families = BTreeMap::new();
     let mut mismatched_source_languages = BTreeMap::new();
     let mut blocking_specimens = Vec::new();
 
     for mismatch in &mismatch_catalog.mismatches {
         increment_count(&mut mismatch_kind_counts, mismatch.mismatch_kind.clone());
+        increment_count(
+            &mut triage_category_counts,
+            mismatch.triage_category.clone(),
+        );
+        increment_count(&mut owner_route_counts, mismatch.owner_route.clone());
         increment_count(
             &mut mismatched_command_families,
             mismatch.command_family.clone(),
@@ -798,6 +888,14 @@ fn build_operator_summary(
             render_count_map(&mismatch_kind_counts)
         ));
         summary_lines.push(format!(
+            "triage categories: {}",
+            render_count_map(&triage_category_counts)
+        ));
+        summary_lines.push(format!(
+            "owner routes: {}",
+            render_count_map(&owner_route_counts)
+        ));
+        summary_lines.push(format!(
             "mismatched command families: {}",
             render_count_map(&mismatched_command_families)
         ));
@@ -832,6 +930,8 @@ fn build_operator_summary(
         match_count: report.match_count,
         mismatch_count: report.mismatch_count,
         mismatch_kind_counts,
+        triage_category_counts,
+        owner_route_counts,
         mismatched_command_families,
         mismatched_source_languages,
         blocking_specimens,
@@ -2093,7 +2193,75 @@ mod tests {
         assert_eq!(catalog.mismatches.len(), 1);
         assert_eq!(catalog.mismatches[0].specimen_id, "ts-mismatch");
         assert_eq!(catalog.mismatches[0].mismatch_kind, "execution_value");
+        assert_eq!(catalog.mismatches[0].triage_category, "runtime");
+        assert_eq!(catalog.mismatches[0].owner_route, "runtime_execution_owner");
         assert_eq!(catalog.mismatches[0].command_family, "run");
+    }
+
+    #[test]
+    fn mismatch_route_classifier_covers_required_categories() {
+        let ts_lane = specimen_record(
+            "ts-compile",
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::Hashes),
+            ParityCommandFamily::Compile,
+            SourceLanguage::TypeScript,
+        );
+        let module = specimen_record(
+            "js-module",
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::Hashes),
+            ParityCommandFamily::Compile,
+            SourceLanguage::JavaScript,
+        );
+        let runtime = specimen_record(
+            "js-runtime",
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::ExecutionValue),
+            ParityCommandFamily::Run,
+            SourceLanguage::JavaScript,
+        );
+        let docs_ux = specimen_record(
+            "docs-ux",
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::VerificationErrors),
+            ParityCommandFamily::VerifyCompileArtifact,
+            SourceLanguage::JavaScript,
+        );
+        let infrastructure = parity_matrix_specimen_record(
+            "infra",
+            ParityVerdict::Mismatch,
+            Some(MismatchKind::ExitCode),
+            ParityCommandFamily::Compile,
+            SourceLanguage::JavaScript,
+            failure_record(FailureClass::Infrastructure),
+            compile_record_with_hash("cli"),
+        );
+
+        let routes = [
+            classify_mismatch_route(&ts_lane),
+            classify_mismatch_route(&module),
+            classify_mismatch_route(&runtime),
+            classify_mismatch_route(&docs_ux),
+            classify_mismatch_route(&infrastructure),
+        ];
+        let categories: Vec<_> = routes.iter().map(|route| route.triage_category).collect();
+        let owner_routes: Vec<_> = routes.iter().map(|route| route.owner_route).collect();
+
+        assert_eq!(
+            categories,
+            vec!["ts_lane", "module", "runtime", "docs_ux", "infrastructure"]
+        );
+        assert_eq!(
+            owner_routes,
+            vec![
+                "typescript_normalization_owner",
+                "module_semantics_owner",
+                "runtime_execution_owner",
+                "operator_docs_ux_owner",
+                "parity_infrastructure_owner",
+            ]
+        );
     }
 
     #[test]
@@ -2129,6 +2297,16 @@ mod tests {
         assert_eq!(summary.mismatch_kind_counts.get("exit_code"), Some(&1));
         assert_eq!(
             summary.mismatch_kind_counts.get("execution_value"),
+            Some(&1)
+        );
+        assert_eq!(summary.triage_category_counts.get("module"), Some(&1));
+        assert_eq!(summary.triage_category_counts.get("runtime"), Some(&1));
+        assert_eq!(
+            summary.owner_route_counts.get("module_semantics_owner"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.owner_route_counts.get("runtime_execution_owner"),
             Some(&1)
         );
         assert_eq!(summary.mismatched_command_families.get("compile"), Some(&1));

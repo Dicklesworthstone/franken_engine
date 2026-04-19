@@ -200,10 +200,12 @@ fn shipped_path_parity_binary_emits_artifacts_and_classifies_divergences() {
     assert_eq!(mismatches.len() as u64, mismatch_count);
     if mismatch_count > 0 {
         assert!(
-            mismatches
-                .iter()
-                .all(|mismatch| mismatch["mismatch_kind"].as_str().is_some()),
-            "every mismatch should carry an explicit classification"
+            mismatches.iter().all(|mismatch| {
+                mismatch["mismatch_kind"].as_str().is_some()
+                    && mismatch["triage_category"].as_str().is_some()
+                    && mismatch["owner_route"].as_str().is_some()
+            }),
+            "every mismatch should carry explicit classification and owner routing"
         );
     }
 
@@ -230,6 +232,14 @@ fn shipped_path_parity_binary_emits_artifacts_and_classifies_divergences() {
     assert_eq!(
         operator_summary_json["mismatch_count"].as_u64(),
         Some(mismatch_count)
+    );
+    assert!(
+        operator_summary_json["triage_category_counts"].is_object(),
+        "operator summary should expose triage-category counts"
+    );
+    assert!(
+        operator_summary_json["owner_route_counts"].is_object(),
+        "operator summary should expose owner-route counts"
     );
     let summary_lines = operator_summary_json["summary_lines"]
         .as_array()

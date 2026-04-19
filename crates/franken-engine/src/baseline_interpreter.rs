@@ -11687,17 +11687,25 @@ impl InterpreterCore {
                             "0".to_string()
                         } else {
                             let mut num = int_val.unsigned_abs();
-                            let mut result = String::new();
-                            let chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+                            let mut digits = Vec::new();
+                            let chars = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
                             while num > 0 {
                                 let digit = (num % radix as u64) as usize;
-                                result.insert(0, chars.chars().nth(digit).unwrap_or('0'));
+                                digits.push(chars[digit] as char);
                                 num /= radix as u64;
                             }
 
+                            // Build result by reversing digits
+                            let mut result = String::with_capacity(
+                                digits.len() + if int_val < 0 { 1 } else { 0 }
+                            );
                             if int_val < 0 {
-                                result.insert(0, '-');
+                                result.push('-');
+                            }
+                            // Reverse iteration for correct digit order
+                            for &digit in digits.iter().rev() {
+                                result.push(digit);
                             }
                             result
                         };

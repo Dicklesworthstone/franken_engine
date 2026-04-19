@@ -175,6 +175,17 @@ Use the provided verification script to test both modes:
 
 See [`docs/DEPENDENCY_AUDIT.md`](./docs/DEPENDENCY_AUDIT.md) for detailed dependency information.
 
+## Cross-Repo Integration Suite
+
+The cross-repo integration suite verifies FrankenEngine sibling boundaries with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, and the service/control contracts around them. The suite is the operator entry point for checking that schema contracts, structured logs, degraded-mode diagnostics, and replay artifacts remain aligned across those repositories.
+
+```bash
+./scripts/run_cross_repo_integration_suite.sh ci
+./scripts/e2e/cross_repo_integration_suite_replay.sh
+```
+
+The machine-readable contract is [`docs/cross_repo_integration_suite_v1.json`](./docs/cross_repo_integration_suite_v1.json), and the operator guide is [`docs/CROSS_REPO_INTEGRATION_SUITE.md`](./docs/CROSS_REPO_INTEGRATION_SUITE.md).
+
 ## Parser Phase0 Artifact Contract
 
 The parser phase0 performance artifact contract defines truthful performance evidence requirements and degraded-mode receipt handling. This contract ensures placeholder artifacts are rejected and real capture failures are explicitly documented.

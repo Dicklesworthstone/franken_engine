@@ -1075,3 +1075,147 @@ fn full_lifecycle() {
     let restored: BudgetedOptimizationStack = serde_json::from_str(&json).unwrap();
     assert_eq!(stack, restored);
 }
+
+// =========================================================================
+// EGraphSnapshot — pathological growth detection
+// =========================================================================
+
+#[test]
+fn egraph_snapshot_new_constructor() {
+    let snapshot = EGraphSnapshot::new(
+        100, // class_count
+        500, // node_count
+        10,  // iteration_count
+        50,  // rewrite_count
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"state"),
+        200,         // elapsed_ms
+        1024 * 1024, // peak_memory_bytes
+    );
+
+    assert_eq!(snapshot.class_count, 100);
+    assert_eq!(snapshot.node_count, 500);
+    assert_eq!(snapshot.iteration_count, 10);
+    assert_eq!(snapshot.rewrite_count, 50);
+    assert_eq!(snapshot.outcome, SaturationOutcome::Saturated);
+    assert_eq!(snapshot.elapsed_ms, 200);
+    assert_eq!(snapshot.peak_memory_bytes, 1024 * 1024);
+}
+
+#[test]
+fn egraph_snapshot_pathological_growth_detection() {
+    let baseline = EGraphSnapshot::new(
+        50,  // class_count
+        100, // node_count
+        5,   // iteration_count
+        20,  // rewrite_count
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"baseline"),
+        100,        // elapsed_ms
+        512 * 1024, // peak_memory_bytes
+    );
+
+    // Normal growth: 400 nodes / 5 iterations = 80 nodes/iter (below threshold)
+    let normal_growth = EGraphSnapshot::new(
+        100, // class_count
+        500, // node_count (400 node increase)
+        10,  // iteration_count (5 iter increase)
+        60,  // rewrite_count
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"normal"),
+        200,         // elapsed_ms
+        1024 * 1024, // peak_memory_bytes
+    );
+
+    assert!(!normal_growth.is_pathological_growth(&baseline));
+    assert_eq!(normal_growth.node_growth_rate(&baseline), 80);
+
+    // Pathological growth: 50,005 nodes / 5 iterations = 10,001 nodes/iter (above threshold)
+    let pathological_growth = EGraphSnapshot::new(
+        5000,   // class_count
+        50_105, // node_count (50,005 node increase)
+        10,     // iteration_count (5 iter increase)
+        500,    // rewrite_count
+        SaturationOutcome::ResourceLimitHit,
+        ContentHash::compute(b"pathological"),
+        1000,             // elapsed_ms
+        10 * 1024 * 1024, // peak_memory_bytes
+    );
+
+    assert!(pathological_growth.is_pathological_growth(&baseline));
+    assert_eq!(pathological_growth.node_growth_rate(&baseline), 10_001);
+}
+
+#[test]
+fn egraph_snapshot_growth_edge_cases() {
+    let baseline = EGraphSnapshot::new(
+        50,
+        100,
+        5,
+        20,
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"baseline"),
+        100,
+        512 * 1024,
+    );
+
+    // Zero iteration delta
+    let same_iterations = EGraphSnapshot::new(
+        60,
+        200,
+        5,
+        30, // same iteration_count as baseline
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"same"),
+        150,
+        768 * 1024,
+    );
+
+    assert!(!same_iterations.is_pathological_growth(&baseline));
+    assert_eq!(same_iterations.node_growth_rate(&baseline), 0);
+
+    // Negative node growth (nodes decreased)
+    let negative_growth = EGraphSnapshot::new(
+        40,
+        50,
+        10,
+        25, // fewer nodes than baseline
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"negative"),
+        200,
+        1024 * 1024,
+    );
+
+    assert!(!negative_growth.is_pathological_growth(&baseline));
+    assert_eq!(negative_growth.node_growth_rate(&baseline), 0); // saturating_sub gives 0
+
+    // Exactly at threshold: 10,000 nodes / 1 iteration = 10,000 (not above threshold)
+    let at_threshold = EGraphSnapshot::new(
+        1000,
+        10_100,
+        6,
+        100, // 10,000 node increase, 1 iteration increase
+        SaturationOutcome::Saturated,
+        ContentHash::compute(b"threshold"),
+        300,
+        2 * 1024 * 1024,
+    );
+
+    assert!(!at_threshold.is_pathological_growth(&baseline));
+    assert_eq!(at_threshold.node_growth_rate(&baseline), 10_000);
+
+    // Just over threshold: 10,001 nodes / 1 iteration = 10,001 (above threshold)
+    let over_threshold = EGraphSnapshot::new(
+        1000,
+        10_101,
+        6,
+        100, // 10,001 node increase, 1 iteration increase
+        SaturationOutcome::ResourceLimitHit,
+        ContentHash::compute(b"over_threshold"),
+        400,
+        3 * 1024 * 1024,
+    );
+
+    assert!(over_threshold.is_pathological_growth(&baseline));
+    assert_eq!(over_threshold.node_growth_rate(&baseline), 10_001);
+}

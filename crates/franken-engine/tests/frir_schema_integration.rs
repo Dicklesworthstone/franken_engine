@@ -2122,3 +2122,181 @@ fn json_field_names_equivalence_witness() {
     assert!(json.contains("\"preserved_invariants\""));
     assert!(json.contains("\"witness_hash\""));
 }
+
+// =========================================================================
+// FrirArtifact — metadata compaction
+// =========================================================================
+
+#[test]
+fn frir_artifact_compact_metadata_single_pass() {
+    let mut artifact = FrirArtifact {
+        schema_version: FRIR_SCHEMA_VERSION.to_string(),
+        artifact_version: FrirVersion::V1_0,
+        artifact_hash: make_hash(b"artifact"),
+        source_hash: make_hash(b"source"),
+        witness_chain: WitnessChain {
+            input_hash: make_hash(b"input"),
+            output_hash: make_hash(b"output"),
+            passes: vec![make_witness(0, PassKind::Parse, b"source", b"parsed")],
+            verification: ChainVerification::Verified,
+        },
+        equivalence_witnesses: vec![],
+        pipeline_config: PipelineConfig::default(),
+        fallback_reasons: vec![],
+    };
+
+    // Store original pass count for comparison
+    let original_invariants_len = artifact.witness_chain.passes[0].invariants_checked.len();
+
+    // compact_metadata should no-op on single pass
+    artifact.compact_metadata();
+
+    assert_eq!(artifact.witness_chain.passes.len(), 1);
+    assert_eq!(
+        artifact.witness_chain.passes[0].invariants_checked.len(),
+        original_invariants_len
+    );
+}
+
+#[test]
+fn frir_artifact_compact_metadata_no_passes() {
+    let mut artifact = FrirArtifact {
+        schema_version: FRIR_SCHEMA_VERSION.to_string(),
+        artifact_version: FrirVersion::V1_0,
+        artifact_hash: make_hash(b"artifact"),
+        source_hash: make_hash(b"source"),
+        witness_chain: WitnessChain {
+            input_hash: make_hash(b"input"),
+            output_hash: make_hash(b"output"),
+            passes: vec![], // Empty passes
+            verification: ChainVerification::Verified,
+        },
+        equivalence_witnesses: vec![],
+        pipeline_config: PipelineConfig::default(),
+        fallback_reasons: vec![],
+    };
+
+    // compact_metadata should no-op on empty passes
+    artifact.compact_metadata();
+
+    assert_eq!(artifact.witness_chain.passes.len(), 0);
+}
+
+#[test]
+fn frir_artifact_compact_metadata_deduplication() {
+    // Create multiple passes with overlapping invariants
+    let mut pass1 = make_witness(0, PassKind::Parse, b"source", b"parsed");
+    pass1.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true),
+        make_invariant(InvariantKind::SemanticEquivalence, true),
+        make_invariant(InvariantKind::PerformanceRelevance, true),
+    ];
+
+    let mut pass2 = make_witness(1, PassKind::ScopeResolve, b"parsed", b"resolved");
+    pass2.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true), // Duplicate
+        make_invariant(InvariantKind::SemanticEquivalence, true), // Duplicate
+        make_invariant(InvariantKind::MemorySafety, true), // Unique to pass2
+    ];
+
+    let mut pass3 = make_witness(2, PassKind::Optimize, b"resolved", b"optimized");
+    pass3.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true), // Duplicate
+        make_invariant(InvariantKind::PerformanceRelevance, true), // Duplicate
+        make_invariant(InvariantKind::ResourceUsage, true), // Unique to pass3
+    ];
+
+    let mut artifact = FrirArtifact {
+        schema_version: FRIR_SCHEMA_VERSION.to_string(),
+        artifact_version: FrirVersion::V1_0,
+        artifact_hash: make_hash(b"artifact"),
+        source_hash: make_hash(b"source"),
+        witness_chain: WitnessChain {
+            input_hash: make_hash(b"input"),
+            output_hash: make_hash(b"output"),
+            passes: vec![pass1, pass2, pass3],
+            verification: ChainVerification::Verified,
+        },
+        equivalence_witnesses: vec![],
+        pipeline_config: PipelineConfig::default(),
+        fallback_reasons: vec![],
+    };
+
+    // Before compaction: each pass has its invariants
+    assert_eq!(artifact.witness_chain.passes[0].invariants_checked.len(), 3);
+    assert_eq!(artifact.witness_chain.passes[1].invariants_checked.len(), 3);
+    assert_eq!(artifact.witness_chain.passes[2].invariants_checked.len(), 3);
+
+    artifact.compact_metadata();
+
+    // After compaction:
+    // Pass 0 (first): keeps all invariants (3)
+    assert_eq!(artifact.witness_chain.passes[0].invariants_checked.len(), 3);
+
+    // Pass 1: should keep TypeSafety (always preserved) + unique MemorySafety
+    let pass1_invariants: BTreeSet<_> = artifact.witness_chain.passes[1]
+        .invariants_checked
+        .iter()
+        .map(|inv| inv.kind)
+        .collect();
+    assert!(pass1_invariants.contains(&InvariantKind::TypeSafety));
+    assert!(pass1_invariants.contains(&InvariantKind::MemorySafety));
+    // Should not contain duplicates
+    assert!(!pass1_invariants.contains(&InvariantKind::SemanticEquivalence));
+    assert_eq!(pass1_invariants.len(), 2);
+
+    // Pass 2: should keep TypeSafety (always preserved) + unique ResourceUsage
+    let pass2_invariants: BTreeSet<_> = artifact.witness_chain.passes[2]
+        .invariants_checked
+        .iter()
+        .map(|inv| inv.kind)
+        .collect();
+    assert!(pass2_invariants.contains(&InvariantKind::TypeSafety));
+    assert!(pass2_invariants.contains(&InvariantKind::ResourceUsage));
+    // Should not contain duplicates
+    assert!(!pass2_invariants.contains(&InvariantKind::PerformanceRelevance));
+    assert_eq!(pass2_invariants.len(), 2);
+}
+
+#[test]
+fn frir_artifact_compact_metadata_preserves_type_safety() {
+    // Test that TypeSafety is always preserved even when it's a duplicate
+    let mut pass1 = make_witness(0, PassKind::Parse, b"source", b"parsed");
+    pass1.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true),
+        make_invariant(InvariantKind::SemanticEquivalence, true),
+    ];
+
+    let mut pass2 = make_witness(1, PassKind::ScopeResolve, b"parsed", b"resolved");
+    pass2.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true), // Duplicate, but should be preserved
+    ];
+
+    let mut artifact = FrirArtifact {
+        schema_version: FRIR_SCHEMA_VERSION.to_string(),
+        artifact_version: FrirVersion::V1_0,
+        artifact_hash: make_hash(b"artifact"),
+        source_hash: make_hash(b"source"),
+        witness_chain: WitnessChain {
+            input_hash: make_hash(b"input"),
+            output_hash: make_hash(b"output"),
+            passes: vec![pass1, pass2],
+            verification: ChainVerification::Verified,
+        },
+        equivalence_witnesses: vec![],
+        pipeline_config: PipelineConfig::default(),
+        fallback_reasons: vec![],
+    };
+
+    artifact.compact_metadata();
+
+    // Pass 0: should keep all original invariants
+    assert_eq!(artifact.witness_chain.passes[0].invariants_checked.len(), 2);
+
+    // Pass 1: should keep TypeSafety even though it's a duplicate
+    assert_eq!(artifact.witness_chain.passes[1].invariants_checked.len(), 1);
+    assert_eq!(
+        artifact.witness_chain.passes[1].invariants_checked[0].kind,
+        InvariantKind::TypeSafety
+    );
+}

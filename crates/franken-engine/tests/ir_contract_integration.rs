@@ -2597,3 +2597,66 @@ fn canonical_bytes_deterministic_across_10_iterations() {
         assert_eq!(bytes, ref_bytes, "bytes mismatch on iteration {iteration}");
     }
 }
+
+// =========================================================================
+// Ir1Module — capacity optimization
+// =========================================================================
+
+#[test]
+fn ir1_module_with_capacity_constructor() {
+    let source_hash = ContentHash::compute(b"test source");
+    let source_label = "test_module.js";
+    let ops_capacity = 100;
+
+    let module = Ir1Module::with_capacity(source_hash.clone(), source_label, ops_capacity);
+
+    assert_eq!(module.header.source_hash, Some(source_hash));
+    assert_eq!(module.header.source_label, source_label);
+    assert_eq!(module.ops.capacity(), ops_capacity);
+    assert_eq!(module.ops.len(), 0);
+    assert!(module.scopes.is_empty());
+}
+
+#[test]
+fn ir1_module_new_delegates_to_with_capacity() {
+    let source_hash = ContentHash::compute(b"test source");
+    let source_label = "test_module.js";
+
+    let module_new = Ir1Module::new(source_hash.clone(), source_label);
+    let module_with_capacity = Ir1Module::with_capacity(source_hash.clone(), source_label, 0);
+
+    // Both constructors should produce equivalent modules
+    assert_eq!(
+        module_new.header.source_hash,
+        module_with_capacity.header.source_hash
+    );
+    assert_eq!(
+        module_new.header.source_label,
+        module_with_capacity.header.source_label
+    );
+    assert_eq!(module_new.ops.len(), module_with_capacity.ops.len());
+    assert_eq!(module_new.scopes.len(), module_with_capacity.scopes.len());
+}
+
+#[test]
+fn ir1_module_capacity_optimization_behavior() {
+    let source_hash = ContentHash::compute(b"test source");
+    let source_label = "test_module.js";
+
+    // Test that pre-allocation actually provides capacity
+    let mut module_small = Ir1Module::with_capacity(source_hash.clone(), source_label, 2);
+    let mut module_large = Ir1Module::with_capacity(source_hash.clone(), source_label, 1000);
+
+    assert_eq!(module_small.ops.capacity(), 2);
+    assert_eq!(module_large.ops.capacity(), 1000);
+
+    // Add a few ops to verify the capacity is working
+    module_small.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
+    module_large.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
+
+    assert_eq!(module_small.ops.len(), 1);
+    assert_eq!(module_large.ops.len(), 1);
+    // Capacity should be preserved after adding elements
+    assert!(module_small.ops.capacity() >= 2);
+    assert!(module_large.ops.capacity() >= 1000);
+}

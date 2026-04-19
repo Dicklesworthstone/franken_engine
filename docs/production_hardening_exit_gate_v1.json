@@ -1,0 +1,316 @@
+{
+  "schema_version": "franken-engine.production-hardening-exit-gate.v1",
+  "contract_version": "1.0",
+  "bead_id": "bd-2476",
+  "gate_name": "Production Hardening Exit Gate",
+  "gate_description": "Phase E final gate before GA - comprehensive production readiness verification",
+  "exit_criteria": {
+    "evidence_backed_operational_readiness_report": {
+      "description": "Comprehensive report demonstrating production readiness across all dimensions",
+      "required_assessments": [
+        "security_assessment",
+        "performance_assessment",
+        "reliability_assessment",
+        "operational_assessment"
+      ],
+      "go_no_go_decision": "required"
+    },
+    "autonomous_quarantine_and_revocation": {
+      "description": "Validated under fault injection drills with fleet-wide containment within SLO",
+      "containment_slo_mins": 2,
+      "convergence_slo_mins": 5,
+      "fleet_size_minimum": 50
+    },
+    "deterministic_replay_audit": {
+      "description": "All high-severity incidents in canary environments replay deterministically",
+      "success_rate_threshold_pct": 100.0,
+      "environments": ["canary", "production"],
+      "severity_levels": ["high", "critical"]
+    }
+  },
+  "security_requirements": {
+    "attack_vector_matrix": {
+      "attack_categories": [
+        {
+          "category": "memory-safety",
+          "attack_vector": "memory-corruption",
+          "expected_containment": "immediate-termination",
+          "slo_threshold_ms": 100
+        },
+        {
+          "category": "privilege-escalation",
+          "attack_vector": "capability-escalation",
+          "expected_containment": "capability-revocation",
+          "slo_threshold_ms": 200
+        },
+        {
+          "category": "execution-injection",
+          "attack_vector": "code-injection",
+          "expected_containment": "sandbox-isolation",
+          "slo_threshold_ms": 150
+        },
+        {
+          "category": "authorization-bypass",
+          "attack_vector": "policy-bypass",
+          "expected_containment": "policy-enforcement",
+          "slo_threshold_ms": 50
+        }
+      ]
+    },
+    "fuzz_campaign_requirements": {
+      "total_cpu_hours_minimum": 144,
+      "targets": [
+        {
+          "target": "parser",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 80.0,
+          "corpus_size_threshold": 10000,
+          "crash_tolerance": 0
+        },
+        {
+          "target": "ir",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 85.0,
+          "corpus_size_threshold": 5000,
+          "crash_tolerance": 0
+        },
+        {
+          "target": "execution",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 75.0,
+          "corpus_size_threshold": 8000,
+          "crash_tolerance": 0
+        },
+        {
+          "target": "hostcall",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 90.0,
+          "corpus_size_threshold": 3000,
+          "crash_tolerance": 0
+        },
+        {
+          "target": "policy",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 95.0,
+          "corpus_size_threshold": 2000,
+          "crash_tolerance": 0
+        },
+        {
+          "target": "evidence",
+          "min_cpu_hours": 24,
+          "coverage_threshold_pct": 90.0,
+          "corpus_size_threshold": 1500,
+          "crash_tolerance": 0
+        }
+      ]
+    }
+  },
+  "testing_requirements": {
+    "property_based_tests": [
+      {
+        "component": "parser",
+        "property_type": "parser_invariants",
+        "test_cases_threshold": 10000,
+        "success_rate_threshold_pct": 99.9,
+        "description": "Determinism, round-trip preservation"
+      },
+      {
+        "component": "ir",
+        "property_type": "ir_invariants",
+        "test_cases_threshold": 5000,
+        "success_rate_threshold_pct": 99.95,
+        "description": "Type safety, control flow validity"
+      },
+      {
+        "component": "execution",
+        "property_type": "execution_invariants",
+        "test_cases_threshold": 8000,
+        "success_rate_threshold_pct": 99.9,
+        "description": "Memory safety, determinism"
+      },
+      {
+        "component": "policy",
+        "property_type": "policy_monotonicity",
+        "test_cases_threshold": 3000,
+        "success_rate_threshold_pct": 100.0,
+        "description": "Stricter policies never reduce security"
+      },
+      {
+        "component": "evidence",
+        "property_type": "evidence_determinism",
+        "test_cases_threshold": 2000,
+        "success_rate_threshold_pct": 100.0,
+        "description": "Same input produces same evidence"
+      }
+    ],
+    "metamorphic_tests": [
+      {
+        "transformation": "optimization-level",
+        "expected_preservation": "semantic-equivalence",
+        "test_cases_threshold": 2000,
+        "description": "Semantic preservation across optimization levels"
+      },
+      {
+        "transformation": "policy-merge-order",
+        "expected_preservation": "policy-equivalence",
+        "test_cases_threshold": 1000,
+        "description": "Policy equivalence across merge orders"
+      },
+      {
+        "transformation": "code-reordering",
+        "expected_preservation": "execution-equivalence",
+        "test_cases_threshold": 3000,
+        "description": "Execution equivalence under code reordering"
+      }
+    ]
+  },
+  "operational_requirements": {
+    "rollout_ladder": [
+      {
+        "stage": "shadow",
+        "metrics_collection_duration_mins": 60,
+        "error_rate_threshold_pct": 0.01,
+        "latency_threshold_p99_ms": 100
+      },
+      {
+        "stage": "canary",
+        "metrics_collection_duration_mins": 120,
+        "error_rate_threshold_pct": 0.1,
+        "latency_threshold_p99_ms": 200
+      },
+      {
+        "stage": "ramp",
+        "metrics_collection_duration_mins": 240,
+        "error_rate_threshold_pct": 0.5,
+        "latency_threshold_p99_ms": 300
+      },
+      {
+        "stage": "default",
+        "metrics_collection_duration_mins": 480,
+        "error_rate_threshold_pct": 1.0,
+        "latency_threshold_p99_ms": 500
+      }
+    ],
+    "fault_injection_drills": [
+      {
+        "fault_type": "network_partition",
+        "duration_mins": 10,
+        "recovery_slo_mins": 5,
+        "description": "Network partition recovery validation"
+      },
+      {
+        "fault_type": "node_failure",
+        "duration_mins": 5,
+        "recovery_slo_mins": 3,
+        "description": "Node failure autonomous recovery"
+      },
+      {
+        "fault_type": "key_compromise",
+        "duration_mins": 1,
+        "recovery_slo_mins": 2,
+        "description": "Key compromise detection and response"
+      },
+      {
+        "fault_type": "stale_revocation",
+        "duration_mins": 15,
+        "recovery_slo_mins": 10,
+        "description": "Stale revocation propagation validation"
+      },
+      {
+        "fault_type": "clock_skew",
+        "duration_mins": 30,
+        "recovery_slo_mins": 5,
+        "description": "Clock skew resilience validation"
+      }
+    ],
+    "quarantine_drills": [
+      {
+        "malicious_extension_type": "cpu-bomb",
+        "fleet_size": 100,
+        "containment_slo_mins": 2,
+        "convergence_slo_mins": 5,
+        "description": "CPU exhaustion attack containment"
+      },
+      {
+        "malicious_extension_type": "memory-exhaustion",
+        "fleet_size": 100,
+        "containment_slo_mins": 1,
+        "convergence_slo_mins": 3,
+        "description": "Memory exhaustion attack containment"
+      },
+      {
+        "malicious_extension_type": "privilege-escalation",
+        "fleet_size": 50,
+        "containment_slo_mins": 1,
+        "convergence_slo_mins": 2,
+        "description": "Privilege escalation attack containment"
+      }
+    ]
+  },
+  "evidence_requirements": {
+    "structured_logging": {
+      "required_fields": [
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "component",
+        "event",
+        "outcome",
+        "error_code",
+        "timestamp"
+      ],
+      "drill_specific_fields": [
+        "drill_scenario",
+        "fault_type",
+        "containment_time_ms",
+        "convergence_time_ms",
+        "replay_pass",
+        "evidence_complete"
+      ]
+    },
+    "evidence_artifacts": {
+      "categories": [
+        "security_matrix_validation",
+        "fuzz_campaign_results",
+        "property_test_coverage",
+        "metamorphic_test_results",
+        "fault_injection_recovery",
+        "quarantine_containment",
+        "replay_audit_determinism",
+        "operational_readiness_assessment"
+      ],
+      "artifact_format": "json",
+      "storage_location": "/evidence/prod-hardening-{gate_id}",
+      "retention_period_days": 365
+    }
+  },
+  "gate_runner": {
+    "module_path": "frankenengine_engine::production_hardening_exit_gate",
+    "entry_point": "execute_production_hardening_gate",
+    "timeout_mins": 480,
+    "resource_requirements": {
+      "cpu_cores": 8,
+      "memory_gb": 32,
+      "disk_gb": 100,
+      "network_bandwidth_mbps": 1000
+    }
+  },
+  "validation_commands": [
+    "cargo check -p frankenengine-engine --lib",
+    "cargo test -p frankenengine-engine --test production_hardening_exit_gate_integration --lib",
+    "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib",
+    "cargo clippy -p frankenengine-engine -- -D warnings"
+  ],
+  "operator_verification": [
+    "Verify operational readiness report generated with GO decision",
+    "Confirm all security matrix attack vectors contained within SLO",
+    "Validate fuzz campaign coverage meets thresholds across all targets",
+    "Verify property-based test invariants hold with required success rates",
+    "Confirm metamorphic preservation properties validated",
+    "Validate rollout ladder metrics comply with progressive thresholds",
+    "Confirm fault injection drills recovery within SLO",
+    "Verify quarantine drills demonstrate autonomous fleet-wide containment",
+    "Validate replay audit achieves deterministic replay for high-severity incidents",
+    "Confirm structured logging captures all required fields with stable format"
+  ]
+}

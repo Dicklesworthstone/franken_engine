@@ -386,6 +386,7 @@ impl GapMatrix {
         for a in &assessments {
             hasher.update(format!("{}", a.surface).as_bytes());
             hasher.update(format!("{}", a.decision).as_bytes());
+            hasher.update(a.rationale.as_bytes());
             let mut sorted_cells: Vec<_> = a.cells.iter().collect();
             sorted_cells.sort_by(|x, y| {
                 format!("{}", x.surface)
@@ -396,6 +397,7 @@ impl GapMatrix {
                 hasher.update(format!("{}", c.surface).as_bytes());
                 hasher.update(format!("{}", c.capability).as_bytes());
                 hasher.update(format!("{}", c.coverage).as_bytes());
+                hasher.update(c.notes.as_bytes());
             }
         }
         let matrix_hash = ContentHash::compute(&hasher.finalize());

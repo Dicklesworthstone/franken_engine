@@ -820,6 +820,56 @@ fn gap_matrix_hash_differs_for_different_content() {
 }
 
 #[test]
+fn gap_matrix_hash_differs_for_different_cell_notes() {
+    let base = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "local virtual-time clock is authoritative",
+    )];
+    let changed = vec![make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "upstream virtual-time bridge owns this surface",
+    )];
+    let m1 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        base,
+        MigrationDecision::MaintainedWrapper,
+    )]);
+    let m2 = GapMatrix::build(vec![make_assessment(
+        SurfaceId::LabRuntime,
+        changed,
+        MigrationDecision::MaintainedWrapper,
+    )]);
+    assert_ne!(m1.matrix_hash, m2.matrix_hash);
+}
+
+#[test]
+fn gap_matrix_hash_differs_for_different_rationale() {
+    let cells = vec![make_cell(
+        SurfaceId::ReleaseGate,
+        CapabilityId::FailClosedGating,
+        CoverageLevel::Covered,
+        "same cell evidence",
+    )];
+    let m1 = GapMatrix::build(vec![SurfaceAssessment::build(
+        SurfaceId::ReleaseGate,
+        cells.clone(),
+        MigrationDecision::ThinBridge,
+        "bridge to upstream release gate once oracle APIs stabilize",
+    )]);
+    let m2 = GapMatrix::build(vec![SurfaceAssessment::build(
+        SurfaceId::ReleaseGate,
+        cells,
+        MigrationDecision::ThinBridge,
+        "keep local gate as the release-blocking source of truth",
+    )]);
+    assert_ne!(m1.matrix_hash, m2.matrix_hash);
+}
+
+#[test]
 fn gap_matrix_summary_cell_counts() {
     let cells = vec![
         make_cell(

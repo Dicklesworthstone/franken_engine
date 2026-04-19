@@ -158,6 +158,7 @@ pub struct RingBufferEntry {
 impl EvidenceRingBuffer {
     /// Create a ring buffer with the specified capacity.
     pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
         Self {
             entries: Vec::with_capacity(capacity),
             capacity,
@@ -1548,6 +1549,31 @@ mod tests {
         let parsed: EvidenceRingBuffer = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed.total_written(), 1);
+    }
+    #[test]
+    fn ring_buffer_zero_capacity_normalizes_to_single_slot() {
+        let mut rb = EvidenceRingBuffer::new(0);
+        rb.push(RingBufferEntry {
+            trace_id: "t1".to_string(),
+            event: "e1".to_string(),
+            outcome: "ok".to_string(),
+            component: "c".to_string(),
+            sequence: 0,
+        });
+        rb.push(RingBufferEntry {
+            trace_id: "t2".to_string(),
+            event: "e2".to_string(),
+            outcome: "ok".to_string(),
+            component: "c".to_string(),
+            sequence: 1,
+        });
+
+        let entries = rb.entries();
+        assert_eq!(rb.len(), 1);
+        assert_eq!(rb.total_written(), 2);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].trace_id, "t2");
+        assert_eq!(entries[0].sequence, 1);
     }
 
     // -- SafeModeManager: adapter unavailable --

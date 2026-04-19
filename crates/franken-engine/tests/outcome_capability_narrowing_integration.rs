@@ -140,9 +140,9 @@ fn integration_severity_threshold_filters() {
 #[test]
 fn integration_capability_presets_correct_sizes() {
     assert_eq!(CapabilityGrant::none().len(), 0);
-    assert_eq!(CapabilityGrant::compute_only().len(), 2);
-    assert_eq!(CapabilityGrant::sandbox().len(), 4);
-    assert_eq!(CapabilityGrant::full().len(), 12);
+    assert_eq!(CapabilityGrant::compute_only().len(), 3);
+    assert_eq!(CapabilityGrant::sandbox().len(), 5);
+    assert_eq!(CapabilityGrant::full().len(), 13);
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn integration_difference_full_minus_sandbox() {
     let sandbox = CapabilityGrant::sandbox();
     let diff = full.difference(&sandbox);
 
-    // Full has 12, sandbox has 4, difference should have 8
+    // Full has 13, sandbox has 5, difference should have 8
     assert_eq!(diff.len(), 8);
     // The difference should include things not in sandbox
     assert!(diff.contains(&CapabilityToken::NetworkAccess));
@@ -722,22 +722,23 @@ fn integration_validator_widening_then_narrowing() {
 }
 
 #[test]
-fn integration_report_hash_differs_for_different_inputs() {
-    let make_report = |label: &str| {
+fn integration_report_hash_differs_for_different_summary_inputs() {
+    let make_report = |outcome: BoundaryOutcome| {
         let mut v = CapabilityNarrowingValidator::with_defaults();
         v.validate_narrowing(
-            label,
-            "c",
-            "b",
+            "parent",
+            "child",
+            "boundary",
             &CapabilityGrant::full(),
             &CapabilityGrant::sandbox(),
         );
+        v.record_outcome_propagation("boundary", outcome, BoundaryOutcome::Success);
         v.build_report()
     };
 
-    let r1 = make_report("parent_a");
-    let r2 = make_report("parent_b");
-    assert_ne!(r1.content_hash, r2.content_hash);
+    let success = make_report(BoundaryOutcome::Success);
+    let failure = make_report(BoundaryOutcome::Failure);
+    assert_ne!(success.content_hash, failure.content_hash);
 }
 
 #[test]

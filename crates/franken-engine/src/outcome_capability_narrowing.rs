@@ -246,7 +246,7 @@ impl CapabilityGrant {
         }
     }
 
-    /// Minimal compute-only set (telemetry + timer).
+    /// Minimal compute-only set (compute + telemetry + timer).
     pub fn compute_only() -> Self {
         let mut tokens = BTreeSet::new();
         tokens.insert(CapabilityToken::Compute);

@@ -886,7 +886,7 @@ write_handoff_manifest() {
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome git_commit error_code_json bundle_operator_verification_json
-  local support_contract_artifact_path="$copied_support_contract_path"
+  local support_contract_artifact_path=""
   local blocker_ledger_artifact_path=""
 
   if [[ "$manifest_written" == true ]]; then
@@ -894,6 +894,9 @@ write_manifest() {
   fi
   manifest_written=true
 
+  if [[ -f "$copied_support_contract_path" ]]; then
+    support_contract_artifact_path="$copied_support_contract_path"
+  fi
   if [[ -f "$copied_blocker_ledger_path" ]]; then
     blocker_ledger_artifact_path="$copied_blocker_ledger_path"
   fi
@@ -992,7 +995,7 @@ write_manifest() {
         sibling_smoke_verification: $smoke_verification,
         support_surface_summary: $summary,
         handoff_bundle_contract: $bundle_contract_path,
-        support_surface_contract: $support_contract_path,
+        support_surface_contract: (if ($support_contract_path | length) > 0 then $support_contract_path else null end),
         engine_product_blocker_ledger: (if ($blocker_ledger_path | length) > 0 then $blocker_ledger_path else null end),
         repo_split_contract: $repo_split_contract_path,
         step_logs: $step_logs,

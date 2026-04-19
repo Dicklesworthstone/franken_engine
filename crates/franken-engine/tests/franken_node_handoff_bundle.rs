@@ -346,6 +346,7 @@ fn rgc_408c_runner_script_requires_rch_repo_local_targets_and_handoff_outputs() 
         "support contract JSON is invalid",
         "blocker ledger JSON is invalid",
         "blocker ledger unavailable",
+        "support_surface_contract: (if ($support_contract_path | length) > 0 then $support_contract_path else null end)",
         "engine_product_blocker_ledger: (if ($blocker_ledger_path | length) > 0 then $blocker_ledger_path else null end)",
     ] {
         assert!(

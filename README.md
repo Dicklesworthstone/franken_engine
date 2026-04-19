@@ -257,6 +257,38 @@ Matrix artifacts are generated at `artifacts/rgc_cross_platform_matrix/<timestam
 
 See [`docs/RGC_CROSS_PLATFORM_MATRIX_V1.md`](./docs/RGC_CROSS_PLATFORM_MATRIX_V1.md) for the complete contract specification.
 
+## Scientific Contribution Targets Gate
+
+The scientific contribution targets gate tracks FrankenEngine's research deliverables, ensuring that novel contributions become publishable artifacts with reproducible evidence bundles. This gate validates technical reports, external replication claims, and open tool adoption.
+
+To verify scientific contribution targets:
+
+```bash
+./scripts/run_scientific_contribution_targets.sh bundle
+./scripts/run_scientific_contribution_targets.sh ci
+./scripts/e2e/scientific_contribution_targets_replay.sh show
+```
+
+Status reports are generated at:
+- `artifacts/scientific_contribution_targets/<timestamp>/technical_report_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/external_replication_status_report.json`  
+- `artifacts/scientific_contribution_targets/<timestamp>/open_tool_adoption_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json`
+
+The gate tracks three milestone beads:
+- `bd-2501.1` — Publish reproducible technical reports with artifact bundles
+- `bd-2501.2` — Achieve externally replicated high-impact claims
+- `bd-2501.3` — Release open benchmark or verification tool adopted outside the project
+
+For operator verification:
+
+```bash
+jq empty docs/scientific_contribution_targets_v1.json
+rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_scientific_contribution_targets_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test scientific_contribution_targets
+```
+
+See [`docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md`](./docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md), [`docs/SCIENTIFIC_REPORT_CATALOG_V1.md`](./docs/SCIENTIFIC_REPORT_CATALOG_V1.md), [`docs/EXTERNAL_REPLICATION_CATALOG_V1.md`](./docs/EXTERNAL_REPLICATION_CATALOG_V1.md), and [`docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md`](./docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md) for complete catalog specifications.
+
 ## RGC Docs and Help Surface Audit
 
 The docs and help surface audit ensures that README.md and frankenctl --help output accurately reflect the commands that actually parse and run in the shipped implementation. This audit prevents aspirational copy from diverging from runtime behavior.

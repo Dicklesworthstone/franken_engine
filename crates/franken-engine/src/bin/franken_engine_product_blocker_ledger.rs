@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -399,6 +399,30 @@ fn validate_support_contract(contract: &SupportSurfaceContract) -> Result<(), St
             "support contract must expose at least one engine-blocked support status".to_string(),
         );
     }
+
+    let ready_statuses = readiness
+        .engine_ready_when_support_status_in
+        .iter()
+        .map(|status| status.trim())
+        .filter(|status| !status.is_empty())
+        .collect::<BTreeSet<_>>();
+    let blocked_statuses = readiness
+        .engine_blocked_when_support_status_in
+        .iter()
+        .map(|status| status.trim())
+        .filter(|status| !status.is_empty())
+        .collect::<BTreeSet<_>>();
+    let contradictions = ready_statuses
+        .intersection(&blocked_statuses)
+        .copied()
+        .collect::<Vec<_>>();
+    if !contradictions.is_empty() {
+        return Err(format!(
+            "support contract has contradictory readiness statuses: {}",
+            contradictions.join(", ")
+        ));
+    }
+
     Ok(())
 }
 

@@ -870,6 +870,7 @@ mod tests {
                     EnforcementPoint::ExtensionActivation
                 );
             }
+            // SAFETY: Test validates revocation enforcement denial for extension activation
             _ => panic!("expected denial"),
         }
     }

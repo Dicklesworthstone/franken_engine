@@ -1966,9 +1966,13 @@ mod tests {
         let mut binding = ExtensionHostBinding::new(DrainDeadline::default());
         let mut cx = mock_cx(200);
 
+        // SAFETY: load_extension with valid test inputs (extension ID, context, decision, policy)
+        // cannot fail under normal test conditions.
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
             .unwrap();
+        // SAFETY: unload_extension after successful load with valid cancel reason
+        // cannot fail under normal test conditions.
         binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
             .unwrap();

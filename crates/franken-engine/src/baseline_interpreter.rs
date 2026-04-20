@@ -6569,6 +6569,21 @@ impl InterpreterCore {
         }
     }
 
+    /// String.prototype receiver coercion with RequireObjectCoercible semantics.
+    /// Throws TypeError for null/undefined as per ECMAScript specification.
+    /// All String.prototype methods should use this for consistent behavior.
+    fn require_object_coercible_to_string(value: &Value) -> Result<String, InterpreterError> {
+        match value {
+            Value::Null => Err(InterpreterError::TypeError {
+                message: "String.prototype method called on null".to_string(),
+            }),
+            Value::Undefined => Err(InterpreterError::TypeError {
+                message: "String.prototype method called on undefined".to_string(),
+            }),
+            _ => Ok(Self::value_to_string(value)),
+        }
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -8075,7 +8090,7 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = Self::value_to_string(&string_arg);
+                let string_val = Self::require_object_coercible_to_string(&string_arg)?;
 
                 // Convert to lowercase using Unicode-aware conversion
                 let lowercase = string_val.to_lowercase();
@@ -8088,7 +8103,7 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = Self::value_to_string(&string_arg);
+                let string_val = Self::require_object_coercible_to_string(&string_arg)?;
 
                 // Convert to uppercase using Unicode-aware conversion
                 let uppercase = string_val.to_uppercase();
@@ -15561,7 +15576,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::value_to_string(&this_val);
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 Ok(Value::Str(str_text.to_lowercase()))
             }
@@ -15682,7 +15697,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::value_to_string(&this_val);
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 Ok(Value::Str(str_text.to_uppercase()))
             }
@@ -17050,7 +17065,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::value_to_string(&this_val);
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 Ok(Value::Str(str_text.to_lowercase()))
             }
@@ -17058,7 +17073,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = Self::value_to_string(&this_val);
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 Ok(Value::Str(str_text.to_uppercase()))
             }
@@ -18976,28 +18991,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLocaleLowerCase" => {
                 // String.prototype.toLocaleLowerCase() implementation - simplified locale-aware lowercase
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    Value::Function(_) => "[object Function]".to_string(),
-                    Value::Closure(_) => "[object Function]".to_string(),
-                    Value::Iterator(_) => "[object Iterator]".to_string(),
-                    Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
-                    Value::Generator(_) => "[object Generator]".to_string(),
-                    Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncGeneratorFunction(_) => {
-                        "[object AsyncGeneratorFunction]".to_string()
-                    }
-                    Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
-                    Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::BuiltinFunction(_) => "[object Function]".to_string(),
-                };
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 // Simplified: use standard lowercase (full locale support would require ICU)
                 Ok(Value::Str(str_text.to_lowercase()))
@@ -19006,28 +19000,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLocaleUpperCase" => {
                 // String.prototype.toLocaleUpperCase() implementation - simplified locale-aware uppercase
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    Value::Function(_) => "[object Function]".to_string(),
-                    Value::Closure(_) => "[object Function]".to_string(),
-                    Value::Iterator(_) => "[object Iterator]".to_string(),
-                    Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
-                    Value::Generator(_) => "[object Generator]".to_string(),
-                    Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
-                    Value::AsyncGeneratorFunction(_) => {
-                        "[object AsyncGeneratorFunction]".to_string()
-                    }
-                    Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
-                    Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::BuiltinFunction(_) => "[object Function]".to_string(),
-                };
+                let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 // Simplified: use standard uppercase (full locale support would require ICU)
                 Ok(Value::Str(str_text.to_uppercase()))
@@ -24029,6 +24002,117 @@ mod tests {
                 let uppercase = result.to_uppercase();
 
                 // These should be the expected transformations of the unified toString result
+                assert_eq!(
+                    lowercase,
+                    expected_string.to_lowercase(),
+                    "toLowerCase should be consistent for {:?}",
+                    input
+                );
+                assert_eq!(
+                    uppercase,
+                    expected_string.to_uppercase(),
+                    "toUpperCase should be consistent for {:?}",
+                    input
+                );
+            }
+        }
+
+        /// Regression test for bd-3o8mv: String.prototype methods must implement
+        /// RequireObjectCoercible semantics, throwing TypeError for null/undefined.
+        #[test]
+        fn string_prototype_require_object_coercible() {
+            // Test that RequireObjectCoercible properly rejects null and undefined
+            let null_result = BaselineInterpreter::require_object_coercible_to_string(&Value::Null);
+            assert!(null_result.is_err());
+            if let Err(InterpreterError::TypeError { message }) = null_result {
+                assert!(message.contains("null"));
+            } else {
+                panic!("Expected TypeError for null");
+            }
+
+            let undef_result =
+                BaselineInterpreter::require_object_coercible_to_string(&Value::Undefined);
+            assert!(undef_result.is_err());
+            if let Err(InterpreterError::TypeError { message }) = undef_result {
+                assert!(message.contains("undefined"));
+            } else {
+                panic!("Expected TypeError for undefined");
+            }
+
+            // Test that valid values are properly converted
+            let valid_values = vec![
+                (Value::Str("hello".to_string()), "hello"),
+                (Value::Int(42), "42"),
+                (Value::Bool(true), "true"),
+                (Value::Function(1), "[object Function]"),
+                (Value::Promise(2), "[object Promise]"),
+                (Value::AsyncGeneratorObject(3), "[object AsyncGenerator]"),
+            ];
+
+            for (input, expected) in valid_values {
+                let result = BaselineInterpreter::require_object_coercible_to_string(&input);
+                assert!(result.is_ok(), "Should succeed for {:?}", input);
+                assert_eq!(
+                    result.unwrap(),
+                    expected,
+                    "Conversion mismatch for {:?}",
+                    input
+                );
+            }
+        }
+
+        /// Test that all string case-conversion builtin paths have unified behavior
+        /// and properly implement RequireObjectCoercible across all builtin IDs.
+        ///
+        /// Previously, builtin IDs had divergent null/undefined handling:
+        /// - Some converted to "null"/"undefined" strings
+        /// - Locale methods had exhaustive tables that also converted them
+        /// Now all methods should throw TypeError for null/undefined consistently.
+        #[test]
+        fn string_case_conversion_unified_object_coercible_behavior() {
+            // Test values that should trigger RequireObjectCoercible TypeError
+            let invalid_values = vec![Value::Null, Value::Undefined];
+
+            for invalid in invalid_values {
+                let result = BaselineInterpreter::require_object_coercible_to_string(&invalid);
+                assert!(
+                    result.is_err(),
+                    "RequireObjectCoercible should reject {:?}",
+                    invalid
+                );
+            }
+
+            // Test values that should be consistently converted across all builtin paths
+            // These exercise the various builtin IDs: 34/35 (basic), 293/297, 330/331, 386/387 (locale)
+            let test_cases = vec![
+                (Value::Function(100), "[object Function]"),
+                (Value::Promise(200), "[object Promise]"),
+                (Value::AsyncGeneratorObject(300), "[object AsyncGenerator]"),
+                (
+                    Value::BuiltinFunction("Array.from".to_string()),
+                    "[object Function]",
+                ),
+                (Value::Object(400), "[object Object]"),
+                (Value::Iterator(500), "[object Iterator]"),
+                (Value::Bool(false), "false"),
+                (Value::Int(-42), "-42"),
+            ];
+
+            for (input, expected_string) in test_cases {
+                let result = BaselineInterpreter::require_object_coercible_to_string(&input);
+                assert!(result.is_ok(), "Should convert {:?} successfully", input);
+
+                let converted = result.unwrap();
+                assert_eq!(
+                    converted, expected_string,
+                    "Unified string conversion for {:?} should be deterministic",
+                    input
+                );
+
+                // Verify case transformations are consistent
+                let lowercase = converted.to_lowercase();
+                let uppercase = converted.to_uppercase();
+
                 assert_eq!(
                     lowercase,
                     expected_string.to_lowercase(),

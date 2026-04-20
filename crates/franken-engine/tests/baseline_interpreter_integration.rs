@@ -24,8 +24,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::baseline_interpreter::{
-    ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore, InterpreterError,
-    InterpreterEvent, LaneChoice, LaneReason, LaneRouter, ObjectId, QuickJsLane, V8Lane, Value,
+    ConsoleLevel, ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore,
+    InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter, ObjectId, QuickJsLane,
+    V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
@@ -1347,6 +1348,7 @@ fn router_with_custom_configs() {
         max_string_size: 33_554_432,
         max_heap_objects: 100_000,
         max_total_memory_bytes: 64 * 1024 * 1024,
+        max_console_entries: 1_000,
         max_scope_depth: 512,
         module_root: None,
         granted_capabilities: BTreeSet::new(),
@@ -1361,6 +1363,7 @@ fn router_with_custom_configs() {
         max_string_size: 33_554_432,
         max_heap_objects: 1_000_000,
         max_total_memory_bytes: 512 * 1024 * 1024,
+        max_console_entries: 10_000,
         max_scope_depth: 512,
         module_root: None,
         granted_capabilities: BTreeSet::new(),
@@ -10118,4 +10121,295 @@ fn cjs_module_require_property_is_callable() {
         .execute(&module, "module-require-property-trace")
         .expect("execute");
     assert_eq!(result.value, Value::Int(17));
+}
+
+// ============================================================================
+// Console Memory DoS Prevention Tests
+// ============================================================================
+
+#[test]
+fn console_output_bounded_by_config_builtin_methods() {
+    // Test that builtin console methods (ConsoleLog, ConsoleError, ConsoleWarn)
+    // respect max_console_entries to prevent DoS via console spam
+    let module = test_module_with_pool(
+        vec![
+            // Call console.log 5 times with different messages
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 1,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 3,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 4,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec![
+            "message1".to_string(),
+            "message2".to_string(),
+            "message3".to_string(),
+            "message4".to_string(),
+            "message5".to_string(),
+        ],
+    );
+
+    // Configure interpreter with max_console_entries = 3
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_console_entries = 3;
+    let mut core = InterpreterCore::new(config, "console-bounds-test");
+
+    let result = core.execute(&module).expect("execution should succeed");
+    assert_eq!(result.value, Value::Undefined);
+
+    // Verify console output is bounded to max 3 entries (ring buffer behavior)
+    let console_output = core.console_output();
+    assert_eq!(
+        console_output.len(),
+        3,
+        "console output should be limited to max_console_entries"
+    );
+
+    // Verify ring buffer: should contain last 3 messages (message3, message4, message5)
+    assert_eq!(console_output[0].message, "message3");
+    assert_eq!(console_output[1].message, "message4");
+    assert_eq!(console_output[2].message, "message5");
+
+    // All entries should be Log level
+    for entry in console_output {
+        assert_eq!(entry.level, ConsoleLevel::Log);
+    }
+}
+
+#[test]
+fn console_output_bounded_by_config_mixed_levels() {
+    // Test that console bounds work with mixed console levels (log, error, warn)
+    let module = test_module_with_pool(
+        vec![
+            // console.log
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            // console.error
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 1,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleError".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            // console.warn
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleWarn".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            // console.log again (should trigger ring buffer truncation)
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 3,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec![
+            "log1".to_string(),
+            "error1".to_string(),
+            "warn1".to_string(),
+            "log2".to_string(),
+        ],
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_console_entries = 2; // Very small limit
+    let mut core = InterpreterCore::new(config, "console-mixed-levels");
+
+    let result = core.execute(&module).expect("execution should succeed");
+    assert_eq!(result.value, Value::Undefined);
+
+    let console_output = core.console_output();
+    assert_eq!(
+        console_output.len(),
+        2,
+        "console output should be limited to 2 entries"
+    );
+
+    // Should contain the last 2 messages: warn1 and log2
+    assert_eq!(console_output[0].message, "warn1");
+    assert_eq!(console_output[0].level, ConsoleLevel::Warn);
+    assert_eq!(console_output[1].message, "log2");
+    assert_eq!(console_output[1].level, ConsoleLevel::Log);
+}
+
+#[test]
+fn console_output_zero_limit_prevents_all_output() {
+    // Test edge case: max_console_entries = 0 should prevent any console output
+    let module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec!["should_not_appear".to_string()],
+    );
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_console_entries = 0; // Zero limit
+    let mut core = InterpreterCore::new(config, "console-zero-limit");
+
+    let result = core.execute(&module).expect("execution should succeed");
+    assert_eq!(result.value, Value::Undefined);
+
+    let console_output = core.console_output();
+    assert_eq!(
+        console_output.len(),
+        0,
+        "zero max_console_entries should prevent all output"
+    );
+}
+
+#[test]
+fn console_output_hostcall_bounds_capability_based() {
+    // Test console bounds for capability-based hostcalls (console:log, console:error, console:warn)
+    // This tests the dispatch_console_hostcall implementation
+    let mut module = test_module_with_pool(
+        vec![
+            // Make multiple console calls via hostcalls
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: "console:log".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 1,
+            },
+            Ir3Instruction::HostCall {
+                capability: "console:error".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 2,
+            },
+            Ir3Instruction::HostCall {
+                capability: "console:warn".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 3,
+            },
+            Ir3Instruction::HostCall {
+                capability: "console:log".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec![
+            "hostcall_log1".to_string(),
+            "hostcall_error1".to_string(),
+            "hostcall_warn1".to_string(),
+            "hostcall_log2".to_string(),
+        ],
+    );
+
+    // Grant console capabilities
+    module.required_capabilities = vec![
+        CapabilityTag::new("console:log").unwrap(),
+        CapabilityTag::new("console:error").unwrap(),
+        CapabilityTag::new("console:warn").unwrap(),
+    ];
+
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_console_entries = 3;
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::Console,
+        RuntimeCapability::ConsoleDiagnostics,
+    ]);
+    let mut core = InterpreterCore::new(config, "console-hostcall-bounds");
+
+    let result = core.execute(&module).expect("execution should succeed");
+    assert_eq!(result.value, Value::Undefined);
+
+    let console_output = core.console_output();
+    assert_eq!(
+        console_output.len(),
+        3,
+        "hostcall console output should be bounded"
+    );
+
+    // Should contain last 3 messages (error1, warn1, log2)
+    assert_eq!(console_output[0].message, "hostcall_error1");
+    assert_eq!(console_output[0].level, ConsoleLevel::Error);
+    assert_eq!(console_output[1].message, "hostcall_warn1");
+    assert_eq!(console_output[1].level, ConsoleLevel::Warn);
+    assert_eq!(console_output[2].message, "hostcall_log2");
+    assert_eq!(console_output[2].level, ConsoleLevel::Log);
 }

@@ -84,6 +84,10 @@ const DEFAULT_V8_MAX_HEAP_OBJECTS: u32 = 1_000_000;
 const DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 /// Default total memory budget for the throughput profile.
 const DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+// Maximum console entries before truncation (conservative profile)
+const DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES: usize = 1_000;
+// Maximum console entries before truncation (throughput profile)
+const DEFAULT_V8_MAX_CONSOLE_ENTRIES: usize = 10_000;
 /// Default scope-chain depth budget for all interpreter profiles.
 const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 
@@ -1405,6 +1409,8 @@ pub struct InterpreterConfig {
     pub max_heap_objects: u32,
     /// Maximum estimated live memory before failing closed.
     pub max_total_memory_bytes: u64,
+    /// Maximum console entries before truncation (prevents DoS via console spam).
+    pub max_console_entries: usize,
     /// Maximum scope-chain depth, including the global frame.
     pub max_scope_depth: u32,
     /// Optional module root used for resolving relative import specifiers.
@@ -1428,6 +1434,7 @@ impl PartialEq for InterpreterConfig {
             && self.max_string_size == other.max_string_size
             && self.max_heap_objects == other.max_heap_objects
             && self.max_total_memory_bytes == other.max_total_memory_bytes
+            && self.max_console_entries == other.max_console_entries
             && self.max_scope_depth == other.max_scope_depth
             && self.module_root == other.module_root
             && self.granted_capabilities == other.granted_capabilities
@@ -1449,6 +1456,7 @@ impl InterpreterConfig {
             max_string_size: 33_554_432,
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
+            max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
@@ -1467,6 +1475,7 @@ impl InterpreterConfig {
             max_string_size: 268_435_456,
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
+            max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
@@ -1485,6 +1494,7 @@ impl InterpreterConfig {
             max_string_size: 33_554_432,
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
+            max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
@@ -1503,6 +1513,7 @@ impl InterpreterConfig {
             max_string_size: 268_435_456,
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
+            max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             granted_capabilities: BTreeSet::new(),
@@ -6697,6 +6708,12 @@ impl InterpreterCore {
 
         let message = parts.join(" ");
 
+        // Bounded console output to prevent DoS via console spam
+        if self.console_output.len() >= self.config.max_console_entries {
+            // Ring buffer: drop oldest entry when limit reached
+            self.console_output.remove(0);
+        }
+
         self.console_output.push(ConsoleEntry {
             level,
             message,
@@ -8155,9 +8172,18 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let arg = self.read_reg(args.start)?;
                     match arg {
-                        Value::Int(n) => Ok(Value::Int(n.abs())),
+                        Value::Int(n) => {
+                            if n == i64::MIN {
+                                Ok(Value::Float(Float64::new(-(i64::MIN as f64))))
+                            } else {
+                                Ok(Value::Int(n.abs()))
+                            }
+                        }
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
-                        _ => Ok(Value::Float(Float64::new(f64::NAN))),
+                        _ => {
+                            let num = Self::coerce_to_float(&arg).unwrap_or(f64::NAN);
+                            Ok(Value::Float(Float64::new(num.abs())))
+                        }
                     }
                 } else {
                     Ok(Value::Float(Float64::new(f64::NAN)))
@@ -8687,6 +8713,12 @@ impl InterpreterCore {
                 // Join with spaces (standard console.log behavior)
                 let output = output_parts.join(" ");
 
+                // Bounded console output to prevent DoS via console spam
+                if self.console_output.len() >= self.config.max_console_entries {
+                    // Ring buffer: drop oldest entry when limit reached
+                    self.console_output.remove(0);
+                }
+
                 // Capture console output for deterministic replay
                 self.console_output.push(ConsoleEntry {
                     level: ConsoleLevel::Log,
@@ -8710,6 +8742,12 @@ impl InterpreterCore {
                 // Join with spaces
                 let output = output_parts.join(" ");
 
+                // Bounded console output to prevent DoS via console spam
+                if self.console_output.len() >= self.config.max_console_entries {
+                    // Ring buffer: drop oldest entry when limit reached
+                    self.console_output.remove(0);
+                }
+
                 // Capture console error output for deterministic replay
                 self.console_output.push(ConsoleEntry {
                     level: ConsoleLevel::Error,
@@ -8732,6 +8770,12 @@ impl InterpreterCore {
 
                 // Join with spaces
                 let output = output_parts.join(" ");
+
+                // Bounded console output to prevent DoS via console spam
+                if self.console_output.len() >= self.config.max_console_entries {
+                    // Ring buffer: drop oldest entry when limit reached
+                    self.console_output.remove(0);
+                }
 
                 // Capture console warning output for deterministic replay
                 self.console_output.push(ConsoleEntry {
@@ -21462,6 +21506,41 @@ mod tests {
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
+    }
+
+    #[test]
+    fn active_math_abs_handles_min_int_and_coercions() {
+        fn call_math_abs(value: Value) -> Value {
+            let mut core = quickjs_test_core();
+            core.registers.resize(1, Value::Undefined);
+            core.registers[0] = value;
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 })
+                .unwrap()
+        }
+
+        assert_eq!(call_math_abs(Value::Int(-7)), Value::Int(7));
+        assert_eq!(
+            call_math_abs(Value::Float(Float64::new(-2.5))),
+            Value::Float(Float64::new(2.5))
+        );
+        assert_eq!(
+            call_math_abs(Value::Int(i64::MIN)),
+            Value::Float(Float64::new(-(i64::MIN as f64)))
+        );
+        assert_eq!(
+            call_math_abs(Value::Str(" -3.5 ".to_string())),
+            Value::Float(Float64::new(3.5))
+        );
+        assert_eq!(
+            call_math_abs(Value::Bool(true)),
+            Value::Float(Float64::new(1.0))
+        );
+
+        let result = call_math_abs(Value::Undefined);
+        let Value::Float(result) = result else {
+            panic!("expected Math.abs(undefined) to produce NaN float");
+        };
+        assert!(result.inner().is_nan());
     }
 
     // -----------------------------------------------------------------------

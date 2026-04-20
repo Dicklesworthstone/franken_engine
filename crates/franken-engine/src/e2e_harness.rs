@@ -5249,6 +5249,8 @@ mod enrichment_tests {
         let runner = DeterministicRunner::default();
         for entry in &registry {
             runner.run_fixture(&entry.fixture).unwrap_or_else(|e| {
+                // SAFETY: Test-only panic to validate fixture execution capability.
+                // Test expects all fixtures in registry to run successfully in deterministic runner.
                 panic!("fixture for {} should run: {e}", entry.scenario_id);
             });
         }

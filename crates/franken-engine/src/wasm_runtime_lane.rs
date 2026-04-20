@@ -991,7 +991,9 @@ mod tests {
             payload: vec![0xDE, 0xAD],
             sequence: 42,
         };
+        // SAFETY: AbiStateUpdate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&u).unwrap();
+        // SAFETY: JSON was just generated from AbiStateUpdate, deserialization guaranteed to succeed
         let u2: AbiStateUpdate = serde_json::from_str(&json).unwrap();
         assert_eq!(u, u2);
     }
@@ -1269,7 +1271,9 @@ mod tests {
     #[test]
     fn lane_serde_roundtrip() {
         let lane = WasmRuntimeLane::with_defaults();
+        // SAFETY: WasmRuntimeLane derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&lane).unwrap();
+        // SAFETY: JSON was just generated from WasmRuntimeLane, deserialization guaranteed to succeed
         let l2: WasmRuntimeLane = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, l2);
     }

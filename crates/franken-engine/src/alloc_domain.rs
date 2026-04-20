@@ -1637,7 +1637,9 @@ mod tests {
     #[test]
     fn budget_serde_zero_capacity_enrichment() {
         let b = DomainBudget::new(0);
+        // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
         let json = serde_json::to_string(&b).unwrap();
+        // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
         let restored: DomainBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.max_bytes, 0);
         assert_eq!(restored.used_bytes, 0);
@@ -1646,8 +1648,11 @@ mod tests {
     #[test]
     fn budget_serde_max_u64_capacity_enrichment() {
         let mut b = DomainBudget::new(u64::MAX);
+        // SAFETY: Reserving one byte from a u64::MAX budget is within capacity.
         b.try_reserve(1).unwrap();
+        // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
         let json = serde_json::to_string(&b).unwrap();
+        // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
         let restored: DomainBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.max_bytes, u64::MAX);
         assert_eq!(restored.used_bytes, 1);

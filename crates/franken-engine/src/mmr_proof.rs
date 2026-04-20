@@ -752,14 +752,18 @@ mod tests {
 
     #[test]
     fn root_hash_is_deterministic() {
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root1 = build_mmr(10).root_hash().unwrap();
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root2 = build_mmr(10).root_hash().unwrap();
         assert_eq!(root1, root2);
     }
 
     #[test]
     fn root_hash_changes_with_appends() {
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root3 = build_mmr(3).root_hash().unwrap();
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root4 = build_mmr(4).root_hash().unwrap();
         assert_ne!(root3, root4);
     }
@@ -767,6 +771,7 @@ mod tests {
     #[test]
     fn single_leaf_root_is_leaf_hash() {
         let mmr = build_mmr(1);
+        // SAFETY: MMR with 1 element has valid structure, root_hash should succeed
         assert_eq!(mmr.root_hash().unwrap(), leaf_hash(0));
     }
 

@@ -14297,44 +14297,7 @@ impl InterpreterCore {
             // Removed duplicate ArrayPrototypeReduce - implementation at line ~9273 properly fails-closed
 
 
-            "builtin:ObjectGetOwnPropertyNames" => {
-                // Object.getOwnPropertyNames() implementation - returns array of property names
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
-
-                let names_array_id = self.alloc_object_with_prototype(None)?;
-
-                // Collect keys first to avoid borrow checker issues
-                let keys: Vec<String> = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    obj.properties.keys().cloned().collect()
-                } else {
-                    Vec::new()
-                };
-
-                for (index, key) in keys.iter().enumerate() {
-                    self.set_object_property(
-                        names_array_id,
-                        index.to_string(),
-                        Value::Str(key.clone()),
-                    )?;
-                }
-
-                // Set the length property
-                self.set_object_property(
-                    names_array_id,
-                    "length".to_string(),
-                    Value::Int(keys.len() as i64),
-                )?;
-
-                Ok(Value::Object(names_array_id))
-            }
+            // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 has correct argument handling
 
 
 
@@ -16771,6 +16734,7 @@ mod tests {
         let mut core = quickjs_test_core();
         core.registers[0] = Value::Str("hello".to_string());
 
+        // SAFETY: call_builtin cannot fail with valid test inputs
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",

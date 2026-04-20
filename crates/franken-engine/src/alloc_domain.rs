@@ -1758,6 +1758,7 @@ mod tests {
     #[test]
     fn stress_many_allocations_enrichment() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Registering a fresh ScratchBuffer domain with a large positive budget is valid.
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
@@ -1765,11 +1766,13 @@ mod tests {
         )
         .unwrap();
         for i in 0..1000 {
+            // SAFETY: Each one-byte allocation remains within the registered 1_000_000-byte budget.
             let seq = reg.allocate(AllocationDomain::ScratchBuffer, 1).unwrap();
             assert_eq!(seq, (i + 1) as u64);
         }
         assert_eq!(
             reg.get(&AllocationDomain::ScratchBuffer)
+                // SAFETY: ScratchBuffer was registered before the allocation loop.
                 .unwrap()
                 .budget
                 .used_bytes,

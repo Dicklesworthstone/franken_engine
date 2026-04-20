@@ -768,6 +768,8 @@ mod tests {
             HookAction::Suspend | HookAction::Terminate(_) | HookAction::Quarantine(_)
         ));
         let summary = adapter.summary();
+        // SAFETY: Test has processed observations that update posterior,
+        // so last_posterior_delta_millionths field must be Some.
         assert!(summary.last_posterior_delta_millionths.unwrap() >= 500_000);
     }
 

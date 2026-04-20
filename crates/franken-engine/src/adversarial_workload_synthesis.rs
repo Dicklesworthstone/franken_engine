@@ -1714,6 +1714,7 @@ mod tests {
     #[test]
     fn engine_validate_config_empty_strategies() {
         let mut engine = SynthesisEngine::new(epoch());
+        // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
             .unwrap();
@@ -1726,6 +1727,7 @@ mod tests {
     #[test]
     fn engine_validate_config_missing_domain_inputs() {
         let mut engine = SynthesisEngine::new(epoch());
+        // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
             .unwrap();
@@ -1737,12 +1739,14 @@ mod tests {
     #[test]
     fn engine_run_campaign_no_counterexamples() {
         let mut engine = SynthesisEngine::new(epoch());
+        // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
             .unwrap();
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
+        // SAFETY: Valid config with inputs for all domains; run_campaign succeeds in test.
         let campaign = engine.run_campaign("c1", config, |_, _, _| None).unwrap();
         assert_eq!(campaign.counterexample_count(), 0);
         // With 1 seed, 1 strategy, 1 domain: 1 iteration.

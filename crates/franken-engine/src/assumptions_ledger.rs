@@ -720,6 +720,7 @@ mod tests {
     #[test]
     fn test_observe_violation_triggers_demotion() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
@@ -735,6 +736,7 @@ mod tests {
     #[test]
     fn test_critical_violation_enters_safe_mode() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .unwrap();
@@ -748,6 +750,7 @@ mod tests {
     #[test]
     fn test_fatal_violation_enters_safe_mode() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Fatal))
             .unwrap();
@@ -761,9 +764,11 @@ mod tests {
     #[test]
     fn test_advisory_violation_no_action() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Advisory))
             .unwrap();
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(actions.len(), 1);
@@ -773,11 +778,13 @@ mod tests {
     #[test]
     fn test_consecutive_violations_trigger_count() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
         let mut monitor = make_monitor("m1", "a1");
         monitor.trigger_count = 3; // Require 3 consecutive violations
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(monitor).unwrap();
 
         // First two violations don't trigger
@@ -791,11 +798,13 @@ mod tests {
     #[test]
     fn test_consecutive_violations_reset_on_pass() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
         let mut monitor = make_monitor("m1", "a1");
         monitor.trigger_count = 3;
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(monitor).unwrap();
 
         // Two violations then a pass
@@ -813,9 +822,11 @@ mod tests {
     #[test]
     fn test_monitor_does_not_double_trigger() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         // First violation triggers
         assert_eq!(ledger.observe("risk", 600_000, 1, 0).len(), 1);

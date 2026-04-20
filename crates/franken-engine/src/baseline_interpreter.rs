@@ -9322,63 +9322,16 @@ impl InterpreterCore {
                 Ok(Value::Object(promise_id))
             }
             "builtin:ArrayPrototypeReduce" => {
-                // Array.prototype.reduce(callback[, initialValue]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
+                // Array.prototype.reduce(callback[, initialValue]) implementation - fail-closed until proper callback dispatch
+                self.validate_array_callback_args(args, "Array.prototype.reduce")?;
 
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let initial_value = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Collect indexed values
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
-                            }
-                        }
-                    }
-
-                    // Sort by index
-                    indexed_values.sort_by_key(|(index, _)| *index);
-
-                    // Simplified reduce - just return initial value or first element
-                    if let Some(init) = initial_value {
-                        // TODO: In full implementation, would call callback for each element
-                        Ok(init)
-                    } else if let Some((_index, first_value)) = indexed_values.first() {
-                        // TODO: In full implementation, would use callback starting from second element
-                        Ok(first_value.clone())
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                } else {
-                    Ok(Value::Undefined)
-                }
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [1,2,3].reduce((acc, val) => acc + val, 0) should error rather than
+                // silently return wrong values like the initial value or first element
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.reduce implementation".to_string(),
+                    got: "reducer callback invocation not yet supported - would require proper callback dispatch with (accumulator, currentValue, index, array) args, thisArg handling, proper initial value semantics, and handling empty arrays without initial value (TypeError)".to_string(),
+                })
             }
             "builtin:StringPrototypePadStart" => {
                 // String.prototype.padStart(targetLength[, padString]) implementation
@@ -13029,12 +12982,6 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_nan))
             }
 
-            "builtin:ArrayPrototypeReduce" => {
-                // Array.prototype.reduce(callback[, initialValue]) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
                 let this_val = self.read_reg(args.start)?;
                 let array_id = match this_val {
                     Value::Object(id) => id,
@@ -13090,67 +13037,6 @@ impl InterpreterCore {
                 Ok(accumulator)
             }
 
-            "builtin:StringPrototypeMatch" => {
-                // String.prototype.match(regexp) implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Null),
-                        }
-                    }
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Null);
-                }
-
-                let pattern_val = self.read_reg(args.start + 1)?;
-                let pattern_str = match pattern_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Null),
-                };
-
-                // Simple pattern matching - find first occurrence
-                if let Some(index) = string_val.find(&pattern_str) {
-                    // Create result array with match information
-                    let result_id = self.alloc_object_with_prototype(None)?;
-
-                    // Add the matched string
-                    self.set_object_property(
-                        result_id,
-                        "0".to_string(),
-                        Value::Str(pattern_str.clone()),
-                    )?;
-                    self.set_object_property(
-                        result_id,
-                        "index".to_string(),
-                        Value::Int(index as i64),
-                    )?;
-                    self.set_object_property(
-                        result_id,
-                        "input".to_string(),
-                        Value::Str(string_val),
-                    )?;
-                    self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
-
-                    Ok(Value::Object(result_id))
-                } else {
-                    Ok(Value::Null)
-                }
-            }
 
             "builtin:ArrayPrototypeReverse" => {
                 // Array.prototype.reverse() implementation - reverses array in place
@@ -13196,44 +13082,6 @@ impl InterpreterCore {
                 Ok(Value::Object(array_id))
             }
 
-            "builtin:StringPrototypeMatch" => {
-                // String.prototype.match(regexp) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Null);
-                }
-
-                let str_val = self.read_reg(args.start)?;
-                let str_text = match str_val {
-                    Value::Str(s) => s,
-                    _ => return Ok(Value::Null), // Non-strings return null
-                };
-
-                let regexp_val = if args.count > 0 {
-                    self.read_reg(args.start + 1)?
-                } else {
-                    return Ok(Value::Null);
-                };
-
-                // Simplified implementation: treat as string search
-                let pattern = match regexp_val {
-                    Value::Str(s) => s,
-                    _ => return Ok(Value::Null), // Invalid pattern
-                };
-
-                if str_text.contains(&pattern) {
-                    // Create result array with the match
-                    let result_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        result_array_id,
-                        "0".to_string(),
-                        Value::Str(pattern),
-                    )?;
-                    self.set_object_property(result_array_id, "length".to_string(), Value::Int(1))?;
-                    Ok(Value::Object(result_array_id))
-                } else {
-                    Ok(Value::Null)
-                }
-            }
 
             "builtin:MathAtan" => {
                 // Math.atan(x) implementation
@@ -16640,58 +16488,6 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:StringPrototypeMatch" => {
-                // String.prototype.match() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Null); // No pattern provided
-                }
-
-                let pattern_val = self.read_reg(args.start + 1)?;
-                let pattern_str = match pattern_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified implementation: check if pattern exists in string
-                if str_text.contains(&pattern_str) {
-                    let matches_array_id = self.alloc_object_with_prototype(None)?;
-
-                    // Add the matched string as first element
-                    self.set_object_property(
-                        matches_array_id,
-                        "0".to_string(),
-                        Value::Str(pattern_str),
-                    )?;
-
-                    self.set_object_property(
-                        matches_array_id,
-                        "length".to_string(),
-                        Value::Int(1),
-                    )?;
-
-                    Ok(Value::Object(matches_array_id))
-                } else {
-                    Ok(Value::Null) // No match found
-                }
-            }
 
             "builtin:JSONStringify" => {
                 // JSON.stringify() implementation - simplified version

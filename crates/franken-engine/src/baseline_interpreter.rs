@@ -17481,6 +17481,7 @@ mod tests {
 
     fn assert_string_split_result(result: Value, expected: Vec<&str>, core: &mut InterpreterCore) {
         let Value::Object(array_id) = result else {
+            // SAFETY: Test helper validates string split returns array object type
             panic!("split should return array object, got {result:?}");
         };
 

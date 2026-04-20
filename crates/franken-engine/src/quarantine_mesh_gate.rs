@@ -658,6 +658,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: Test scenario with hardcoded ID "exhaustion-ext-d" is guaranteed to exist in test results
         let exhaustion = result
             .scenarios
             .iter()

@@ -784,6 +784,7 @@ mod tests {
                     ev.specimen_id, ev.expected_outcome, ev.actual_outcome, ev.error_message,
                 ));
             }
+            // SAFETY: Test expects all frontier corpus specimens to pass, panics with details on failures
             panic!("{}", msg);
         }
     }

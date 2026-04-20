@@ -9,7 +9,6 @@ use std::fmt;
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 
@@ -273,54 +272,46 @@ impl TopologyPromotionAssessment {
     }
 
     pub fn compute_content_hash(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.schema_version.as_bytes());
-        hasher.update(self.bead_id.as_bytes());
-        hasher.update(self.component.as_bytes());
-        hasher.update(self.policy_id.as_bytes());
-        hasher.update(self.decision.as_str().as_bytes());
-        hasher.update(self.rationale.as_bytes());
-        hasher.update(if self.fail_closed { "true" } else { "false" }.as_bytes());
-
-        for prerequisite in &self.required_prerequisites {
-            hasher.update(prerequisite.as_bytes());
-        }
-        for source in &self.generated_from {
-            hasher.update(source.as_bytes());
-        }
-        for seam in &self.seams {
-            hasher.update(seam.seam_id.as_str().as_bytes());
-            hasher.update(seam.decision.as_str().as_bytes());
-            hasher.update(seam.rationale.as_bytes());
-            for file in &seam.source_files {
-                hasher.update(file.as_bytes());
-            }
-            for trigger in &seam.trigger_assessments {
-                hasher.update(trigger.trigger.as_str().as_bytes());
-                hasher.update(trigger.disposition.as_str().as_bytes());
-                hasher.update(trigger.evidence.as_bytes());
-                hasher.update(trigger.expected_benefit_micros.to_le_bytes());
-                hasher.update(trigger.migration_risk_micros.to_le_bytes());
-                hasher.update(trigger.rollback_cost_micros.to_le_bytes());
-                hasher.update(trigger.diagnostic_simplification_micros.to_le_bytes());
-            }
-            for primitive in &seam.required_upstream_primitives {
-                hasher.update(primitive.as_bytes());
-            }
-            for benefit in &seam.expected_benefits {
-                hasher.update(benefit.as_bytes());
-            }
-            for risk in &seam.migration_risks {
-                hasher.update(risk.as_bytes());
-            }
-            hasher.update(seam.rollback_plan.as_bytes());
-            hasher.update(seam.operator_diagnostic_benefit.as_bytes());
-            for step in &seam.implementation_order {
-                hasher.update(step.as_bytes());
-            }
+        // Create a temporary structure for hashing without the content_hash field
+        // to avoid recursive dependencies
+        #[derive(Serialize)]
+        struct HashableAssessment<'a> {
+            schema_version: &'a str,
+            bead_id: &'a str,
+            component: &'a str,
+            policy_id: &'a str,
+            decision: &'a TopologyPromotionDecision,
+            rationale: &'a str,
+            fail_closed: bool,
+            required_prerequisites: &'a Vec<String>,
+            generated_from: &'a Vec<String>,
+            seams: &'a Vec<SeamAssessment>,
+            summary: &'a TopologyPromotionSummary,
+            required_artifacts: &'a Vec<String>,
+            verification_commands: &'a Vec<String>,
         }
 
-        ContentHash::compute(&hasher.finalize()).to_hex()
+        let hashable = HashableAssessment {
+            schema_version: &self.schema_version,
+            bead_id: &self.bead_id,
+            component: &self.component,
+            policy_id: &self.policy_id,
+            decision: &self.decision,
+            rationale: &self.rationale,
+            fail_closed: self.fail_closed,
+            required_prerequisites: &self.required_prerequisites,
+            generated_from: &self.generated_from,
+            seams: &self.seams,
+            summary: &self.summary,
+            required_artifacts: &self.required_artifacts,
+            verification_commands: &self.verification_commands,
+        };
+
+        // Use canonical JSON serialization to avoid boundary collisions
+        let canonical_bytes =
+            serde_json::to_vec(&hashable).expect("Serialization of assessment should not fail");
+
+        ContentHash::compute(&canonical_bytes).to_hex()
     }
 }
 

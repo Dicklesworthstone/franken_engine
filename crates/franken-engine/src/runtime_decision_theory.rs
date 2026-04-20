@@ -2773,7 +2773,9 @@ mod tests {
             max_cvar_millionths: 25 * MILLION,
             min_observations: 50,
         };
+        // SAFETY: CvarConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by valid CvarConfig serialization
         let back: CvarConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }

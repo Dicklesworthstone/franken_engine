@@ -2188,6 +2188,7 @@ mod tests {
                 assert!(denial.transitive_root.is_none());
                 assert_eq!(denial.target_type, RevocationTargetType::Extension);
             }
+            // SAFETY: Test validates revocation enforcement direct denial for extension activation
             _ => panic!("expected direct denial"),
         }
     }

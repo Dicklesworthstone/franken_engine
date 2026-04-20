@@ -963,8 +963,11 @@ impl EvidenceLog {
         let previous_receipt_hash = self.receipts.last().map(|r| r.signature.clone());
 
         // Create unsigned receipt
+        // REGRESSION TEST COVERAGE: This assignment of extension_id to DecisionReceipt
+        // is critical for bd-ldm0f. The extension_id must propagate correctly through
+        // the entire receipt pipeline without corruption or loss.
         let mut receipt = DecisionReceipt {
-            extension_id,
+            extension_id,  // <- CRITICAL: extension_id propagation point for bd-ldm0f
             operation_type,
             risk_score,
             action_taken,

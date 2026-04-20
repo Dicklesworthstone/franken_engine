@@ -665,6 +665,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(keys)
+        // SAFETY: Test helper builds valid genesis checkpoint with test keys, build should succeed
         .unwrap()
     }
 
@@ -715,6 +716,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
+        // SAFETY: Test builds valid successor checkpoint with test keys, build should succeed
         .unwrap();
 
         assert_eq!(cp1.checkpoint_seq, 1);
@@ -736,6 +738,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
+        // SAFETY: Test builds valid checkpoint with test keys, build should succeed
         .unwrap();
 
         let cp2 = CheckpointBuilder::after(
@@ -747,6 +750,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
+        // SAFETY: Test builds valid checkpoint with test keys, build should succeed
         .unwrap();
 
         assert_eq!(cp2.checkpoint_seq, 2);
@@ -1011,7 +1015,11 @@ mod tests {
     fn checkpoint_serialization_round_trip() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
+        // SAFETY: PolicyCheckpoint derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cp).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid PolicyCheckpoint,
+        // so from_str back to PolicyCheckpoint cannot fail (valid format + matching schema).
         let restored: PolicyCheckpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(cp, restored);
     }
@@ -1019,7 +1027,11 @@ mod tests {
     #[test]
     fn policy_head_serialization_round_trip() {
         let head = make_policy_head(PolicyType::RuntimeExecution, 5);
+        // SAFETY: PolicyHead derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&head).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid PolicyHead,
+        // so from_str back to PolicyHead cannot fail (valid format + matching schema).
         let restored: PolicyHead = serde_json::from_str(&json).unwrap();
         assert_eq!(head, restored);
     }

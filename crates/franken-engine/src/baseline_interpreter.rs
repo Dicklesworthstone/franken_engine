@@ -8800,35 +8800,18 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
             "builtin:DateNow" => {
-                // Date.now implementation - returns current timestamp in milliseconds
+                // Date.now implementation - returns deterministic timestamp in milliseconds
+                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
+                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
 
-                // For deterministic execution, we should return a fixed value
-                // In a real implementation, this would use the system clock
-                // TODO: Integrate with proper time system for deterministic replay
-
-                use std::time::{SystemTime, UNIX_EPOCH};
-
-                match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(duration) => {
-                        let millis = duration.as_millis() as f64;
-                        Ok(Value::Float(Float64::new(millis)))
-                    }
-                    Err(_) => {
-                        // Fallback to epoch time if clock is before Unix epoch
-                        Ok(Value::Float(Float64::new(0.0)))
-                    }
-                }
+                Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
             }
             "builtin:Date" => {
-                // Date() constructor - returns new Date object with current timestamp
-                // When called with `new Date()` or `Date()`, creates/returns current date
+                // Date() constructor - returns new Date object with deterministic timestamp
+                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
+                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
 
-                use std::time::{SystemTime, UNIX_EPOCH};
-
-                let millis = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                    Ok(duration) => duration.as_millis() as f64,
-                    Err(_) => 0.0,
-                };
+                let millis = DETERMINISTIC_EPOCH_MS as f64;
 
                 // Create a new Date object with current timestamp. Use the
                 // capability-checked allocator rather than poking the heap
@@ -17858,14 +17841,11 @@ impl InterpreterCore {
             }
 
             "builtin:DateNow" => {
-                // Date.now() implementation - returns current timestamp in milliseconds
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis();
+                // Date.now() implementation - returns deterministic timestamp in milliseconds
+                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
+                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
 
-                // Convert to f64 to handle large timestamp values
-                Ok(Value::Float(Float64::new(now as f64)))
+                Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
             }
 
             "builtin:ArrayPrototypeConcat" => {
@@ -24843,5 +24823,112 @@ mod tests {
 
         // Should return the integer as-is
         assert_eq!(core.registers[10], Value::Int(42));
+    }
+
+    // Regression tests for bd-2gbeb: Deterministic Date.now timing
+    #[test]
+    fn date_now_deterministic_across_runs() {
+        let deterministic_epoch_ms = 1_767_225_600_000.0; // 2026-01-01T00:00:00Z
+
+        // Run Date.now multiple times - should always return same value
+        for _ in 0..5 {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+            let result = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CallBuiltin {
+                        builtin: "builtin:DateNow".to_string(),
+                        args: RegRange { start: 0, count: 0 },
+                        dst: 10,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+
+            // Should always return the fixed deterministic epoch
+            if let Value::Float(f) = core.registers[10] {
+                assert_eq!(f.inner(), deterministic_epoch_ms);
+            } else {
+                panic!("Date.now should return a float");
+            }
+        }
+    }
+
+    #[test]
+    fn date_constructor_deterministic_across_runs() {
+        let deterministic_epoch_ms = 1_767_225_600_000.0; // 2026-01-01T00:00:00Z
+
+        // Run Date constructor multiple times - should always create same timestamp
+        for _ in 0..5 {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+            let result = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CallBuiltin {
+                        builtin: "builtin:Date".to_string(),
+                        args: RegRange { start: 0, count: 0 },
+                        dst: 10,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+
+            // Should create Date object with deterministic timestamp
+            if let Value::Object(date_id) = core.registers[10] {
+                let date_obj = &core.heap[date_id.0 as usize];
+                let timestamp = date_obj.properties.get("__timestamp").unwrap();
+
+                if let Value::Float(f) = timestamp {
+                    assert_eq!(f.inner(), deterministic_epoch_ms);
+                } else {
+                    panic!("Date timestamp should be a float");
+                }
+            } else {
+                panic!("Date constructor should return an object");
+            }
+        }
+    }
+
+    #[test]
+    fn date_prototype_gettime_stable_values() {
+        let deterministic_epoch_ms = 1_767_225_600_000.0; // 2026-01-01T00:00:00Z
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Create Date object
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:Date".to_string(),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 5,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Multiple calls to getTime() should return same value
+        for _ in 0..3 {
+            // Set up this=date object for getTime call
+            core.registers[0] = core.registers[5].clone();
+
+            let result = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CallBuiltin {
+                        builtin: "builtin:DatePrototypeGetTime".to_string(),
+                        args: RegRange { start: 0, count: 1 },
+                        dst: 10,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .unwrap();
+
+            // Should return the same deterministic timestamp
+            if let Value::Float(f) = core.registers[10] {
+                assert_eq!(f.inner(), deterministic_epoch_ms);
+            } else {
+                panic!("Date.prototype.getTime should return a float");
+            }
+        }
     }
 }

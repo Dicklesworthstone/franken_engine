@@ -1048,7 +1048,9 @@ mod tests {
 
         // Create an empty IBLT and subtract.
         let empty = Iblt::new(64, 3);
+        // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt.subtract(&empty).unwrap();
+        // SAFETY: Test peeling simple difference (1 inserted element) should succeed
         let (pos, neg) = diff.peel().unwrap();
         assert_eq!(pos.len(), 1);
         assert_eq!(pos[0], h);
@@ -1075,7 +1077,9 @@ mod tests {
             iblt_b.insert(h);
         }
 
+        // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt_a.subtract(&iblt_b).unwrap();
+        // SAFETY: Test peeling symmetric difference with known element counts should succeed
         let (pos, neg) = diff.peel().unwrap();
 
         // pos = elements in A but not B (a_only).
@@ -1103,7 +1107,9 @@ mod tests {
             iblt_b.insert(&h);
         }
 
+        // SAFETY: Test subtracting identical compatible IBLTs should succeed
         let diff = iblt_a.subtract(&iblt_b).unwrap();
+        // SAFETY: Test peeling empty difference from identical sets should succeed
         let (pos, neg) = diff.peel().unwrap();
         assert!(pos.is_empty());
         assert!(neg.is_empty());
@@ -1123,6 +1129,7 @@ mod tests {
             iblt_b.insert(&make_wide_hash(i, 0xBB));
         }
 
+        // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt_a.subtract(&iblt_b).unwrap();
         assert!(diff.peel().is_err());
     }
@@ -1180,6 +1187,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
+            // SAFETY: Test reconciliation with valid IBLT parameters and small difference should succeed
             .unwrap();
 
         assert!(!result.fallback_triggered);
@@ -1202,6 +1210,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         let result = session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
+            // SAFETY: Test reconciliation with identical sets should succeed
             .unwrap();
 
         assert!(!result.fallback_triggered);
@@ -1225,6 +1234,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
+            // SAFETY: Test reconciliation with fallback enabled should succeed (even if fallback triggered)
             .unwrap();
         assert!(result.fallback_triggered);
     }

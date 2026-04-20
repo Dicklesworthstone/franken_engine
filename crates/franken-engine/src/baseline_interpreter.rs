@@ -22261,9 +22261,12 @@ mod tests {
     fn string_prototype_char_at_out_of_bounds() {
         // Test charAt with out-of-bounds index returns empty string
         let mut core = BaselineInterpreter::new();
+        // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(0, Value::Str("Hi".to_string())).unwrap();
+        // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(1, Value::Int(5)).unwrap(); // index 5 (out of bounds)
 
+        // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -22273,6 +22276,7 @@ mod tests {
             Ir3Instruction::Halt,
         ])).unwrap();
 
+        // SAFETY: the executed module writes its result to register 2.
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Str("".to_string()), "Out-of-bounds charAt should return empty string");
     }

@@ -370,6 +370,48 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the research artifact template entry.
+    pub fn with_research_artifact_template_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "research-artifact-template-0001".to_string(),
+            title: "Research Artifact Template".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text:
+                "Template for reusable research artifact metadata, bundle layout, and replication notes."
+                    .to_string(),
+            bundle_path: "docs/RESEARCH_ARTIFACT_TEMPLATE.md".to_string(),
+            artifact_type: "artifact_template".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the bd-2501 audit report entry.
+    pub fn with_bd2501_audit_report_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "bd2501-audit-report-0001".to_string(),
+            title: "BD-2501 Audit Report".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text:
+                "Audit report reconciling Section 16 research artifact coverage and registry completeness."
+                    .to_string(),
+            bundle_path: "docs/BD2501_AUDIT_REPORT.md".to_string(),
+            artifact_type: "audit_report".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -916,6 +958,34 @@ mod tests {
     }
 
     #[test]
+    fn test_research_artifact_template_entry() {
+        let registry = ResearchArtifactRegistry::with_research_artifact_template_entry();
+
+        let artifact = registry
+            .get_artifact("research-artifact-template-0001")
+            .expect("expected research artifact template artifact");
+        assert_eq!(artifact.artifact_type, "artifact_template");
+        assert_eq!(artifact.title, "Research Artifact Template");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("RESEARCH_ARTIFACT_TEMPLATE.md")
+        );
+    }
+
+    #[test]
+    fn test_bd2501_audit_report_entry() {
+        let registry = ResearchArtifactRegistry::with_bd2501_audit_report_entry();
+
+        let artifact = registry
+            .get_artifact("bd2501-audit-report-0001")
+            .expect("expected bd-2501 audit report artifact");
+        assert_eq!(artifact.artifact_type, "audit_report");
+        assert_eq!(artifact.title, "BD-2501 Audit Report");
+        assert!(artifact.bundle_path.ends_with("BD2501_AUDIT_REPORT.md"));
+    }
+
+    #[test]
     fn test_list_artifacts_order_deterministic() {
         let mut registry = ResearchArtifactRegistry::new();
         registry.register_artifact(ArtifactMetadata {
@@ -924,7 +994,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/DETERMINISM.md".to_string(),
+            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
         registry.register_artifact(ArtifactMetadata {
@@ -933,7 +1003,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/DETERMINISM.md".to_string(),
+            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
         registry.register_artifact(ArtifactMetadata {
@@ -942,7 +1012,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/DETERMINISM.md".to_string(),
+            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
 

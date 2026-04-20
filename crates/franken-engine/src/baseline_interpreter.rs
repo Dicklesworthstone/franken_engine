@@ -13050,30 +13050,7 @@ impl InterpreterCore {
 
             // Removed duplicate ArrayPrototypeFlat - implementation at line ~9886 is more complete
 
-            "builtin:PromiseResolve" => {
-                // Promise.resolve(value) implementation (simplified)
-                let value = if args.count > 1 {
-                    self.read_reg(args.start + 1)?
-                } else {
-                    Value::Undefined
-                };
-
-                // Create a simple resolved promise object
-                let promise_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    promise_id,
-                    "__type".to_string(),
-                    Value::Str("Promise".to_string()),
-                )?;
-                self.set_object_property(
-                    promise_id,
-                    "state".to_string(),
-                    Value::Str("fulfilled".to_string()),
-                )?;
-                self.set_object_property(promise_id, "value".to_string(), value)?;
-
-                Ok(Value::Object(promise_id))
-            }
+            // Removed duplicate PromiseResolve - implementation at line ~9255 is identical
 
             "builtin:StringPrototypeReplaceAll" => {
                 // String.prototype.replaceAll(searchValue, replaceValue) implementation

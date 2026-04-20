@@ -4688,7 +4688,11 @@ mod tests {
             }),
         ];
         for stmt in stmts {
+            // SAFETY: Statement derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&stmt).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Statement,
+            // so from_str back to Statement cannot fail (valid format + matching schema).
             let restored: Statement = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, stmt);
         }
@@ -4873,7 +4877,11 @@ mod tests {
             },
             span: make_span(),
         };
+        // SAFETY: CatchClause derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&clause).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CatchClause,
+        // so from_str back to CatchClause cannot fail (valid format + matching schema).
         let restored: CatchClause = serde_json::from_str(&json).unwrap();
         assert_eq!(clause, restored);
     }

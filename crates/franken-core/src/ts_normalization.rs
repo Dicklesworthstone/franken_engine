@@ -3940,6 +3940,8 @@ abstract class Base { }"#;
 
     #[test]
     fn output_witness_contains_hashes() {
+        // SAFETY: normalize_typescript_to_es2020 with valid TypeScript source and test inputs
+        // cannot fail under normal test conditions.
         let output = normalize_typescript_to_es2020(
             "const x = 1;",
             &TsNormalizationConfig::default(),

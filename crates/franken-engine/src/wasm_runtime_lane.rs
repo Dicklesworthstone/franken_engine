@@ -913,6 +913,7 @@ mod tests {
         // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(e).unwrap();
 
+        // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = g.propagate_dirty(s).unwrap();
         assert_eq!(dirty.len(), 3);
         assert_eq!(dirty[0], s);
@@ -931,6 +932,7 @@ mod tests {
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps).unwrap();
+        // SAFETY: dispose cannot fail for registered ID
         g.dispose(d).unwrap();
         assert_eq!(g.active_count(), 1);
     }
@@ -1362,11 +1364,11 @@ mod tests {
             .register(d, WasmSignalKind::Derived, deps)
             .unwrap();
 
-        // Dispose derived
+        // SAFETY: dispose cannot fail for registered ID
         lane.graph.dispose(d).unwrap();
         assert_eq!(lane.graph.active_count(), 1);
 
-        // Source dirty propagation should not reach disposed
+        // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = lane.graph.propagate_dirty(s).unwrap();
         assert_eq!(dirty.len(), 1);
     }
@@ -1443,6 +1445,7 @@ mod tests {
         let mut js_deps = BTreeSet::new();
         js_deps.insert(js_s);
         js.register(js_d, JsSignalKind::Derived, js_deps).unwrap();
+        // SAFETY: dispose cannot fail for registered ID
         js.dispose(js_d).unwrap();
         let js_dirty = js.mark_dirty(js_s).unwrap();
         let js_ids: Vec<JsSignalId> = js_dirty;
@@ -1825,6 +1828,7 @@ mod tests {
         graph.mark_clean(b).unwrap();
         graph.mark_clean(c).unwrap();
 
+        // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = graph.propagate_dirty(a).unwrap();
         // a(depth=0), b(depth=1), c(depth=2)
         assert_eq!(dirty.len(), 3);

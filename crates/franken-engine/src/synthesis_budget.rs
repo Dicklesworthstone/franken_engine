@@ -1293,7 +1293,9 @@ mod tests {
             FallbackQuality::PartialAblation,
             FallbackQuality::UnverifiedFull,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&q).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: FallbackQuality = serde_json::from_str(&json).unwrap();
             assert_eq!(q, restored);
         }
@@ -1361,7 +1363,9 @@ mod tests {
     fn error_serde_roundtrip() {
         let errors = vec![BudgetError::AlreadyExhausted, BudgetError::NoActivePhase];
         for err in &errors {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: BudgetError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
@@ -1501,7 +1505,9 @@ mod tests {
             contract: tight_contract(),
             justification: "needs more compute".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ovr).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: BudgetOverride = serde_json::from_str(&json).unwrap();
         assert_eq!(ovr, restored);
     }
@@ -1851,7 +1857,9 @@ mod tests {
             contract: SynthesisBudgetContract::default(),
             justification: "testing".into(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ovr).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: BudgetOverride = serde_json::from_str(&json).unwrap();
         assert_eq!(ovr, back);
     }

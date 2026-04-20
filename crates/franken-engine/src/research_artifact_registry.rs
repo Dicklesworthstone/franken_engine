@@ -203,6 +203,26 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the e2e mock-free test manifest entry.
+    pub fn with_e2e_mock_free_test_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "e2e-mock-free-test-manifest-0001".to_string(),
+            title: "E2E Mock-Free Test Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text: "Mock-free integration test manifest covering transactional isolation, service-level fixtures, rollback guarantees, structured logging, and observability-driven assertions."
+                .to_string(),
+            bundle_path: "docs/E2E_MOCK_FREE_TEST_MANIFEST.md".to_string(),
+            artifact_type: "e2e_testing_framework".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -226,7 +246,6 @@ impl ResearchArtifactRegistry {
             .filter(|artifact| artifact.artifact_type == artifact_type)
             .collect()
     }
-
     /// Construct a registry containing the golden artifact test bundle entry.
     pub fn with_golden_artifact_test_bundle_entry() -> Self {
         let mut registry = Self::new();
@@ -260,6 +279,26 @@ impl ResearchArtifactRegistry {
                 .to_string(),
             bundle_path: "docs/CONFORMANCE_HARNESS_MANIFEST.md".to_string(),
             artifact_type: "conformance_harness".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the lean proof feedback manifest entry.
+    pub fn with_lean_proof_feedback_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "lean-proof-feedback-0001".to_string(),
+            title: "Lean Proof Feedback Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Verification Team".to_string()],
+            abstract_text: "Formal verification strategy manifest integrating Lean theorem prover with Rust runtime validators, featuring proof obligations catalog, counterexample harvesting, and CI integration."
+                .to_string(),
+            bundle_path: "docs/LEAN_PROOF_FEEDBACK_MANIFEST.md".to_string(),
+            artifact_type: "verification_framework".to_string(),
         };
 
         registry.register_artifact(artifact);
@@ -424,6 +463,22 @@ mod tests {
     }
 
     #[test]
+    fn test_e2e_mock_free_test_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_e2e_mock_free_test_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("e2e-mock-free-test-manifest-0001")
+            .expect("expected e2e mock-free test manifest artifact");
+        assert_eq!(artifact.artifact_type, "e2e_testing_framework");
+        assert_eq!(artifact.title, "E2E Mock-Free Test Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("E2E_MOCK_FREE_TEST_MANIFEST.md")
+        );
+    }
+
+    #[test]
     fn test_golden_artifact_test_bundle_entry() {
         let registry = ResearchArtifactRegistry::with_golden_artifact_test_bundle_entry();
 
@@ -449,5 +504,17 @@ mod tests {
                 .bundle_path
                 .ends_with("CONFORMANCE_HARNESS_MANIFEST.md")
         );
+    }
+
+    #[test]
+    fn test_lean_proof_feedback_entry() {
+        let registry = ResearchArtifactRegistry::with_lean_proof_feedback_entry();
+
+        let artifact = registry
+            .get_artifact("lean-proof-feedback-0001")
+            .expect("expected lean proof feedback manifest");
+        assert_eq!(artifact.artifact_type, "verification_framework");
+        assert_eq!(artifact.title, "Lean Proof Feedback Manifest");
+        assert!(artifact.bundle_path.ends_with("LEAN_PROOF_FEEDBACK_MANIFEST.md"));
     }
 }

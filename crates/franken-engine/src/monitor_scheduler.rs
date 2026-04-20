@@ -1373,7 +1373,9 @@ mod tests {
         };
         let mut sched = MonitorScheduler::new(config);
         // Same cost, same info gain, same relevance => same VOI
+        // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched.register_probe(health_probe("beta")).unwrap();
+        // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched.register_probe(health_probe("alpha")).unwrap();
 
         let result = sched.schedule(Regime::Normal);
@@ -1405,6 +1407,7 @@ mod tests {
             information_gain_millionths: 0,
             base_relevance_millionths: 1_000_000,
         };
+        // SAFETY: Manually created ProbeConfig has valid fields for testing purposes
         sched.register_probe(zero_info).unwrap();
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
@@ -1421,10 +1424,12 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
+        // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched.register_probe(health_probe("h1")).unwrap(); // cost 100_000
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
         assert!(!dec.scheduled);
+        // SAFETY: Test setup ensures probe is not scheduled, so skip_reason is Some
         let reason = dec.skip_reason.as_ref().unwrap();
         assert!(reason.contains("budget exhausted"));
         assert!(reason.contains("remaining:"));

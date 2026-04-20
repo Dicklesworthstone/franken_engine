@@ -1038,6 +1038,30 @@ pub fn generate_report(bundle: &EvidenceBundle, config: &BundleConfig) -> Bundle
 }
 
 // ---------------------------------------------------------------------------
+// Export functionality
+// ---------------------------------------------------------------------------
+
+/// Export an evidence bundle to JSON format.
+pub fn export_bundle_json(bundle: &EvidenceBundle) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(bundle)
+}
+
+/// Export a bundle report to JSON format.
+pub fn export_report_json(report: &BundleReport) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(report)
+}
+
+/// Export an evidence bundle to TOML format.
+pub fn export_bundle_toml(bundle: &EvidenceBundle) -> Result<String, toml::ser::Error> {
+    toml::to_string_pretty(bundle)
+}
+
+/// Export a bundle report to TOML format.
+pub fn export_report_toml(report: &BundleReport) -> Result<String, toml::ser::Error> {
+    toml::to_string_pretty(report)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1731,5 +1755,55 @@ mod tests {
             .unwrap();
         assert_eq!(bundle.parity_for_workload("wk-1").len(), 2);
         assert_eq!(bundle.parity_for_workload("wk-nonexist").len(), 0);
+    }
+
+    // -- Export functionality tests --
+
+    #[test]
+    fn export_bundle_json_roundtrip() {
+        let bundle = populated_bundle();
+        let json = export_bundle_json(&bundle).unwrap();
+        let parsed: EvidenceBundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(bundle.bundle_id, parsed.bundle_id);
+        assert_eq!(bundle.runs.len(), parsed.runs.len());
+        assert_eq!(bundle.provenances.len(), parsed.provenances.len());
+    }
+
+    #[test]
+    fn export_bundle_toml_roundtrip() {
+        let bundle = populated_bundle();
+        let toml_str = export_bundle_toml(&bundle).unwrap();
+        let parsed: EvidenceBundle = toml::from_str(&toml_str).unwrap();
+        assert_eq!(bundle.bundle_id, parsed.bundle_id);
+        assert_eq!(bundle.runs.len(), parsed.runs.len());
+        assert_eq!(bundle.provenances.len(), parsed.provenances.len());
+    }
+
+    #[test]
+    fn export_report_json_contains_expected_structure() {
+        let bundle = populated_bundle();
+        let config = default_config();
+        let report = generate_report(&bundle, &config);
+        let json = export_report_json(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.get("bundle_id").is_some());
+        assert!(parsed.get("total_workloads").is_some());
+        assert!(parsed.get("verdict").is_some());
+        assert!(parsed.get("workload_stats").is_some());
+    }
+
+    #[test]
+    fn export_report_toml_contains_expected_structure() {
+        let bundle = populated_bundle();
+        let config = default_config();
+        let report = generate_report(&bundle, &config);
+        let toml_str = export_report_toml(&report).unwrap();
+        let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
+
+        assert!(parsed.get("bundle_id").is_some());
+        assert!(parsed.get("total_workloads").is_some());
+        assert!(parsed.get("verdict").is_some());
+        assert!(parsed.get("workload_stats").is_some());
     }
 }

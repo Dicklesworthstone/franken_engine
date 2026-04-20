@@ -50,6 +50,16 @@ impl LoweringGapStatus {
             Self::Resolved => "resolved",
         }
     }
+
+    pub const fn parser_ready_syntax(self) -> bool {
+        match self {
+            Self::FailClosed | Self::OpenPlaceholder | Self::Resolved => true,
+        }
+    }
+
+    pub const fn execution_ready_semantics(self) -> bool {
+        matches!(self, Self::Resolved)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -128,11 +138,11 @@ impl LoweringGapSiteId {
     }
 
     pub const fn parser_ready_syntax(self) -> bool {
-        true
+        self.status().parser_ready_syntax()
     }
 
     pub const fn execution_ready_semantics(self) -> bool {
-        matches!(self.status(), LoweringGapStatus::Resolved)
+        self.status().execution_ready_semantics()
     }
 
     pub const fn ast_node_family(self) -> &'static str {
@@ -709,6 +719,20 @@ mod tests {
             let back: LoweringGapStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(back, status);
             assert!(!status.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn lowering_gap_status_derives_readiness_flags() {
+        let cases = [
+            (LoweringGapStatus::Resolved, true, true),
+            (LoweringGapStatus::OpenPlaceholder, true, false),
+            (LoweringGapStatus::FailClosed, true, false),
+        ];
+
+        for (status, parser_ready, execution_ready) in cases {
+            assert_eq!(status.parser_ready_syntax(), parser_ready);
+            assert_eq!(status.execution_ready_semantics(), execution_ready);
         }
     }
 

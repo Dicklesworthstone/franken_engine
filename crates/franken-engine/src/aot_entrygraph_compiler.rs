@@ -1057,7 +1057,9 @@ mod tests {
     #[test]
     fn test_entry_kind_serde_roundtrip() {
         for kind in EntryKind::ALL {
+            // SAFETY: EntryKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid EntryKind serialization
             let back: EntryKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, back);
         }

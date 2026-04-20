@@ -577,9 +577,12 @@ impl TransitionReceipt {
         let mut data = Vec::new();
         data.extend_from_slice(array_id.as_bytes());
         data.push(b'|');
+        // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
         data.extend_from_slice(serde_json::to_string(&transition.from).unwrap().as_bytes());
+        // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
         data.extend_from_slice(serde_json::to_string(&transition.to).unwrap().as_bytes());
         data.extend_from_slice(
+            // SAFETY: StateTransitionReason derives Serialize and has no non-serializable fields
             serde_json::to_string(&transition.reason)
                 .unwrap()
                 .as_bytes(),

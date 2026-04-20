@@ -773,6 +773,7 @@ mod tests {
         if let TaxonomyValidationError::MissingRequiredField { field } = &err {
             assert!(field.contains("locale"));
         } else {
+            // SAFETY: Test validates taxonomy error type matches expected MissingRequiredField variant
             panic!("expected MissingRequiredField");
         }
     }

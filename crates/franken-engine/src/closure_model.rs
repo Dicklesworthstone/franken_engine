@@ -977,7 +977,9 @@ mod tests {
     #[test]
     fn closure_sees_mutations_through_captures() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("counter".into(), 1).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("counter", EnvValue::Number(0), Label::Public)
             .unwrap();

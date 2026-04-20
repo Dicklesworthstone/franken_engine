@@ -1050,6 +1050,7 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
+        // SAFETY: Test scenario with valid health probe; registration should succeed
         sched.register_probe(health_probe("h1")).unwrap();
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 1);

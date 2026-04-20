@@ -974,8 +974,13 @@ mod tests {
     #[test]
     fn challenge_serde_roundtrip() {
         let verifier = test_verifier();
+        // SAFETY: Test verifier with valid parameters should allow challenge generation to succeed
         let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        // SAFETY: AttestationChallenge derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&challenge).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid AttestationChallenge,
+        // so from_str back to AttestationChallenge cannot fail (valid format + matching schema).
         let restored: AttestationChallenge = serde_json::from_str(&json).unwrap();
         assert_eq!(challenge, restored);
     }
@@ -990,6 +995,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
+        // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
         let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
         assert!(auth.is_valid_at(1000));
@@ -1020,9 +1026,14 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
+        // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
         let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
+        // SAFETY: CellAuthorization derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&auth).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CellAuthorization,
+        // so from_str back to CellAuthorization cannot fail (valid format + matching schema).
         let restored: CellAuthorization = serde_json::from_str(&json).unwrap();
         assert_eq!(auth, restored);
     }
@@ -1037,6 +1048,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
+        // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
         let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
         assert_eq!(auth.cell_id, "cell-001");

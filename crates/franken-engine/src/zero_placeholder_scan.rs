@@ -417,7 +417,13 @@ fn lowering_findings(inventory: &LoweringGapInventory) -> Vec<ZeroPlaceholderFin
             owner_bead_id: bead_id_for_lowering_family(&site.ast_node_family).to_string(),
             subject_area: site.ast_node_family.clone(),
             source_reference: site.source_reference.clone(),
-            observed_behavior: site.user_visible_divergence.clone(),
+            observed_behavior: format!(
+                "status={}; parser_ready_syntax={}; execution_ready_semantics={}; {}",
+                site.status.as_str(),
+                site.parser_ready_syntax,
+                site.execution_ready_semantics,
+                site.user_visible_divergence,
+            ),
             required_behavior: site.target_replacement_strategy.clone(),
             diagnostic_code: Some(site.diagnostic_code.clone()),
         })

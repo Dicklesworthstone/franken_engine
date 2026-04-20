@@ -263,9 +263,12 @@ fn enrichment_inventory_serde_roundtrip() {
 fn make_artifact_paths() -> LoweringGapInventoryArtifactPaths {
     LoweringGapInventoryArtifactPaths {
         lowering_gap_inventory: "inventory.json".to_string(),
+        trace_ids: "trace_ids.json".to_string(),
         run_manifest: "manifest.json".to_string(),
         events_jsonl: "events.jsonl".to_string(),
         commands_txt: "commands.txt".to_string(),
+        step_logs: "step_logs".to_string(),
+        consumer_parity_report: "lowering_gap_truth_consumer_parity_report.json".to_string(),
     }
 }
 
@@ -286,9 +289,12 @@ fn enrichment_artifact_paths_json_field_names() {
     let json = serde_json::to_string(&make_artifact_paths()).unwrap();
     for field in &[
         "lowering_gap_inventory",
+        "trace_ids",
         "run_manifest",
         "events_jsonl",
         "commands_txt",
+        "step_logs",
+        "consumer_parity_report",
     ] {
         assert!(
             json.contains(&format!("\"{}\"", field)),
@@ -322,7 +328,7 @@ fn make_manifest() -> LoweringGapInventoryRunManifest {
         fail_closed_site_count: 0,
         open_placeholder_site_count: 0,
         parser_ready_site_count: 6,
-        execution_ready_site_count: 0,
+        execution_ready_site_count: 6,
         artifact_paths: make_artifact_paths(),
     }
 }
@@ -385,6 +391,8 @@ fn make_event() -> LoweringGapInventoryEvent {
         component: LOWERING_GAP_COMPONENT.to_string(),
         event: "site_evaluated".to_string(),
         outcome: "resolved".to_string(),
+        error_code: None,
+        consumer_name: Some("lowering_gap_inventory".to_string()),
         site_id: Some("for_in".to_string()),
         diagnostic_code: Some("FE-001".to_string()),
         detail: Some("detail".to_string()),
@@ -414,6 +422,8 @@ fn enrichment_event_json_field_names() {
         "component",
         "event",
         "outcome",
+        "error_code",
+        "consumer_name",
         "site_id",
         "diagnostic_code",
         "detail",
@@ -444,6 +454,8 @@ fn enrichment_event_with_nones() {
         component: LOWERING_GAP_COMPONENT.to_string(),
         event: "inventory_started".to_string(),
         outcome: "ok".to_string(),
+        error_code: None,
+        consumer_name: None,
         site_id: None,
         diagnostic_code: None,
         detail: None,

@@ -315,9 +315,12 @@ fn bundle_write_creates_all_expected_files() {
     let commands = vec!["test-command".to_string()];
     let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     assert!(artifacts.inventory_path.exists());
+    assert!(artifacts.trace_ids_path.exists());
     assert!(artifacts.run_manifest_path.exists());
     assert!(artifacts.events_path.exists());
     assert!(artifacts.commands_path.exists());
+    assert!(artifacts.step_logs_dir.exists());
+    assert!(artifacts.consumer_parity_report_path.exists());
 }
 
 #[test]
@@ -343,6 +346,12 @@ fn bundle_manifest_has_correct_counts() {
     assert_eq!(manifest.open_placeholder_site_count, 0);
     assert_eq!(manifest.parser_ready_site_count, 6);
     assert_eq!(manifest.execution_ready_site_count, 6);
+    assert_eq!(manifest.artifact_paths.trace_ids, "trace_ids.json");
+    assert_eq!(manifest.artifact_paths.step_logs, "step_logs");
+    assert_eq!(
+        manifest.artifact_paths.consumer_parity_report,
+        "lowering_gap_truth_consumer_parity_report.json"
+    );
 }
 
 #[test]
@@ -351,8 +360,58 @@ fn bundle_events_has_correct_line_count() {
     let commands = vec!["run".to_string()];
     let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events = fs::read_to_string(&artifacts.events_path).expect("read");
-    // 1 started + 6 gap_site_recorded + 1 completed = 8
-    assert_eq!(events.lines().count(), 8);
+    // 1 started + 6 gap_site_recorded + 12 consumer_truth_recorded + 1 completed = 20
+    assert_eq!(events.lines().count(), 20);
+}
+
+#[test]
+fn bundle_events_include_stable_replay_fields() {
+    let out_dir = unique_temp_dir("bundle-events-stable-fields");
+    let commands = vec!["run".to_string()];
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let events = fs::read_to_string(&artifacts.events_path).expect("read");
+    for line in events.lines() {
+        let event: serde_json::Value = serde_json::from_str(line).expect("parse event");
+        assert!(event.get("trace_id").is_some());
+        assert!(event.get("component").is_some());
+        assert!(event.get("event").is_some());
+        assert!(event.get("outcome").is_some());
+        assert!(event.get("error_code").is_some());
+        assert!(event.get("consumer_name").is_some());
+    }
+}
+
+#[test]
+fn bundle_writes_truth_consumer_parity_report() {
+    let out_dir = unique_temp_dir("bundle-consumer-parity");
+    let commands = vec!["parity".to_string()];
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let bytes = fs::read(&artifacts.consumer_parity_report_path).expect("read parity report");
+    let report: LoweringGapTruthConsumerParityReport =
+        serde_json::from_slice(&bytes).expect("parse parity report");
+    assert!(report.all_consumers_agree);
+    assert_eq!(report.site_count, 6);
+    assert_eq!(report.consumer_count, 2);
+    assert_eq!(report.records.len(), 12);
+    for record in report.records {
+        assert_eq!(record.status, LoweringGapStatus::Resolved);
+        assert!(record.parser_ready_syntax);
+        assert!(record.execution_ready_semantics);
+        assert_eq!(record.zero_placeholder_status, "resolved");
+        assert!(record.parity_ok);
+    }
+}
+
+#[test]
+fn bundle_step_log_replays_structured_events() {
+    let out_dir = unique_temp_dir("bundle-step-log");
+    let commands = vec!["step-log".to_string()];
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
+    let step_log = artifacts.step_logs_dir.join("step_000_generate.log");
+    assert!(step_log.exists());
+    let events = fs::read_to_string(&artifacts.events_path).expect("read events");
+    let step_events = fs::read_to_string(step_log).expect("read step log");
+    assert_eq!(step_events, events);
 }
 
 #[test]

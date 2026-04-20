@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frankenengine_engine::lowering_gap_inventory::{LoweringGapSiteId, lowering_gap_inventory};
 use frankenengine_engine::zero_placeholder_scan::*;
 
 fn unique_dir(label: &str) -> PathBuf {
@@ -205,6 +206,48 @@ fn enrichment_inventory_subsystem_summaries() {
     assert!(!summaries.is_empty());
     let total: u64 = summaries.iter().map(|s| s.finding_count).sum();
     assert_eq!(total, inventory.findings.len() as u64);
+}
+
+#[test]
+fn enrichment_lowering_summary_reflects_reconciled_execution_ready_truth() {
+    let inventory = zero_placeholder_scan_inventory();
+    let summary = inventory
+        .subsystem_summaries()
+        .into_iter()
+        .find(|summary| summary.subsystem == ZeroPlaceholderSubsystem::Lowering)
+        .expect("lowering summary");
+    assert_eq!(summary.finding_count, LoweringGapSiteId::ALL.len() as u64);
+    assert_eq!(summary.open_placeholder_finding_count, 0);
+    assert_eq!(summary.fail_closed_finding_count, 0);
+    assert_eq!(
+        summary.resolved_finding_count,
+        LoweringGapSiteId::ALL.len() as u64
+    );
+}
+
+#[test]
+fn enrichment_lowering_findings_carry_execution_ready_semantics() {
+    let lowering_inventory = lowering_gap_inventory();
+    let scan_inventory = zero_placeholder_scan_inventory();
+    for site in lowering_inventory.sites {
+        let finding_id = format!("lowering::{}", site.site_id);
+        let finding = scan_inventory
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == finding_id)
+            .unwrap_or_else(|| panic!("missing finding {finding_id}"));
+        assert_eq!(finding.status, ZeroPlaceholderStatus::Resolved);
+        assert!(
+            finding
+                .observed_behavior
+                .contains("parser_ready_syntax=true")
+        );
+        assert!(
+            finding
+                .observed_behavior
+                .contains("execution_ready_semantics=true")
+        );
+    }
 }
 
 #[test]

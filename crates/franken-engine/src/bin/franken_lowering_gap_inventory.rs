@@ -13,9 +13,12 @@ struct CommandOutput {
     schema_version: String,
     out_dir: String,
     lowering_gap_inventory: String,
+    trace_ids: String,
     run_manifest: String,
     events_jsonl: String,
     commands_txt: String,
+    step_logs_dir: String,
+    consumer_parity_report: String,
     inventory_hash: String,
     site_count: usize,
 }
@@ -37,9 +40,12 @@ fn run() -> Result<(), String> {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
         out_dir: artifacts.out_dir.display().to_string(),
         lowering_gap_inventory: artifacts.inventory_path.display().to_string(),
+        trace_ids: artifacts.trace_ids_path.display().to_string(),
         run_manifest: artifacts.run_manifest_path.display().to_string(),
         events_jsonl: artifacts.events_path.display().to_string(),
         commands_txt: artifacts.commands_path.display().to_string(),
+        step_logs_dir: artifacts.step_logs_dir.display().to_string(),
+        consumer_parity_report: artifacts.consumer_parity_report_path.display().to_string(),
         inventory_hash: artifacts.inventory_hash,
         site_count: artifacts.site_count,
     };
@@ -119,6 +125,6 @@ fn shell_escape_arg(arg: &str) -> String {
 }
 
 fn replay_command_for_bundle() -> String {
-    "rch exec -- cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>"
+    "CARGO_TARGET_DIR=<TARGET_DIR> CARGO_INCREMENTAL=0 cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>"
         .to_string()
 }

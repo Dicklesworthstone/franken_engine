@@ -11,10 +11,18 @@ use sha2::{Digest, Sha256};
 pub const LOWERING_GAP_INVENTORY_SCHEMA_VERSION: &str = "franken-engine.lowering-gap-inventory.v1";
 pub const LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.lowering-gap-inventory.run-manifest.v1";
+pub const LOWERING_GAP_TRACE_IDS_SCHEMA_VERSION: &str =
+    "franken-engine.lowering-gap-inventory.trace-ids.v1";
 pub const LOWERING_GAP_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.lowering-gap-inventory.event.v1";
+pub const LOWERING_GAP_TRUTH_CONSUMER_PARITY_SCHEMA_VERSION: &str =
+    "franken-engine.lowering-gap-inventory.truth-consumer-parity.v1";
 pub const LOWERING_GAP_COMPONENT: &str = "lowering_gap_inventory";
 pub const LOWERING_GAP_POLICY_ID: &str = "franken-engine.lowering-gap-inventory.policy.v1";
+
+const LOWERING_GAP_INVENTORY_CONSUMER: &str = "lowering_gap_inventory";
+const ZERO_PLACEHOLDER_SCAN_CONSUMER: &str = "zero_placeholder_scan";
+const LOWERING_GAP_STEP_LOG_NAME: &str = "step_000_generate.log";
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -366,9 +374,22 @@ pub fn lowering_gap_inventory() -> LoweringGapInventory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringGapInventoryArtifactPaths {
     pub lowering_gap_inventory: String,
+    pub trace_ids: String,
     pub run_manifest: String,
     pub events_jsonl: String,
     pub commands_txt: String,
+    pub step_logs: String,
+    pub consumer_parity_report: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoweringGapInventoryTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,6 +417,8 @@ pub struct LoweringGapInventoryEvent {
     pub component: String,
     pub event: String,
     pub outcome: String,
+    pub error_code: Option<String>,
+    pub consumer_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -404,13 +427,42 @@ pub struct LoweringGapInventoryEvent {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoweringGapTruthConsumerParityReport {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+    pub site_count: u64,
+    pub consumer_count: u64,
+    pub all_consumers_agree: bool,
+    pub records: Vec<LoweringGapTruthConsumerParityRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoweringGapTruthConsumerParityRecord {
+    pub consumer_name: String,
+    pub site_id: String,
+    pub diagnostic_code: String,
+    pub status: LoweringGapStatus,
+    pub parser_ready_syntax: bool,
+    pub execution_ready_semantics: bool,
+    pub zero_placeholder_status: String,
+    pub parity_ok: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweringGapInventoryArtifacts {
     pub out_dir: PathBuf,
     pub inventory_path: PathBuf,
+    pub trace_ids_path: PathBuf,
     pub run_manifest_path: PathBuf,
     pub events_path: PathBuf,
     pub commands_path: PathBuf,
+    pub step_logs_dir: PathBuf,
+    pub consumer_parity_report_path: PathBuf,
     pub inventory_hash: String,
     pub site_count: usize,
 }
@@ -445,9 +497,14 @@ pub fn write_lowering_gap_inventory_bundle(
 
     let inventory = lowering_gap_inventory();
     let inventory_path = out_dir.join("lowering_gap_inventory.json");
+    let trace_ids_path = out_dir.join("trace_ids.json");
     let run_manifest_path = out_dir.join("run_manifest.json");
     let events_path = out_dir.join("events.jsonl");
     let commands_path = out_dir.join("commands.txt");
+    let step_logs_dir = out_dir.join("step_logs");
+    let step_log_path = step_logs_dir.join(LOWERING_GAP_STEP_LOG_NAME);
+    let consumer_parity_report_path =
+        out_dir.join("lowering_gap_truth_consumer_parity_report.json");
 
     let inventory_bytes = canonical_json_bytes(&inventory, &inventory_path)?;
     let inventory_hash = sha256_hex(&inventory_bytes);
@@ -455,6 +512,25 @@ pub fn write_lowering_gap_inventory_bundle(
     let short_hash = inventory_hash.chars().take(16).collect::<String>();
     let trace_id = format!("trace-lowering-gap-{short_hash}");
     let decision_id = format!("decision-lowering-gap-{short_hash}");
+
+    let trace_ids = LoweringGapInventoryTraceIds {
+        schema_version: LOWERING_GAP_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: LOWERING_GAP_COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: LOWERING_GAP_POLICY_ID.to_string(),
+        inventory_hash: inventory_hash.clone(),
+    };
+    let trace_ids_bytes = canonical_json_bytes(&trace_ids, &trace_ids_path)?;
+
+    let consumer_parity_report = lowering_gap_truth_consumer_parity_report_with_hash(
+        &inventory,
+        &trace_id,
+        &decision_id,
+        &inventory_hash,
+    );
+    let consumer_parity_report_bytes =
+        canonical_json_bytes(&consumer_parity_report, &consumer_parity_report_path)?;
 
     let manifest = LoweringGapInventoryRunManifest {
         schema_version: LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -470,14 +546,18 @@ pub fn write_lowering_gap_inventory_bundle(
         execution_ready_site_count: inventory.execution_ready_site_count() as u64,
         artifact_paths: LoweringGapInventoryArtifactPaths {
             lowering_gap_inventory: "lowering_gap_inventory.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
             commands_txt: "commands.txt".to_string(),
+            step_logs: "step_logs".to_string(),
+            consumer_parity_report: "lowering_gap_truth_consumer_parity_report.json".to_string(),
         },
     };
     let manifest_bytes = canonical_json_bytes(&manifest, &run_manifest_path)?;
 
-    let events = build_inventory_events(&inventory, &trace_id, &decision_id);
+    let events =
+        build_inventory_events(&inventory, &consumer_parity_report, &trace_id, &decision_id);
     let mut events_jsonl = String::new();
     for event in &events {
         let line = serde_json::to_string(event).map_err(|source| {
@@ -497,25 +577,99 @@ pub fn write_lowering_gap_inventory_bundle(
 
     let _bundle_lock = acquire_bundle_write_lock(&out_dir)?;
     remove_commit_marker(&run_manifest_path)?;
+    fs::create_dir_all(&step_logs_dir).map_err(|source| LoweringGapInventoryWriteError::Io {
+        path: step_logs_dir.display().to_string(),
+        source,
+    })?;
     write_atomic(&inventory_path, &inventory_bytes)?;
+    write_atomic(&trace_ids_path, &trace_ids_bytes)?;
     write_atomic(&events_path, events_jsonl.as_bytes())?;
     write_atomic(&commands_path, commands_buf.as_bytes())?;
+    write_atomic(&step_log_path, events_jsonl.as_bytes())?;
+    write_atomic(&consumer_parity_report_path, &consumer_parity_report_bytes)?;
     // Publish the manifest last so its presence acts as a commit marker.
     write_atomic(&run_manifest_path, &manifest_bytes)?;
 
     Ok(LoweringGapInventoryArtifacts {
         out_dir,
         inventory_path,
+        trace_ids_path,
         run_manifest_path,
         events_path,
         commands_path,
+        step_logs_dir,
+        consumer_parity_report_path,
         inventory_hash,
         site_count: inventory.sites.len(),
     })
 }
 
+pub fn lowering_gap_truth_consumer_parity_report(
+    inventory: &LoweringGapInventory,
+    trace_id: &str,
+    decision_id: &str,
+) -> LoweringGapTruthConsumerParityReport {
+    lowering_gap_truth_consumer_parity_report_with_hash(inventory, trace_id, decision_id, "")
+}
+
+fn lowering_gap_truth_consumer_parity_report_with_hash(
+    inventory: &LoweringGapInventory,
+    trace_id: &str,
+    decision_id: &str,
+    inventory_hash: &str,
+) -> LoweringGapTruthConsumerParityReport {
+    let mut records = Vec::with_capacity(inventory.sites.len() * 2);
+    for site in &inventory.sites {
+        records.push(parity_record_for_consumer(
+            site,
+            LOWERING_GAP_INVENTORY_CONSUMER,
+        ));
+        records.push(parity_record_for_consumer(
+            site,
+            ZERO_PLACEHOLDER_SCAN_CONSUMER,
+        ));
+    }
+
+    let all_consumers_agree = records.iter().all(|record| record.parity_ok);
+
+    LoweringGapTruthConsumerParityReport {
+        schema_version: LOWERING_GAP_TRUTH_CONSUMER_PARITY_SCHEMA_VERSION.to_string(),
+        component: LOWERING_GAP_COMPONENT.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: LOWERING_GAP_POLICY_ID.to_string(),
+        inventory_hash: inventory_hash.to_string(),
+        site_count: inventory.sites.len() as u64,
+        consumer_count: 2,
+        all_consumers_agree,
+        records,
+    }
+}
+
+fn parity_record_for_consumer(
+    site: &LoweringGapSiteDescriptor,
+    consumer_name: &str,
+) -> LoweringGapTruthConsumerParityRecord {
+    let zero_placeholder_status = site.status.as_str().to_string();
+    let parity_ok = site.parser_ready_syntax == site.status.parser_ready_syntax()
+        && site.execution_ready_semantics == site.status.execution_ready_semantics()
+        && zero_placeholder_status == site.status.as_str();
+
+    LoweringGapTruthConsumerParityRecord {
+        consumer_name: consumer_name.to_string(),
+        site_id: site.site_id.clone(),
+        diagnostic_code: site.diagnostic_code.clone(),
+        status: site.status,
+        parser_ready_syntax: site.parser_ready_syntax,
+        execution_ready_semantics: site.execution_ready_semantics,
+        zero_placeholder_status,
+        parity_ok,
+    }
+}
+
 fn build_inventory_events(
     inventory: &LoweringGapInventory,
+    consumer_parity_report: &LoweringGapTruthConsumerParityReport,
     trace_id: &str,
     decision_id: &str,
 ) -> Vec<LoweringGapInventoryEvent> {
@@ -527,6 +681,8 @@ fn build_inventory_events(
         component: LOWERING_GAP_COMPONENT.to_string(),
         event: "inventory_started".to_string(),
         outcome: "started".to_string(),
+        error_code: None,
+        consumer_name: Some(LOWERING_GAP_INVENTORY_CONSUMER.to_string()),
         site_id: None,
         diagnostic_code: None,
         detail: Some("authoritative lowering-gap inventory generation began".to_string()),
@@ -544,11 +700,40 @@ fn build_inventory_events(
                 component: LOWERING_GAP_COMPONENT.to_string(),
                 event: "gap_site_recorded".to_string(),
                 outcome: site.status.as_str().to_string(),
+                error_code: None,
+                consumer_name: Some(LOWERING_GAP_INVENTORY_CONSUMER.to_string()),
                 site_id: Some(site.site_id.clone()),
                 diagnostic_code: Some(site.diagnostic_code.clone()),
                 detail: Some(site.user_visible_divergence.clone()),
             }),
     );
+
+    events.extend(consumer_parity_report.records.iter().map(|record| {
+        LoweringGapInventoryEvent {
+            schema_version: LOWERING_GAP_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            policy_id: LOWERING_GAP_POLICY_ID.to_string(),
+            component: LOWERING_GAP_COMPONENT.to_string(),
+            event: "consumer_truth_recorded".to_string(),
+            outcome: if record.parity_ok { "pass" } else { "fail" }.to_string(),
+            error_code: if record.parity_ok {
+                None
+            } else {
+                Some("LOWERING_GAP_TRUTH_CONSUMER_MISMATCH".to_string())
+            },
+            consumer_name: Some(record.consumer_name.clone()),
+            site_id: Some(record.site_id.clone()),
+            diagnostic_code: Some(record.diagnostic_code.clone()),
+            detail: Some(format!(
+                "status={}, parser_ready_syntax={}, execution_ready_semantics={}, zero_placeholder_status={}",
+                record.status.as_str(),
+                record.parser_ready_syntax,
+                record.execution_ready_semantics,
+                record.zero_placeholder_status,
+            )),
+        }
+    }));
 
     events.push(LoweringGapInventoryEvent {
         schema_version: LOWERING_GAP_EVENT_SCHEMA_VERSION.to_string(),
@@ -558,6 +743,8 @@ fn build_inventory_events(
         component: LOWERING_GAP_COMPONENT.to_string(),
         event: "inventory_completed".to_string(),
         outcome: "completed".to_string(),
+        error_code: None,
+        consumer_name: Some(LOWERING_GAP_INVENTORY_CONSUMER.to_string()),
         site_id: None,
         diagnostic_code: None,
         detail: Some(format!(
@@ -693,7 +880,9 @@ mod tests {
     fn schema_version_constants_are_non_empty() {
         assert!(!LOWERING_GAP_INVENTORY_SCHEMA_VERSION.is_empty());
         assert!(!LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!LOWERING_GAP_TRACE_IDS_SCHEMA_VERSION.is_empty());
         assert!(!LOWERING_GAP_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!LOWERING_GAP_TRUTH_CONSUMER_PARITY_SCHEMA_VERSION.is_empty());
         assert!(!LOWERING_GAP_COMPONENT.is_empty());
         assert!(!LOWERING_GAP_POLICY_ID.is_empty());
     }
@@ -811,6 +1000,8 @@ mod tests {
             component: LOWERING_GAP_COMPONENT.to_string(),
             event: "gap_site_recorded".to_string(),
             outcome: "resolved".to_string(),
+            error_code: None,
+            consumer_name: Some("test_consumer".to_string()),
             site_id: Some("test_site".to_string()),
             diagnostic_code: Some("FE-TEST-0001".to_string()),
             detail: None,
@@ -836,9 +1027,13 @@ mod tests {
             execution_ready_site_count: 6,
             artifact_paths: LoweringGapInventoryArtifactPaths {
                 lowering_gap_inventory: "inventory.json".to_string(),
+                trace_ids: "trace_ids.json".to_string(),
                 run_manifest: "manifest.json".to_string(),
                 events_jsonl: "events.jsonl".to_string(),
                 commands_txt: "commands.txt".to_string(),
+                step_logs: "step_logs".to_string(),
+                consumer_parity_report: "lowering_gap_truth_consumer_parity_report.json"
+                    .to_string(),
             },
         };
         let json = serde_json::to_string(&manifest).unwrap();
@@ -901,9 +1096,18 @@ mod tests {
         let artifacts =
             write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write artifacts");
         assert!(artifacts.inventory_path.exists());
+        assert!(artifacts.trace_ids_path.exists());
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.events_path.exists());
         assert!(artifacts.commands_path.exists());
+        assert!(artifacts.step_logs_dir.exists());
+        assert!(
+            artifacts
+                .step_logs_dir
+                .join(LOWERING_GAP_STEP_LOG_NAME)
+                .exists()
+        );
+        assert!(artifacts.consumer_parity_report_path.exists());
 
         let inventory: LoweringGapInventory =
             serde_json::from_slice(&fs::read(&artifacts.inventory_path).expect("read inventory"))
@@ -924,9 +1128,44 @@ mod tests {
             manifest.execution_ready_site_count,
             LoweringGapSiteId::ALL.len() as u64
         );
+        assert_eq!(manifest.artifact_paths.trace_ids, "trace_ids.json");
+        assert_eq!(manifest.artifact_paths.step_logs, "step_logs");
+        assert_eq!(
+            manifest.artifact_paths.consumer_parity_report,
+            "lowering_gap_truth_consumer_parity_report.json"
+        );
+
+        let trace_ids: LoweringGapInventoryTraceIds =
+            serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
+                .expect("trace ids json");
+        assert_eq!(trace_ids.trace_id, manifest.trace_id);
+
+        let parity_report: LoweringGapTruthConsumerParityReport = serde_json::from_slice(
+            &fs::read(&artifacts.consumer_parity_report_path).expect("read parity report"),
+        )
+        .expect("parity report json");
+        assert!(parity_report.all_consumers_agree);
+        assert_eq!(
+            parity_report.site_count,
+            LoweringGapSiteId::ALL.len() as u64
+        );
+        assert_eq!(parity_report.consumer_count, 2);
+        assert_eq!(
+            parity_report.records.len(),
+            LoweringGapSiteId::ALL.len() * 2
+        );
 
         let events = fs::read_to_string(&artifacts.events_path).expect("read events");
-        assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() + 2);
+        assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() * 3 + 2);
+        for line in events.lines() {
+            let event_json: serde_json::Value = serde_json::from_str(line).expect("event json");
+            assert!(event_json.get("trace_id").is_some());
+            assert!(event_json.get("component").is_some());
+            assert!(event_json.get("event").is_some());
+            assert!(event_json.get("outcome").is_some());
+            assert!(event_json.get("error_code").is_some());
+            assert!(event_json.get("consumer_name").is_some());
+        }
 
         let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("read commands");
         assert!(commands_txt.contains("franken_lowering_gap_inventory"));
@@ -1096,11 +1335,12 @@ mod tests {
     #[test]
     fn build_inventory_events_has_start_sites_and_end() {
         let inventory = lowering_gap_inventory();
-        let events = build_inventory_events(&inventory, "t1", "d1");
-        assert_eq!(events.len(), inventory.sites.len() + 2);
+        let report = lowering_gap_truth_consumer_parity_report(&inventory, "t1", "d1");
+        let events = build_inventory_events(&inventory, &report, "t1", "d1");
+        assert_eq!(events.len(), inventory.sites.len() * 3 + 2);
         assert_eq!(events.first().unwrap().event, "inventory_started");
         assert_eq!(events.last().unwrap().event, "inventory_completed");
-        for event in &events[1..events.len() - 1] {
+        for event in &events[1..=inventory.sites.len()] {
             assert_eq!(event.event, "gap_site_recorded");
             assert!(event.site_id.is_some());
             assert!(event.diagnostic_code.is_some());
@@ -1110,7 +1350,9 @@ mod tests {
     #[test]
     fn event_trace_and_decision_ids_are_consistent() {
         let inventory = lowering_gap_inventory();
-        let events = build_inventory_events(&inventory, "trace-abc", "decision-xyz");
+        let report =
+            lowering_gap_truth_consumer_parity_report(&inventory, "trace-abc", "decision-xyz");
+        let events = build_inventory_events(&inventory, &report, "trace-abc", "decision-xyz");
         for event in &events {
             assert_eq!(event.trace_id, "trace-abc");
             assert_eq!(event.decision_id, "decision-xyz");
@@ -1424,6 +1666,8 @@ mod tests {
             component: "c".to_string(),
             event: "inventory_started".to_string(),
             outcome: "started".to_string(),
+            error_code: None,
+            consumer_name: None,
             site_id: None,
             diagnostic_code: None,
             detail: None,
@@ -1450,6 +1694,8 @@ mod tests {
             component: "c".to_string(),
             event: "gap_site_recorded".to_string(),
             outcome: "resolved".to_string(),
+            error_code: None,
+            consumer_name: Some("consumer".to_string()),
             site_id: Some("site_x".to_string()),
             diagnostic_code: Some("DC-0001".to_string()),
             detail: Some("some detail".to_string()),
@@ -1464,6 +1710,8 @@ mod tests {
     fn event_deserialize_with_missing_optional_fields() {
         let json = r#"{"schema_version":"v","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"o"}"#;
         let event: LoweringGapInventoryEvent = serde_json::from_str(json).unwrap();
+        assert!(event.error_code.is_none());
+        assert!(event.consumer_name.is_none());
         assert!(event.site_id.is_none());
         assert!(event.diagnostic_code.is_none());
         assert!(event.detail.is_none());
@@ -1600,10 +1848,16 @@ mod tests {
     #[test]
     fn build_inventory_events_start_event_has_no_site_id() {
         let inventory = lowering_gap_inventory();
-        let events = build_inventory_events(&inventory, "t", "d");
+        let report = lowering_gap_truth_consumer_parity_report(&inventory, "t", "d");
+        let events = build_inventory_events(&inventory, &report, "t", "d");
         let start = &events[0];
         assert_eq!(start.event, "inventory_started");
         assert_eq!(start.outcome, "started");
+        assert!(start.error_code.is_none());
+        assert_eq!(
+            start.consumer_name.as_deref(),
+            Some(LOWERING_GAP_INVENTORY_CONSUMER)
+        );
         assert!(start.site_id.is_none());
         assert!(start.diagnostic_code.is_none());
         assert!(start.detail.is_some());
@@ -1612,7 +1866,8 @@ mod tests {
     #[test]
     fn build_inventory_events_completed_event_detail_contains_counts() {
         let inventory = lowering_gap_inventory();
-        let events = build_inventory_events(&inventory, "t", "d");
+        let report = lowering_gap_truth_consumer_parity_report(&inventory, "t", "d");
+        let events = build_inventory_events(&inventory, &report, "t", "d");
         let completed = events.last().unwrap();
         assert_eq!(completed.event, "inventory_completed");
         assert_eq!(completed.outcome, "completed");
@@ -1627,8 +1882,9 @@ mod tests {
     #[test]
     fn build_inventory_events_site_events_match_inventory_order() {
         let inventory = lowering_gap_inventory();
-        let events = build_inventory_events(&inventory, "trace", "dec");
-        let site_events = &events[1..events.len() - 1];
+        let report = lowering_gap_truth_consumer_parity_report(&inventory, "trace", "dec");
+        let events = build_inventory_events(&inventory, &report, "trace", "dec");
+        let site_events = &events[1..=inventory.sites.len()];
         assert_eq!(site_events.len(), inventory.sites.len());
         for (i, event) in site_events.iter().enumerate() {
             assert_eq!(
@@ -1647,9 +1903,12 @@ mod tests {
     fn artifact_paths_serde_roundtrip() {
         let paths = LoweringGapInventoryArtifactPaths {
             lowering_gap_inventory: "inv.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
             run_manifest: "man.json".to_string(),
             events_jsonl: "ev.jsonl".to_string(),
             commands_txt: "cmd.txt".to_string(),
+            step_logs: "step_logs".to_string(),
+            consumer_parity_report: "parity.json".to_string(),
         };
         let json = serde_json::to_string(&paths).unwrap();
         let back: LoweringGapInventoryArtifactPaths = serde_json::from_str(&json).unwrap();

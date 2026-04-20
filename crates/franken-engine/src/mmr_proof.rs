@@ -831,7 +831,9 @@ mod tests {
     fn inclusion_proof_power_of_two() {
         let mmr = build_mmr(8);
         for i in 0..8 {
+            // SAFETY: MMR with 8 elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr.inclusion_proof(i).unwrap();
+            // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
             verify_inclusion(&leaf_hash(i), i, &proof).unwrap();
         }
     }

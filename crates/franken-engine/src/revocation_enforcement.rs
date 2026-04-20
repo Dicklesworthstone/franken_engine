@@ -724,6 +724,7 @@ mod tests {
                 assert_eq!(denial.transitive_root, Some(issuer_key_id));
                 assert_eq!(denial.target_type, RevocationTargetType::Token);
             }
+            // SAFETY: Test validates revocation enforcement produces expected transitive denial
             _ => panic!("expected transitive denial"),
         }
     }

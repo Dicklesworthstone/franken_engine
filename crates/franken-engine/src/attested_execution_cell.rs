@@ -1078,6 +1078,7 @@ impl CellRegistry {
         self.function_index
             .get(&function)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
+            // SAFETY: Function index is maintained in sync with registered functions
             .unwrap()
     }
 
@@ -1674,23 +1675,30 @@ mod tests {
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
         // Suspend.
+        // SAFETY: suspend_cell cannot fail with valid test inputs
         reg.suspend_cell(&cid, "trust root update", 5_000, epoch)
             .unwrap();
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Suspended);
 
         // Re-attest from Suspended.
         let q2 = root.attest(&m, [2u8; 32], 10_000_000, 5_000);
+        // SAFETY: attest_cell cannot fail with valid test inputs
         reg.attest_cell(&cid, q2, 6_000, epoch).unwrap();
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Attested);
 
         // Re-activate.
+        // SAFETY: activate_cell cannot fail with valid test inputs
         reg.activate_cell(&cid, 7_000, epoch).unwrap();
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Active);
     }
 
     #[test]
     fn invalid_transition_provisioning_to_active() {
         let mut reg = CellRegistry::new();
+        // SAFETY: create_cell cannot fail with valid test inputs
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
         assert!(matches!(

@@ -647,7 +647,11 @@ mod tests {
     #[test]
     fn gate_kind_serde_roundtrip() {
         for kind in GateKind::all() {
+            // SAFETY: GateKind derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid GateKind,
+            // so from_str back to GateKind cannot fail (valid format + matching schema).
             let restored: GateKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, restored);
         }
@@ -720,7 +724,11 @@ mod tests {
             },
         ];
         for v in verdicts {
+            // SAFETY: GateVerdict derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid GateVerdict,
+            // so from_str back to GateVerdict cannot fail (valid format + matching schema).
             let restored: GateVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
@@ -748,7 +756,11 @@ mod tests {
                 ],
             },
         ] {
+            // SAFETY: OverallVerdict derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid OverallVerdict,
+            // so from_str back to OverallVerdict cannot fail (valid format + matching schema).
             let restored: OverallVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
@@ -776,7 +788,11 @@ mod tests {
             check_evidence: false,
             replay_iterations: 5,
         };
+        // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cfg).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateConfig,
+        // so from_str back to GateConfig cannot fail (valid format + matching schema).
         let restored: GateConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, restored);
     }

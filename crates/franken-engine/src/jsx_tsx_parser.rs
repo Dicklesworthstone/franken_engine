@@ -1553,6 +1553,7 @@ mod tests {
                 assert!(el.self_closing);
                 assert!(el.children.is_empty());
             }
+            // SAFETY: Test validates JSX parsing produces element node for self-closing "<br />"
             _ => panic!("expected element"),
         }
     }

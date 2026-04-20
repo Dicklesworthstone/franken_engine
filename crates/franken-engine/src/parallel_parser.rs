@@ -2912,6 +2912,7 @@ mod tests {
     fn log_entries_for_serial() {
         let config = default_config();
         let input = make_input("x + y", &config);
+        // SAFETY: parse cannot fail on valid test input
         let output = parse(&input).unwrap();
         let entries = generate_log_entries("trace-1", &output);
         assert!(!entries.is_empty());
@@ -2927,6 +2928,7 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: parse cannot fail on valid test input
         let output = parse(&input).unwrap();
         let entries = generate_log_entries("trace-1", &output);
         assert!(!entries.is_empty());
@@ -2936,6 +2938,7 @@ mod tests {
     fn log_entries_trace_id_consistent() {
         let config = default_config();
         let input = make_input("x + y", &config);
+        // SAFETY: parse cannot fail on valid test input
         let output = parse(&input).unwrap();
         let entries = generate_log_entries("trace-42", &output);
         assert!(entries.iter().all(|e| e.trace_id == "trace-42"));
@@ -2981,7 +2984,9 @@ mod tests {
             size: 1000,
             max: 500,
         };
+        // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&e).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ParseError = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
     }
@@ -2992,6 +2997,7 @@ mod tests {
     fn schema_version_in_output() {
         let config = default_config();
         let input = make_input("x", &config);
+        // SAFETY: parse cannot fail on valid test input
         let output = parse(&input).unwrap();
         assert_eq!(output.schema_version, SCHEMA_VERSION);
     }

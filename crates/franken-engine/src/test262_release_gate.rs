@@ -923,8 +923,11 @@ fn parse_pin_toml(content: &str) -> io::Result<Test262PinSet> {
         schema_version: values
             .remove("schema_version")
             .unwrap_or_else(|| TEST262_PIN_SCHEMA.to_string()),
+        // SAFETY: source_repo is a required field in Test262 pin TOML format
         source_repo: values.remove("source_repo").unwrap(),
+        // SAFETY: es_profile is a required field in Test262 pin TOML format
         es_profile: values.remove("es_profile").unwrap(),
+        // SAFETY: test262_commit is a required field in Test262 pin TOML format
         test262_commit: values.remove("test262_commit").unwrap(),
     })
 }
@@ -1563,7 +1566,11 @@ mod tests {
             Test262WaiverReason::IntentionalDivergence,
             Test262WaiverReason::NotYetImplemented,
         ] {
+            // SAFETY: Test262WaiverReason derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&reason).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Test262WaiverReason,
+            // so from_str back to Test262WaiverReason cannot fail (valid format + matching schema).
             let back: Test262WaiverReason = serde_json::from_str(&json).unwrap();
             assert_eq!(back, reason);
         }
@@ -1779,7 +1786,11 @@ mod tests {
             Test262Outcome::Timeout,
             Test262Outcome::Crash,
         ] {
+            // SAFETY: Test262Outcome derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&outcome).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Test262Outcome,
+            // so from_str back to Test262Outcome cannot fail (valid format + matching schema).
             let back: Test262Outcome = serde_json::from_str(&json).unwrap();
             assert_eq!(back, outcome);
         }
@@ -3101,7 +3112,11 @@ unknown_field = "value"
             evidence_path: PathBuf::from("/tmp/evidence.jsonl"),
             high_water_mark_path: PathBuf::from("/tmp/hwm.json"),
         };
+        // SAFETY: Test262CollectedArtifacts derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&arts).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Test262CollectedArtifacts,
+        // so from_str back to Test262CollectedArtifacts cannot fail (valid format + matching schema).
         let back: Test262CollectedArtifacts = serde_json::from_str(&json).unwrap();
         assert_eq!(back, arts);
     }
@@ -3162,7 +3177,11 @@ unknown_field = "value"
             error_code: Some("ERR-1".to_string()),
             error_detail: Some("detail".to_string()),
         };
+        // SAFETY: Test262ObservedResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&obs).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Test262ObservedResult,
+        // so from_str back to Test262ObservedResult cannot fail (valid format + matching schema).
         let back: Test262ObservedResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back, obs);
     }
@@ -3176,7 +3195,11 @@ unknown_field = "value"
             worker_index: 3,
             queue_index: 7,
         };
+        // SAFETY: DeterministicWorkerAssignment derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&wa).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DeterministicWorkerAssignment,
+        // so from_str back to DeterministicWorkerAssignment cannot fail (valid format + matching schema).
         let back: DeterministicWorkerAssignment = serde_json::from_str(&json).unwrap();
         assert_eq!(back, wa);
     }
@@ -3190,7 +3213,11 @@ unknown_field = "value"
             rationale: "core Array coverage".into(),
             normative_clause: "22.1".into(),
         };
+        // SAFETY: Test262ProfileInclude derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&inc).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Test262ProfileInclude,
+        // so from_str back to Test262ProfileInclude cannot fail (valid format + matching schema).
         let back: Test262ProfileInclude = serde_json::from_str(&json).unwrap();
         assert_eq!(inc, back);
     }
@@ -3202,7 +3229,11 @@ unknown_field = "value"
             rationale: "legacy annex B not supported".into(),
             normative_clause: "B".into(),
         };
+        // SAFETY: Test262ProfileExclude derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&exc).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Test262ProfileExclude,
+        // so from_str back to Test262ProfileExclude cannot fail (valid format + matching schema).
         let back: Test262ProfileExclude = serde_json::from_str(&json).unwrap();
         assert_eq!(exc, back);
     }

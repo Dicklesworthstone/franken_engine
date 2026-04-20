@@ -806,6 +806,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
+        // SAFETY: EntropyEstimator contains valid observed data (0,1 symbols, 200 total observations),
+        // so from_estimator has non-empty frequency table and cannot fail with InvalidInput.
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
         assert_eq!(coder.alphabet_size, 2);
     }
@@ -826,7 +828,11 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
+        // SAFETY: EntropyEstimator contains valid observed data (0,1 symbols, 200 total observations),
+        // so from_estimator has non-empty frequency table and cannot fail with InvalidInput.
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
+        // SAFETY: Input symbols [0,1,0,1,0] are all present in coder's frequency table
+        // (observed during estimator construction), so encode cannot fail with UnknownSymbol.
         let compressed = coder.encode(&[0, 1, 0, 1, 0]).unwrap();
         assert!(!compressed.compressed_data.is_empty());
         assert_eq!(compressed.original_symbol_count, 5);
@@ -956,7 +962,11 @@ mod tests {
             symbol_count: 100,
             certificate_hash: ContentHash::compute(b"cert"),
         };
+        // SAFETY: CompressionCertificate derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cert).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CompressionCertificate,
+        // so from_str back to CompressionCertificate cannot fail (valid format + matching schema).
         let restored: CompressionCertificate = serde_json::from_str(&json).unwrap();
         assert_eq!(cert, restored);
     }

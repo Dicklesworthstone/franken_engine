@@ -6546,7 +6546,7 @@ impl InterpreterCore {
     /// Convert a Value to its string representation using JavaScript toString semantics.
     /// This unified implementation ensures all string case-conversion builtin paths
     /// have consistent behavior across all Value enum variants.
-    fn value_to_string(value: &Value) -> String {
+    fn value_to_primitive_string(value: &Value) -> String {
         match value {
             Value::Str(s) => s.clone(),
             Value::Null => "null".to_string(),
@@ -6575,12 +6575,14 @@ impl InterpreterCore {
     fn require_object_coercible_to_string(value: &Value) -> Result<String, InterpreterError> {
         match value {
             Value::Null => Err(InterpreterError::TypeError {
-                message: "String.prototype method called on null".to_string(),
+                expected: "object-coercible String.prototype receiver".to_string(),
+                got: "null".to_string(),
             }),
             Value::Undefined => Err(InterpreterError::TypeError {
-                message: "String.prototype method called on undefined".to_string(),
+                expected: "object-coercible String.prototype receiver".to_string(),
+                got: "undefined".to_string(),
             }),
-            _ => Ok(Self::value_to_string(value)),
+            _ => Ok(Self::value_to_primitive_string(value)),
         }
     }
 
@@ -18949,8 +18951,8 @@ impl InterpreterCore {
                         _ => 0,
                     };
 
-                    // Collect elements for sorting
-                    let mut elements: Vec<(usize, String)> = Vec::new();
+                    // Collect elements for sorting (preserve original values)
+                    let mut elements: Vec<(usize, Value, String)> = Vec::new();
                     for i in 0..length {
                         if let Some(element) = obj.properties.get(&i.to_string()) {
                             let element_str = match element {
@@ -18960,14 +18962,14 @@ impl InterpreterCore {
                                 Value::Bool(b) => b.to_string(),
                                 Value::Null => "null".to_string(),
                                 Value::Undefined => "undefined".to_string(),
-                                _ => "".to_string(),
+                                _ => "[object Object]".to_string(),
                             };
-                            elements.push((i, element_str));
+                            elements.push((i, element.clone(), element_str));
                         }
                     }
 
-                    // Sort elements lexicographically (default JavaScript behavior)
-                    elements.sort_by(|a, b| a.1.cmp(&b.1));
+                    // Sort elements lexicographically by string representation
+                    elements.sort_by(|a, b| a.2.cmp(&b.2));
 
                     // Clear existing elements and reassign sorted ones
                     if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
@@ -18976,11 +18978,11 @@ impl InterpreterCore {
                         }
                     }
 
-                    for (new_index, (_, sorted_value)) in elements.into_iter().enumerate() {
+                    for (new_index, (_, original_value, _)) in elements.into_iter().enumerate() {
                         self.set_object_property(
                             array_id,
                             new_index.to_string(),
-                            Value::Str(sorted_value),
+                            original_value,
                         )?;
                     }
                 }
@@ -24245,6 +24247,149 @@ mod tests {
                     "toUpperCase should be consistent for {:?}",
                     input
                 );
+            }
+        }
+
+        /// Regression test for ArrayPrototypeSort value preservation across builtin IDs.
+        ///
+        /// The issue was that builtin ID 385 implementation was converting all array elements
+        /// to strings during sorting and then writing back string values instead of preserving
+        /// the original Value types. This caused type corruption where numeric/boolean/object
+        /// elements became strings after sorting.
+        ///
+        /// All three ArrayPrototypeSort builtin IDs (28, 248, 385) should preserve original
+        /// element values while only using string representation for comparison during sorting.
+        #[test]
+        fn array_prototype_sort_preserves_element_values_across_builtin_ids() {
+            let mut interpreter = test_interpreter();
+
+            // Create test array with mixed types that should be preserved after sorting
+            let array_id = ObjectId::from_raw(100);
+            let test_elements = vec![
+                (0, Value::Int(42)),           // Should remain Int(42), not Str("42")
+                (1, Value::Bool(true)),        // Should remain Bool(true), not Str("true")
+                (2, Value::Float(3.14.into())), // Should remain Float, not Str("3.14")
+                (3, Value::Str("apple".to_string())), // Should remain Str
+                (4, Value::Object(ObjectId::from_raw(200))), // Should remain Object, not Str("[object Object]")
+            ];
+
+            // Add object to heap
+            interpreter.heap.insert(
+                array_id.0 as usize,
+                HeapObject {
+                    properties: test_elements
+                        .iter()
+                        .map(|(i, val)| (i.to_string(), val.clone()))
+                        .chain(std::iter::once(("length".to_string(), Value::Int(5))))
+                        .collect(),
+                    prototype_id: None,
+                },
+            );
+
+            // Add nested object for testing object preservation
+            interpreter.heap.insert(
+                200,
+                HeapObject {
+                    properties: BTreeMap::new(),
+                    prototype_id: None,
+                },
+            );
+
+            // Test all three ArrayPrototypeSort builtin IDs
+            let builtin_ids = [28, 248, 385];
+
+            for builtin_id in builtin_ids {
+                // Reset array to original state
+                if let Some(obj) = interpreter.heap.get_mut(array_id.0 as usize) {
+                    obj.properties.clear();
+                    for (i, val) in &test_elements {
+                        obj.properties.insert(i.to_string(), val.clone());
+                    }
+                    obj.properties.insert("length".to_string(), Value::Int(5));
+                }
+
+                // Invoke ArrayPrototypeSort via builtin dispatcher
+                let result = interpreter.call_builtin_by_id(
+                    builtin_id,
+                    RegRange { start: 0, count: 1 }
+                );
+
+                assert!(result.is_ok(), "Builtin ID {} should complete successfully", builtin_id);
+
+                // Verify all element types are preserved after sorting
+                if let Some(sorted_obj) = interpreter.heap.get(array_id.0 as usize) {
+                    for i in 0..5 {
+                        let element = sorted_obj.properties.get(&i.to_string())
+                            .expect(&format!("Builtin ID {} should preserve element {}", builtin_id, i));
+
+                        // Verify types are preserved, not converted to strings
+                        match element {
+                            Value::Int(_) => {}, // Good - preserved as Int
+                            Value::Bool(_) => {}, // Good - preserved as Bool
+                            Value::Float(_) => {}, // Good - preserved as Float
+                            Value::Str(_) => {}, // Good - was already Str
+                            Value::Object(_) => {}, // Good - preserved as Object
+                            Value::Undefined => {}, // Acceptable for missing elements
+                            other => panic!(
+                                "Builtin ID {} corrupted element {} type: expected original type, got {:?}",
+                                builtin_id, i, other
+                            )
+                        }
+                    }
+                }
+
+                // Test specific preservation cases that were failing before the fix
+                if let Some(sorted_obj) = interpreter.heap.get(array_id.0 as usize) {
+                    // Find where Int(42) ended up after sorting (should be lexicographically sorted by string rep)
+                    let mut found_int = false;
+                    for i in 0..5 {
+                        if let Some(Value::Int(42)) = sorted_obj.properties.get(&i.to_string()) {
+                            found_int = true;
+                            break;
+                        }
+                    }
+                    assert!(found_int, "Builtin ID {} should preserve Int(42) as Int type", builtin_id);
+
+                    // Find where Bool(true) ended up
+                    let mut found_bool = false;
+                    for i in 0..5 {
+                        if let Some(Value::Bool(true)) = sorted_obj.properties.get(&i.to_string()) {
+                            found_bool = true;
+                            break;
+                        }
+                    }
+                    assert!(found_bool, "Builtin ID {} should preserve Bool(true) as Bool type", builtin_id);
+
+                    // Find where Object ended up
+                    let mut found_object = false;
+                    for i in 0..5 {
+                        if let Some(Value::Object(ObjectId(200))) = sorted_obj.properties.get(&i.to_string()) {
+                            found_object = true;
+                            break;
+                        }
+                    }
+                    assert!(found_object, "Builtin ID {} should preserve Object as Object type", builtin_id);
+                }
+            }
+
+            // Verify sorting order is correct (by string representation, but preserving types)
+            // Expected order: "3.14", "42", "[object Object]", "apple", "true"
+            if let Some(final_obj) = interpreter.heap.get(array_id.0 as usize) {
+                let elem_0 = final_obj.properties.get("0").unwrap();
+                let elem_1 = final_obj.properties.get("1").unwrap();
+                let elem_4 = final_obj.properties.get("4").unwrap();
+
+                // First element should be 3.14 (string "3.14" comes first lexicographically)
+                assert!(matches!(elem_0, Value::Float(_)),
+                    "First element should be Float(3.14), got {:?}", elem_0);
+
+                // Second element should be 42 (string "42" comes second)
+                assert!(matches!(elem_1, Value::Int(42)),
+                    "Second element should be Int(42), got {:?}", elem_1);
+
+                // Last element should be true (string "true" comes last)
+                assert!(matches!(elem_4, Value::Bool(true)),
+                    "Last element should be Bool(true), got {:?}", elem_4);
             }
         }
     }

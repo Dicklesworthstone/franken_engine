@@ -1765,7 +1765,9 @@ mod tests {
             ModuleFeature::ConditionalExports,
             ModuleFeature::PackageJsonFields,
         ] {
+            // SAFETY: ModuleFeature derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid ModuleFeature serialization
             let back: ModuleFeature = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -1778,7 +1780,9 @@ mod tests {
             CompatibilityRuntime::Node,
             CompatibilityRuntime::Bun,
         ] {
+            // SAFETY: CompatibilityRuntime derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid CompatibilityRuntime serialization
             let back: CompatibilityRuntime = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -1791,7 +1795,9 @@ mod tests {
             CompatibilityMode::NodeCompat,
             CompatibilityMode::BunCompat,
         ] {
+            // SAFETY: CompatibilityMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid CompatibilityMode serialization
             let back: CompatibilityMode = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -1809,7 +1815,9 @@ mod tests {
             CompatibilityMatrixErrorCode::InvalidMatrix,
             CompatibilityMatrixErrorCode::ObservationMismatch,
         ] {
+            // SAFETY: CompatibilityMatrixErrorCode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid CompatibilityMatrixErrorCode serialization
             let back: CompatibilityMatrixErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }

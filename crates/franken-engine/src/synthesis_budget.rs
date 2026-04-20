@@ -894,7 +894,9 @@ mod tests {
             compute_cap: 100,
             depth_cap: 10,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&budget).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: PhaseBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(budget, restored);
     }
@@ -930,7 +932,9 @@ mod tests {
     #[test]
     fn contract_serde_roundtrip() {
         let c = contract_with_phase_budgets();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: SynthesisBudgetContract = serde_json::from_str(&json).unwrap();
         assert_eq!(c, restored);
     }
@@ -983,7 +987,9 @@ mod tests {
             contract: tight_contract(),
             justification: "test".to_string(),
         });
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: BudgetRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.override_count(), 1);
     }
@@ -993,8 +999,11 @@ mod tests {
     #[test]
     fn monitor_tracks_consumption() {
         let mut monitor = BudgetMonitor::new(default_contract());
+        // SAFETY: beginning phase with valid phase should succeed
         monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        // SAFETY: recording consumption with valid values should succeed
         monitor.record_consumption(100, 10, 1).unwrap();
+        // SAFETY: recording consumption with valid values should succeed
         monitor.record_consumption(200, 20, 2).unwrap();
 
         let pc = monitor
@@ -1098,10 +1107,14 @@ mod tests {
     #[test]
     fn monitor_serde_roundtrip() {
         let mut monitor = BudgetMonitor::new(default_contract());
+        // SAFETY: beginning phase with valid phase should succeed
         monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        // SAFETY: recording consumption with valid values should succeed
         monitor.record_consumption(100, 10, 1).unwrap();
 
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&monitor).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: BudgetMonitor = serde_json::from_str(&json).unwrap();
         assert_eq!(
             restored.total_consumption().time_ns,
@@ -1251,7 +1264,9 @@ mod tests {
             timestamp_ns: 1000,
             epoch: SecurityEpoch::from_raw(1),
         });
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&history).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: BudgetHistory = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.len(), 1);
     }

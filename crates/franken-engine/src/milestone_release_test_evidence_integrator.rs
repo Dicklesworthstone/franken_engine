@@ -441,6 +441,7 @@ fn validate_signal(
                     ),
                 ));
             }
+            // SAFETY: signature_ref field is guaranteed to be Some in this validation context
             if artifact
                 .signature_ref
                 .as_deref()
@@ -563,6 +564,7 @@ pub fn integrate_milestone_release_test_evidence(
                             .signer
                             .clone()
                             .unwrap_or_else(|| "unknown-signer".to_string()),
+                        // SAFETY: signature_ref is guaranteed to be Some for passed artifacts
                         signature_ref: artifact.signature_ref.clone().unwrap(),
                     });
                 }
@@ -1332,6 +1334,7 @@ mod tests {
         for signal in &mut input.signals {
             signal.score_millionths = 0;
         }
+        // SAFETY: UnitDepthGate signal is guaranteed to exist in test input
         input
             .signals
             .iter_mut()
@@ -1682,7 +1685,9 @@ mod tests {
             error_code: "ERR-001".to_string(),
             message: "something went wrong".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&f).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: IntegrationFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(f, back);
     }

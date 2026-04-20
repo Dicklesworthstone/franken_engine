@@ -821,3 +821,190 @@ fn seed_corpus_async_flag() {
         .collect();
     assert_eq!(async_specs.len(), 2); // AsyncHeavy + HostcallSpike
 }
+
+// ---------------------------------------------------------------------------
+// Reproducibility Tests (bd-1lsy.8.4.3.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gate_events_reset_between_runs() {
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let out_dir = temp_dir.path();
+
+    // Run gate twice in same output directory
+    for run_num in 1..=2 {
+        let output = Command::new("cargo")
+            .args(&[
+                "run",
+                "--bin",
+                "franken_workload_corpus_gate",
+                "--",
+                "--out-dir",
+                &out_dir.display().to_string(),
+            ])
+            .current_dir("crates/franken-engine")
+            .output()
+            .expect("Failed to execute gate binary");
+
+        assert!(output.status.success(), "Gate run {} failed", run_num);
+
+        // Verify events.jsonl exists and contains only current run events
+        let events_path = out_dir.join("events.jsonl");
+        assert!(
+            events_path.exists(),
+            "events.jsonl missing after run {}",
+            run_num
+        );
+
+        let events_content = fs::read_to_string(&events_path).unwrap();
+        let event_lines: Vec<&str> = events_content.lines().collect();
+
+        // Each run should produce exactly 3 events: gate_start, corpus_built, gate_complete
+        assert_eq!(
+            event_lines.len(),
+            3,
+            "Run {} should produce exactly 3 events, got {}: {:?}",
+            run_num,
+            event_lines.len(),
+            event_lines
+        );
+
+        // Verify events are from current run only (no mixing with previous runs)
+        for line in &event_lines {
+            let event: serde_json::Value = serde_json::from_str(line).unwrap();
+            // All events should have recent timestamps, not from previous runs
+            assert!(
+                event.get("timestamp").is_some(),
+                "Event missing timestamp: {}",
+                line
+            );
+        }
+    }
+}
+
+#[test]
+fn gate_commands_include_all_cli_parameters() {
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let out_dir = temp_dir.path();
+
+    // Run gate with custom CLI threshold parameters
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--bin",
+            "franken_workload_corpus_gate",
+            "--",
+            "--out-dir",
+            &out_dir.display().to_string(),
+            "--min-per-family",
+            "3",
+            "--min-equivalence-rate",
+            "800000",
+        ])
+        .current_dir("crates/franken-engine")
+        .output()
+        .expect("Failed to execute gate binary");
+
+    assert!(output.status.success(), "Gate execution failed");
+
+    // Verify commands.txt includes complete CLI parameters for reproducible replay
+    let commands_path = out_dir.join("commands.txt");
+    assert!(commands_path.exists(), "commands.txt missing");
+
+    let commands_content = fs::read_to_string(&commands_path).unwrap();
+    let lines: Vec<&str> = commands_content.lines().collect();
+
+    assert!(!lines.is_empty(), "commands.txt should not be empty");
+
+    let replay_command = lines[0];
+
+    // Verify all CLI parameters are preserved in replay command
+    assert!(
+        replay_command.contains("--out-dir"),
+        "Replay command missing --out-dir"
+    );
+    assert!(
+        replay_command.contains("--min-per-family 3"),
+        "Replay command missing --min-per-family: {}",
+        replay_command
+    );
+    assert!(
+        replay_command.contains("--min-equivalence-rate 800000"),
+        "Replay command missing --min-equivalence-rate: {}",
+        replay_command
+    );
+
+    // Verify command structure
+    assert!(
+        replay_command.starts_with("franken_workload_corpus_gate"),
+        "Replay command should start with binary name: {}",
+        replay_command
+    );
+}
+
+#[test]
+fn gate_repeated_runs_same_outdir_deterministic() {
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let out_dir = temp_dir.path();
+
+    let mut first_events = String::new();
+    let mut first_commands = String::new();
+
+    // Run gate twice with identical parameters
+    for run_num in 1..=2 {
+        let output = Command::new("cargo")
+            .args(&[
+                "run",
+                "--bin",
+                "franken_workload_corpus_gate",
+                "--",
+                "--out-dir",
+                &out_dir.display().to_string(),
+                "--min-per-family",
+                "2",
+                "--min-equivalence-rate",
+                "950000",
+            ])
+            .current_dir("crates/franken-engine")
+            .output()
+            .expect("Failed to execute gate binary");
+
+        assert!(output.status.success(), "Gate run {} failed", run_num);
+
+        let events_content = fs::read_to_string(out_dir.join("events.jsonl")).unwrap();
+        let commands_content = fs::read_to_string(out_dir.join("commands.txt")).unwrap();
+
+        if run_num == 1 {
+            first_events = events_content;
+            first_commands = commands_content;
+        } else {
+            // Second run should produce identical event structure (different timestamps)
+            let first_lines: Vec<&str> = first_events.lines().collect();
+            let second_lines: Vec<&str> = events_content.lines().collect();
+
+            assert_eq!(
+                first_lines.len(),
+                second_lines.len(),
+                "Event count should be consistent between runs"
+            );
+
+            // Commands should be identical between runs
+            assert_eq!(
+                first_commands, commands_content,
+                "Commands.txt should be identical between runs with same parameters"
+            );
+        }
+    }
+}

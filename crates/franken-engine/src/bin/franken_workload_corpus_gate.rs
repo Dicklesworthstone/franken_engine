@@ -263,6 +263,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let events_path = out_dir.join("events.jsonl");
             let commands_path = out_dir.join("commands.txt");
 
+            // Reset events.jsonl for clean per-run isolation
+            if events_path.exists() {
+                fs::remove_file(&events_path)?;
+            }
+
             // Write initial event
             write_event(
                 &events_path,
@@ -347,14 +352,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::to_string_pretty(&run_manifest)?,
             )?;
 
-            // Write commands log
-            let commands = [
-                format!(
-                    "franken_workload_corpus_gate --out-dir {}",
-                    out_dir.display()
-                ),
-                "# Corpus evaluation completed".to_string(),
-            ];
+            // Write commands log with complete CLI parameters for reproducible replay
+            let mut replay_cmd = format!(
+                "franken_workload_corpus_gate --out-dir {}",
+                out_dir.display()
+            );
+            if let Some(min_fam) = min_per_family {
+                replay_cmd.push_str(&format!(" --min-per-family {}", min_fam));
+            }
+            if let Some(min_eq_rate) = min_equivalence_rate {
+                replay_cmd.push_str(&format!(" --min-equivalence-rate {}", min_eq_rate));
+            }
+
+            let commands = [replay_cmd, "# Corpus evaluation completed".to_string()];
             fs::write(&commands_path, commands.join("\n"))?;
 
             // Compute hashes

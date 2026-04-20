@@ -1298,7 +1298,9 @@ mod tests {
     fn measurement_serde_roundtrip() {
         let root = test_trust_root();
         let m = test_measurement(&root);
+        // SAFETY: MeasurementDigest derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&m).unwrap();
+        // SAFETY: JSON was just produced by valid MeasurementDigest serialization
         let restored: MeasurementDigest = serde_json::from_str(&json).unwrap();
         assert_eq!(m, restored);
     }
@@ -1321,7 +1323,9 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         let quote = test_quote(&root, &m, [2u8; 32], 200, 5_000_000);
+        // SAFETY: AttestationQuote derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&quote).unwrap();
+        // SAFETY: JSON was just produced by valid AttestationQuote serialization
         let restored: AttestationQuote = serde_json::from_str(&json).unwrap();
         assert_eq!(quote, restored);
     }
@@ -1549,9 +1553,11 @@ mod tests {
     #[test]
     fn create_cell_happy_path() {
         let mut reg = CellRegistry::new();
+        // SAFETY: Test setup ensures create_cell succeeds with valid inputs
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         assert_eq!(reg.cell_count(), 1);
 
+        // SAFETY: Cell was just created successfully, so get() with its ID cannot fail
         let cell = reg.get(&format!("{cell_id}")).unwrap();
         assert_eq!(cell.lifecycle, CellLifecycle::Provisioning);
         assert_eq!(cell.function, CellFunction::DecisionReceiptSigner);
@@ -1617,13 +1623,16 @@ mod tests {
         let mut reg = CellRegistry::new();
         let root = test_trust_root();
         let epoch = test_epoch();
+        // SAFETY: Test setup ensures create_cell succeeds with valid inputs
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
 
         // Measure.
         let measurement = test_measurement(&root);
+        // SAFETY: Cell was just created, so measure_cell with valid inputs will succeed
         reg.measure_cell(&cid, measurement.clone(), 2_000, epoch)
             .unwrap();
+        // SAFETY: Cell exists and measure_cell just succeeded, so get() cannot fail
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Measured);
 
         // Attest.

@@ -713,6 +713,7 @@ mod tests {
     fn epoch_exhaustion_trips_latch() {
         let mut acc = test_accountant();
         // Consume most of the budget.
+        // SAFETY: Test with budget consumption within limits should succeed
         acc.consume(900_000, 0, "big op", 2_000_000_000).unwrap();
         // Next consumption would exceed budget -> exhaustion.
         let err = acc
@@ -726,6 +727,7 @@ mod tests {
     fn exhaustion_latch_stays_tripped() {
         let mut acc = test_accountant();
         // Force exhaustion.
+        // SAFETY: Test with budget consumption within limits should succeed
         acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
         let _ = acc.consume(200_000, 0, "overflow", 3_000_000_000);
         // Even small consumption is rejected.

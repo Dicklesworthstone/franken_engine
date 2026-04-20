@@ -772,7 +772,9 @@ mod tests {
             ProbeKind::IntegrityAudit,
         ];
         for kind in &kinds {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: ProbeKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, restored);
         }
@@ -781,7 +783,9 @@ mod tests {
     #[test]
     fn probe_config_serialization_round_trip() {
         let config = health_probe("h1");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ProbeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }

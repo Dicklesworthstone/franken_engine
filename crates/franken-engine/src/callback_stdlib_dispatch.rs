@@ -2160,6 +2160,7 @@ mod tests {
             0,
         );
         assert!(result.is_ok());
+        // SAFETY: result verified to be Ok above
         let d = result.unwrap();
         assert_eq!(d.strategy, DispatchStrategy::InlinedCallback);
     }
@@ -3099,7 +3100,9 @@ mod tests {
             SecurityEpoch::from_raw(1),
             SecurityEpoch::from_raw(2),
         );
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DispatchRegressionReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back.strategy_changes, report.strategy_changes);
         assert_eq!(back.is_regression, report.is_regression);
@@ -3168,7 +3171,9 @@ mod tests {
     fn test_coverage_matrix_serde_round_trip() {
         let trace = franken_engine_stdlib_dispatch_manifest();
         let matrix = MethodCoverageMatrix::from_trace(&trace);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&matrix).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: MethodCoverageMatrix = serde_json::from_str(&json).unwrap();
         assert_eq!(back.exercised.len(), matrix.exercised.len());
     }
@@ -3242,6 +3247,7 @@ mod tests {
             0,
         );
         assert!(result.is_ok());
+        // SAFETY: result verified to be Ok above
         assert_eq!(result.unwrap().strategy, DispatchStrategy::FallbackSlow);
     }
 

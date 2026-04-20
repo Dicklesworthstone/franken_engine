@@ -1692,10 +1692,15 @@ mod tests {
 
     #[test]
     fn ftrl_serde_roundtrip() {
+        // SAFETY: Test-only unwrap with valid arm count
         let mut state = FtrlState::new(2).unwrap();
+        // SAFETY: Test-only unwrap with valid arm index and reward
         state.update(0, 600_000).unwrap();
+        // SAFETY: Test-only unwrap with valid arm index and reward
         state.update(1, 400_000).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: FtrlState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
     }
@@ -1704,15 +1709,20 @@ mod tests {
 
     #[test]
     fn exp3_exactly_max_arms_accepted() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let state = Exp3State::new(MAX_ARMS, 100_000).unwrap();
         assert_eq!(state.num_arms, MAX_ARMS);
     }
 
     #[test]
     fn exp3_serde_roundtrip() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let mut state = Exp3State::new(2, 200_000).unwrap();
+        // SAFETY: Test-only unwrap with valid arm index and reward
         state.update(0, 700_000).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: Exp3State = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
     }

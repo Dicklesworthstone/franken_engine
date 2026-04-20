@@ -843,6 +843,7 @@ mod tests {
         for n in [3, 5, 6, 7, 9, 10, 13, 15, 17] {
             let mmr = build_mmr(n);
             for i in 0..n {
+                // SAFETY: MMR with n elements has valid leaf at index i, inclusion_proof should succeed
                 let proof = mmr.inclusion_proof(i).unwrap();
                 // SAFETY: Test-only panic to validate MMR inclusion proof verification
                 // expects all proofs to verify successfully in consistency test

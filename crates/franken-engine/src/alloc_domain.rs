@@ -398,6 +398,7 @@ mod tests {
     #[test]
     fn budget_rejects_over_limit() {
         let mut budget = DomainBudget::new(100);
+        // SAFETY: Test reserving 60 bytes within 100-byte budget should succeed
         budget.try_reserve(60).unwrap();
         assert!(matches!(
             budget.try_reserve(50),
@@ -410,6 +411,7 @@ mod tests {
     #[test]
     fn budget_release_frees_space() {
         let mut budget = DomainBudget::new(100);
+        // SAFETY: Test reserving 80 bytes within 100-byte budget should succeed
         budget.try_reserve(80).unwrap();
         budget.release(30);
         assert_eq!(budget.used_bytes, 50);
@@ -419,6 +421,7 @@ mod tests {
     #[test]
     fn budget_release_saturates_at_zero() {
         let mut budget = DomainBudget::new(100);
+        // SAFETY: Test reserving 10 bytes within 100-byte budget should succeed
         budget.try_reserve(10).unwrap();
         budget.release(100); // release more than used
         assert_eq!(budget.used_bytes, 0);
@@ -428,8 +431,10 @@ mod tests {
     fn budget_utilization_calculation() {
         let mut budget = DomainBudget::new(200);
         assert!((budget.utilization() - 0.0).abs() < f64::EPSILON);
+        // SAFETY: Test reserving 100 bytes within 200-byte budget should succeed
         budget.try_reserve(100).unwrap();
         assert!((budget.utilization() - 0.5).abs() < f64::EPSILON);
+        // SAFETY: Test reserving second 100 bytes within remaining 100-byte budget should succeed
         budget.try_reserve(100).unwrap();
         assert!((budget.utilization() - 1.0).abs() < f64::EPSILON);
     }
@@ -445,14 +450,17 @@ mod tests {
     #[test]
     fn register_and_allocate() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             1024,
         )
         .unwrap();
+        // SAFETY: Test allocating 256 bytes from 1024-byte registered domain should succeed
         let seq = reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
         assert_eq!(seq, 1);
+        // SAFETY: Test getting config for just-registered domain should succeed
         let config = reg.get(&AllocationDomain::ExtensionHeap).unwrap();
         assert_eq!(config.budget.used_bytes, 256);
     }
@@ -480,13 +488,16 @@ mod tests {
     #[test]
     fn budget_enforcement_across_allocations() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             100,
         )
         .unwrap();
+        // SAFETY: Test allocating 60 bytes from 100-byte budget should succeed
         reg.allocate(AllocationDomain::ExtensionHeap, 60).unwrap();
+        // SAFETY: Test allocating 30 bytes from remaining 40-byte budget should succeed
         reg.allocate(AllocationDomain::ExtensionHeap, 30).unwrap();
         // Next allocation would exceed
         assert!(matches!(
@@ -501,17 +512,22 @@ mod tests {
     #[test]
     fn release_and_reallocate() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
             100,
         )
         .unwrap();
+        // SAFETY: Test allocating 80 bytes from 100-byte budget should succeed
         reg.allocate(AllocationDomain::ScratchBuffer, 80).unwrap();
+        // SAFETY: Test releasing 80 bytes from allocated domain should succeed
         reg.release(AllocationDomain::ScratchBuffer, 80).unwrap();
         // Should be able to allocate again.
+        // SAFETY: Test allocating 90 bytes from freed 100-byte budget should succeed
         reg.allocate(AllocationDomain::ScratchBuffer, 90).unwrap();
         assert_eq!(
+            // SAFETY: Test getting config for registered domain should succeed
             reg.get(&AllocationDomain::ScratchBuffer)
                 .unwrap()
                 .budget
@@ -523,11 +539,15 @@ mod tests {
     #[test]
     fn reset_domain_clears_usage() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1024)
             .unwrap();
+        // SAFETY: Test allocating 500 bytes from 1024-byte budget should succeed
         reg.allocate(AllocationDomain::IrArena, 500).unwrap();
+        // SAFETY: Test resetting registered domain should succeed
         reg.reset_domain(AllocationDomain::IrArena).unwrap();
         assert_eq!(
+            // SAFETY: Test getting config for registered domain should succeed
             reg.get(&AllocationDomain::IrArena)
                 .unwrap()
                 .budget
@@ -539,17 +559,22 @@ mod tests {
     #[test]
     fn allocation_sequence_increments_deterministically() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering ExtensionHeap domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             10000,
         )
         .unwrap();
+        // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000)
             .unwrap();
 
+        // SAFETY: Test allocating 10 bytes from 10000-byte ExtensionHeap budget should succeed
         let s1 = reg.allocate(AllocationDomain::ExtensionHeap, 10).unwrap();
+        // SAFETY: Test allocating 20 bytes from 10000-byte IrArena budget should succeed
         let s2 = reg.allocate(AllocationDomain::IrArena, 20).unwrap();
+        // SAFETY: Test allocating 30 bytes from remaining ExtensionHeap budget should succeed
         let s3 = reg.allocate(AllocationDomain::ExtensionHeap, 30).unwrap();
 
         assert_eq!(s1, 1);

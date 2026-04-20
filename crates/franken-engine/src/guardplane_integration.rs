@@ -617,6 +617,7 @@ mod tests {
             extension_id: None,
         };
 
+        // SAFETY: Test setup with valid context should allow pre_property_access to succeed
         let action = adapter.pre_property_access(&context).unwrap();
         assert_eq!(action, HookAction::Allow);
         assert!(

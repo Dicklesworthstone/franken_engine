@@ -1028,6 +1028,7 @@ mod tests {
         assert!(matches!(result, Err(BudgetError::Exhausted(_))));
         assert!(monitor.is_exhausted());
 
+        // SAFETY: Test just verified monitor.is_exhausted() is true; exhaustion_reason() returns Some
         let reason = monitor.exhaustion_reason().unwrap();
         assert!(!reason.global_limit_hit);
         assert_eq!(reason.phase, SynthesisPhase::StaticAnalysis);

@@ -1659,6 +1659,7 @@ mod tests {
             .unwrap();
 
         let events = gate.events();
+        // SAFETY: Test performed submit, record_verdict, lift_quarantine operations; events non-empty
         let last = events.last().unwrap();
         assert!(matches!(
             last.event_type,

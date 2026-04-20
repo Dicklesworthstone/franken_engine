@@ -1752,6 +1752,8 @@ mod tests {
     #[test]
     fn generate_attestation_signed() {
         let report = make_report(VerificationVerdict::Verified);
+        // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
+        // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report.clone(), Some(key_hex));

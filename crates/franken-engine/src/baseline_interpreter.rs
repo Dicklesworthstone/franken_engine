@@ -23131,6 +23131,25 @@ mod tests {
     }
 
     #[test]
+    fn string_prototype_repeat_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [42_u32, 233_u32] {
+            interpreter.registers[0] = Value::Str("ha".to_string());
+            interpreter.registers[1] = Value::Int(3);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeRepeat".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect("StringPrototypeRepeat ID should execute");
+            assert_eq!(result, Value::Str("hahaha".to_string()));
+        }
+    }
+
+    #[test]
     fn array_prototype_fill_deduplication_regression() {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 

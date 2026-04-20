@@ -2267,6 +2267,7 @@ mod tests {
     fn small_input_routes_to_serial() {
         let config = default_config();
         let input = make_input("var x = 1;", &config);
+        // SAFETY: Test-only unwrap expecting valid JS syntax to parse successfully
         let output = parse(&input).unwrap();
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(output.serial_reason.is_some());

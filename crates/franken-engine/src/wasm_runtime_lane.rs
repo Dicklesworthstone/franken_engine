@@ -845,10 +845,12 @@ mod tests {
         let d1 = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d1, WasmSignalKind::Derived, deps).unwrap();
         let d2 = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d1);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d2, WasmSignalKind::Derived, deps2).unwrap();
         // depth 3 exceeds max_depth=2
         let d3 = g.next_id();
@@ -894,16 +896,21 @@ mod tests {
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
+        // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(s).unwrap();
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps).unwrap();
+        // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(d).unwrap();
         let e = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(e, WasmSignalKind::Effect, deps2).unwrap();
+        // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(e).unwrap();
 
         let dirty = g.propagate_dirty(s).unwrap();
@@ -922,6 +929,7 @@ mod tests {
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps).unwrap();
         g.dispose(d).unwrap();
         assert_eq!(g.active_count(), 1);
@@ -1756,10 +1764,13 @@ mod tests {
     fn graph_dispose_marks_disposed() {
         let mut graph = WasmSignalGraph::new(16, 32);
         let id = graph.next_id();
+        // SAFETY: register cannot fail with valid test inputs and empty dependencies
         graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
+        // SAFETY: dispose cannot fail for registered ID
         graph.dispose(id).unwrap();
+        // SAFETY: get cannot fail for ID we just registered and disposed
         let node = graph.get(id).unwrap();
         assert_eq!(node.status, WasmSignalStatus::Disposed);
     }

@@ -813,10 +813,13 @@ mod tests {
     #[test]
     fn let_accessible_after_init() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("a".into(), 10).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("a", EnvValue::Number(42_000_000), Label::Public)
             .unwrap();
+        // SAFETY: Test gets initialized variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("a").unwrap();
         assert_eq!(*val, EnvValue::Number(42_000_000));
     }
@@ -824,7 +827,9 @@ mod tests {
     #[test]
     fn const_assignment_after_init_fails() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid const variable; declare_const succeeds in controlled test environment.
         chain.declare_const("PI".into(), 20).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("PI", EnvValue::Number(3_141_593), Label::Public)
             .unwrap();
@@ -835,11 +840,14 @@ mod tests {
     #[test]
     fn const_value_preserved_after_failed_assignment() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid const variable; declare_const succeeds in controlled test environment.
         chain.declare_const("C".into(), 30).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("C", EnvValue::Number(100), Label::Public)
             .unwrap();
         let _ = chain.set_value("C", EnvValue::Number(999), Label::Public);
+        // SAFETY: Test gets const value; get_value succeeds in controlled test environment.
         let val = chain.get_value("C").unwrap();
         assert_eq!(*val, EnvValue::Number(100));
     }
@@ -847,10 +855,13 @@ mod tests {
     #[test]
     fn let_reassignment_works() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 11).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(1), Label::Public)
             .unwrap();
+        // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("x", EnvValue::Number(2), Label::Public)
             .unwrap();

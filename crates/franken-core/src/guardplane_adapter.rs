@@ -670,6 +670,8 @@ mod tests {
             HookAction::Suspend | HookAction::Terminate(_) | HookAction::Quarantine(_)
         ));
         let summary = adapter.summary();
+        // SAFETY: Test just triggered decision making that sets last_posterior_delta_millionths,
+        // so this Optional field is guaranteed to be Some in test context.
         assert!(summary.last_posterior_delta_millionths.unwrap() >= 500_000);
     }
 

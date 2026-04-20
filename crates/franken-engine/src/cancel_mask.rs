@@ -370,6 +370,7 @@ mod tests {
     #[test]
     fn create_mask_succeeds_for_allowed_operation() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         let mask_id = ctx.create_mask(&checkpoint_justification()).unwrap();
         assert_eq!(mask_id, 1);
         assert!(ctx.is_masked());
@@ -395,6 +396,7 @@ mod tests {
     #[test]
     fn nesting_denied() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         ctx.create_mask(&checkpoint_justification()).unwrap();
         let err = ctx.create_mask(&checkpoint_justification()).unwrap_err();
         assert_eq!(err, MaskError::NestingDenied);
@@ -405,6 +407,7 @@ mod tests {
     #[test]
     fn clean_release_within_bounds() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         ctx.create_mask(&checkpoint_justification()).unwrap();
 
         for _ in 0..10 {

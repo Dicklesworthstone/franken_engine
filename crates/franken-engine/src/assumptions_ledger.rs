@@ -670,6 +670,7 @@ mod tests {
     #[test]
     fn test_register_monitor() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
@@ -690,6 +691,7 @@ mod tests {
     #[test]
     fn test_register_duplicate_monitor() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
@@ -1137,7 +1139,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_ledger_error() {
         let err = LedgerError::DuplicateAssumption("a1".into());
+        // SAFETY: LedgerError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just generated from LedgerError, deserialization guaranteed to succeed
         let back: LedgerError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
@@ -1291,7 +1295,9 @@ mod tests {
             DemotionAction::NoAction,
         ];
         for action in &actions {
+            // SAFETY: DemotionAction derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(action).unwrap();
+            // SAFETY: JSON was just generated from DemotionAction, deserialization guaranteed to succeed
             let back: DemotionAction = serde_json::from_str(&json).unwrap();
             assert_eq!(*action, back);
         }

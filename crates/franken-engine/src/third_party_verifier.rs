@@ -1919,6 +1919,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "context_matches_report")
+            // SAFETY: Test-only unwrap expecting context_matches_report check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

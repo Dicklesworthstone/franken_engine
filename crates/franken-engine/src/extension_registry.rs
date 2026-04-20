@@ -2277,6 +2277,7 @@ mod tests {
         let vr = VerificationResult {
             valid: false,
             package_id: EngineObjectId([20; 32]),
+            // SAFETY: Test scenario with valid byte array for VerificationKey creation
             publisher_key: VerificationKey::from_bytes([21; 32]).unwrap(),
             publisher_active: true,
             package_active: false,
@@ -2285,7 +2286,9 @@ mod tests {
             artifacts_root_valid: true,
             errors: vec!["package has been revoked".to_string()],
         };
+        // SAFETY: VerificationResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&vr).unwrap();
+        // SAFETY: JSON was just produced by valid VerificationResult serialization
         let restored: VerificationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, vr);
     }

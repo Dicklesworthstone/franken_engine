@@ -742,6 +742,8 @@ mod tests {
         if let IdempotencyError::MaxRetriesExceeded { max_retries, .. } = err {
             assert_eq!(max_retries, 1);
         } else {
+            // SAFETY: Test-only panic to validate custom retry config error handling
+            // expects specific IdempotencyError::MaxRetriesExceeded variant
             panic!("expected MaxRetriesExceeded");
         }
     }

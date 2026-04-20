@@ -54,10 +54,6 @@ impl GuardplaneTrustLevel {
         }
     }
 
-    fn parse(raw: &str) -> Self {
-        Self::parse_with_status(raw).0
-    }
-
     fn risk_penalty_millionths(self) -> i64 {
         match self {
             Self::Trusted => 0,

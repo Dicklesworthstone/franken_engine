@@ -2409,7 +2409,11 @@ mod tests {
             lower_millionths: 500_000,
             upper_millionths: 1_500_000,
         };
+        // SAFETY: DecisionConfidenceInterval derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ci).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DecisionConfidenceInterval,
+        // so from_str back to DecisionConfidenceInterval cannot fail (valid format + matching schema).
         let back: DecisionConfidenceInterval = serde_json::from_str(&json).unwrap();
         assert_eq!(ci, back);
     }

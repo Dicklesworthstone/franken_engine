@@ -1681,6 +1681,7 @@ mod tests {
             let graph = make_graph("gt", EntryKind::AppEntry, modules);
             let mut cfg = default_config();
             cfg.target = *target;
+            // SAFETY: Test with valid graph and target-specific config should compile successfully
             let report = compile_entrygraph(&graph, &cfg, epoch()).unwrap();
             assert_eq!(report.target, *target);
             assert_eq!(report.verdict, CompileVerdict::FullyCompiled);
@@ -1698,6 +1699,7 @@ mod tests {
                 make_module("dep2.js", 50, false),
             ];
             let graph = make_graph("gk", *kind, modules);
+            // SAFETY: Test with valid graph and entry kind should compile successfully
             let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
             assert_eq!(report.entry_kind, *kind);
         }
@@ -1711,8 +1713,11 @@ mod tests {
             make_module("c.js", 50, false),
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
+        // SAFETY: Test with valid graph and default config should compile for serde roundtrip
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
+        // SAFETY: CompilationReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: JSON was just produced by valid CompilationReport serialization
         let back: CompilationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }
@@ -1728,8 +1733,11 @@ mod tests {
                 make_module("c.js", 50, false),
             ],
         );
+        // SAFETY: Test batch compilation with valid graph should succeed for serde roundtrip
         let batch = compile_batch(&[g], &default_config(), epoch()).unwrap();
+        // SAFETY: BatchReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&batch).unwrap();
+        // SAFETY: JSON was just produced by valid BatchReport serialization
         let back: BatchReport = serde_json::from_str(&json).unwrap();
         assert_eq!(batch, back);
     }
@@ -1742,9 +1750,12 @@ mod tests {
             make_module("c.js", 50, false),
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
+        // SAFETY: Test with valid graph and default config should compile for receipt serde roundtrip
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
         let receipt = build_receipt(&report, graph.graph_hash, &default_config());
+        // SAFETY: DecisionReceipt derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: JSON was just produced by valid DecisionReceipt serialization
         let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, back);
     }

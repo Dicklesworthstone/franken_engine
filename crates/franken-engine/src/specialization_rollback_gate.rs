@@ -1234,6 +1234,7 @@ mod tests {
         let ev = bad_parity_evidence();
         let v = g.evaluate("r-002", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
+        // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g.last_receipt().unwrap();
         assert!(
             receipt
@@ -1249,6 +1250,7 @@ mod tests {
         let ev = bad_tail_evidence();
         let v = g.evaluate("r-003", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
+        // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g.last_receipt().unwrap();
         assert!(
             receipt
@@ -1282,6 +1284,7 @@ mod tests {
         let ev = good_evidence(); // 500_000 budget usage
         let v = g.evaluate("r-006", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
+        // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g.last_receipt().unwrap();
         assert!(
             receipt
@@ -1423,6 +1426,7 @@ mod tests {
         let mut g = SpecializationRollbackGate::with_defaults(epoch());
         let ev = good_evidence();
         g.evaluate("r-001", &ev, 100_000_000);
+        // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g.last_receipt().unwrap();
         assert!(receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.verdict, GateVerdict::Approved);
@@ -1433,6 +1437,7 @@ mod tests {
         let mut g = SpecializationRollbackGate::with_defaults(epoch());
         let ev = bad_tail_evidence();
         g.evaluate("r-001", &ev, 100_000_000);
+        // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g.last_receipt().unwrap();
         assert!(!receipt.blocking_reasons.is_empty());
     }
@@ -1444,6 +1449,7 @@ mod tests {
         let ev = good_evidence();
         g1.evaluate("r-001", &ev, 100_000_000);
         g2.evaluate("r-001", &ev, 100_000_000);
+        // SAFETY: last_receipt() returns Some after evaluate() calls in controlled test environment.
         assert_eq!(
             g1.last_receipt().unwrap().content_hash,
             g2.last_receipt().unwrap().content_hash,

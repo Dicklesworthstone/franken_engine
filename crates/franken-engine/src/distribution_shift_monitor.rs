@@ -526,6 +526,7 @@ pub fn build_window(
     start: u64,
 ) -> StreamWindow {
     let end = start + embeddings.len() as u64;
+    // SAFETY: Vec<EmbeddingVector> derives Serialize and has no non-serializable fields
     let hash_data = serde_json::to_vec(&embeddings).unwrap();
     StreamWindow {
         stream_kind: kind,
@@ -549,6 +550,7 @@ pub fn detect_shift(
     live: &StreamWindow,
     config: &MonitorConfig,
 ) -> ShiftCertificate {
+    // SAFETY: MonitorConfig derives Serialize and has no non-serializable fields
     let config_bytes = serde_json::to_vec(config).unwrap();
     let config_hash = ContentHash::compute(&config_bytes);
 
@@ -562,6 +564,7 @@ pub fn detect_shift(
                 config.abstention_sample_floor
             ),
         };
+        // SAFETY: Tuple of ContentHash and ShiftVerdict types derive Serialize
         let cert_bytes =
             serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).unwrap();
         return ShiftCertificate {

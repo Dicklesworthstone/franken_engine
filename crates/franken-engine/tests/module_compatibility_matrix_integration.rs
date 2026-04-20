@@ -4865,8 +4865,10 @@ fn matrix_covers_all_json_defined_cases() {
     let required = m.required_waiver_ids();
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
-    // Verify that all case IDs from the JSON matrix are covered
-    let expected_cases = vec![
+    // Keep this set in lockstep with the crate-boundary scenarios above. A new
+    // JSON matrix entry must add an executing scenario here instead of only
+    // extending the data fixture.
+    let expected_cases: BTreeSet<_> = [
         "cjs-require-esm",
         "bare-require-package-index-mjs",
         "scoped-bare-require-package-index-mjs",
@@ -4883,17 +4885,17 @@ fn matrix_covers_all_json_defined_cases() {
         "external-extension-probe-package-root-relative-require",
         "external-package-relative-traversal-fail-closed",
         "package-type-module-extensionless-relative",
-    ];
+    ]
+    .into_iter()
+    .collect();
 
     let entries = m.entries();
-    let case_ids: BTreeSet<String> = entries.iter().map(|e| e.case_id.to_string()).collect();
+    let case_ids: BTreeSet<_> = entries.iter().map(|e| e.case_id.as_str()).collect();
 
-    for expected_case in &expected_cases {
-        assert!(
-            case_ids.contains(*expected_case),
-            "Matrix should contain case: {expected_case}"
-        );
-    }
+    assert_eq!(
+        case_ids, expected_cases,
+        "module compatibility matrix JSON cases must exactly match the crate-boundary scenario coverage"
+    );
 
     // Verify that key divergences are properly documented
     let divergent_cases: Vec<&str> = entries

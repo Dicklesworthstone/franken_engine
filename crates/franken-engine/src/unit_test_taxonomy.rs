@@ -849,6 +849,7 @@ mod tests {
         if let TaxonomyValidationError::DuplicateFixtureId { fixture_id } = &err {
             assert_eq!(fixture_id, "test.fixture.v1");
         } else {
+            // SAFETY: Test validates taxonomy error type matches expected DuplicateFixtureId variant
             panic!("expected DuplicateFixtureId");
         }
     }

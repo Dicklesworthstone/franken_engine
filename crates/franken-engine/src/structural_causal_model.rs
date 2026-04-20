@@ -2571,7 +2571,9 @@ mod tests {
         // Should have at least the direct path
         assert!(!paths.is_empty());
         for path in &paths {
+            // SAFETY: causal paths are non-empty by construction; first() returns Some
             assert_eq!(path.first().unwrap(), "lane_choice");
+            // SAFETY: causal paths are non-empty by construction; last() returns Some
             assert_eq!(path.last().unwrap(), "latency_outcome");
         }
     }

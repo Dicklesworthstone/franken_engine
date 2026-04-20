@@ -1199,10 +1199,12 @@ mod tests {
     #[test]
     fn event_ir_starts_with_parse_started_ends_with_completed() {
         let (_, ir) = parse_with_audit("42;", ParseGoal::Script);
+        // SAFETY: parse_with_audit always produces at least one event; first() returns Some
         assert_eq!(
             ir.events.first().unwrap().kind,
             ParseEventKind::ParseStarted
         );
+        // SAFETY: parse_with_audit always produces at least one event; last() returns Some
         assert_eq!(
             ir.events.last().unwrap().kind,
             ParseEventKind::ParseCompleted

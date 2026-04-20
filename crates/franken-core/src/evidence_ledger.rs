@@ -1420,8 +1420,11 @@ fn write_stitching_bundle(
                 "edge_count": evaluated.bundle.evidence_ledger_graph.edges.len(),
                 "artifact_count": evaluated.bundle.artifact_lineage_index.len(),
                 "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions.first().map_or(0, |d| d.boundary_correlation_keys.len()),
+                // SAFETY: EvidenceBundle implements Serialize and has no non-serializable fields
                 "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).unwrap()),
+                // SAFETY: EvidenceLedgerGraph implements Serialize and has no non-serializable fields
                 "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).unwrap()),
+                // SAFETY: EvidenceQuerySurfaceSnapshot implements Serialize and has no non-serializable fields
                 "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).unwrap()),
                 "artifacts": required_artifact_names(),
                 "operator_verification": commands.clone(),
@@ -2040,7 +2043,9 @@ mod tests {
     #[test]
     fn evidence_entry_serialization_round_trip() {
         let entry = sample_entry();
+        // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by valid EvidenceEntry serialization
         let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, restored);
     }
@@ -2048,7 +2053,9 @@ mod tests {
     #[test]
     fn evidence_entry_deterministic_serialization() {
         let entry = sample_entry();
+        // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
         let json1 = serde_json::to_string(&entry).unwrap();
+        // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
         let json2 = serde_json::to_string(&entry).unwrap();
         assert_eq!(json1, json2);
     }
@@ -2069,7 +2076,9 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: LedgerError derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was just produced by valid LedgerError serialization
             let restored: LedgerError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }

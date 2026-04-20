@@ -1220,7 +1220,9 @@ mod tests {
         assert!(display.starts_with("idem:"));
         assert!(display.contains('@'));
         // The hex part should be 64 chars
+        // SAFETY: test verified display.starts_with("idem:"); strip_prefix returns Some
         let hex_part = display.strip_prefix("idem:").unwrap();
+        // SAFETY: test verified display.contains('@'); split('@').next() returns Some
         let hex_part = hex_part.split('@').next().unwrap();
         assert_eq!(hex_part.len(), 64);
     }

@@ -584,7 +584,11 @@ pub fn evaluate_gate(input: &GateEvaluationInput, timestamp_ms: u64) -> GateEval
         gate.gate_id,
         gate.program,
         timestamp_ms,
+        // SAFETY: CategoryCoverage derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         serde_json::to_string(&category_coverage).unwrap(),
+        // SAFETY: GateDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         serde_json::to_string(&final_decision).unwrap(),
         override_applied
     );
@@ -1427,7 +1431,11 @@ mod tests {
     #[test]
     fn frontier_program_serde_round_trip() {
         for program in FrontierProgram::all() {
+            // SAFETY: FrontierProgram derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(program).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid FrontierProgram,
+            // so from_str back to FrontierProgram cannot fail (valid format + matching schema).
             let back: FrontierProgram = serde_json::from_str(&json).unwrap();
             assert_eq!(*program, back);
         }

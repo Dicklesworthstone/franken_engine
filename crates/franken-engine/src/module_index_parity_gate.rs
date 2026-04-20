@@ -1153,7 +1153,11 @@ mod tests {
     #[test]
     fn test_parity_verdict_serde_roundtrip() {
         let v = ParityVerdict::PartialParity;
+        // SAFETY: ParityVerdict derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&v).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ParityVerdict,
+        // so from_str back to ParityVerdict cannot fail (valid format + matching schema).
         let back: ParityVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
     }
@@ -1227,7 +1231,11 @@ mod tests {
     #[test]
     fn test_blocking_reason_serde_roundtrip() {
         let r = BlockingReason::CooldownActive { remaining_ns: 5000 };
+        // SAFETY: BlockingReason derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BlockingReason,
+        // so from_str back to BlockingReason cannot fail (valid format + matching schema).
         let back: BlockingReason = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -1364,7 +1372,11 @@ mod tests {
     #[test]
     fn test_gate_config_serde_roundtrip() {
         let c = GateConfig::default();
+        // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateConfig,
+        // so from_str back to GateConfig cannot fail (valid format + matching schema).
         let back: GateConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }

@@ -2052,7 +2052,9 @@ mod tests {
     #[test]
     fn cut_line_serde_roundtrip() {
         let original = CutLine::C3;
+        // SAFETY: CutLine derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&original).unwrap();
+        // SAFETY: JSON was just produced by valid CutLine serialization
         let restored: CutLine = serde_json::from_str(&json).unwrap();
         assert_eq!(original, restored);
     }

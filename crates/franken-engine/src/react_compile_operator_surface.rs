@@ -660,7 +660,9 @@ mod tests {
     #[test]
     fn build_target_serde() {
         for target in ReactBuildTarget::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(target).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: ReactBuildTarget = serde_json::from_str(&json).unwrap();
             assert_eq!(*target, back);
         }

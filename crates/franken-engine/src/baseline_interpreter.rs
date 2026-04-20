@@ -11820,23 +11820,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:MathClz32" => {
-                // Math.clz32(x) implementation - count leading zeros in 32-bit representation
-                if args.count == 0 {
-                    return Ok(Value::Int(32));
-                }
-
-                let x_val = self.read_reg(args.start)?;
-                let x = match x_val {
-                    Value::Int(n) => n as u32,
-                    Value::Float(f) => f.inner() as u32,
-                    _ => 0,
-                };
-
-                // Count leading zeros in 32-bit representation
-                let leading_zeros = x.leading_zeros();
-                Ok(Value::Int(leading_zeros as i64))
-            }
+            // Removed duplicate MathClz32 - implementation at line ~12775 has better type conversion
 
             "builtin:ArrayPrototypeEntries" => {
                 // Array.prototype.entries() implementation - returns iterator for [index, value] pairs

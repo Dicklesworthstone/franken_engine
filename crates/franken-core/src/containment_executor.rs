@@ -925,9 +925,11 @@ mod tests {
     fn quarantine_preserves_forensic_snapshot() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (quarantine action) cannot fail under normal test conditions.
         executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
             .unwrap();
+        // SAFETY: forensic_snapshot() returns Some after successful quarantine action in test
         let snapshot = executor.forensic_snapshot("ext-001").unwrap();
         assert_eq!(snapshot.snapshot_ns, ctx.timestamp_ns);
     }

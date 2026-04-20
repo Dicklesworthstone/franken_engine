@@ -7912,78 +7912,7 @@ impl InterpreterCore {
                     }
                 }
             }
-            "builtin:StringPrototypeSubstring" => {
-                // String.prototype.substring implementation - returns substring between two indices
-                if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
-                }
-
-                let string_arg = self.read_reg(args.start)?;
-                let string_val = match string_arg {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "".to_string(),
-                };
-
-                let str_len = string_val.chars().count();
-
-                // Get start index (default to 0)
-                let start_idx = if args.count > 1 {
-                    let start_arg = self.read_reg(args.start + 1)?;
-                    match start_arg {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => {
-                            let val = f.inner();
-                            if val.is_nan() || val < 0.0 {
-                                0
-                            } else {
-                                val as usize
-                            }
-                        }
-                        _ => 0,
-                    }
-                } else {
-                    0
-                }
-                .min(str_len);
-
-                // Get end index (default to string length)
-                let end_idx = if args.count > 2 {
-                    let end_arg = self.read_reg(args.start + 2)?;
-                    match end_arg {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => {
-                            let val = f.inner();
-                            if val.is_nan() || val < 0.0 {
-                                0
-                            } else {
-                                val as usize
-                            }
-                        }
-                        _ => str_len,
-                    }
-                } else {
-                    str_len
-                }
-                .min(str_len);
-
-                // Ensure start <= end (swap if necessary, per JavaScript spec)
-                let (actual_start, actual_end) = if start_idx <= end_idx {
-                    (start_idx, end_idx)
-                } else {
-                    (end_idx, start_idx)
-                };
-
-                // Extract substring using character indices
-                let chars: Vec<char> = string_val.chars().collect();
-                let substring: String = chars[actual_start..actual_end].iter().collect();
-
-                Ok(Value::Str(substring))
-            }
+            // Removed duplicate StringPrototypeSubstring - implementation at line ~14106 is more JS-compliant
             "builtin:StringPrototypeSlice" => {
                 // String.prototype.slice implementation - extracts part of string with different negative index behavior
                 if args.count == 0 {

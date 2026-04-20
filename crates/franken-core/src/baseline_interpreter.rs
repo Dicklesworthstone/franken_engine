@@ -9621,6 +9621,7 @@ mod tests {
     #[test]
     fn scope_chain_push_respects_max_scope_depth() {
         let mut chain = ScopeChain::new();
+        // SAFETY: First push() call with valid scope depth setting cannot fail.
         chain.push(2).unwrap();
         let err = chain.push(2).unwrap_err();
         assert!(matches!(
@@ -9641,6 +9642,8 @@ mod tests {
         instrs.push(Ir3Instruction::Halt);
         let m = test_module(instrs);
         let router = LaneRouter::new();
+        // SAFETY: router.execute() with valid test module and valid parameters
+        // cannot fail under normal test conditions.
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);

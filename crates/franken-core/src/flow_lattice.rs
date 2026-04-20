@@ -1781,6 +1781,7 @@ mod tests {
             })
             .unwrap();
 
+        // SAFETY: SigningKey::from_bytes with fixed-size array of correct length cannot fail.
         let signing_key = SigningKey::from_bytes([5u8; 32]).unwrap();
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-untrusted".to_string(),
@@ -1797,6 +1798,7 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
+        // SAFETY: sign() with valid receipt and signing key cannot fail in test context.
         receipt.sign(&signing_key).unwrap();
 
         let err = lattice

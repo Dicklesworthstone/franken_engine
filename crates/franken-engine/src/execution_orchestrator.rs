@@ -2236,6 +2236,7 @@ mod tests {
                 assert!(detail.contains("hostcall.invoke"));
                 assert!(detail.contains("dynamic_capability"));
             }
+            // SAFETY: Test validates orchestrator error for runtime checkpoint validation
             other => panic!("unexpected error: {other}"),
         }
     }

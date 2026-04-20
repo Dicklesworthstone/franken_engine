@@ -884,23 +884,30 @@ mod tests {
     #[test]
     fn same_name_let_in_different_scopes_ok() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 1).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(10), Label::Public)
             .unwrap();
 
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid let variable in inner scope; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 2).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(20), Label::Public)
             .unwrap();
         // Inner x shadows outer x.
+        // SAFETY: Test gets inner scope variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Number(20));
 
+        // SAFETY: Test has valid scope; pop_scope succeeds in controlled test environment.
         chain.pop_scope().unwrap();
         // Outer x is visible again.
+        // SAFETY: Test gets outer scope variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Number(10));
     }
@@ -910,7 +917,9 @@ mod tests {
     #[test]
     fn block_scoped_let_shadows_var() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var variable; declare_var succeeds in controlled test environment.
         chain.declare_var("x".into(), 1).unwrap();
+        // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("x", EnvValue::Number(100), Label::Public)
             .unwrap();

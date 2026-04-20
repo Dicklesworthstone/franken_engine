@@ -1853,6 +1853,7 @@ mod tests {
         for n in [1u64, 2, 4, 8, 16, 32] {
             let mmr = build_mmr(n);
             let proof = mmr.inclusion_proof(n - 1).unwrap();
+            // SAFETY: Test validates MMR inclusion proof succeeds for last leaf
             verify_inclusion(&leaf_hash(n - 1), n - 1, &proof)
                 .unwrap_or_else(|e| panic!("n={n}: {e}"));
         }

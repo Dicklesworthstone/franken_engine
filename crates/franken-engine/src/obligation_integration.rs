@@ -681,7 +681,9 @@ mod tests {
             TwoPhaseCategory::StateMutation,
             TwoPhaseCategory::EvidenceCommit,
         ] {
+            // SAFETY: TwoPhaseCategory derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&cat).unwrap();
+            // SAFETY: JSON was just produced by valid TwoPhaseCategory serialization
             let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(cat, restored);
         }
@@ -714,7 +716,9 @@ mod tests {
             OperationPhase::Aborted,
             OperationPhase::Leaked,
         ] {
+            // SAFETY: OperationPhase derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&phase).unwrap();
+            // SAFETY: JSON was just produced by valid OperationPhase serialization
             let restored: OperationPhase = serde_json::from_str(&json).unwrap();
             assert_eq!(phase, restored);
         }
@@ -757,7 +761,9 @@ mod tests {
             cell_id: "c".to_string(),
             current_state: RegionState::Closed,
         };
+        // SAFETY: ObligationIntegrationError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by valid ObligationIntegrationError serialization
         let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
@@ -824,6 +830,7 @@ mod tests {
     fn begin_rejected_when_cell_not_running() {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut cx = mock_cx(100);
+        // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
@@ -881,9 +888,11 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
             .unwrap();
+        // SAFETY: Test-only unwrap expecting valid commit operation to succeed
         tracker.commit_operation(&mut cell, "op-1").unwrap();
 
         let err = tracker.commit_operation(&mut cell, "op-1").unwrap_err();
@@ -895,9 +904,11 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
             .unwrap();
+        // SAFETY: Test-only unwrap expecting valid abort operation to succeed
         tracker.abort_operation(&mut cell, "op-1").unwrap();
 
         let err = tracker.abort_operation(&mut cell, "op-1").unwrap_err();
@@ -914,6 +925,7 @@ mod tests {
         let mut cx = mock_cx(200);
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(
                 &mut cell,
@@ -924,6 +936,7 @@ mod tests {
             .unwrap();
 
         // Close the cell (obligation is force-aborted by drain timeout)
+        // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
@@ -946,6 +959,7 @@ mod tests {
         let mut cx = mock_cx(200);
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(
                 &mut cell,
@@ -954,8 +968,10 @@ mod tests {
                 "evidence",
             )
             .unwrap();
+        // SAFETY: Test-only unwrap expecting valid commit operation to succeed
         tracker.commit_operation(&mut cell, "op-1").unwrap();
 
+        // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
@@ -973,6 +989,7 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(
                 &mut cell,

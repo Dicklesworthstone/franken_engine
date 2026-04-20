@@ -1157,7 +1157,11 @@ mod tests {
         let err = HostLifecycleError::ExtensionNotFound {
             extension_id: "ext-test".to_string(),
         };
+        // SAFETY: HostLifecycleError derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid HostLifecycleError,
+        // so from_str back to HostLifecycleError cannot fail (valid format + matching schema).
         let back: HostLifecycleError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
@@ -1173,7 +1177,11 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
+        // SAFETY: HostLifecycleEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid HostLifecycleEvent,
+        // so from_str back to HostLifecycleEvent cannot fail (valid format + matching schema).
         let back: HostLifecycleEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }
@@ -1186,7 +1194,11 @@ mod tests {
             load_trace_id: "trace-1".to_string(),
             unloaded: false,
         };
+        // SAFETY: ExtensionRecord derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&record).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ExtensionRecord,
+        // so from_str back to ExtensionRecord cannot fail (valid format + matching schema).
         let back: ExtensionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, back);
     }

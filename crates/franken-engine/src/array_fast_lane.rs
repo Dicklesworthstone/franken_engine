@@ -1292,6 +1292,7 @@ mod tests {
             0,
         );
         assert!(receipt.is_none());
+        // SAFETY: Array arr-1 was registered at start of test, so get_array will succeed
         let lane = engine.get_array("arr-1").unwrap();
         assert!(!lane.fast_lane_active);
     }
@@ -1322,6 +1323,7 @@ mod tests {
             8,
         );
         assert!(receipt.is_none());
+        // SAFETY: Array arr-1 was registered at start of test, so get_array will succeed
         assert!(!engine.get_array("arr-1").unwrap().fast_lane_active);
     }
 

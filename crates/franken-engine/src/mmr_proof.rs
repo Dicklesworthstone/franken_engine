@@ -1163,6 +1163,7 @@ mod tests {
         let mmr = build_mmr(n);
         for i in 0..n {
             let proof = mmr.inclusion_proof(i).unwrap();
+            // SAFETY: Test validates MMR inclusion proof verification succeeds for all leaves
             verify_inclusion(&leaf_hash(i), i, &proof)
                 .unwrap_or_else(|e| panic!("n={n}, i={i}: {e}"));
         }

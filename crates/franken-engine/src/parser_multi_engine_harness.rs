@@ -2091,7 +2091,9 @@ mod tests {
             HarnessEngineKind::FixtureExpectedHash,
             HarnessEngineKind::ExternalCommand,
         ] {
+            // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just generated from HarnessEngineKind, deserialization guaranteed to succeed
             let restored: HarnessEngineKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, restored);
         }
@@ -2099,10 +2101,13 @@ mod tests {
 
     #[test]
     fn harness_engine_kind_snake_case_format() {
+        // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::FrankenCanonical).unwrap();
         assert_eq!(json, "\"franken_canonical\"");
+        // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::FixtureExpectedHash).unwrap();
         assert_eq!(json, "\"fixture_expected_hash\"");
+        // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::ExternalCommand).unwrap();
         assert_eq!(json, "\"external_command\"");
     }
@@ -2110,7 +2115,9 @@ mod tests {
     #[test]
     fn harness_engine_spec_serde_roundtrip() {
         let spec = HarnessEngineSpec::franken_canonical("v1.0");
+        // SAFETY: HarnessEngineSpec derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&spec).unwrap();
+        // SAFETY: JSON was just generated from HarnessEngineSpec, deserialization guaranteed to succeed
         let restored: HarnessEngineSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, restored);
     }
@@ -2125,15 +2132,19 @@ mod tests {
             command: Some("/usr/bin/engine".to_string()),
             args: vec!["--mode".to_string(), "strict".to_string()],
         };
+        // SAFETY: HarnessEngineSpec derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&spec).unwrap();
+        // SAFETY: JSON was just generated from HarnessEngineSpec, deserialization guaranteed to succeed
         let restored: HarnessEngineSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, restored);
     }
 
     #[test]
     fn engine_outcome_kind_serialize() {
+        // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
         let hash_json = serde_json::to_string(&EngineOutcomeKind::Hash).unwrap();
         assert_eq!(hash_json, "\"hash\"");
+        // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
         let error_json = serde_json::to_string(&EngineOutcomeKind::Error).unwrap();
         assert_eq!(error_json, "\"error\"");
     }

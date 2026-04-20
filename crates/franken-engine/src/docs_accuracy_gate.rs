@@ -919,6 +919,7 @@ mod tests {
     #[test]
     fn add_surface() {
         let mut inv = DocsAccuracyInventory::new();
+        // SAFETY: Test helper creates valid surface; add_surface succeeds for new surface in controlled test.
         inv.add_surface(aligned_surface("s1")).unwrap();
         assert_eq!(inv.surface_count(), 1);
     }

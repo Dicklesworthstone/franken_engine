@@ -5087,6 +5087,7 @@ mod tests {
                 assert_eq!(ids[0], CanonicalValue::String("p1".to_string()));
                 assert_eq!(ids[1], CanonicalValue::String("p2".to_string()));
             } else {
+                // SAFETY: Test validates canonical value contains expected proof_input_ids array
                 panic!("expected proof_input_ids Array");
             }
             assert!(m.contains_key("rollback_token"));

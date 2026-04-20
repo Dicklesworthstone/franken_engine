@@ -40,18 +40,22 @@ pub enum GuardplaneTrustLevel {
 }
 
 impl GuardplaneTrustLevel {
-    fn parse(raw: &str) -> Self {
+    fn parse_with_status(raw: &str) -> (Self, bool) {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "trusted" | "signed" | "signed_supply_chain" => Self::Trusted,
-            "established" => Self::Established,
-            "provisional" | "development" => Self::Provisional,
-            "unknown" => Self::Unknown,
-            "unsigned" => Self::Suspicious,
-            "suspicious" | "untrusted" => Self::Suspicious,
-            "compromised" => Self::Compromised,
-            "revoked" => Self::Revoked,
-            _ => Self::Unknown,
+            "trusted" | "signed" | "signed_supply_chain" => (Self::Trusted, true),
+            "established" => (Self::Established, true),
+            "provisional" | "development" => (Self::Provisional, true),
+            "unknown" => (Self::Unknown, true),
+            "unsigned" => (Self::Suspicious, true),
+            "suspicious" | "untrusted" => (Self::Suspicious, true),
+            "compromised" => (Self::Compromised, true),
+            "revoked" => (Self::Revoked, true),
+            _ => (Self::Unknown, false),
         }
+    }
+
+    fn parse(raw: &str) -> Self {
+        Self::parse_with_status(raw).0
     }
 
     fn risk_penalty_millionths(self) -> i64 {
@@ -113,6 +117,8 @@ impl GuardplaneExtensionContext {
         declared_capabilities: BTreeSet<String>,
         metadata: BTreeMap<String, String>,
     ) -> Self {
+        let mut diagnostics = Vec::new();
+
         let trust_level = metadata_lookup(
             &metadata,
             &[
@@ -121,7 +127,17 @@ impl GuardplaneExtensionContext {
                 "trust_level",
             ],
         )
-        .map(GuardplaneTrustLevel::parse)
+        .map(|value| {
+            let (level, parsed) = GuardplaneTrustLevel::parse_with_status(value);
+            if !parsed {
+                diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
+                    "capability_witness.trust_level",
+                    value,
+                    "failed to parse trust level",
+                ));
+            }
+            level
+        })
         .unwrap_or(GuardplaneTrustLevel::Unknown);
 
         let witness_confidence_millionths = metadata_lookup(
@@ -131,8 +147,29 @@ impl GuardplaneExtensionContext {
                 "guardplane.witness_confidence_millionths",
             ],
         )
-        .and_then(|value| value.parse::<i64>().ok())
-        .map(|value| value.clamp(0, MILLION))
+        .and_then(|value| {
+            match value.parse::<i64>() {
+                Ok(value) => {
+                    let clamped = value.clamp(0, MILLION);
+                    if clamped != value {
+                        diagnostics.push(GuardplaneDiagnosticRecord::metadata_clamped(
+                            "capability_witness.confidence_millionths",
+                            &value.to_string(),
+                            "clamped witness confidence to [0, 1000000]",
+                        ));
+                    }
+                    Some(clamped)
+                }
+                Err(_) => {
+                    diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
+                        "capability_witness.confidence_millionths",
+                        value,
+                        "failed to parse witness confidence",
+                    ));
+                    None
+                }
+            }
+        })
         .unwrap_or(0);
 
         let required_capabilities = parse_capability_csv(
@@ -164,6 +201,7 @@ impl GuardplaneExtensionContext {
             witness_confidence_millionths,
             required_capabilities,
             denied_capabilities,
+            diagnostics,
         }
     }
 
@@ -408,8 +446,8 @@ impl GuardplaneAdapter {
             .clone()
     }
 
-    pub fn diagnostic_records(&self) -> Vec<GuardplaneDecisionRecord> {
-        self.decision_records()
+    pub fn diagnostic_records(&self) -> Vec<GuardplaneDiagnosticRecord> {
+        self.context.diagnostics.clone()
     }
 
     fn evaluate_operation(

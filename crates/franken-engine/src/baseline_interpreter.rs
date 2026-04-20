@@ -14746,30 +14746,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:MathTrunc" => {
-                // Math.trunc(x) implementation
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let val = self.read_reg(args.start)?;
-                let num = match val {
-                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already truncated
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                if num.is_nan() || num.is_infinite() {
-                    Ok(Value::Float(Float64::new(num)))
-                } else {
-                    // Truncate towards zero
-                    Ok(Value::Float(Float64::new(num.trunc())))
-                }
-            }
+            // Removed duplicate MathTrunc - implementation at line ~9554 is identical
 
             "builtin:ArrayPrototypeGroupToMap" => {
                 // Array.prototype.groupToMap(callback) implementation (simplified)

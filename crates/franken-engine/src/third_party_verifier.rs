@@ -1964,6 +1964,7 @@ mod tests {
     fn verify_attestation_empty_required_fields() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let mut attestation = generate_attestation(&input).unwrap();
         attestation.verifier_name = "".to_string();
         let verification = verify_attestation(&attestation);

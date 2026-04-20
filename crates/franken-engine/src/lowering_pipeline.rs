@@ -2237,6 +2237,7 @@ fn lower_statement_to_ir1_with_flow(
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
             // Lower constructor as a function declaration.
+            // SAFETY: Constructor is guaranteed to exist for class declarations in this lowering path
             let param_names: Vec<String> = constructor
                 .map(|c| {
                     c.params

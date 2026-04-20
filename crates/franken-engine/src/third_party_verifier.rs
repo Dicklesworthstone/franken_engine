@@ -1890,6 +1890,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "claim_type_matches_report")
+            // SAFETY: Test-only unwrap expecting claim_type_matches_report check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

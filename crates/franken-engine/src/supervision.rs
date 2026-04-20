@@ -536,6 +536,7 @@ mod tests {
         sup.report_failure("svc-a", "crash-3", 30);
 
         // 4th failure — budget exhausted, escalates
+        // SAFETY: Test with valid service should succeed even when escalating
         let action = sup.report_failure("svc-a", "crash-4", 40).unwrap();
         assert_eq!(action, SupervisorAction::Escalate);
         assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Isolated));
@@ -551,7 +552,7 @@ mod tests {
             shutdown_order: 0,
         });
         sup.start_service("tmp-svc");
-
+        // SAFETY: Test with valid service should succeed reporting failure
         let action = sup.report_failure("tmp-svc", "crash", 10).unwrap();
         assert_eq!(action, SupervisorAction::Terminate);
         assert_eq!(sup.service_state("tmp-svc"), Some(ServiceState::Terminated));
@@ -600,6 +601,7 @@ mod tests {
 
         // Second failure: budget exhausted -> escalate to Isolate
         sup.report_failure("svc", "crash", 20);
+        // SAFETY: Test service was registered and should have severity tracking
         assert!(sup.service_severity("svc").unwrap() >= Severity::Isolate);
     }
 
@@ -624,6 +626,7 @@ mod tests {
         sup.report_failure("svc", "crash", 20);
 
         // Next failure at t=200 (outside window of 100) — budget refreshed
+        // SAFETY: Test with valid service and refreshed budget should succeed
         let action = sup.report_failure("svc", "crash", 200).unwrap();
         assert_eq!(action, SupervisorAction::Restart);
     }
@@ -756,7 +759,11 @@ mod tests {
             Severity::RootEscalation,
         ];
         for s in &severities {
+            // SAFETY: Severity derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Severity,
+            // so from_str back to Severity cannot fail (valid format + matching schema).
             let restored: Severity = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, restored);
         }
@@ -765,7 +772,11 @@ mod tests {
     #[test]
     fn service_config_serialization_round_trip() {
         let config = test_config("svc-1");
+        // SAFETY: ServiceConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ServiceConfig,
+        // so from_str back to ServiceConfig cannot fail (valid format + matching schema).
         let restored: ServiceConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }

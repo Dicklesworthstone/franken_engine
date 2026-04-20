@@ -1961,7 +1961,9 @@ mod tests {
             proof_refs: vec![pid],
             elided_check_description: "flow label check".into(),
         };
+        // SAFETY: MarkedRegion derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&region).unwrap();
+        // SAFETY: JSON was just generated from MarkedRegion, deserialization guaranteed to succeed
         let back: MarkedRegion = serde_json::from_str(&json).unwrap();
         assert_eq!(region, back);
     }
@@ -1990,7 +1992,9 @@ mod tests {
             outcome: "GLOBAL_DISABLE".into(),
             error_code: Some("GLOBAL_DISABLE".into()),
         };
+        // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
         let back: CompilerPolicyEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("GLOBAL_DISABLE"));
@@ -2057,7 +2061,9 @@ mod tests {
             required_proof_types: required,
             governance_approved: true,
         };
+        // SAFETY: OptimizationClassPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just generated from OptimizationClassPolicy, deserialization guaranteed to succeed
         let back: OptimizationClassPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, back);
     }
@@ -2196,6 +2202,7 @@ mod tests {
         ];
         let mut jsons: BTreeSet<String> = BTreeSet::new();
         for o in &outcomes {
+            // SAFETY: SpecializationOutcome derives Serialize and has no non-serializable fields
             let j = serde_json::to_string(o).unwrap();
             jsons.insert(j);
         }
@@ -2597,7 +2604,9 @@ mod tests {
     #[test]
     fn proof_store_serde_roundtrip_empty() {
         let store = ProofStore::new();
+        // SAFETY: ProofStore derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&store).unwrap();
+        // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
         let back: ProofStore = serde_json::from_str(&json).unwrap();
         assert!(back.is_empty());
     }
@@ -2610,7 +2619,9 @@ mod tests {
         store.insert(flow_proof("sr-b", epoch));
         store.insert(replay_motif_proof("sr-c", epoch));
 
+        // SAFETY: ProofStore derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&store).unwrap();
+        // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
         let back: ProofStore = serde_json::from_str(&json).unwrap();
         assert_eq!(back.len(), 3);
     }

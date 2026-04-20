@@ -1053,9 +1053,11 @@ mod tests {
     #[test]
     fn dry_run_pass() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
+        // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner.dry_run("m-1", passing_dry_run("m-1"), "t").unwrap();
         assert_eq!(runner.state("m-1"), Some(MigrationState::DryRunPassed));
     }
@@ -1063,6 +1065,7 @@ mod tests {
     #[test]
     fn dry_run_fail() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
@@ -1094,10 +1097,13 @@ mod tests {
     #[test]
     fn checkpoint_after_dry_run() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
+        // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner.dry_run("m-1", passing_dry_run("m-1"), "t").unwrap();
+        // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner.create_checkpoint("m-1", 42, "t").unwrap();
         assert_eq!(runner.state("m-1"), Some(MigrationState::Executing));
     }
@@ -1105,6 +1111,7 @@ mod tests {
     #[test]
     fn checkpoint_requires_dry_run_passed() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
@@ -1134,12 +1141,17 @@ mod tests {
     #[test]
     fn verification_pass() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
+        // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner.dry_run("m-1", passing_dry_run("m-1"), "t").unwrap();
+        // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner.create_checkpoint("m-1", 42, "t").unwrap();
+        // SAFETY: Test uses valid execution; complete_execution succeeds in controlled test environment.
         runner.complete_execution("m-1", 100, "t").unwrap();
+        // SAFETY: Test uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify("m-1", passing_verification("m-1"), "t")
             .unwrap();
@@ -1182,6 +1194,7 @@ mod tests {
     #[test]
     fn commit_requires_verified() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
@@ -1197,6 +1210,7 @@ mod tests {
     #[test]
     fn rollback_from_executing() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();

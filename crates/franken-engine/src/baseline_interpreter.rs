@@ -12272,52 +12272,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeRepeat" => {
-                // String.prototype.repeat(count) implementation
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
-                        }
-                    }
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Str(string_val));
-                }
-
-                let count = match self.read_reg(args.start + 1)? {
-                    Value::Int(n) => {
-                        if n < 0 {
-                            return Ok(Value::Str("RangeError".to_string())); // Negative count
-                        }
-                        n as usize
-                    }
-                    Value::Float(f) => {
-                        let num = f.inner();
-                        if num.is_infinite() || num.is_nan() || num < 0.0 {
-                            return Ok(Value::Str("RangeError".to_string()));
-                        }
-                        num as usize
-                    }
-                    _ => 0,
-                };
-
-                // Limit repeat count to prevent memory issues
-                if count > 10000 {
-                    return Ok(Value::Str("RangeError".to_string()));
-                }
-
-                Ok(Value::Str(string_val.repeat(count)))
-            }
+            // StringPrototypeRepeat: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:NumberParseInt" => {
                 // Number.parseInt(string, radix) implementation

@@ -1025,7 +1025,9 @@ mod tests {
     #[test]
     fn evidence_source_serde_roundtrip() {
         for source in EvidenceSource::REQUIRED {
+            // SAFETY: EvidenceSource derives Serialize and has no non-serializable fields.
             let json = serde_json::to_string(&source).unwrap();
+            // SAFETY: JSON was just produced by valid EvidenceSource serialization.
             let back: EvidenceSource = serde_json::from_str(&json).unwrap();
             assert_eq!(back, source);
         }
@@ -1038,7 +1040,9 @@ mod tests {
             SignatureStatus::Unsigned,
             SignatureStatus::Invalid,
         ] {
+            // SAFETY: SignatureStatus derives Serialize and has no non-serializable fields.
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just produced by valid SignatureStatus serialization.
             let back: SignatureStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(back, status);
         }

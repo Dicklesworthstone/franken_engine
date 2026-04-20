@@ -9987,6 +9987,7 @@ mod tests {
                 "finally_target must be set for try/catch/finally"
             );
         } else {
+            // SAFETY: Test validates IR3 lowering includes expected BeginTry instruction
             panic!("BeginTry not found in IR3 output");
         }
     }

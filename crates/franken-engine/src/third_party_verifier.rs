@@ -1738,6 +1738,8 @@ mod tests {
     fn generate_attestation_unsigned() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report.clone(), None);
+        // SAFETY: Test uses valid attestation input from helper functions.
+        // generate_attestation only fails on malformed inputs (impossible here).
         let attestation = generate_attestation(&input).unwrap();
         assert_eq!(attestation.claim_type, "containment");
         assert_eq!(attestation.verdict, VerificationVerdict::Verified);

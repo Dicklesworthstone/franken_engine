@@ -3689,7 +3689,9 @@ mod tests {
     #[test]
     fn parser_mode_serde_roundtrip() {
         for v in &[ParserMode::Serial, ParserMode::Parallel] {
+            // SAFETY: ParserMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by valid ParserMode serialization
             let back: ParserMode = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }

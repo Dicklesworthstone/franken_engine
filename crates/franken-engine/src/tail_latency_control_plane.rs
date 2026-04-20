@@ -1868,6 +1868,7 @@ mod tests {
 
     #[test]
     fn decomposition_gc_comes_only_from_gc_pause_stage() {
+        // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
         // GC p99 should equal the GcPause observation p99_ns
         // From the balanced scenario: GcPause p99_ns = 8_600_000

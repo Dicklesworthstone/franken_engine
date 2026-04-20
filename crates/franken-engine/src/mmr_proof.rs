@@ -808,9 +808,11 @@ mod tests {
     #[test]
     fn inclusion_proof_single_leaf() {
         let mmr = build_mmr(1);
+        // SAFETY: MMR with 1 element has valid leaf at index 0, inclusion_proof should succeed
         let proof = mmr.inclusion_proof(0).unwrap();
         assert_eq!(proof.proof_type, ProofType::Inclusion);
         assert_eq!(proof.marker_index, 0);
+        // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
         verify_inclusion(&leaf_hash(0), 0, &proof).unwrap();
     }
 
@@ -818,7 +820,9 @@ mod tests {
     fn inclusion_proof_two_leaves() {
         let mmr = build_mmr(2);
         for i in 0..2 {
+            // SAFETY: MMR with 2 elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr.inclusion_proof(i).unwrap();
+            // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
             verify_inclusion(&leaf_hash(i), i, &proof).unwrap();
         }
     }

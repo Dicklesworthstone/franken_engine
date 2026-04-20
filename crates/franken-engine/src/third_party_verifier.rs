@@ -2122,6 +2122,7 @@ mod tests {
     fn attestation_input_serde() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: VerificationAttestationInput derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&input).unwrap();
         let back: VerificationAttestationInput = serde_json::from_str(&json).unwrap();
         assert_eq!(back, input);

@@ -1987,7 +1987,9 @@ mod tests {
             KeyStatus::Revoked,
             KeyStatus::Expired,
         ] {
+            // SAFETY: KeyStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just produced by valid KeyStatus serialization
             let back: KeyStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, back);
         }

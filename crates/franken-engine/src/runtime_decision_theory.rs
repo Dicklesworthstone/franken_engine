@@ -2403,6 +2403,8 @@ mod tests {
         if let LaneAction::RouteTo(lane) = &outcome.action {
             assert_eq!(lane.to_string(), THROUGHPUT_PROFILE_LABEL);
         } else {
+            // SAFETY: Test-only panic to validate normal regime decision logic
+            // expects RouteTo action. Any other action type is test failure.
             panic!("expected RouteTo, got {:?}", outcome.action);
         }
     }

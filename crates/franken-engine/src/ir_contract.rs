@@ -5443,6 +5443,7 @@ mod tests {
                     lit,
                 );
             } else {
+                // SAFETY: Test validates literal canonical value returns expected Map format
                 panic!("expected Map for {:?}", lit);
             }
         }

@@ -2167,7 +2167,9 @@ mod tests {
             DemotionSeverity::Warning,
             DemotionSeverity::Critical,
         ] {
+            // SAFETY: to_value cannot fail on derived Serialize enum
             let json = serde_json::to_value(sev).unwrap();
+            // SAFETY: from_value cannot fail on valid JSON from to_value roundtrip
             let back: DemotionSeverity = serde_json::from_value(json).unwrap();
             assert_eq!(sev, back);
         }
@@ -2194,7 +2196,9 @@ mod tests {
             },
         ];
         for err in errors {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&err).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: DemotionError = serde_json::from_str(&json).unwrap();
             assert_eq!(err, back);
         }
@@ -2208,7 +2212,9 @@ mod tests {
             collected_at_ns: 1_000_000,
             summary: "divergent output".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&item).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DemotionEvidenceItem = serde_json::from_str(&json).unwrap();
         assert_eq!(item, back);
     }
@@ -2289,7 +2295,9 @@ mod tests {
             },
         ];
         for obs in &observations {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(obs).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: MonitoringObservation = serde_json::from_str(&json).unwrap();
             assert_eq!(&restored, obs);
         }
@@ -2302,7 +2310,9 @@ mod tests {
             max_value_millionths: 100_000_000,
             sustained_duration_ns: 5_000_000_000,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&pt).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: PerformanceThreshold = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, pt);
     }
@@ -2367,12 +2377,14 @@ mod tests {
         assert!(receipt.verify_signature(&vk).is_ok());
 
         // Wrong key should fail.
+        // SAFETY: from_bytes cannot fail on correctly sized byte array
         let wrong_vk = VerificationKey::from_bytes([0xAB; 32]).unwrap();
         assert!(receipt.verify_signature(&wrong_vk).is_err());
     }
 
     #[test]
     fn demotion_receipt_derive_id_deterministic() {
+        // SAFETY: derive_receipt_id cannot fail with valid test inputs
         let id1 = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native",
@@ -2381,6 +2393,7 @@ mod tests {
             "zone-a",
         )
         .unwrap();
+        // SAFETY: derive_receipt_id cannot fail with valid test inputs
         let id2 = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native",
@@ -2429,7 +2442,9 @@ mod tests {
                 summary: "risk breach".to_string(),
             }],
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&te).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: TriggerEvaluation = serde_json::from_str(&json).unwrap();
         assert_eq!(te, restored);
     }
@@ -2441,7 +2456,9 @@ mod tests {
             evaluation: None,
             observations_processed: 10,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&or).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ObservationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(or, restored);
     }
@@ -2449,7 +2466,9 @@ mod tests {
     #[test]
     fn auto_demotion_monitor_serde_roundtrip() {
         let monitor = test_monitor();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&monitor).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: AutoDemotionMonitor = serde_json::from_str(&json).unwrap();
         assert_eq!(monitor, restored);
     }

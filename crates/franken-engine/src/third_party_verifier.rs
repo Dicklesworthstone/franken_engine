@@ -1928,6 +1928,7 @@ mod tests {
     fn verify_attestation_tampered_digest() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let mut attestation = generate_attestation(&input).unwrap();
         attestation.report_digest_hex = "0000000000000000".to_string();
         let verification = verify_attestation(&attestation);

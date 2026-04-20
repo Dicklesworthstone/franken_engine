@@ -13048,20 +13048,7 @@ impl InterpreterCore {
             }
 
 
-            "builtin:ObjectPrototypeValueOf" => {
-                // Object.prototype.valueOf() implementation
-                let this_val = self.read_reg(args.start)?;
-
-                // For primitives, return themselves
-                match this_val {
-                    Value::Object(_) => {
-                        // For objects, return the object itself (simplified)
-                        // In a real implementation, this would check for primitive wrapper objects
-                        Ok(this_val)
-                    }
-                    _ => Ok(this_val), // Primitives return themselves
-                }
-            }
+            // Removed duplicate ObjectPrototypeValueOf - implementation at line ~11410 is identical
 
 
             "builtin:MathLog2" => {

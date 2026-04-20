@@ -115,7 +115,7 @@ impl GuardplaneExtensionContext {
     ) -> Self {
         let mut diagnostics = Vec::new();
 
-        let trust_level = metadata_lookup(
+        let trust_level = metadata_lookup_with_key(
             &metadata,
             &[
                 "capability_witness.trust_level",
@@ -123,11 +123,11 @@ impl GuardplaneExtensionContext {
                 "trust_level",
             ],
         )
-        .map(|value| {
+        .map(|(key, value)| {
             let (level, parsed) = GuardplaneTrustLevel::parse_with_status(value);
             if !parsed {
                 diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
-                    "capability_witness.trust_level",
+                    key,
                     value,
                     "failed to parse trust level",
                 ));
@@ -136,21 +136,21 @@ impl GuardplaneExtensionContext {
         })
         .unwrap_or(GuardplaneTrustLevel::Unknown);
 
-        let witness_confidence_millionths = metadata_lookup(
+        let witness_confidence_millionths = metadata_lookup_with_key(
             &metadata,
             &[
                 "capability_witness.confidence_millionths",
                 "guardplane.witness_confidence_millionths",
             ],
         )
-        .and_then(|value| {
+        .and_then(|(key, value)| {
             match value.parse::<i64>() {
-                Ok(value) => {
-                    let clamped = value.clamp(0, MILLION);
-                    if clamped != value {
+                Ok(parsed) => {
+                    let clamped = parsed.clamp(0, MILLION);
+                    if clamped != parsed {
                         diagnostics.push(GuardplaneDiagnosticRecord::metadata_clamped(
-                            "capability_witness.confidence_millionths",
-                            &value.to_string(),
+                            key,
+                            value,
                             "clamped witness confidence to [0, 1000000]",
                         ));
                     }
@@ -158,7 +158,7 @@ impl GuardplaneExtensionContext {
                 }
                 Err(_) => {
                     diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
-                        "capability_witness.confidence_millionths",
+                        key,
                         value,
                         "failed to parse witness confidence",
                     ));

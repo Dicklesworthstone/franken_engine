@@ -1203,6 +1203,8 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
+        // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
+        // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         SigningKey::from_bytes([42u8; 32]).unwrap()
     }
 
@@ -1291,6 +1293,8 @@ mod tests {
     #[test]
     fn demotion_receipt_signature_fails_with_wrong_key() {
         let key = test_signing_key();
+        // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
+        // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         let wrong_key = SigningKey::from_bytes([99u8; 32]).unwrap();
 
         let receipt = DemotionReceipt::create_signed(

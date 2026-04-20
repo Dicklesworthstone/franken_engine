@@ -2431,7 +2431,11 @@ mod tests {
             state_contributions_millionths: contributions,
             guardrail_blocked: false,
         };
+        // SAFETY: CandidateActionScore derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&score).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CandidateActionScore,
+        // so from_str back to CandidateActionScore cannot fail (valid format + matching schema).
         let back: CandidateActionScore = serde_json::from_str(&json).unwrap();
         assert_eq!(score, back);
     }

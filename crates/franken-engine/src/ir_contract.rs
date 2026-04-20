@@ -5017,6 +5017,8 @@ mod tests {
             assert_eq!(m.get("count"), Some(&CanonicalValue::U64(3)));
             assert_eq!(m.len(), 2);
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5040,6 +5042,8 @@ mod tests {
                 Some(&CanonicalValue::String("main".to_string()))
             );
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5057,6 +5061,8 @@ mod tests {
         if let CanonicalValue::Map(m) = cv {
             assert_eq!(m.get("name"), Some(&CanonicalValue::Null));
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5085,6 +5091,8 @@ mod tests {
             }
             assert!(m.contains_key("rollback_token"));
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5104,6 +5112,8 @@ mod tests {
             assert_eq!(m.get("instruction_index"), Some(&CanonicalValue::U64(20)));
             assert!(m.contains_key("capability"));
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5330,6 +5340,8 @@ mod tests {
             assert!(m.contains_key("schema_version"));
             assert!(m.contains_key("source_hash"));
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }
@@ -5346,6 +5358,8 @@ mod tests {
         if let CanonicalValue::Map(m) = cv {
             assert_eq!(m.get("source_hash"), Some(&CanonicalValue::Null));
         } else {
+            // SAFETY: Test-only panic to validate canonical value Map format.
+            // Test expects CanonicalValue::Map from canonical_value method.
             panic!("expected Map");
         }
     }

@@ -1017,6 +1017,7 @@ mod tests {
     #[test]
     fn add_blocker() {
         let mut ledger = BlockerLedger::new();
+        // SAFETY: Test adding unique blocker to empty ledger should succeed
         ledger
             .add_blocker(make_blocker(
                 "b1",
@@ -1030,6 +1031,7 @@ mod tests {
     #[test]
     fn duplicate_blocker_rejected() {
         let mut ledger = BlockerLedger::new();
+        // SAFETY: Test adding first unique blocker to empty ledger should succeed
         ledger
             .add_blocker(make_blocker(
                 "b1",
@@ -1050,6 +1052,7 @@ mod tests {
     #[test]
     fn release_blockers_filtered() {
         let mut ledger = BlockerLedger::new();
+        // SAFETY: Test adding unique blocker b1 to empty ledger should succeed
         ledger
             .add_blocker(make_blocker(
                 "b1",
@@ -1057,6 +1060,7 @@ mod tests {
                 BlockerSeverity::Blocking,
             ))
             .unwrap();
+        // SAFETY: Test adding unique blocker b2 to ledger should succeed
         ledger
             .add_blocker(make_blocker(
                 "b2",
@@ -1072,6 +1076,7 @@ mod tests {
         let mut ledger = BlockerLedger::new();
         let mut b = make_blocker("b1", BlockerSurface::Parser, BlockerSeverity::Blocking);
         b.remediation = RemediationStatus::Verified;
+        // SAFETY: Test adding unique resolved blocker to empty ledger should succeed
         ledger.add_blocker(b).unwrap();
         assert!(ledger.release_blockers().is_empty());
     }

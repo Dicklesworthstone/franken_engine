@@ -3090,6 +3090,7 @@ mod tests {
 
     #[test]
     fn receipt_id_differs_by_digest() {
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_a = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native-a",
@@ -3098,6 +3099,7 @@ mod tests {
             "zone",
         )
         .unwrap();
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native-b",

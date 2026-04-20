@@ -765,7 +765,11 @@ mod tests {
     #[test]
     fn sandbox_policy_serde_roundtrip() {
         let policy = SandboxPolicy::default();
+        // SAFETY: SandboxPolicy derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SandboxPolicy,
+        // so from_str back to SandboxPolicy cannot fail (valid format + matching schema).
         let restored: SandboxPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
@@ -804,6 +808,8 @@ mod tests {
     fn allow_is_noop() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Allow, "ext-001", &ctx)
             .unwrap();

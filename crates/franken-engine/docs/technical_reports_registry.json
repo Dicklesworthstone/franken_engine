@@ -121,6 +121,28 @@
       "dependencies": ["bd-2501"],
       "reproducible": true,
       "validation_status": "draft_skeleton"
+    },
+    {
+      "id": "FKTR-2026-007",
+      "title": "Property-Based Testing Manifest",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-04-20",
+      "type": "Methodology",
+      "status": "Draft Skeleton",
+      "artifact_bundle": "crates/franken-engine/docs/PROPERTY_BASED_TESTING_MANIFEST.md",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Mathematical property catalog for JavaScript runtime verification",
+        "Arbitrary value generators with stratified sampling and constraint solving",
+        "Hierarchical minimization framework for counterexample reduction",
+        "Delta debugging algorithms for failure localization",
+        "Bayesian coverage targeting with multi-objective test generation optimization",
+        "Automated property discovery and invariant mining methodology"
+      ],
+      "dependencies": ["bd-2501"],
+      "reproducible": true,
+      "validation_status": "draft_skeleton"
     }
   ],
   "external_replications": [
@@ -161,7 +183,7 @@
     "minimum_adopted_tools": 1
   },
   "current_status": {
-    "publishable_reports": 3,
+    "publishable_reports": 4,
     "externally_replicated_claims": 0,
     "adopted_tools": 0,
     "section_16_complete": false

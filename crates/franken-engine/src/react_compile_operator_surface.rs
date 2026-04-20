@@ -677,7 +677,9 @@ mod tests {
     #[test]
     fn operator_command_serde() {
         for cmd in ReactOperatorCommand::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(cmd).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: ReactOperatorCommand = serde_json::from_str(&json).unwrap();
             assert_eq!(*cmd, back);
         }

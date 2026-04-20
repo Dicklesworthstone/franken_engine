@@ -1533,6 +1533,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_div() {
+        // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<div>hello</div>", &default_config()).unwrap();
         match &result.node {
             JsxNode::Element(el) => {
@@ -1547,6 +1548,7 @@ mod tests {
 
     #[test]
     fn test_parse_self_closing() {
+        // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<br />", &default_config()).unwrap();
         match &result.node {
             JsxNode::Element(el) => {
@@ -1560,6 +1562,7 @@ mod tests {
 
     #[test]
     fn test_parse_component() {
+        // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<App />", &default_config()).unwrap();
         match &result.node {
             JsxNode::Element(el) => {
@@ -1575,6 +1578,7 @@ mod tests {
 
     #[test]
     fn test_parse_fragment() {
+        // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<>hello</>", &default_config()).unwrap();
         match &result.node {
             JsxNode::Fragment(frag) => {
@@ -1587,6 +1591,7 @@ mod tests {
 
     #[test]
     fn test_parse_fragment_with_element_child() {
+        // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<><div>inner</div></>", &default_config()).unwrap();
         match &result.node {
             JsxNode::Fragment(frag) => {

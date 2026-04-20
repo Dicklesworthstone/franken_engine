@@ -1856,7 +1856,9 @@ mod tests {
             HypothesisKind::FlowCheckElision,
             HypothesisKind::SuperinstructionFusion,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&hk).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: HypothesisKind = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, hk);
         }
@@ -1865,7 +1867,9 @@ mod tests {
     #[test]
     fn risk_level_serde_roundtrip() {
         for rl in [RiskLevel::Low, RiskLevel::Medium, RiskLevel::High] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&rl).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: RiskLevel = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, rl);
         }
@@ -2084,6 +2088,7 @@ mod tests {
     fn canonical_bytes_deterministic_for_hypothesis() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test-only unwrap with valid proof and engine configuration
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         let bytes1 = hypotheses[0].canonical_bytes();

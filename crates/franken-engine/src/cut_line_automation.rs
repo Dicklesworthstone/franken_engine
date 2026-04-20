@@ -2102,7 +2102,9 @@ mod tests {
     #[test]
     fn gate_category_serde_roundtrip() {
         let original = GateCategory::SecuritySurvival;
+        // SAFETY: GateCategory derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&original).unwrap();
+        // SAFETY: JSON was just produced by valid GateCategory serialization
         let restored: GateCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(original, restored);
     }
@@ -2160,7 +2162,9 @@ mod tests {
     #[test]
     fn spec_serde_roundtrip() {
         let spec = CutLineSpec::default_c0();
+        // SAFETY: CutLineSpec derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&spec).unwrap();
+        // SAFETY: JSON was just produced by valid CutLineSpec serialization
         let restored: CutLineSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, restored);
     }
@@ -2170,7 +2174,9 @@ mod tests {
     #[test]
     fn gate_input_serde_roundtrip() {
         let input = make_passing_input(GateCategory::SemanticContract, 1000);
+        // SAFETY: GateInput derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&input).unwrap();
+        // SAFETY: JSON was just produced by valid GateInput serialization
         let restored: GateInput = serde_json::from_str(&json).unwrap();
         assert_eq!(input, restored);
     }
@@ -2212,6 +2218,7 @@ mod tests {
             zone: "test".into(),
         };
 
+        // SAFETY: Test setup ensures evaluate() succeeds with valid inputs and test epoch
         let record = evaluator.evaluate(input).unwrap();
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert_eq!(record.risk_level, RiskLevel::Low);

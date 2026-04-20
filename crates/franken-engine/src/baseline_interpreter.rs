@@ -8563,11 +8563,16 @@ impl InterpreterCore {
                             r as u32
                         }
                         Value::Float(f) => {
-                            let r = f.inner() as i64;
-                            if r < 2 || r > 36 {
-                                return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
+                            let r = f.inner();
+                            if !r.is_finite() {
+                                10
+                            } else {
+                                let r = r as i64;
+                                if r < 2 || r > 36 {
+                                    return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
+                                }
+                                r as u32
                             }
-                            r as u32
                         }
                         _ => 10, // Default to base 10 for non-numeric radix
                     }
@@ -9172,6 +9177,61 @@ impl InterpreterCore {
 
                 Ok(Value::Undefined)
             }
+            "builtin:ArrayPrototypeFind" => {
+                // Array.prototype.find(callback[, thisArg]) implementation (simplified)
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get the array object from heap
+                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
+                    // Get array length
+                    let length = array_obj
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(i) => Some(*i as usize),
+                            Value::Float(f) => Some(f.inner() as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+
+                    // Collect indexed values
+                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
+                    for (key, value) in &array_obj.properties {
+                        if let Ok(index) = key.parse::<usize>() {
+                            if index < length {
+                                indexed_values.push((index, value.clone()));
+                            }
+                        }
+                    }
+
+                    // Sort by index and return first element (simplified)
+                    indexed_values.sort_by_key(|(index, _)| *index);
+                    if let Some((_index, value)) = indexed_values.first() {
+                        // TODO: In full implementation, would call callback and test condition
+                        // For now, just return first element to demonstrate structure
+                        Ok(value.clone())
+                    } else {
+                        Ok(Value::Undefined)
+                    }
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
             "builtin:MathSin" => {
                 // Math.sin(x) implementation - returns sine of x in radians
                 if args.count == 0 {
@@ -9381,61 +9441,6 @@ impl InterpreterCore {
                     Ok(Value::Undefined)
                 }
             }
-            "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Collect indexed values
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
-                            }
-                        }
-                    }
-
-                    // Sort by index and return first element (simplified)
-                    indexed_values.sort_by_key(|(index, _)| *index);
-                    if let Some((_index, value)) = indexed_values.first() {
-                        // TODO: In full implementation, would call callback and test condition
-                        // For now, just return first element to demonstrate structure
-                        Ok(value.clone())
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
             "builtin:MathLog" => {
                 // Math.log(x) implementation - returns natural logarithm of x
                 if args.count == 0 {
@@ -9537,66 +9542,6 @@ impl InterpreterCore {
 
                 let result = this_str.repeat(count);
                 Ok(Value::Str(result))
-            }
-            "builtin:ArrayPrototypeConcat" => {
-                // Array.prototype.concat(...items) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                // Snapshot original elements under an immutable borrow so
-                // we can release it before the &mut self calls below.
-                let snapshot: Option<Vec<(usize, Value)>> =
-                    self.heap.get(array_id.0 as usize).map(|array_obj| {
-                        let original_length = array_obj
-                            .properties
-                            .get("length")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i as usize),
-                                Value::Float(f) => Some(f.inner() as usize),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        let mut entries: Vec<(usize, Value)> = Vec::new();
-                        for (key, value) in &array_obj.properties {
-                            if let Ok(index) = key.parse::<usize>() {
-                                if index < original_length {
-                                    entries.push((index, value.clone()));
-                                }
-                            }
-                        }
-                        entries.sort_by_key(|(i, _)| *i);
-                        entries
-                    });
-
-                if let Some(entries) = snapshot {
-                    let result_id = self.alloc_object_with_prototype(None)?;
-                    let mut result_index: u64 = 0;
-                    for (_k, value) in entries {
-                        self.set_object_property(result_id, result_index.to_string(), value)?;
-                        result_index += 1;
-                    }
-                    // Add additional arguments (simplified).
-                    for i in 1..args.count {
-                        let item = self.read_reg(args.start + i)?;
-                        self.set_object_property(result_id, result_index.to_string(), item)?;
-                        result_index += 1;
-                    }
-                    self.set_object_property(
-                        result_id,
-                        "length".to_string(),
-                        Value::Int(result_index as i64),
-                    )?;
-                    Ok(Value::Object(result_id))
-                } else {
-                    Ok(Value::Undefined)
-                }
             }
             "builtin:PromiseResolve" => {
                 // Promise.resolve(value) implementation (simplified)
@@ -11695,11 +11640,7 @@ impl InterpreterCore {
                 };
 
                 let radix = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(r) => r as i32,
-                        Value::Float(r) => r.inner() as i32,
-                        _ => 10,
-                    }
+                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
                 } else {
                     10
                 };
@@ -12780,58 +12721,6 @@ impl InterpreterCore {
                 Ok(Value::Str(trimmed.to_string()))
             }
 
-            "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find(callback[, thisArg]) implementation
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                // Simplified implementation without function call support
-                // Return first element that exists and is truthy
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let is_truthy = match element {
-                                Value::Bool(false) | Value::Null | Value::Undefined => false,
-                                Value::Int(0) => false,
-                                Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => false,
-                                Value::Str(s) if s.is_empty() => false,
-                                _ => true,
-                            };
-                            if is_truthy {
-                                return Ok(element.clone());
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined)
-            }
-
             "builtin:StringPrototypePadStart" => {
                 // String.prototype.padStart(targetLength[, padString]) implementation
                 let this_val = self.read_reg(args.start)?;
@@ -12985,6 +12874,58 @@ impl InterpreterCore {
                 } else {
                     Ok(Value::Bool(false))
                 }
+            }
+
+            "builtin:ArrayPrototypeFind" => {
+                // Array.prototype.find(callback[, thisArg]) implementation
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                let array_id = match this_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
+                };
+
+                let _callback = self.read_reg(args.start + 1)?;
+                let _this_arg = if args.count > 2 {
+                    Some(self.read_reg(args.start + 2)?)
+                } else {
+                    None
+                };
+
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => *len as usize,
+                        Some(Value::Float(len)) => len.inner() as usize,
+                        _ => return Ok(Value::Undefined),
+                    }
+                } else {
+                    return Ok(Value::Undefined);
+                };
+
+                // Simplified implementation without function call support
+                // Return first element that exists and is truthy
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            let is_truthy = match element {
+                                Value::Bool(false) | Value::Null | Value::Undefined => false,
+                                Value::Int(0) => false,
+                                Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => false,
+                                Value::Str(s) if s.is_empty() => false,
+                                _ => true,
+                            };
+                            if is_truthy {
+                                return Ok(element.clone());
+                            }
+                        }
+                    }
+                }
+
+                Ok(Value::Undefined)
             }
 
             "builtin:StringPrototypeStartsWith" => {
@@ -13242,11 +13183,7 @@ impl InterpreterCore {
                 };
 
                 let radix = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(r) => r as i32,
-                        Value::Float(f) => f.inner() as i32,
-                        _ => 10,
-                    }
+                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
                 } else {
                     10
                 };
@@ -13773,152 +13710,6 @@ impl InterpreterCore {
                 }
 
                 Ok(Value::Object(array_id))
-            }
-
-            "builtin:MathSin" => {
-                // Math.sin(x) implementation - sine function
-                if args.count == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let x_val = self.read_reg(args.start)?;
-                let x = match x_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let result = x.sin();
-                Ok(Value::Float(result.into()))
-            }
-
-            "builtin:MathCos" => {
-                // Math.cos(x) implementation - cosine function
-                if args.count == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let x_val = self.read_reg(args.start)?;
-                let x = match x_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let result = x.cos();
-                Ok(Value::Float(result.into()))
-            }
-
-            "builtin:ArrayPrototypeConcat" => {
-                // Array.prototype.concat(...items) implementation
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects treated as empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                // Get original array length and elements
-                let mut result_elements = Vec::new();
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    if let Some(Value::Int(length)) = obj.properties.get("length") {
-                        for i in 0..*length as usize {
-                            if let Some(element) = obj.properties.get(&i.to_string()) {
-                                result_elements.push(element.clone());
-                            } else {
-                                result_elements.push(Value::Undefined);
-                            }
-                        }
-                    }
-                }
-
-                // Add items to concatenate
-                for i in 1..args.count {
-                    let item = self.read_reg(args.start + i)?;
-
-                    // Check if item is array-like
-                    match item {
-                        Value::Object(item_id) => {
-                            if let Some(item_obj) = self.heap.get(item_id.0 as usize) {
-                                if let Some(Value::Int(item_length)) =
-                                    item_obj.properties.get("length")
-                                {
-                                    // It's array-like, spread its elements
-                                    for j in 0..*item_length as usize {
-                                        if let Some(element) =
-                                            item_obj.properties.get(&j.to_string())
-                                        {
-                                            result_elements.push(element.clone());
-                                        } else {
-                                            result_elements.push(Value::Undefined);
-                                        }
-                                    }
-                                } else {
-                                    // Not array-like, add as single item
-                                    result_elements.push(item);
-                                }
-                            } else {
-                                result_elements.push(item);
-                            }
-                        }
-                        _ => {
-                            // Primitive value, add as single item
-                            result_elements.push(item);
-                        }
-                    }
-                }
-
-                // Create result array
-                let result_array_id = self.alloc_object_with_prototype(None)?;
-
-                // Set elements
-                for (i, element) in result_elements.iter().enumerate() {
-                    self.set_object_property(result_array_id, i.to_string(), element.clone())?;
-                }
-
-                // Set length
-                self.set_object_property(
-                    result_array_id,
-                    "length".to_string(),
-                    Value::Int(result_elements.len() as i64),
-                )?;
-
-                Ok(Value::Object(result_array_id))
-            }
-
-            "builtin:MathTan" => {
-                // Math.tan(x) implementation - tangent function
-                if args.count == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let x_val = self.read_reg(args.start)?;
-                let x = match x_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let result = x.tan();
-                Ok(Value::Float(result.into()))
             }
 
             "builtin:StringPrototypeMatch" => {
@@ -17341,12 +17132,7 @@ impl InterpreterCore {
                 };
 
                 let radix = if args.count >= 2 {
-                    let radix_val = self.read_reg(args.start + 1)?;
-                    match radix_val {
-                        Value::Int(n) => n as i32,
-                        Value::Float(f) => f.inner() as i32,
-                        _ => 10,
-                    }
+                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
                 } else {
                     10
                 };
@@ -18370,101 +18156,6 @@ impl InterpreterCore {
                 Ok(Value::Int(-1)) // No elements found
             }
 
-            "builtin:MathSin" => {
-                // Math.sin() implementation - returns sine of a number
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                let result = num.sin();
-                Ok(Value::Float(Float64::new(result)))
-            }
-
-            "builtin:MathCos" => {
-                // Math.cos() implementation - returns cosine of a number
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                let result = num.cos();
-                Ok(Value::Float(Float64::new(result)))
-            }
-
-            "builtin:MathTan" => {
-                // Math.tan() implementation - returns tangent of a number
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                let result = num.tan();
-                Ok(Value::Float(Float64::new(result)))
-            }
-
-            "builtin:RegExpPrototypeTest" => {
-                // RegExp.prototype.test() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-
-                // For simplicity, treat RegExp objects as objects with a pattern property
-                let pattern_str = match this_val {
-                    Value::Object(obj_id) => {
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            obj.properties
-                                .get("pattern")
-                                .and_then(|p| match p {
-                                    Value::Str(s) => Some(s.clone()),
-                                    _ => None,
-                                })
-                                .unwrap_or_else(|| "".to_string())
-                        } else {
-                            "".to_string()
-                        }
-                    }
-                    Value::Str(s) => s, // Treat string as pattern directly
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false)); // No test string provided
-                }
-
-                let test_val = self.read_reg(args.start + 1)?;
-                let test_str = match test_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified regex test: just check if pattern is contained in string
-                let matches = test_str.contains(&pattern_str);
-                Ok(Value::Bool(matches))
-            }
-
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent() implementation - simplified URL encoding
                 if args.count == 0 {
@@ -18633,12 +18324,7 @@ impl InterpreterCore {
                 };
 
                 let radix = if args.count >= 3 {
-                    let radix_val = self.read_reg(args.start + 2)?;
-                    match radix_val {
-                        Value::Int(n) => n.clamp(2, 36) as u32,
-                        Value::Float(f) => f.inner().clamp(2.0, 36.0) as u32,
-                        _ => 10,
-                    }
+                    Self::coerce_clamped_radix_or_default(self.read_reg(args.start + 2)?, 10)
                 } else {
                     10
                 };
@@ -18964,6 +18650,36 @@ impl InterpreterCore {
         let normalized = (random_bits as f64) / (1u64 << 53) as f64;
 
         Ok(Value::Float(Float64::new(normalized)))
+    }
+
+    fn coerce_finite_radix_or_default(value: Value, default: i32) -> i32 {
+        match value {
+            Value::Int(n) => n as i32,
+            Value::Float(f) => {
+                let radix = f.inner();
+                if radix.is_finite() {
+                    radix as i32
+                } else {
+                    default
+                }
+            }
+            _ => default,
+        }
+    }
+
+    fn coerce_clamped_radix_or_default(value: Value, default: u32) -> u32 {
+        match value {
+            Value::Int(n) => n.clamp(2, 36) as u32,
+            Value::Float(f) => {
+                let radix = f.inner();
+                if radix.is_finite() {
+                    radix.clamp(2.0, 36.0) as u32
+                } else {
+                    default
+                }
+            }
+            _ => default,
+        }
     }
 
     /// Unified Number.prototype.toString implementation - spec-consistent radix handling.
@@ -20451,6 +20167,46 @@ mod tests {
 
     fn quickjs_test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    #[test]
+    fn parseint_nan_radix_defaults_for_global_and_number_parseint_builtin_ids() {
+        let mut interpreter = quickjs_test_core();
+
+        for func_index in [82, 234] {
+            interpreter.registers[0] = Value::Str("42".to_string());
+            interpreter.registers[1] = Value::Float(Float64::new(f64::NAN));
+
+            let result = interpreter
+                .call_builtin_by_id(func_index, RegRange { start: 0, count: 2 })
+                .expect("parseInt with NaN radix should not fail interpreter dispatch");
+            assert_eq!(
+                result,
+                Value::Int(42),
+                "parseInt builtin ID {} should default NaN radix to decimal",
+                func_index
+            );
+        }
+    }
+
+    #[test]
+    fn parseint_number_to_string_nan_radix_defaults_for_builtin_ids() {
+        let mut interpreter = quickjs_test_core();
+
+        for func_index in [196, 343] {
+            interpreter.registers[0] = Value::Int(42);
+            interpreter.registers[1] = Value::Float(Float64::new(f64::NAN));
+
+            let result = interpreter
+                .call_builtin_by_id(func_index, RegRange { start: 0, count: 2 })
+                .expect("Number.toString with NaN radix should not fail interpreter dispatch");
+            assert_eq!(
+                result,
+                Value::Str("42".to_string()),
+                "Number.toString builtin ID {} should default NaN radix to decimal",
+                func_index
+            );
+        }
     }
 
     #[allow(dead_code)]
@@ -23410,8 +23166,14 @@ mod tests {
 
         // Verify timers are stored in active_timers
         assert_eq!(core.active_timers.len(), 2, "Both timers should be active");
-        assert!(core.active_timers.contains_key(&(timer_id_1.as_int().unwrap() as u32)));
-        assert!(core.active_timers.contains_key(&(timer_id_2.as_int().unwrap() as u32)));
+        assert!(
+            core.active_timers
+                .contains_key(&(timer_id_1.as_int().unwrap() as u32))
+        );
+        assert!(
+            core.active_timers
+                .contains_key(&(timer_id_2.as_int().unwrap() as u32))
+        );
     }
 
     #[test]
@@ -23463,12 +23225,27 @@ mod tests {
             )
             .expect("clearTimeout should succeed");
 
-        assert_eq!(clear_result, Value::Undefined, "clearTimeout returns undefined");
+        assert_eq!(
+            clear_result,
+            Value::Undefined,
+            "clearTimeout returns undefined"
+        );
 
         // Verify first timer was removed but second remains
-        assert_eq!(core.active_timers.len(), 1, "Only one timer should remain active");
-        assert!(!core.active_timers.contains_key(&(timer_id_1.as_int().unwrap() as u32)));
-        assert!(core.active_timers.contains_key(&(timer_id_2.as_int().unwrap() as u32)));
+        assert_eq!(
+            core.active_timers.len(),
+            1,
+            "Only one timer should remain active"
+        );
+        assert!(
+            !core
+                .active_timers
+                .contains_key(&(timer_id_1.as_int().unwrap() as u32))
+        );
+        assert!(
+            core.active_timers
+                .contains_key(&(timer_id_2.as_int().unwrap() as u32))
+        );
 
         // Clear the second timer
         let clear_result_2 = core
@@ -23478,10 +23255,18 @@ mod tests {
             )
             .expect("clearTimeout should succeed");
 
-        assert_eq!(clear_result_2, Value::Undefined, "clearTimeout returns undefined");
+        assert_eq!(
+            clear_result_2,
+            Value::Undefined,
+            "clearTimeout returns undefined"
+        );
 
         // Verify all timers are cleared
-        assert_eq!(core.active_timers.len(), 0, "No timers should remain active");
+        assert_eq!(
+            core.active_timers.len(),
+            0,
+            "No timers should remain active"
+        );
 
         // Test clearing non-existent timer (should be safe)
         let clear_invalid = core
@@ -23491,7 +23276,11 @@ mod tests {
             )
             .expect("clearTimeout with invalid ID should succeed");
 
-        assert_eq!(clear_invalid, Value::Undefined, "clearing invalid timer returns undefined");
+        assert_eq!(
+            clear_invalid,
+            Value::Undefined,
+            "clearing invalid timer returns undefined"
+        );
     }
 
     #[test]
@@ -24501,6 +24290,106 @@ mod tests {
             }
         }
 
+        /// Regression test for batch-37 Math/RegExp builtin dispatch deduplication.
+        ///
+        /// The issue was duplicate match arms for MathSin, MathCos, MathTan, and
+        /// RegExpPrototypeTest in the builtin dispatcher. Because both arms matched
+        /// the same names, only the first arm was reachable and newer builtin IDs
+        /// were effectively dead-code mapping entries.
+        ///
+        /// All first/duplicate ID pairs should execute the same canonical
+        /// implementation and produce identical results.
+        #[test]
+        fn math_regexp_builtin_dispatch_deduplication_regression() {
+            let mut interpreter = test_interpreter();
+
+            // Recreate RegExp object with source property used by the canonical impl.
+            let regexp_obj_id = ObjectId::from_raw(500);
+            interpreter.heap.insert(
+                regexp_obj_id.0 as usize,
+                HeapObject {
+                    properties: BTreeMap::from_iter([(
+                        "source".to_string(),
+                        Value::Str("foo".to_string()),
+                    )]),
+                    prototype_id: None,
+                },
+            );
+
+            let math_id_pairs = [
+                (244u32, 369u32, "builtin:MathSin"),
+                (245u32, 370u32, "builtin:MathCos"),
+                (247u32, 371u32, "builtin:MathTan"),
+            ];
+            let math_inputs = [Value::Int(1), Value::Float(1.0.into()), Value::Bool(true)];
+
+            for (first_id, second_id, builtin_name) in math_id_pairs {
+                for input in &math_inputs {
+                    interpreter.registers[0] = input.clone();
+
+                    assert_eq!(
+                        interpreter.map_function_index_to_builtin_capability(first_id),
+                        Some(builtin_name.to_string()),
+                        "Builtin ID {} should map to {}",
+                        first_id,
+                        builtin_name
+                    );
+                    assert_eq!(
+                        interpreter.map_function_index_to_builtin_capability(second_id),
+                        Some(builtin_name.to_string()),
+                        "Builtin ID {} should map to {}",
+                        second_id,
+                        builtin_name
+                    );
+
+                    let first_result = interpreter
+                        .call_builtin_by_id(first_id, RegRange { start: 0, count: 1 })
+                        .expect("first mapping should execute");
+                    let second_result = interpreter
+                        .call_builtin_by_id(second_id, RegRange { start: 0, count: 1 })
+                        .expect("second mapping should execute");
+                    assert_eq!(
+                        first_result, second_result,
+                        "Builtin IDs {} and {} should execute same {} result",
+                        first_id, second_id, builtin_name
+                    );
+                }
+            }
+
+            let regexp_ids = [(268u32, 372u32, "builtin:RegExpPrototypeTest")];
+            for (first_id, second_id, builtin_name) in regexp_ids {
+                interpreter.registers[0] = Value::Object(regexp_obj_id);
+                interpreter.registers[1] = Value::Str("a quick fox".to_string());
+
+                assert_eq!(
+                    interpreter.map_function_index_to_builtin_capability(first_id),
+                    Some(builtin_name.to_string()),
+                    "Builtin ID {} should map to {}",
+                    first_id,
+                    builtin_name
+                );
+                assert_eq!(
+                    interpreter.map_function_index_to_builtin_capability(second_id),
+                    Some(builtin_name.to_string()),
+                    "Builtin ID {} should map to {}",
+                    second_id,
+                    builtin_name
+                );
+
+                let first_result = interpreter
+                    .call_builtin_by_id(first_id, RegRange { start: 0, count: 2 })
+                    .expect("first RegExp mapping should execute");
+                let second_result = interpreter
+                    .call_builtin_by_id(second_id, RegRange { start: 0, count: 2 })
+                    .expect("second RegExp mapping should execute");
+                assert_eq!(
+                    first_result, second_result,
+                    "Builtin IDs {} and {} should execute same {} result",
+                    first_id, second_id, builtin_name
+                );
+            }
+        }
+
         /// Regression test for ArrayPrototypeSort builtin dispatch deduplication.
         ///
         /// The issue was that three separate match arms for "builtin:ArrayPrototypeSort"
@@ -24630,6 +24519,159 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // Regression tests for bd-19wq2: Array.prototype.concat array spreading
+    #[test]
+    fn array_concat_spreads_arrays() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Create first array [1]
+        let arr1_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr1_id, "0".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(arr1_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+
+        // Create second array [2]
+        let arr2_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr2_id, "0".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(arr2_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+
+        // Set up registers for concat call: this=arr1, args=[arr2]
+        core.registers[0] = Value::Object(arr1_id);
+        core.registers[1] = Value::Object(arr2_id);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ArrayPrototypeConcat".to_string(),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Result should be an array with elements [1, 2], not [1, [2]]
+        if let Value::Object(result_id) = core.registers[10] {
+            let result_obj = &core.heap[result_id.0 as usize];
+
+            // Check length is 2
+            assert_eq!(result_obj.properties.get("length"), Some(&Value::Int(2)));
+
+            // Check elements are 1 and 2 (not a nested array)
+            assert_eq!(result_obj.properties.get("0"), Some(&Value::Int(1)));
+            assert_eq!(result_obj.properties.get("1"), Some(&Value::Int(2)));
+        } else {
+            panic!("Array concat should return an object");
+        }
+    }
+
+    #[test]
+    fn array_concat_non_array_as_single_element() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Create array [1]
+        let arr_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr_id, "0".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(arr_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+
+        // Set up registers for concat call: this=arr, args=["str"]
+        core.registers[0] = Value::Object(arr_id);
+        core.registers[1] = Value::Str("str".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ArrayPrototypeConcat".to_string(),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Result should be [1, "str"]
+        if let Value::Object(result_id) = core.registers[10] {
+            let result_obj = &core.heap[result_id.0 as usize];
+
+            // Check length is 2
+            assert_eq!(result_obj.properties.get("length"), Some(&Value::Int(2)));
+
+            // Check elements
+            assert_eq!(result_obj.properties.get("0"), Some(&Value::Int(1)));
+            assert_eq!(
+                result_obj.properties.get("1"),
+                Some(&Value::Str("str".to_string()))
+            );
+        } else {
+            panic!("Array concat should return an object");
+        }
+    }
+
+    #[test]
+    fn array_concat_multiple_arrays() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Create array [1]
+        let arr1_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr1_id, "0".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(arr1_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+
+        // Create array [2, 3]
+        let arr2_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr2_id, "0".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(arr2_id, "1".to_string(), Value::Int(3))
+            .unwrap();
+        core.set_object_property(arr2_id, "length".to_string(), Value::Int(2))
+            .unwrap();
+
+        // Create array [4]
+        let arr3_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(arr3_id, "0".to_string(), Value::Int(4))
+            .unwrap();
+        core.set_object_property(arr3_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+
+        // Set up registers for concat call: this=arr1, args=[arr2, arr3]
+        core.registers[0] = Value::Object(arr1_id);
+        core.registers[1] = Value::Object(arr2_id);
+        core.registers[2] = Value::Object(arr3_id);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ArrayPrototypeConcat".to_string(),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Result should be [1, 2, 3, 4]
+        if let Value::Object(result_id) = core.registers[10] {
+            let result_obj = &core.heap[result_id.0 as usize];
+
+            // Check length is 4
+            assert_eq!(result_obj.properties.get("length"), Some(&Value::Int(4)));
+
+            // Check all elements
+            assert_eq!(result_obj.properties.get("0"), Some(&Value::Int(1)));
+            assert_eq!(result_obj.properties.get("1"), Some(&Value::Int(2)));
+            assert_eq!(result_obj.properties.get("2"), Some(&Value::Int(3)));
+            assert_eq!(result_obj.properties.get("3"), Some(&Value::Int(4)));
+        } else {
+            panic!("Array concat should return an object");
         }
     }
 }

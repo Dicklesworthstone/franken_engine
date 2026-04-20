@@ -1945,7 +1945,9 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: AllocDomainError derives Serialize; writing to an in-memory String cannot fail here.
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was produced from the same AllocDomainError schema immediately above.
             let restored: AllocDomainError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }

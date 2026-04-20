@@ -1670,6 +1670,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "isolation_verified:s1")
+            // SAFETY: Test-only unwrap expecting isolation_verified:s1 check to be present in verification report
             .unwrap();
         assert!(!isolation_check.passed);
         let recovery_check = report

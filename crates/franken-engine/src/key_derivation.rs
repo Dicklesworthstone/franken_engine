@@ -1318,7 +1318,9 @@ mod tests {
             32,
         );
         let ctx = DerivationContext::empty();
+        // SAFETY: cache operation with test deriver should succeed
         cache.get_or_derive(KeyDomain::Symbol, &ctx, "t1").unwrap();
+        // SAFETY: cache operation with test deriver should succeed
         cache.get_or_derive(KeyDomain::Session, &ctx, "t2").unwrap();
         assert_eq!(cache.cached_count(), 2);
         assert_eq!(cache.events().len(), 2);

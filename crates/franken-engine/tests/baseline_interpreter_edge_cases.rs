@@ -1478,3 +1478,147 @@ fn test_array_prototype_some_duplicate_removal_regression() {
         eprintln!("some failed on falsy elements: {:?}", result);
     }
 }
+
+#[test]
+fn math_round_negative_half_semantics_regression() {
+    // Regression test for commit 5e20ceac701c03a02f70fda1966e2677c9a73f8e
+    // fix(baseline_interpreter): add comprehensive Math.round tests + fix ConsoleLevel::Info
+    //
+    // Tests Math.round negative half semantics in complete execution context:
+    // - Verifies -0.5 → -0 (not -1)
+    // - Verifies -1.5 → -1 (not -2)
+    // - Tests other edge cases (NaN, infinity, etc.)
+    // - Ensures consistent behavior across different execution paths
+
+    let mut interpreter = baseline_test_interpreter();
+
+    // Test 1: Critical negative half semantics -0.5 → -0
+    let result = interpreter.evaluate_expression("Math.round(-0.5)");
+    match result {
+        Ok(Value::Int(0)) => {
+            // Correct: -0.5 should round to -0 (represented as 0)
+        }
+        Ok(Value::Float(f)) if f.inner() == -0.0 => {
+            // Also correct: -0 as float
+        }
+        Ok(other) => panic!("Math.round(-0.5) should return -0, got {:?}", other),
+        Err(e) => panic!("Math.round(-0.5) should not error: {:?}", e),
+    }
+
+    // Test 2: Verify -1.5 → -1 (not -2)
+    let result = interpreter.evaluate_expression("Math.round(-1.5)");
+    match result {
+        Ok(Value::Int(-1)) => {
+            // Correct: -1.5 should round to -1
+        }
+        Ok(Value::Float(f)) if f.inner() == -1.0 => {
+            // Also correct: -1 as float
+        }
+        Ok(other) => panic!("Math.round(-1.5) should return -1, got {:?}", other),
+        Err(e) => panic!("Math.round(-1.5) should not error: {:?}", e),
+    }
+
+    // Test 3: Positive half rounding (should round up) 0.5 → 1
+    let result = interpreter.evaluate_expression("Math.round(0.5)");
+    match result {
+        Ok(Value::Int(1)) => {
+            // Correct: 0.5 should round to 1
+        }
+        Ok(Value::Float(f)) if f.inner() == 1.0 => {
+            // Also correct: 1 as float
+        }
+        Ok(other) => panic!("Math.round(0.5) should return 1, got {:?}", other),
+        Err(e) => panic!("Math.round(0.5) should not error: {:?}", e),
+    }
+
+    // Test 4: Positive half rounding 1.5 → 2
+    let result = interpreter.evaluate_expression("Math.round(1.5)");
+    match result {
+        Ok(Value::Int(2)) => {
+            // Correct: 1.5 should round to 2
+        }
+        Ok(Value::Float(f)) if f.inner() == 2.0 => {
+            // Also correct: 2 as float
+        }
+        Ok(other) => panic!("Math.round(1.5) should return 2, got {:?}", other),
+        Err(e) => panic!("Math.round(1.5) should not error: {:?}", e),
+    }
+
+    // Test 5: Edge case - NaN should return NaN
+    let result = interpreter.evaluate_expression("Math.round(NaN)");
+    match result {
+        Ok(Value::Float(f)) if f.inner().is_nan() => {
+            // Correct: NaN rounds to NaN
+        }
+        Ok(other) => panic!("Math.round(NaN) should return NaN, got {:?}", other),
+        Err(e) => panic!("Math.round(NaN) should not error: {:?}", e),
+    }
+
+    // Test 6: Edge case - Infinity should return Infinity
+    let result = interpreter.evaluate_expression("Math.round(Infinity)");
+    match result {
+        Ok(Value::Float(f)) if f.inner().is_infinite() && f.inner() > 0.0 => {
+            // Correct: +Infinity rounds to +Infinity
+        }
+        Ok(other) => panic!("Math.round(Infinity) should return Infinity, got {:?}", other),
+        Err(e) => panic!("Math.round(Infinity) should not error: {:?}", e),
+    }
+
+    // Test 7: Edge case - Negative Infinity should return -Infinity
+    let result = interpreter.evaluate_expression("Math.round(-Infinity)");
+    match result {
+        Ok(Value::Float(f)) if f.inner().is_infinite() && f.inner() < 0.0 => {
+            // Correct: -Infinity rounds to -Infinity
+        }
+        Ok(other) => panic!("Math.round(-Infinity) should return -Infinity, got {:?}", other),
+        Err(e) => panic!("Math.round(-Infinity) should not error: {:?}", e),
+    }
+
+    // Test 8: No-argument case should return NaN
+    let result = interpreter.evaluate_expression("Math.round()");
+    match result {
+        Ok(Value::Float(f)) if f.inner().is_nan() => {
+            // Correct: undefined argument becomes NaN
+        }
+        Ok(other) => {
+            // Alternative: might handle as error or return specific value
+            eprintln!("Math.round() without args returned: {:?}", other);
+        }
+        Err(_) => {
+            // Error is acceptable for missing argument
+            eprintln!("Math.round() without args errored (acceptable)");
+        }
+    }
+
+    // Test 9: String coercion behavior
+    let result = interpreter.evaluate_expression("Math.round('-2.7')");
+    match result {
+        Ok(Value::Int(-3)) => {
+            // Correct: '-2.7' coerces to -2.7, rounds to -3
+        }
+        Ok(Value::Float(f)) if f.inner() == -3.0 => {
+            // Also correct: -3 as float
+        }
+        Ok(other) => panic!("Math.round('-2.7') should return -3, got {:?}", other),
+        Err(e) => panic!("Math.round('-2.7') should not error: {:?}", e),
+    }
+
+    // Test 10: Consistency check - multiple calls to same values should be identical
+    // This ensures no duplicate implementations cause different behavior
+    let result1 = interpreter.evaluate_expression("Math.round(-0.5)");
+    let result2 = interpreter.evaluate_expression("Math.round(-0.5)");
+
+    match (result1, result2) {
+        (Ok(val1), Ok(val2)) => {
+            // Both should be the same value (either 0 or -0.0)
+            assert_eq!(val1, val2, "Math.round(-0.5) should be consistent across calls");
+        }
+        (Err(e1), Err(e2)) => {
+            // Both erroring consistently is acceptable
+            eprintln!("Math.round consistently errors: {:?}, {:?}", e1, e2);
+        }
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
+            panic!("Math.round(-0.5) inconsistent behavior suggests implementation issues");
+        }
+    }
+}

@@ -16128,46 +16128,6 @@ impl InterpreterCore {
                 Ok(Value::Str(str_text.trim().to_string()))
             }
 
-            "builtin:ArrayPrototypeForEach" => {
-                // Array.prototype.forEach() implementation - executes callback for each element
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Undefined); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Undefined); // Callback is not a function
-                }
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: just iterate without actual callback execution
-                    // (Full implementation would require function call mechanism)
-                    for i in 0..length {
-                        if obj.properties.contains_key(&i.to_string()) {
-                            // In real implementation, would call callback(element, index, array)
-                            // For now, just acknowledge the iteration
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined) // forEach returns undefined
-            }
 
             "builtin:NumberIsInteger" => {
                 // Number.isInteger() implementation - checks if value is an integer

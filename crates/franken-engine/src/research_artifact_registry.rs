@@ -101,6 +101,26 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the vulnerability disclosure policy entry.
+    pub fn with_vulnerability_disclosure_policy_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "vulnerability-disclosure-policy-0001".to_string(),
+            title: "Vulnerability Disclosure Policy".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Security Team".to_string()],
+            abstract_text: "Policy template for intake, severity triage, coordinated disclosure, credit, and licensing."
+                .to_string(),
+            bundle_path: "docs/VULNERABILITY_DISCLOSURE_POLICY.md".to_string(),
+            artifact_type: "security_policy".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -219,5 +239,17 @@ mod tests {
         assert_eq!(artifact.artifact_type, "proof_template");
         assert_eq!(artifact.title, "Proof Sketch Template");
         assert!(artifact.bundle_path.ends_with("PROOF_SKETCH_TEMPLATE.md"));
+    }
+
+    #[test]
+    fn test_vulnerability_disclosure_policy_entry() {
+        let registry = ResearchArtifactRegistry::with_vulnerability_disclosure_policy_entry();
+
+        let artifact = registry
+            .get_artifact("vulnerability-disclosure-policy-0001")
+            .expect("expected vulnerability disclosure policy artifact");
+        assert_eq!(artifact.artifact_type, "security_policy");
+        assert_eq!(artifact.title, "Vulnerability Disclosure Policy");
+        assert!(artifact.bundle_path.ends_with("VULNERABILITY_DISCLOSURE_POLICY.md"));
     }
 }

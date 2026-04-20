@@ -433,7 +433,9 @@ mod tests {
             writer_pressure_fallbacks: 0,
             writes: 5,
         };
+        // SAFETY: FastPathTelemetry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&telemetry).unwrap();
+        // SAFETY: JSON was just produced by valid FastPathTelemetry serialization
         let back: FastPathTelemetry = serde_json::from_str(&json).unwrap();
         assert_eq!(telemetry, back);
     }

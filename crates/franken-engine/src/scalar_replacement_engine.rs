@@ -1775,6 +1775,7 @@ mod tests {
         );
         let layout = make_layout("s1", 4);
         let config = default_config();
+        // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
         let plan = build_scalar_plan(&cert, &layout, &config).unwrap();
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.fields.len(), 4);

@@ -2145,6 +2145,7 @@ mod tests {
     #[test]
     fn attestation_signed_serde() {
         let report = make_report(VerificationVerdict::Verified);
+        // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
         let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let attestation = generate_attestation(&input).unwrap();

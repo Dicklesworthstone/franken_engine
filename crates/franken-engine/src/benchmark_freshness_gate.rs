@@ -2351,7 +2351,9 @@ mod tests {
     #[test]
     fn test_severity_serde_roundtrip() {
         let severity = ShiftSeverity::Critical;
+        // SAFETY: ShiftSeverity derives Serialize; writing to an in-memory String cannot fail here.
         let json = serde_json::to_string(&severity).unwrap();
+        // SAFETY: JSON was produced from the same ShiftSeverity schema immediately above.
         let back: ShiftSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(severity, back);
     }

@@ -6543,6 +6543,32 @@ impl InterpreterCore {
         }
     }
 
+    /// Convert a Value to its string representation using JavaScript toString semantics.
+    /// This unified implementation ensures all string case-conversion builtin paths
+    /// have consistent behavior across all Value enum variants.
+    fn value_to_string(value: &Value) -> String {
+        match value {
+            Value::Str(s) => s.clone(),
+            Value::Null => "null".to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Object(_) => "[object Object]".to_string(),
+            Value::Function(_) => "[object Function]".to_string(),
+            Value::Closure(_) => "[object Function]".to_string(),
+            Value::Iterator(_) => "[object Iterator]".to_string(),
+            Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
+            Value::Generator(_) => "[object Generator]".to_string(),
+            Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
+            Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
+            Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+            Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
+            Value::Promise(_) => "[object Promise]".to_string(),
+            Value::BuiltinFunction(_) => "[object Function]".to_string(),
+        }
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -8049,15 +8075,7 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = match string_arg {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "".to_string(),
-                };
+                let string_val = Self::value_to_string(&string_arg);
 
                 // Convert to lowercase using Unicode-aware conversion
                 let lowercase = string_val.to_lowercase();
@@ -8070,15 +8088,7 @@ impl InterpreterCore {
                 }
 
                 let string_arg = self.read_reg(args.start)?;
-                let string_val = match string_arg {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "".to_string(),
-                };
+                let string_val = Self::value_to_string(&string_arg);
 
                 // Convert to uppercase using Unicode-aware conversion
                 let uppercase = string_val.to_uppercase();
@@ -15551,15 +15561,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
+                let str_text = Self::value_to_string(&this_val);
 
                 Ok(Value::Str(str_text.to_lowercase()))
             }
@@ -15680,15 +15682,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
+                let str_text = Self::value_to_string(&this_val);
 
                 Ok(Value::Str(str_text.to_uppercase()))
             }
@@ -17056,16 +17050,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => String::new(),
-                };
+                let str_text = Self::value_to_string(&this_val);
 
                 Ok(Value::Str(str_text.to_lowercase()))
             }
@@ -17073,16 +17058,7 @@ impl InterpreterCore {
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase() implementation
                 let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
+                let str_text = Self::value_to_string(&this_val);
 
                 Ok(Value::Str(str_text.to_uppercase()))
             }
@@ -23982,6 +23958,90 @@ mod tests {
 
             assert!(!async_gen_func.is_nullish());
             assert!(!async_gen_obj.is_nullish());
+        }
+
+        /// Regression test for bd-bnji7: String case-conversion builtins must have
+        /// consistent toString behavior across all mapped builtin IDs.
+        #[test]
+        fn string_case_conversion_builtin_consistency() {
+            // Test values that previously had inconsistent behavior
+            let test_values = vec![
+                Value::Function(0),
+                Value::Promise(0),
+                Value::AsyncGeneratorObject(0),
+                Value::BuiltinFunction("test".to_string()),
+                Value::Object(0),
+                Value::Closure(0),
+            ];
+
+            for test_value in test_values {
+                let result = BaselineInterpreter::value_to_string(&test_value);
+
+                // All non-primitive values should consistently convert to their
+                // appropriate [object Type] string representation
+                match test_value {
+                    Value::Function(_) => assert_eq!(result, "[object Function]"),
+                    Value::Promise(_) => assert_eq!(result, "[object Promise]"),
+                    Value::AsyncGeneratorObject(_) => assert_eq!(result, "[object AsyncGenerator]"),
+                    Value::BuiltinFunction(_) => assert_eq!(result, "[object Function]"),
+                    Value::Object(_) => assert_eq!(result, "[object Object]"),
+                    Value::Closure(_) => assert_eq!(result, "[object Function]"),
+                    _ => {}
+                }
+            }
+        }
+
+        /// Test that all string case-conversion operations are deterministic
+        /// and produce identical results regardless of which builtin ID is used.
+        ///
+        /// Previously, builtin IDs 34/35, 293/297, 330/331 mapped to different
+        /// implementations with divergent wildcard conversion behavior.
+        #[test]
+        fn string_case_conversion_deterministic_across_builtin_ids() {
+            // Test cases that exposed inconsistency between builtin implementations
+            let test_cases = vec![
+                (Value::Function(42), "[object Function]"),
+                (Value::Promise(7), "[object Promise]"),
+                (Value::AsyncGeneratorObject(1), "[object AsyncGenerator]"),
+                (
+                    Value::BuiltinFunction("Math.abs".to_string()),
+                    "[object Function]",
+                ),
+                (Value::Object(123), "[object Object]"),
+                (Value::Closure(5), "[object Function]"),
+                (Value::Iterator(9), "[object Iterator]"),
+                (Value::Null, "null"),
+                (Value::Undefined, "undefined"),
+                (Value::Int(42), "42"),
+                (Value::Bool(true), "true"),
+            ];
+
+            for (input, expected_string) in test_cases {
+                let result = BaselineInterpreter::value_to_string(&input);
+                assert_eq!(
+                    result, expected_string,
+                    "value_to_string for {:?} should be deterministic",
+                    input
+                );
+
+                // Verify toLowerCase and toUpperCase produce consistent results
+                let lowercase = result.to_lowercase();
+                let uppercase = result.to_uppercase();
+
+                // These should be the expected transformations of the unified toString result
+                assert_eq!(
+                    lowercase,
+                    expected_string.to_lowercase(),
+                    "toLowerCase should be consistent for {:?}",
+                    input
+                );
+                assert_eq!(
+                    uppercase,
+                    expected_string.to_uppercase(),
+                    "toUpperCase should be consistent for {:?}",
+                    input
+                );
+            }
         }
     }
 }

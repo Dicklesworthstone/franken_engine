@@ -2585,6 +2585,8 @@ mod tests {
                 use_count: 0,
             })
             .unwrap();
+        // SAFETY: register_obligation with valid test obligation data ("beta" obligation)
+        // cannot fail under normal test conditions.
         lattice
             .register_obligation(DeclassificationObligation {
                 obligation_id: "beta".into(),

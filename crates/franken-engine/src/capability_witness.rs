@@ -4218,9 +4218,11 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .rollback(token.clone())
+        // SAFETY: Builder configured with valid test data; build() succeeds in controlled test
         .build()
         .unwrap();
 
+        // SAFETY: Test just called rollback(token) on builder; witness has rollback token
         assert_eq!(witness.rollback_token.as_ref().unwrap().sequence, 1);
     }
 
@@ -4563,6 +4565,7 @@ mod tests {
         );
         assert!(artifact.publication_proof.log_entry.verify_leaf_hash());
         assert_eq!(pipeline.evidence_entries().len(), 1);
+        // SAFETY: Pipeline configured with governance config; governance ledger exists
         assert_eq!(pipeline.governance_ledger().unwrap().entries().len(), 1);
 
         WitnessPublicationPipeline::verify_artifact(

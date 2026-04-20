@@ -920,6 +920,7 @@ mod tests {
         let action = guard.check();
         assert_eq!(action, CheckpointAction::Drain);
         let events = guard.drain_events();
+        // SAFETY: Test performs ticks and cancellation; drain_events() produces non-empty events
         assert_eq!(
             events.last().unwrap().reason,
             CheckpointReason::CancelPending

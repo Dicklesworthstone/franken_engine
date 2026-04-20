@@ -8101,6 +8101,8 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
+        // SAFETY: alloc_object_with_prototype() in test environment with sufficient heap space
+        // cannot fail under normal test conditions.
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
             .properties

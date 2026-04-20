@@ -1253,6 +1253,8 @@ mod tests {
             variable
                 .telemetry
                 .validate()
+                // SAFETY: Test-only panic to validate variable telemetry in twin state transition
+                // expects valid telemetry from test data construction
                 .unwrap_or_else(|e| panic!("variable {} telemetry invalid: {}", variable.id, e));
         }
     }

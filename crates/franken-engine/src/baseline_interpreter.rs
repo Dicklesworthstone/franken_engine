@@ -14969,7 +14969,7 @@ impl InterpreterCore {
             236 => Some("builtin:ArrayPrototypeFilter".to_string()),
             237 => Some("builtin:ArrayPrototypeMap".to_string()),
             238 => Some("builtin:StringPrototypeIncludes".to_string()),
-            239 => Some("builtin:NumberIsNaNMethod".to_string()),
+            239 => Some("builtin:NumberIsNaN".to_string()),
             240 => Some("builtin:MathPow".to_string()),
             241 => Some("builtin:ArrayPrototypeReduce".to_string()),
             242 => Some("builtin:StringPrototypeMatch".to_string()),
@@ -15120,6 +15120,23 @@ impl InterpreterCore {
 
             _ => None, // Not a recognized builtin
         }
+    }
+
+    #[cfg(test)]
+    fn builtin_name_from_id(&self, func_idx: u32) -> Option<String> {
+        self.map_function_index_to_builtin_capability(func_idx)
+    }
+
+    #[cfg(test)]
+    fn call_builtin_by_id(
+        &mut self,
+        func_idx: u32,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Some(capability) = self.map_function_index_to_builtin_capability(func_idx) else {
+            return Ok(Value::Undefined);
+        };
+        self.dispatch_builtin_hostcall(&capability, args, None)
     }
 
     /// Compare two values for equality (used by array methods like lastIndexOf).
@@ -20770,198 +20787,106 @@ mod tests {
             assert!(!async_gen_obj.is_nullish());
         }
 
-        /// Regression test for bd-bnji7: String case-conversion builtins must have
-        /// consistent toString behavior across all mapped builtin IDs.
+        /// Regression test for bd-3ovua: String casing builtins should route through
+        /// RequireObjectCoercible and stay stable across all mapped builtin IDs.
         #[test]
-        fn string_case_conversion_builtin_consistency() {
-            // Test values that previously had inconsistent behavior
-            let test_values = vec![
-                Value::Function(0),
-                Value::Promise(0),
-                Value::AsyncGeneratorObject(0),
-                Value::BuiltinFunction("test".to_string()),
-                Value::Object(0),
-                Value::Closure(0),
+        fn string_case_conversion_id_dispatch_matrix() {
+            let mut interpreter = test_interpreter();
+
+            let lowercase_builtin_ids = [34u32, 293, 330, 386];
+            let uppercase_builtin_ids = [35u32, 297, 331, 387];
+            let all_builtin_ids = lowercase_builtin_ids
+                .iter()
+                .chain(uppercase_builtin_ids.iter());
+
+            let invalid_values = vec![Value::Null, Value::Undefined];
+            for invalid in invalid_values {
+                for &builtin_id in lowercase_builtin_ids.iter().chain(&uppercase_builtin_ids) {
+                    interpreter.registers[0] = invalid.clone();
+                    let result =
+                        interpreter.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 });
+                    assert!(
+                        matches!(
+                            result,
+                            Err(InterpreterError::TypeError { expected, got })
+                                if expected == "object-coercible String.prototype receiver" &&
+                                    ((got == "null" && invalid == Value::Null) ||
+                                    (got == "undefined" && invalid == Value::Undefined))
+                        ),
+                        "string case builtin {} should reject {:?}",
+                        builtin_id,
+                        invalid
+                    );
+                }
+            }
+
+            let test_cases = vec![
+                Value::Function(100),
+                Value::Promise(200),
+                Value::AsyncGeneratorObject(300),
+                Value::BuiltinFunction(BuiltinFunction::require("array-from-test")),
+                Value::Object(ObjectId(400)),
+                Value::Iterator(500),
+                Value::Bool(false),
+                Value::Int(-42),
+                Value::Str("ßa".to_string()),
+                Value::Closure(600),
             ];
 
-            for test_value in test_values {
-                let result = BaselineInterpreter::value_to_string(&test_value);
+            for input in test_cases {
+                let expected = InterpreterCore::require_object_coercible_to_string(&input)
+                    .expect("require_object_coercible_to_string should handle non-null values");
 
-                // All non-primitive values should consistently convert to their
-                // appropriate [object Type] string representation
-                match test_value {
-                    Value::Function(_) => assert_eq!(result, "[object Function]"),
-                    Value::Promise(_) => assert_eq!(result, "[object Promise]"),
-                    Value::AsyncGeneratorObject(_) => assert_eq!(result, "[object AsyncGenerator]"),
-                    Value::BuiltinFunction(_) => assert_eq!(result, "[object Function]"),
-                    Value::Object(_) => assert_eq!(result, "[object Object]"),
-                    Value::Closure(_) => assert_eq!(result, "[object Function]"),
-                    _ => {}
+                for &builtin_id in all_builtin_ids.clone() {
+                    interpreter.registers[0] = input.clone();
+                    let result = interpreter
+                        .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                        .expect("string casing builtin should execute");
+                    let expected_result = if lowercase_builtin_ids.contains(&builtin_id) {
+                        Value::Str(expected.to_lowercase())
+                    } else {
+                        Value::Str(expected.to_uppercase())
+                    };
+                    assert_eq!(
+                        result, expected_result,
+                        "string casing builtin {} conversion mismatch for {:?}",
+                        builtin_id, input
+                    );
                 }
             }
         }
 
-        /// Test that all string case-conversion operations are deterministic
-        /// and produce identical results regardless of which builtin ID is used.
-        ///
-        /// Previously, builtin IDs 34/35, 293/297, 330/331 mapped to different
-        /// implementations with divergent wildcard conversion behavior.
+        /// Keep helper-level RequireObjectCoercible behavior explicit and deterministic.
         #[test]
-        fn string_case_conversion_deterministic_across_builtin_ids() {
-            // Test cases that exposed inconsistency between builtin implementations
-            let test_cases = vec![
-                (Value::Function(42), "[object Function]"),
-                (Value::Promise(7), "[object Promise]"),
-                (Value::AsyncGeneratorObject(1), "[object AsyncGenerator]"),
-                (
-                    Value::BuiltinFunction("Math.abs".to_string()),
-                    "[object Function]",
-                ),
-                (Value::Object(123), "[object Object]"),
-                (Value::Closure(5), "[object Function]"),
-                (Value::Iterator(9), "[object Iterator]"),
-                (Value::Null, "null"),
-                (Value::Undefined, "undefined"),
-                (Value::Int(42), "42"),
-                (Value::Bool(true), "true"),
-            ];
+        fn string_case_conversion_require_object_coercible() {
+            let null_result = InterpreterCore::require_object_coercible_to_string(&Value::Null);
+            assert!(matches!(
+                null_result,
+                Err(InterpreterError::TypeError { expected, got })
+                    if expected == "object-coercible String.prototype receiver" && got == "null"
+            ));
 
-            for (input, expected_string) in test_cases {
-                let result = BaselineInterpreter::value_to_string(&input);
-                assert_eq!(
-                    result, expected_string,
-                    "value_to_string for {:?} should be deterministic",
-                    input
-                );
+            let undefined_result =
+                InterpreterCore::require_object_coercible_to_string(&Value::Undefined);
+            assert!(matches!(
+                undefined_result,
+                Err(InterpreterError::TypeError { expected, got })
+                    if expected == "object-coercible String.prototype receiver" && got == "undefined"
+            ));
 
-                // Verify toLowerCase and toUpperCase produce consistent results
-                let lowercase = result.to_lowercase();
-                let uppercase = result.to_uppercase();
-
-                // These should be the expected transformations of the unified toString result
-                assert_eq!(
-                    lowercase,
-                    expected_string.to_lowercase(),
-                    "toLowerCase should be consistent for {:?}",
-                    input
-                );
-                assert_eq!(
-                    uppercase,
-                    expected_string.to_uppercase(),
-                    "toUpperCase should be consistent for {:?}",
-                    input
-                );
-            }
-        }
-
-        /// Regression test for bd-3o8mv: String.prototype methods must implement
-        /// RequireObjectCoercible semantics, throwing TypeError for null/undefined.
-        #[test]
-        fn string_prototype_require_object_coercible() {
-            // Test that RequireObjectCoercible properly rejects null and undefined
-            let null_result = BaselineInterpreter::require_object_coercible_to_string(&Value::Null);
-            assert!(null_result.is_err());
-            if let Err(InterpreterError::TypeError { message }) = null_result {
-                assert!(message.contains("null"));
-            } else {
-                panic!("Expected TypeError for null");
-            }
-
-            let undef_result =
-                BaselineInterpreter::require_object_coercible_to_string(&Value::Undefined);
-            assert!(undef_result.is_err());
-            if let Err(InterpreterError::TypeError { message }) = undef_result {
-                assert!(message.contains("undefined"));
-            } else {
-                panic!("Expected TypeError for undefined");
-            }
-
-            // Test that valid values are properly converted
-            let valid_values = vec![
-                (Value::Str("hello".to_string()), "hello"),
-                (Value::Int(42), "42"),
-                (Value::Bool(true), "true"),
-                (Value::Function(1), "[object Function]"),
-                (Value::Promise(2), "[object Promise]"),
-                (Value::AsyncGeneratorObject(3), "[object AsyncGenerator]"),
-            ];
-
-            for (input, expected) in valid_values {
-                let result = BaselineInterpreter::require_object_coercible_to_string(&input);
-                assert!(result.is_ok(), "Should succeed for {:?}", input);
-                assert_eq!(
-                    result.unwrap(),
-                    expected,
-                    "Conversion mismatch for {:?}",
-                    input
-                );
-            }
-        }
-
-        /// Test that all string case-conversion builtin paths have unified behavior
-        /// and properly implement RequireObjectCoercible across all builtin IDs.
-        ///
-        /// Previously, builtin IDs had divergent null/undefined handling:
-        /// - Some converted to "null"/"undefined" strings
-        /// - Locale methods had exhaustive tables that also converted them
-        /// Now all methods should throw TypeError for null/undefined consistently.
-        #[test]
-        fn string_case_conversion_unified_object_coercible_behavior() {
-            // Test values that should trigger RequireObjectCoercible TypeError
-            let invalid_values = vec![Value::Null, Value::Undefined];
-
-            for invalid in invalid_values {
-                let result = BaselineInterpreter::require_object_coercible_to_string(&invalid);
-                assert!(
-                    result.is_err(),
-                    "RequireObjectCoercible should reject {:?}",
-                    invalid
-                );
-            }
-
-            // Test values that should be consistently converted across all builtin paths
-            // These exercise the various builtin IDs: 34/35 (basic), 293/297, 330/331, 386/387 (locale)
-            let test_cases = vec![
-                (Value::Function(100), "[object Function]"),
-                (Value::Promise(200), "[object Promise]"),
-                (Value::AsyncGeneratorObject(300), "[object AsyncGenerator]"),
-                (
-                    Value::BuiltinFunction("Array.from".to_string()),
-                    "[object Function]",
-                ),
-                (Value::Object(400), "[object Object]"),
-                (Value::Iterator(500), "[object Iterator]"),
-                (Value::Bool(false), "false"),
-                (Value::Int(-42), "-42"),
-            ];
-
-            for (input, expected_string) in test_cases {
-                let result = BaselineInterpreter::require_object_coercible_to_string(&input);
-                assert!(result.is_ok(), "Should convert {:?} successfully", input);
-
-                let converted = result.unwrap();
-                assert_eq!(
-                    converted, expected_string,
-                    "Unified string conversion for {:?} should be deterministic",
-                    input
-                );
-
-                // Verify case transformations are consistent
-                let lowercase = converted.to_lowercase();
-                let uppercase = converted.to_uppercase();
-
-                assert_eq!(
-                    lowercase,
-                    expected_string.to_lowercase(),
-                    "toLowerCase should be consistent for {:?}",
-                    input
-                );
-                assert_eq!(
-                    uppercase,
-                    expected_string.to_uppercase(),
-                    "toUpperCase should be consistent for {:?}",
-                    input
-                );
+            for valid in [
+                Value::Str("hello".to_string()),
+                Value::Int(42),
+                Value::Bool(true),
+                Value::Function(1),
+                Value::Promise(2),
+                Value::AsyncGeneratorObject(3),
+                Value::BuiltinFunction(BuiltinFunction::require("math-abs-test")),
+                Value::Closure(4),
+                Value::Iterator(5),
+                Value::Object(ObjectId(6)),
+            ] {
+                assert!(InterpreterCore::require_object_coercible_to_string(&valid).is_ok());
             }
         }
 
@@ -21149,89 +21074,77 @@ mod tests {
             let mut interpreter = test_interpreter();
 
             // Recreate RegExp object with source property used by the canonical impl.
-            let regexp_obj_id = ObjectId::from_raw(500);
-            interpreter.heap.insert(
-                regexp_obj_id.0 as usize,
-                HeapObject {
-                    properties: BTreeMap::from_iter([(
-                        "source".to_string(),
-                        Value::Str("foo".to_string()),
-                    )]),
-                    prototype_id: None,
-                },
-            );
+            let regexp_obj_id = interpreter.alloc_object_with_prototype(None).unwrap();
+            interpreter
+                .set_object_property(
+                    regexp_obj_id,
+                    "source".to_string(),
+                    Value::Str("foo".to_string()),
+                )
+                .unwrap();
 
-            let math_id_pairs = [
-                (244u32, 369u32, "builtin:MathSin"),
-                (245u32, 370u32, "builtin:MathCos"),
-                (247u32, 371u32, "builtin:MathTan"),
+            let math_id_groups = [
+                ([59u32, 244u32, 369u32], "builtin:MathSin"),
+                ([60u32, 245u32, 370u32], "builtin:MathCos"),
+                ([63u32, 247u32, 371u32], "builtin:MathTan"),
             ];
-            let math_inputs = [Value::Int(1), Value::Float(1.0.into()), Value::Bool(true)];
+            let math_inputs = [
+                Value::Int(1),
+                Value::Float(Float64::new(1.0)),
+                Value::Bool(true),
+            ];
 
-            for (first_id, second_id, builtin_name) in math_id_pairs {
+            for (ids, builtin_name) in math_id_groups {
                 for input in &math_inputs {
                     interpreter.registers[0] = input.clone();
 
-                    assert_eq!(
-                        interpreter.map_function_index_to_builtin_capability(first_id),
-                        Some(builtin_name.to_string()),
-                        "Builtin ID {} should map to {}",
-                        first_id,
-                        builtin_name
-                    );
-                    assert_eq!(
-                        interpreter.map_function_index_to_builtin_capability(second_id),
-                        Some(builtin_name.to_string()),
-                        "Builtin ID {} should map to {}",
-                        second_id,
-                        builtin_name
-                    );
-
                     let first_result = interpreter
-                        .call_builtin_by_id(first_id, RegRange { start: 0, count: 1 })
+                        .call_builtin_by_id(ids[0], RegRange { start: 0, count: 1 })
                         .expect("first mapping should execute");
-                    let second_result = interpreter
-                        .call_builtin_by_id(second_id, RegRange { start: 0, count: 1 })
-                        .expect("second mapping should execute");
-                    assert_eq!(
-                        first_result, second_result,
-                        "Builtin IDs {} and {} should execute same {} result",
-                        first_id, second_id, builtin_name
-                    );
+                    for builtin_id in ids {
+                        assert_eq!(
+                            interpreter.map_function_index_to_builtin_capability(builtin_id),
+                            Some(builtin_name.to_string()),
+                            "Builtin ID {} should map to {}",
+                            builtin_id,
+                            builtin_name
+                        );
+                        interpreter.registers[0] = input.clone();
+                        let result = interpreter
+                            .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                            .expect("trig mapping should execute");
+                        assert_eq!(
+                            first_result, result,
+                            "Builtin ID {} should execute same {} result",
+                            builtin_id, builtin_name
+                        );
+                    }
                 }
             }
 
-            let regexp_ids = [(268u32, 372u32, "builtin:RegExpPrototypeTest")];
-            for (first_id, second_id, builtin_name) in regexp_ids {
+            let regexp_ids = [268u32, 372u32];
+            let first_result = {
                 interpreter.registers[0] = Value::Object(regexp_obj_id);
-                interpreter.registers[1] = Value::Str("a quick fox".to_string());
+                interpreter.registers[1] = Value::Str("a quick food".to_string());
+                interpreter
+                    .call_builtin_by_id(regexp_ids[0], RegRange { start: 0, count: 2 })
+                    .expect("first RegExp mapping should execute")
+            };
 
+            assert_eq!(first_result, Value::Bool(true));
+            for builtin_id in regexp_ids {
                 assert_eq!(
-                    interpreter.map_function_index_to_builtin_capability(first_id),
-                    Some(builtin_name.to_string()),
-                    "Builtin ID {} should map to {}",
-                    first_id,
-                    builtin_name
+                    interpreter.map_function_index_to_builtin_capability(builtin_id),
+                    Some("builtin:RegExpPrototypeTest".to_string()),
+                    "Builtin ID {} should map to RegExpPrototypeTest",
+                    builtin_id
                 );
-                assert_eq!(
-                    interpreter.map_function_index_to_builtin_capability(second_id),
-                    Some(builtin_name.to_string()),
-                    "Builtin ID {} should map to {}",
-                    second_id,
-                    builtin_name
-                );
-
-                let first_result = interpreter
-                    .call_builtin_by_id(first_id, RegRange { start: 0, count: 2 })
-                    .expect("first RegExp mapping should execute");
-                let second_result = interpreter
-                    .call_builtin_by_id(second_id, RegRange { start: 0, count: 2 })
-                    .expect("second RegExp mapping should execute");
-                assert_eq!(
-                    first_result, second_result,
-                    "Builtin IDs {} and {} should execute same {} result",
-                    first_id, second_id, builtin_name
-                );
+                interpreter.registers[0] = Value::Object(regexp_obj_id);
+                interpreter.registers[1] = Value::Str("a quick food".to_string());
+                let result = interpreter
+                    .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                    .expect("RegExp mapping should execute");
+                assert_eq!(first_result, result);
             }
         }
 
@@ -22274,6 +22187,81 @@ mod tests {
             core.map_function_index_to_builtin_capability(378),
             Some("builtin:ParseFloat".to_string())
         );
+    }
+
+    #[test]
+    fn batch_29_number_and_char_at_builtin_ids_use_canonical_dispatch() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        let number_is_nan_ids = [90u32, 239u32, 337u32];
+        let nan_cases = [
+            (Value::Float(Float64::new(f64::NAN)), true),
+            (Value::Str("NaN".to_string()), false),
+            (Value::Undefined, false),
+        ];
+        for builtin_id in number_is_nan_ids {
+            assert_eq!(
+                core.builtin_name_from_id(builtin_id),
+                Some("builtin:NumberIsNaN".to_string())
+            );
+
+            for (value, expected) in &nan_cases {
+                core.registers[4] = value.clone();
+                let result = core
+                    .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 1 })
+                    .expect("Number.isNaN alias should execute");
+                assert_eq!(
+                    result,
+                    Value::Bool(*expected),
+                    "Number.isNaN id {builtin_id} should share canonical strict semantics"
+                );
+            }
+        }
+
+        let number_is_finite_ids = [91u32, 338u32];
+        let finite_cases = [
+            (Value::Int(7), true),
+            (Value::Float(Float64::new(f64::INFINITY)), false),
+            (Value::Str("7".to_string()), false),
+        ];
+        for builtin_id in number_is_finite_ids {
+            assert_eq!(
+                core.builtin_name_from_id(builtin_id),
+                Some("builtin:NumberIsFinite".to_string())
+            );
+
+            for (value, expected) in &finite_cases {
+                core.registers[4] = value.clone();
+                let result = core
+                    .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 1 })
+                    .expect("Number.isFinite alias should execute");
+                assert_eq!(
+                    result,
+                    Value::Bool(*expected),
+                    "Number.isFinite id {builtin_id} should share canonical strict semantics"
+                );
+            }
+        }
+
+        for builtin_id in [30u32, 339u32] {
+            assert_eq!(
+                core.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeCharAt".to_string())
+            );
+
+            core.registers[4] = Value::Str("hello".to_string());
+            core.registers[5] = Value::Int(1);
+            let explicit_index = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 2 })
+                .expect("String.prototype.charAt alias should execute");
+            assert_eq!(explicit_index, Value::Str("e".to_string()));
+
+            core.registers[4] = Value::Int(42);
+            let default_index = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 1 })
+                .expect("String.prototype.charAt alias should execute");
+            assert_eq!(default_index, Value::Str("4".to_string()));
+        }
     }
 
     #[test]

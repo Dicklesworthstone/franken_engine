@@ -13108,71 +13108,7 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(num.cbrt())))
             }
 
-            "builtin:ArrayPrototypeFlat" => {
-                // Array.prototype.flat([depth]) implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                let _depth = if args.count > 1 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => n as usize,
-                        Value::Float(f) => f.inner() as usize,
-                        _ => 1,
-                    }
-                } else {
-                    1 // Default depth
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Create result array
-                let result_array_id = self.alloc_object_with_prototype(None)?;
-                let mut result_length = 0;
-
-                // Simplified flattening: only flatten one level for arrays.
-                // Snapshot the elements under an immutable borrow first, so
-                // we don't alias &mut self while iterating.
-                let elements: Vec<Value> = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    (0..length)
-                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                for element in elements {
-                    self.set_object_property(result_array_id, result_length.to_string(), element)?;
-                    result_length += 1;
-                }
-
-                self.set_object_property(
-                    result_array_id,
-                    "length".to_string(),
-                    Value::Int(result_length as i64),
-                )?;
-
-                Ok(Value::Object(result_array_id))
-            }
+            // Removed duplicate ArrayPrototypeFlat - implementation at line ~9886 is more complete
 
             "builtin:PromiseResolve" => {
                 // Promise.resolve(value) implementation (simplified)

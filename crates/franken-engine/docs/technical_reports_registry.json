@@ -79,6 +79,48 @@
       "dependencies": ["bd-2501"],
       "reproducible": true,
       "validation_status": "draft_skeleton"
+    },
+    {
+      "id": "FKTR-2026-005",
+      "title": "Conformance Scorecard Bundle",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-04-20",
+      "type": "Assessment",
+      "status": "Draft Skeleton",
+      "artifact_bundle": "crates/franken-engine/docs/CONFORMANCE_SCORECARD_BUNDLE.md",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Comprehensive conformance metrics for JavaScript coverage",
+        "Security policy conformance scorecard",
+        "Deterministic execution verification framework",
+        "Test coverage and validation methodology"
+      ],
+      "dependencies": ["bd-2501"],
+      "reproducible": true,
+      "validation_status": "draft_skeleton"
+    },
+    {
+      "id": "FKTR-2026-006",
+      "title": "Differential Testing Manifest",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-04-20",
+      "type": "Methodology",
+      "status": "Draft Skeleton",
+      "artifact_bundle": "crates/franken-engine/docs/DIFFERENTIAL_TESTING_MANIFEST.md",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Comprehensive differential testing methodology for JavaScript runtime compatibility",
+        "Reference implementation pairing strategy (Node.js, Bun, V8)",
+        "Automated divergence capture and classification framework",
+        "Escalation threshold matrix with severity-based response procedures",
+        "Replay bundle architecture for deterministic test reproduction",
+        "Regression prevention and historical tracking methodology"
+      ],
+      "dependencies": ["bd-2501"],
+      "reproducible": true,
+      "validation_status": "draft_skeleton"
     }
   ],
   "external_replications": [
@@ -119,7 +161,7 @@
     "minimum_adopted_tools": 1
   },
   "current_status": {
-    "publishable_reports": 1,
+    "publishable_reports": 3,
     "externally_replicated_claims": 0,
     "adopted_tools": 0,
     "section_16_complete": false

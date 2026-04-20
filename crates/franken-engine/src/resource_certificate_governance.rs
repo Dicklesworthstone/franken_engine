@@ -1338,7 +1338,11 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_resource_dimension() {
         for dim in ResourceDimension::all() {
+            // SAFETY: ResourceDimension derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(dim).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ResourceDimension,
+            // so from_str back to ResourceDimension cannot fail (valid format + matching schema).
             let back: ResourceDimension = serde_json::from_str(&json).unwrap();
             assert_eq!(*dim, back);
         }

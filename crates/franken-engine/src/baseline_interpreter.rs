@@ -13711,36 +13711,7 @@ impl InterpreterCore {
 
             // StringPrototypeToUpperCase: Removed duplicate dispatch arm (use first occurrence at line 8136)
 
-            "builtin:MathHypot" => {
-                // Math.hypot(...values) implementation (Euclidean norm)
-                let mut sum_squares = 0.0;
-
-                // Process all arguments after the first (which is 'this')
-                for i in 1..args.count {
-                    let val = self.read_reg(args.start + i)?;
-                    let num = match val {
-                        Value::Int(n) => n as f64,
-                        Value::Float(f) => f.inner(),
-                        Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                        Value::Bool(true) => 1.0,
-                        Value::Bool(false) => 0.0,
-                        Value::Null => 0.0,
-                        _ => f64::NAN,
-                    };
-
-                    // If any argument is NaN or infinite, return NaN or infinity
-                    if num.is_nan() {
-                        return Ok(Value::Float(Float64::new(f64::NAN)));
-                    }
-                    if num.is_infinite() {
-                        return Ok(Value::Float(Float64::new(f64::INFINITY)));
-                    }
-
-                    sum_squares += num * num;
-                }
-
-                Ok(Value::Float(Float64::new(sum_squares.sqrt())))
-            }
+            // Removed duplicate MathHypot - implementation at line ~11456 is more complete
 
             "builtin:ArrayPrototypeToSorted" => {
                 // Array.prototype.toSorted([compareFunction]) implementation (ES2023)
@@ -23734,6 +23705,26 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypePadStart ID should execute");
             assert_eq!(result, Value::Str("007".to_string()));
+        }
+    }
+
+    #[test]
+    fn string_prototype_pad_end_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [44_u32, 227_u32] {
+            interpreter.registers[0] = Value::Str("7".to_string());
+            interpreter.registers[1] = Value::Int(3);
+            interpreter.registers[2] = Value::Str("0".to_string());
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypePadEnd".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("StringPrototypePadEnd ID should execute");
+            assert_eq!(result, Value::Str("700".to_string()));
         }
     }
 }

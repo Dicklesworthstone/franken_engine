@@ -1177,7 +1177,9 @@ mod tests {
     #[test]
     fn cost_class_serde_roundtrip() {
         for class in InstructionCostClass::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(class).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: InstructionCostClass = serde_json::from_str(&json).unwrap();
             assert_eq!(*class, back);
         }

@@ -1992,6 +1992,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "signature_presence_consistent")
+            // SAFETY: Test-only unwrap expecting signature_presence_consistent check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

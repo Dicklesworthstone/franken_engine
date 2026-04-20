@@ -769,6 +769,7 @@ impl ScopeChain {
     }
 
     fn current_mut(&mut self) -> &mut ScopeFrame {
+        // SAFETY: Scope chain is initialized with global frame and never emptied
         self.frames.last_mut().expect("scope chain never empty")
     }
 

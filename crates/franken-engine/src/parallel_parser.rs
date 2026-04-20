@@ -2298,6 +2298,7 @@ mod tests {
             ..default_config()
         };
         let input = make_input("only_one_boundary_at_eof\n", &config);
+        // SAFETY: Test-only unwrap expecting valid JS code to parse successfully
         let output = parse(&input).unwrap();
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(

@@ -1218,7 +1218,11 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: EntropyError derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid EntropyError,
+            // so from_str back to EntropyError cannot fail (valid format + matching schema).
             let back: EntropyError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, back);
         }
@@ -1446,7 +1450,11 @@ mod tests {
         let err = EntropyError::DecodeError {
             message: "unexpected EOF at offset 42".to_string(),
         };
+        // SAFETY: EntropyError derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid EntropyError,
+        // so from_str back to EntropyError cannot fail (valid format + matching schema).
         let back: EntropyError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }

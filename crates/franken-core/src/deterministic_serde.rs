@@ -1440,6 +1440,8 @@ mod tests {
         }
         let val = CanonicalValue::Map(map);
         let bytes = encode_value(&val);
+        // SAFETY: decode_value() with bytes just produced by encode_value()
+        // cannot fail (valid encoding format).
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 

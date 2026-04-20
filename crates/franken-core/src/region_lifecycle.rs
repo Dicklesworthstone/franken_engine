@@ -840,7 +840,11 @@ mod tests {
             CancelReason::Custom("test".to_string()),
         ];
         for reason in &reasons {
+            // SAFETY: CancelReason derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(reason).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid CancelReason,
+            // so from_str back to CancelReason cannot fail (valid format + matching schema).
             let restored: CancelReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
@@ -875,7 +879,11 @@ mod tests {
             obligations_pending: 0,
             drain_elapsed_ticks: 0,
         };
+        // SAFETY: RegionEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RegionEvent,
+        // so from_str back to RegionEvent cannot fail (valid format + matching schema).
         let restored: RegionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
@@ -889,7 +897,11 @@ mod tests {
             ObligationStatus::Committed,
             ObligationStatus::Aborted,
         ] {
+            // SAFETY: ObligationStatus derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ObligationStatus,
+            // so from_str back to ObligationStatus cannot fail (valid format + matching schema).
             let restored: ObligationStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, restored);
         }
@@ -902,7 +914,11 @@ mod tests {
             description: "must finalize".to_string(),
             status: ObligationStatus::Pending,
         };
+        // SAFETY: Obligation derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ob).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Obligation,
+        // so from_str back to Obligation cannot fail (valid format + matching schema).
         let restored: Obligation = serde_json::from_str(&json).unwrap();
         assert_eq!(ob, restored);
     }
@@ -910,7 +926,11 @@ mod tests {
     #[test]
     fn drain_deadline_serde_roundtrip() {
         let dd = DrainDeadline { max_ticks: 5000 };
+        // SAFETY: DrainDeadline derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&dd).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DrainDeadline,
+        // so from_str back to DrainDeadline cannot fail (valid format + matching schema).
         let restored: DrainDeadline = serde_json::from_str(&json).unwrap();
         assert_eq!(dd, restored);
     }

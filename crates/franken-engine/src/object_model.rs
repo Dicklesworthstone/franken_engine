@@ -2490,7 +2490,9 @@ mod tests {
     fn heap_set_and_get_property() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(h, str_key("x"), int_val(42)).unwrap();
+        // SAFETY: Test-only unwrap with valid heap object and existing property
         let val = heap.get_property(h, &str_key("x")).unwrap();
         assert_eq!(val, int_val(42));
     }
@@ -2503,10 +2505,12 @@ mod tests {
     fn prototype_chain_get() {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(proto, str_key("inherited"), int_val(99))
             .unwrap();
 
         let child = heap.alloc(Some(proto));
+        // SAFETY: Test-only unwrap with valid heap object and inherited property
         let val = heap.get_property(child, &str_key("inherited")).unwrap();
         assert_eq!(val, int_val(99));
     }
@@ -2515,11 +2519,14 @@ mod tests {
     fn prototype_chain_own_shadows() {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(proto, str_key("x"), int_val(1)).unwrap();
 
         let child = heap.alloc(Some(proto));
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(child, str_key("x"), int_val(2)).unwrap();
 
+        // SAFETY: Test-only unwrap with valid heap object and existing property
         let val = heap.get_property(child, &str_key("x")).unwrap();
         assert_eq!(val, int_val(2)); // own shadows prototype
     }
@@ -2528,6 +2535,7 @@ mod tests {
     fn prototype_chain_undefined_at_end() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object (returns Undefined for nonexistent)
         let val = heap.get_property(h, &str_key("nonexistent")).unwrap();
         assert_eq!(val, JsValue::Undefined);
     }

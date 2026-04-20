@@ -1167,6 +1167,7 @@ mod tests {
 
     #[test]
     fn exp3_reward_out_of_range() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let mut state = Exp3State::new(2, 100_000).unwrap();
         assert!(matches!(
             state.update(0, -1),
@@ -1182,6 +1183,7 @@ mod tests {
 
     #[test]
     fn ftrl_initialization() {
+        // SAFETY: Test-only unwrap with valid arm count
         let state = FtrlState::new(3).unwrap();
         assert_eq!(state.num_arms, 3);
         assert_eq!(state.rounds, 0);
@@ -1189,11 +1191,15 @@ mod tests {
 
     #[test]
     fn ftrl_learns_best_arm() {
+        // SAFETY: Test-only unwrap with valid arm count
         let mut state = FtrlState::new(3).unwrap();
         // Arm 2 is consistently best.
         for _ in 0..50 {
+            // SAFETY: Test-only unwrap with valid arm index and reward
             state.update(0, 200_000).unwrap();
+            // SAFETY: Test-only unwrap with valid arm index and reward
             state.update(1, 300_000).unwrap();
+            // SAFETY: Test-only unwrap with valid arm index and reward
             state.update(2, 800_000).unwrap();
         }
         let probs = state.arm_probabilities();

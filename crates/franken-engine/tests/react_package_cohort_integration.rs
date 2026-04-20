@@ -1112,3 +1112,212 @@ fn test_schema_constants() {
     assert!(!REACT_COHORT_POLICY_ID.is_empty());
     assert!(!REACT_COHORT_COMPONENT.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Compatibility Report Hash Binding Tests (bd-1svfe)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn manifest_includes_compat_report_hash() {
+    let temp_dir = unique_temp_dir("cohort_manifest_hash_test");
+
+    // Create a minimal cohort matrix
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "test-pkg".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    // Write cohort bundle which should include compat report hash
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read the manifest and verify it contains compat_report_hash
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let manifest: ReactCohortRunManifest = serde_json::from_str(&manifest_content).unwrap();
+
+    // Verify compat_report_hash field exists and is not empty
+    assert!(
+        !manifest.compat_report_hash.is_empty(),
+        "Manifest should include compat_report_hash"
+    );
+    assert!(
+        manifest.compat_report_hash.len() > 10,
+        "compat_report_hash should be a proper hash string"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn manifest_hash_binding_detects_report_tampering() {
+    let temp_dir = unique_temp_dir("cohort_tamper_test");
+
+    // Create cohort matrix and write initial bundle
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "test-pkg".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read original manifest
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let original_manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let original_manifest: ReactCohortRunManifest =
+        serde_json::from_str(&original_manifest_content).unwrap();
+    let original_hash = original_manifest.compat_report_hash.clone();
+
+    // Tamper with the compatibility report
+    let compat_report_path = temp_dir.join("react_ecosystem_compat_report.json");
+    let tampered_report = EcosystemCompatibilityReport {
+        schema_version: "tampered".to_string(),
+        patterns_validated: 999,
+        patterns_passed: 999,
+        patterns_failed: 0,
+        overall_compatibility_level: "Perfect".to_string(),
+        validation_epoch: test_epoch(),
+        report_hash: "tampered_hash".to_string(),
+    };
+
+    fs::write(
+        &compat_report_path,
+        serde_json::to_string_pretty(&tampered_report).unwrap(),
+    )
+    .unwrap();
+
+    // Re-generate bundle with tampered report
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read new manifest
+    let new_manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let new_manifest: ReactCohortRunManifest = serde_json::from_str(&new_manifest_content).unwrap();
+
+    // Verify the hash changed, detecting the tampering
+    assert_ne!(
+        original_hash, new_manifest.compat_report_hash,
+        "Manifest hash should change when compatibility report content changes"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn manifest_hash_binding_consistent_across_runs() {
+    let temp_dir = unique_temp_dir("cohort_consistency_test");
+
+    // Create identical cohort matrix
+    let create_matrix = || {
+        let mut matrix = CohortMatrix::new(test_epoch());
+        let package = ReactPackage {
+            name: "consistent-pkg".to_string(),
+            version: "2.0.0".to_string(),
+            subpath_entries: vec![SubpathEntry {
+                subpath: ".".to_string(),
+                format: ModuleFormat::ESModule,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        matrix.add_package(package).unwrap();
+        matrix
+    };
+
+    // Generate bundle twice with identical input
+    let matrix1 = create_matrix();
+    write_react_package_cohort_bundle(&matrix1, &temp_dir).unwrap();
+
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let first_manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let first_manifest: ReactCohortRunManifest =
+        serde_json::from_str(&first_manifest_content).unwrap();
+    let first_hash = first_manifest.compat_report_hash.clone();
+
+    // Generate bundle again with same matrix
+    let matrix2 = create_matrix();
+    write_react_package_cohort_bundle(&matrix2, &temp_dir).unwrap();
+
+    let second_manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let second_manifest: ReactCohortRunManifest =
+        serde_json::from_str(&second_manifest_content).unwrap();
+
+    // Verify hash is deterministic for identical input
+    assert_eq!(
+        first_hash, second_manifest.compat_report_hash,
+        "Manifest hash should be deterministic for identical cohort inputs"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn manifest_hash_varies_with_different_compatibility_patterns() {
+    let temp_dir1 = unique_temp_dir("cohort_pattern_test_1");
+    let temp_dir2 = unique_temp_dir("cohort_pattern_test_2");
+
+    // Create two different cohort matrices that would generate different compatibility reports
+    let mut matrix1 = CohortMatrix::new(test_epoch());
+    let package1 = ReactPackage {
+        name: "pkg-esm".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::ESModule,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix1.add_package(package1).unwrap();
+
+    let mut matrix2 = CohortMatrix::new(test_epoch());
+    let package2 = ReactPackage {
+        name: "pkg-cjs".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix2.add_package(package2).unwrap();
+
+    // Generate bundles
+    write_react_package_cohort_bundle(&matrix1, &temp_dir1).unwrap();
+    write_react_package_cohort_bundle(&matrix2, &temp_dir2).unwrap();
+
+    // Read manifests
+    let manifest1_content = fs::read_to_string(temp_dir1.join("run_manifest.json")).unwrap();
+    let manifest1: ReactCohortRunManifest = serde_json::from_str(&manifest1_content).unwrap();
+
+    let manifest2_content = fs::read_to_string(temp_dir2.join("run_manifest.json")).unwrap();
+    let manifest2: ReactCohortRunManifest = serde_json::from_str(&manifest2_content).unwrap();
+
+    // Verify hashes are different for different cohort contents
+    assert_ne!(
+        manifest1.compat_report_hash, manifest2.compat_report_hash,
+        "Manifest hashes should differ when cohort content affects compatibility patterns"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir1);
+    let _ = fs::remove_dir_all(&temp_dir2);
+}

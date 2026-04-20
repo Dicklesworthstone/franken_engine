@@ -593,6 +593,8 @@ pub struct ReactCohortRunManifest {
     pub fail_count: u64,
     pub pass_rate_millionths: u64,
     pub contract_satisfied: bool,
+    /// Content hash of the compatibility report to bind report content into manifest.
+    pub compat_report_hash: String,
     pub artifact_paths: ReactCohortArtifactPaths,
 }
 
@@ -1340,6 +1342,9 @@ pub fn write_react_package_cohort_bundle(
         })?;
     let compat_report_bytes = canonical_json_bytes(&compat_report, &compat_report_path)?;
 
+    // Compute compatibility report content hash to bind report content into manifest
+    let compat_report_hash = ContentHash::compute(&compat_report_bytes);
+
     let manifest = ReactCohortRunManifest {
         schema_version: REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
         component: REACT_COHORT_COMPONENT.to_string(),
@@ -1353,6 +1358,7 @@ pub fn write_react_package_cohort_bundle(
         fail_count: matrix.failed_edge_cases() as u64,
         pass_rate_millionths: report.pass_rate_millionths,
         contract_satisfied: report.passed,
+        compat_report_hash: compat_report_hash.to_string(),
         artifact_paths: ReactCohortArtifactPaths {
             react_package_cohort_matrix: "react_package_cohort_matrix.json".to_string(),
             react_ecosystem_compat_report: "react_ecosystem_compat_report.json".to_string(),

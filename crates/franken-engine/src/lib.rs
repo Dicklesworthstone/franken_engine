@@ -78,6 +78,7 @@ pub mod cliff_margin_certificate;
 pub mod closure_model;
 pub mod cold_start_aot_governance;
 pub mod cold_start_compilation_lane;
+pub mod compatibility_advisory;
 pub mod compiler_policy;
 pub mod component_shape_catalog;
 pub mod composable_gate_framework;

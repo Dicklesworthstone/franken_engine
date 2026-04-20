@@ -4789,6 +4789,7 @@ fn build_ir2_flow_proof_artifact(
 fn compute_ir2_flow_artifact_id(artifact: &Ir2FlowProofArtifact) -> String {
     let mut preimage = artifact.clone();
     preimage.artifact_id.clear();
+    // SAFETY: to_vec cannot fail on derived Serialize struct
     let encoded = serde_json::to_vec(&preimage).unwrap();
     let hash = ContentHash::compute(&encoded);
     format!("sha256:{}", hex::encode(hash.as_bytes()))
@@ -7320,7 +7321,9 @@ mod tests {
         let second = build_ir2_flow_proof_artifact(&ir2, &context).expect("second");
 
         assert_eq!(first, second);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let first_json = serde_json::to_string(&first).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let second_json = serde_json::to_string(&second).unwrap();
         assert_eq!(first_json, second_json);
     }
@@ -7412,7 +7415,9 @@ mod tests {
     #[test]
     fn lowering_context_serde_roundtrip() {
         let ctx = LoweringContext::new("t", "d", "p");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ctx).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: LoweringContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, parsed);
     }
@@ -7430,7 +7435,9 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: Some("FE-LOWER-0001".to_string()),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: LoweringEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, parsed);
     }
@@ -7444,7 +7451,9 @@ mod tests {
             passed: true,
             detail: "detail".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&check).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: InvariantCheck = serde_json::from_str(&json).unwrap();
         assert_eq!(check, parsed);
     }

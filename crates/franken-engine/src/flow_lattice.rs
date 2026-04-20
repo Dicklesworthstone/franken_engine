@@ -1810,6 +1810,8 @@ mod tests {
             FlowLatticeError::FlowBlocked { detail } => {
                 assert!(detail.contains("authorizer is not trusted"));
             }
+            // SAFETY: Test-only panic to validate untrusted authorizer security enforcement.
+            // Test expects FlowBlocked error for untrusted authorizers. Any other error type is test failure.
             other => panic!("expected FlowBlocked for untrusted authorizer, got {other:?}"),
         }
         assert_eq!(lattice.events().len(), 1);

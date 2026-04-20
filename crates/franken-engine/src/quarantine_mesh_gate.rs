@@ -673,6 +673,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: Test scenario with hardcoded ID "skew-ext-e" is guaranteed to exist in test results
         let skew = result
             .scenarios
             .iter()

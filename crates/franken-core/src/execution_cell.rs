@@ -1131,6 +1131,7 @@ mod tests {
         let mut cx = mock_cx(100);
 
         // SAFETY: Test executes valid effects with sufficient budget; execute_effect succeeds in controlled test environment
+        // SAFETY: Test executes valid effects with sufficient budget; execute_effect succeeds in controlled test environment
         let s1 = cell
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
             .unwrap();
@@ -1153,6 +1154,7 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut cx = mock_cx(100);
 
+        // SAFETY: Test executes valid effect with sufficient budget; execute_effect succeeds in controlled test environment
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "read_data")
             .unwrap();
 
@@ -1170,7 +1172,7 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut cx = mock_cx(100);
 
-        // Close the cell first
+        // SAFETY: Test closes valid cell with proper cancellation reason; close succeeds in controlled test environment
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,

@@ -658,6 +658,7 @@ mod tests {
     fn round_trip_u64() {
         let val = CanonicalValue::U64(42);
         let bytes = encode_value(&val);
+        // SAFETY: Bytes were just encoded from valid CanonicalValue, decode should succeed
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 
@@ -665,6 +666,7 @@ mod tests {
     fn round_trip_u64_max() {
         let val = CanonicalValue::U64(u64::MAX);
         let bytes = encode_value(&val);
+        // SAFETY: Bytes were just encoded from valid CanonicalValue, decode should succeed
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 
@@ -672,6 +674,7 @@ mod tests {
     fn round_trip_i64() {
         let val = CanonicalValue::I64(-12345);
         let bytes = encode_value(&val);
+        // SAFETY: Bytes were just encoded from valid CanonicalValue, decode should succeed
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 
@@ -679,6 +682,7 @@ mod tests {
     fn round_trip_bool_true() {
         let val = CanonicalValue::Bool(true);
         let bytes = encode_value(&val);
+        // SAFETY: Bytes were just encoded from valid CanonicalValue, decode should succeed
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 
@@ -686,6 +690,7 @@ mod tests {
     fn round_trip_bool_false() {
         let val = CanonicalValue::Bool(false);
         let bytes = encode_value(&val);
+        // SAFETY: Bytes were just encoded from valid CanonicalValue, decode should succeed
         assert_eq!(decode_value(&bytes).unwrap(), val);
     }
 

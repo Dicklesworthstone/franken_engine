@@ -1737,18 +1737,25 @@ mod tests {
         let mut reg = CellRegistry::new();
         let root = test_trust_root();
         let epoch = test_epoch();
+        // SAFETY: Test-only unwrap with valid cell input
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
 
         let m = test_measurement(&root);
+        // SAFETY: Test-only unwrap with valid cell ID and measurement
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
+        // SAFETY: Test-only unwrap with valid cell ID and attestation
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
+        // SAFETY: Test-only unwrap with valid cell ID
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
+        // SAFETY: Test-only unwrap with valid cell ID
         reg.suspend_cell(&cid, "test", 5_000, epoch).unwrap();
+        // SAFETY: Test-only unwrap with valid cell ID
         reg.decommission_cell(&cid, "permanent removal", 6_000, epoch)
             .unwrap();
         assert_eq!(
+            // SAFETY: Test-only unwrap, cell was just created and decommissioned
             reg.get(&cid).unwrap().lifecycle,
             CellLifecycle::Decommissioned
         );
@@ -1777,17 +1784,22 @@ mod tests {
         let epoch = test_epoch();
 
         // Create and activate cell.
+        // SAFETY: Test-only unwrap with valid cell input
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
+        // SAFETY: Test-only unwrap with valid cell ID and measurement
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
+        // SAFETY: Test-only unwrap with valid cell ID and attestation
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
+        // SAFETY: Test-only unwrap with valid cell ID
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
         // Revoke trust root.
         let suspended = reg.revoke_trust_root("test-key-1", 5_000, epoch);
         assert_eq!(suspended.len(), 1);
+        // SAFETY: Test-only unwrap, cell was just created and suspended by trust root revocation
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Suspended);
     }
 
@@ -1955,8 +1967,11 @@ mod tests {
         let m = test_measurement(&root);
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
 
+        // SAFETY: Test-only unwrap, cell was just created and measured
         let cell = reg.get(&cid).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(cell).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ExecutionCell = serde_json::from_str(&json).unwrap();
         assert_eq!(*cell, restored);
     }
@@ -1964,8 +1979,11 @@ mod tests {
     #[test]
     fn registry_serde_roundtrip() {
         let mut reg = CellRegistry::new();
+        // SAFETY: Test-only unwrap with valid cell input
         reg.create_cell(default_cell_input(), 1_000).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: CellRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.cell_count(), 1);
     }

@@ -1219,7 +1219,9 @@ mod tests {
     #[test]
     fn cost_model_serde_roundtrip() {
         let model = DeterministicCostModel::default_baseline("serde-test");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&model).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DeterministicCostModel = serde_json::from_str(&json).unwrap();
         assert_eq!(model, back);
     }
@@ -1352,7 +1354,9 @@ mod tests {
             RewriteCategory::ArrayOptimization,
             RewriteCategory::Custom,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&cat).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: RewriteCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(cat, back);
         }
@@ -1378,7 +1382,9 @@ mod tests {
             RuleInterferenceKind::SemanticOverlap,
             RuleInterferenceKind::BudgetContention,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: RuleInterferenceKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, back);
         }
@@ -1469,7 +1475,9 @@ mod tests {
             "b",
             RuleInterferenceKind::None,
         )]);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&meta).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: InterferenceMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(meta, back);
     }
@@ -1663,7 +1671,9 @@ mod tests {
             "serde",
             vec![test_rule("r1", RewriteCategory::Custom, true)],
         );
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&pack).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: RewritePack = serde_json::from_str(&json).unwrap();
         assert_eq!(pack, back);
     }

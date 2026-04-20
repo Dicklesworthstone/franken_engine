@@ -1716,6 +1716,7 @@ mod tests {
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
         assert_eq!(cp1.policy_heads.len(), 2);
         // Find RuntimeExecution head and check version
+        // SAFETY: Test scenario has RuntimeExecution policy head added above; find will succeed
         let re_head = cp1
             .policy_heads
             .iter()

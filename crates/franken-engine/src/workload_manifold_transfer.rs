@@ -608,6 +608,7 @@ mod tests {
     #[test]
     fn manifest_add_embedding() {
         let mut m = TransferManifest::new();
+        // SAFETY: Test with valid embedding should succeed adding to empty manifest
         m.add_embedding(test_embedding("a", &[])).unwrap();
         assert_eq!(m.embeddings.len(), 1);
     }
@@ -615,6 +616,7 @@ mod tests {
     #[test]
     fn manifest_duplicate_rejected() {
         let mut m = TransferManifest::new();
+        // SAFETY: Test with valid embedding should succeed adding to empty manifest
         m.add_embedding(test_embedding("a", &[])).unwrap();
         let err = m.add_embedding(test_embedding("a", &[])).unwrap_err();
         assert!(matches!(err, ManifoldError::DuplicateEmbedding { .. }));
@@ -623,11 +625,13 @@ mod tests {
     #[test]
     fn compute_certificate_same_workload() {
         let mut m = TransferManifest::new();
+        // SAFETY: Test with valid embedding should succeed adding to empty manifest
         m.add_embedding(test_embedding(
             "a",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
         .unwrap();
+        // SAFETY: Test certificate computation with same workload ID should succeed
         let cert = m.compute_certificate("a", "a").unwrap();
         assert!(cert.is_neighbor);
     }
@@ -635,16 +639,19 @@ mod tests {
     #[test]
     fn compute_certificate_different_workloads() {
         let mut m = TransferManifest::new();
+        // SAFETY: Test with valid embedding 'a' should succeed adding to empty manifest
         m.add_embedding(test_embedding(
             "a",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
         .unwrap();
+        // SAFETY: Test with valid embedding 'b' should succeed adding to manifest with one entry
         m.add_embedding(test_embedding(
             "b",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
         .unwrap();
+        // SAFETY: Test certificate computation between different workloads 'a' and 'b' should succeed
         let cert = m.compute_certificate("a", "b").unwrap();
         assert!(cert.is_neighbor);
     }

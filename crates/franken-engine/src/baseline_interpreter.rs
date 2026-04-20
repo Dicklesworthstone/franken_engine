@@ -11451,50 +11451,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeFlatMap" => {
-                // Array.prototype.flatMap(callback) implementation
-                if args.count < 2 {
-                    // Return empty array if no callback provided
-                    let empty_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-                    return Ok(Value::Object(empty_array_id));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // For now, simplified implementation without function call support
-                // Return empty array since we can't execute callback functions yet
-                // TODO: Implement function call mechanism for full flatMap support
-                let empty_array_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-                Ok(Value::Object(empty_array_id))
-            }
+            // Removed duplicate ArrayPrototypeFlatMap - implementation at line ~13119 is more complete
 
             "builtin:MathHypot" => {
                 // Math.hypot(...values) implementation - Euclidean distance

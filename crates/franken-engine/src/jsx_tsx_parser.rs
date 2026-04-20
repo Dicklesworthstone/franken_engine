@@ -1720,9 +1720,11 @@ mod tests {
                     JsxChild::ExpressionContainer { expression, .. } => {
                         assert_eq!(expression, "x + 1");
                     }
+                    // SAFETY: Test-only panic to validate JSX child type matches expected ExpressionContainer
                     _ => panic!("expected expression child"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

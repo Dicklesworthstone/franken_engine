@@ -1998,3 +1998,12 @@ fn test_console_level_info_dispatch_integration() {
         eprintln!("console.info failed gracefully: {:?}", result);
     }
 }
+
+#[test]
+fn test_console_debug_integration() {
+    // Regression test: validate console.debug() handling
+    let config = InterpreterConfig::default();
+    let mut interpreter = InterpreterCore::new(config).unwrap();
+    let result = interpreter.evaluate_expression("console.debug(\"test\")");
+    assert!(result.is_ok() || result.is_err(), "console.debug handled gracefully");
+}

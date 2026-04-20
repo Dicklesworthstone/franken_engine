@@ -1564,6 +1564,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
+    // SAFETY: to_vec cannot fail on valid serde_json::Value
     let bytes = serde_json::to_vec(value).unwrap();
     sha256_hex(&bytes)
 }
@@ -1885,7 +1886,9 @@ mod tests {
             CandidateDisposition::Conditional,
             CandidateDisposition::Reject,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&disposition).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CandidateDisposition = serde_json::from_str(&json).unwrap();
             assert_eq!(back, disposition);
         }
@@ -1901,7 +1904,9 @@ mod tests {
             SurfaceArea::RuntimeMetadata,
             SurfaceArea::Telemetry,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&area).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: SurfaceArea = serde_json::from_str(&json).unwrap();
             assert_eq!(back, area);
         }
@@ -1917,7 +1922,9 @@ mod tests {
             BaselineStrategy::OfflineSummary,
             BaselineStrategy::QueryAppendOnly,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&strategy).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: BaselineStrategy = serde_json::from_str(&json).unwrap();
             assert_eq!(back, strategy);
         }
@@ -1931,7 +1938,9 @@ mod tests {
             TearingRisk::Medium,
             TearingRisk::High,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&risk).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: TearingRisk = serde_json::from_str(&json).unwrap();
             assert_eq!(back, risk);
         }
@@ -1945,7 +1954,9 @@ mod tests {
             WriteProfile::Bursty,
             WriteProfile::HotPath,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&profile).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: WriteProfile = serde_json::from_str(&json).unwrap();
             assert_eq!(back, profile);
         }
@@ -1962,7 +1973,9 @@ mod tests {
             FallbackReason::HotPathWritePressure,
             FallbackReason::NonRetrySafeRead,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&reason).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: FallbackReason = serde_json::from_str(&json).unwrap();
             assert_eq!(back, reason);
         }
@@ -2034,7 +2047,9 @@ mod tests {
             exact_fallback_conditions: vec!["condition 1".to_string()],
             notes: vec!["note 1".to_string()],
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: CandidateInventoryEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(back, entry);
     }
@@ -2302,7 +2317,9 @@ mod tests {
             CandidateDisposition::Conditional,
             CandidateDisposition::Reject,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&d).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CandidateDisposition = serde_json::from_str(&json).unwrap();
             assert_eq!(d, back);
         }
@@ -2318,7 +2335,9 @@ mod tests {
             SurfaceArea::RuntimeMetadata,
             SurfaceArea::Telemetry,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: SurfaceArea = serde_json::from_str(&json).unwrap();
             assert_eq!(s, back);
         }
@@ -2334,7 +2353,9 @@ mod tests {
             BaselineStrategy::OfflineSummary,
             BaselineStrategy::QueryAppendOnly,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&b).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: BaselineStrategy = serde_json::from_str(&json).unwrap();
             assert_eq!(b, back);
         }

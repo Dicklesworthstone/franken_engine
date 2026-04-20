@@ -1448,7 +1448,9 @@ mod tests {
             VerificationVerdict::Failed,
             VerificationVerdict::Inconclusive,
         ] {
+            // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
             let json = serde_json::to_string(&verdict).unwrap();
+            // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
             let back: VerificationVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(back, verdict);
         }

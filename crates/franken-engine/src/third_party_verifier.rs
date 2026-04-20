@@ -1840,6 +1840,7 @@ mod tests {
     fn generate_attestation_statement_format() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let attestation = generate_attestation(&input).unwrap();
         assert!(attestation.statement.contains("acme-verifier"));
         assert!(attestation.statement.contains("1.0.0"));

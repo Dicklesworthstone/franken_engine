@@ -1582,6 +1582,7 @@ mod tests {
         let decision = evaluate_gate("c1", &bl, &cur, &budget, &default_config(), test_epoch());
         ledger.apply_decision(&decision);
 
+        // SAFETY: get_record cannot fail for claim ID we just applied decision for
         let record = ledger.get_record("c1").unwrap();
         assert!(record.active);
         assert!(record.max_passing_drift_millionths > 0);
@@ -1609,6 +1610,7 @@ mod tests {
         let decision = evaluate_gate("c1", &bl, &cur, &budget, &default_config(), test_epoch());
         ledger.apply_decision(&decision);
 
+        // SAFETY: get_record cannot fail for claim ID we just applied decision for
         let record = ledger.get_record("c1").unwrap();
         assert!(!record.active);
         assert!(record.deactivation_reason.is_some());

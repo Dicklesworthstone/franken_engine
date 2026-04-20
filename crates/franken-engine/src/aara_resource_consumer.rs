@@ -924,6 +924,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = good_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test just consumed good certificate, should have receipt for Scheduler subsystem
         let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
         assert!(receipt.denial_reasons.is_empty());
@@ -935,6 +936,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = good_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test just consumed good certificate, should have receipt for GarbageCollector subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::GarbageCollector)
             .unwrap();
@@ -946,6 +948,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = good_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test just consumed good certificate, should have receipt for HostcallGate subsystem
         let receipt = consumer.last_receipt_for(Subsystem::HostcallGate).unwrap();
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
     }
@@ -969,6 +972,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = uncertified_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test consumed uncertified certificate, should still have receipt for Scheduler subsystem
         let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
         assert!(
             receipt
@@ -987,6 +991,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = low_bound_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test consumed low_bound certificate, should have receipt for Scheduler subsystem
         let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
         // Time bound = 10k < required 100k → should be reduced or denied
         assert!(!receipt.denial_reasons.is_empty());
@@ -1001,6 +1006,7 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = dynamic_code_gen_certificate();
         consumer.consume(&cert);
+        // SAFETY: Test consumed dynamic_code_gen certificate, should have receipt for Specializer subsystem
         let receipt = consumer.last_receipt_for(Subsystem::Specializer).unwrap();
         assert_eq!(receipt.decision, BudgetDecision::Denied);
         assert!(receipt.denial_reasons.iter().any(|r| matches!(
@@ -1206,7 +1212,9 @@ mod tests {
             Subsystem::Specializer,
             Subsystem::HostcallGate,
         ] {
+            // SAFETY: Subsystem derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: JSON was just produced by valid Subsystem serialization
             let back: Subsystem = serde_json::from_str(&json).unwrap();
             assert_eq!(s, back);
         }
@@ -1220,7 +1228,9 @@ mod tests {
             BudgetDecision::Denied,
             BudgetDecision::Abstain,
         ] {
+            // SAFETY: BudgetDecision derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&d).unwrap();
+            // SAFETY: JSON was just produced by valid BudgetDecision serialization
             let back: BudgetDecision = serde_json::from_str(&json).unwrap();
             assert_eq!(d, back);
         }

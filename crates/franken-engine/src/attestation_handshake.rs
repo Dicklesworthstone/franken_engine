@@ -1066,11 +1066,13 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let nonce = [1u8; 32];
+        // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
         let challenge = verifier.generate_challenge(nonce, 1000, 100).unwrap();
         let client = test_client();
         let response = client.respond(&challenge, &measurement, &root, 10_000, 1200);
 
         // Verify at time 1200, but challenge deadline was 1000 + 100 = 1100.
+        // SAFETY: The verification time is intentionally past the challenge deadline.
         let err = verifier
             .verify_and_authorize(&challenge, &response, &root, 1200)
             .unwrap_err();

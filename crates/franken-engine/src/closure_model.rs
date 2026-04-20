@@ -926,14 +926,19 @@ mod tests {
 
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid let variable in block scope; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 2).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(200), Label::Public)
             .unwrap();
+        // SAFETY: Test gets block-scoped variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Number(200));
 
+        // SAFETY: Test has valid scope; pop_scope succeeds in controlled test environment.
         chain.pop_scope().unwrap();
+        // SAFETY: Test gets outer scope variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Number(100));
     }
@@ -952,7 +957,9 @@ mod tests {
     #[test]
     fn capture_from_enclosing_scope() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("outer".into(), 1).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("outer", EnvValue::Number(42), Label::Public)
             .unwrap();
@@ -960,6 +967,7 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
 
+        // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
         let captures = chain.compute_captures(&["outer".into()]).unwrap();
         assert_eq!(captures.len(), 1);
         assert_eq!(captures[0].name, "outer");

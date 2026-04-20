@@ -2,9 +2,7 @@
 //! Integration regression tests for minor fixes and edge cases
 //! Covers small but important fixes that may not have dedicated integration tests
 
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, Value,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 
 #[test]
 fn test_string_operations_integration_regression() {

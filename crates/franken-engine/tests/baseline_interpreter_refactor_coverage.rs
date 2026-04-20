@@ -434,10 +434,7 @@ fn console_info_captured_with_correct_metadata() {
                 dst: 0,
                 pool_index: 0,
             },
-            Ir3Instruction::LoadInt {
-                dst: 1,
-                value: 42,
-            },
+            Ir3Instruction::LoadInt { dst: 1, value: 42 },
             Ir3Instruction::HostCall {
                 capability: "console:info".to_string(),
                 args: RegRange { start: 0, count: 2 },
@@ -463,8 +460,7 @@ fn console_info_captured_with_correct_metadata() {
         "Console entry should have Info level"
     );
     assert_eq!(
-        entry.message,
-        "Info message 42",
+        entry.message, "Info message 42",
         "Console info message should include number"
     );
     assert!(

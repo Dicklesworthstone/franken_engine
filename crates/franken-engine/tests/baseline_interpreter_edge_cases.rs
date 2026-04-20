@@ -1395,7 +1395,7 @@ fn test_array_prototype_some_duplicate_removal_regression() {
 
     // Test 1: some with callback - should fail closed until callback dispatch is implemented
     let result = interpreter.evaluate_expression("[1, 2, 3].some(function(x) { return x > 2; })");
-    
+
     // Current fail-closed implementation should either:
     // 1. Return false (fail-closed default)
     // 2. Error due to missing callback dispatch infrastructure
@@ -1410,14 +1410,20 @@ fn test_array_prototype_some_duplicate_removal_regression() {
         }
     } else {
         // Error is acceptable for fail-closed implementation
-        eprintln!("some failed as expected due to fail-closed implementation: {:?}", result);
+        eprintln!(
+            "some failed as expected due to fail-closed implementation: {:?}",
+            result
+        );
     }
 
-    // Test 2: some without callback - should handle missing callback parameter  
+    // Test 2: some without callback - should handle missing callback parameter
     let result = interpreter.evaluate_expression("[1, 2, 3].some()");
     if let Ok(value) = result {
-        assert_eq!(value, Value::Bool(false), 
-                  "some without callback should return false");
+        assert_eq!(
+            value,
+            Value::Bool(false),
+            "some without callback should return false"
+        );
     } else {
         // Error acceptable for missing callback
         eprintln!("some without callback failed as expected: {:?}", result);
@@ -1426,8 +1432,11 @@ fn test_array_prototype_some_duplicate_removal_regression() {
     // Test 3: some on empty array - should return false regardless of callback
     let result = interpreter.evaluate_expression("[].some(function(x) { return true; })");
     if let Ok(value) = result {
-        assert_eq!(value, Value::Bool(false),
-                  "some on empty array should return false");
+        assert_eq!(
+            value,
+            Value::Bool(false),
+            "some on empty array should return false"
+        );
     } else {
         eprintln!("some on empty array failed: {:?}", result);
     }
@@ -1446,14 +1455,20 @@ fn test_array_prototype_some_duplicate_removal_regression() {
     // This verifies no duplicate implementations cause different behavior
     let result1 = interpreter.evaluate_expression("[1, 2].some(function() {})");
     let result2 = interpreter.evaluate_expression("[3, 4].some(function() {})");
-    
+
     match (result1.is_ok(), result2.is_ok()) {
         (true, true) => {
             // Both succeeded - should have same type and consistent logic
             let val1 = result1.unwrap();
             let val2 = result2.unwrap();
-            assert!(matches!(val1, Value::Bool(_)), "First call should return boolean");
-            assert!(matches!(val2, Value::Bool(_)), "Second call should return boolean");
+            assert!(
+                matches!(val1, Value::Bool(_)),
+                "First call should return boolean"
+            );
+            assert!(
+                matches!(val2, Value::Bool(_)),
+                "Second call should return boolean"
+            );
         }
         (false, false) => {
             // Both failed consistently - good for fail-closed implementation
@@ -1466,7 +1481,8 @@ fn test_array_prototype_some_duplicate_removal_regression() {
 
     // Test 6: Edge case - verify no element truthiness bypass (from old implementation)
     // Old implementation incorrectly checked element truthiness instead of callback result
-    let result = interpreter.evaluate_expression("[0, false, ''].some(function() { return true; })");
+    let result =
+        interpreter.evaluate_expression("[0, false, ''].some(function() { return true; })");
     if let Ok(Value::Bool(false)) = result {
         // If it returns false, it might still be using old truthiness logic instead of callback
         eprintln!("Warning: some may still be using element truthiness instead of callback");
@@ -1560,7 +1576,10 @@ fn math_round_negative_half_semantics_regression() {
         Ok(Value::Float(f)) if f.inner().is_infinite() && f.inner() > 0.0 => {
             // Correct: +Infinity rounds to +Infinity
         }
-        Ok(other) => panic!("Math.round(Infinity) should return Infinity, got {:?}", other),
+        Ok(other) => panic!(
+            "Math.round(Infinity) should return Infinity, got {:?}",
+            other
+        ),
         Err(e) => panic!("Math.round(Infinity) should not error: {:?}", e),
     }
 
@@ -1570,7 +1589,10 @@ fn math_round_negative_half_semantics_regression() {
         Ok(Value::Float(f)) if f.inner().is_infinite() && f.inner() < 0.0 => {
             // Correct: -Infinity rounds to -Infinity
         }
-        Ok(other) => panic!("Math.round(-Infinity) should return -Infinity, got {:?}", other),
+        Ok(other) => panic!(
+            "Math.round(-Infinity) should return -Infinity, got {:?}",
+            other
+        ),
         Err(e) => panic!("Math.round(-Infinity) should not error: {:?}", e),
     }
 
@@ -1611,7 +1633,10 @@ fn math_round_negative_half_semantics_regression() {
     match (result1, result2) {
         (Ok(val1), Ok(val2)) => {
             // Both should be the same value (either 0 or -0.0)
-            assert_eq!(val1, val2, "Math.round(-0.5) should be consistent across calls");
+            assert_eq!(
+                val1, val2,
+                "Math.round(-0.5) should be consistent across calls"
+            );
         }
         (Err(e1), Err(e2)) => {
             // Both erroring consistently is acceptable
@@ -1685,7 +1710,8 @@ fn array_foreach_duplicate_removal_regression() {
     }
 
     // Test 4: forEach on non-array should handle type validation
-    let result = interpreter.evaluate_expression("Array.prototype.forEach.call('abc', function() {})");
+    let result =
+        interpreter.evaluate_expression("Array.prototype.forEach.call('abc', function() {})");
 
     if result.is_ok() {
         eprintln!("forEach on string handled without crash");
@@ -1709,7 +1735,9 @@ fn array_foreach_duplicate_removal_regression() {
             eprintln!("Both forEach calls failed consistently - good fail-closed behavior");
         }
         (true, false) | (false, true) => {
-            panic!("Inconsistent forEach behavior suggests duplicate implementations still present");
+            panic!(
+                "Inconsistent forEach behavior suggests duplicate implementations still present"
+            );
         }
     }
 
@@ -1792,8 +1820,14 @@ fn array_some_duplicate_removal_regression() {
         (true, true) => {
             let val1 = result1.unwrap();
             let val2 = result2.unwrap();
-            assert!(matches!(val1, Value::Bool(_)), "First some call should return boolean");
-            assert!(matches!(val2, Value::Bool(_)), "Second some call should return boolean");
+            assert!(
+                matches!(val1, Value::Bool(_)),
+                "First some call should return boolean"
+            );
+            assert!(
+                matches!(val2, Value::Bool(_)),
+                "Second some call should return boolean"
+            );
         }
         (false, false) => {
             eprintln!("Both some calls failed consistently - good fail-closed behavior");
@@ -1854,7 +1888,10 @@ fn string_charat_utf16_integration_regression() {
     match result {
         Ok(Value::Str(s)) => {
             // Should return first code unit of surrogate pair or the emoji
-            assert!(s.len() <= 4, "charAt should return single character or code unit");
+            assert!(
+                s.len() <= 4,
+                "charAt should return single character or code unit"
+            );
         }
         Ok(other) => panic!("charAt should return string, got {:?}", other),
         Err(e) => panic!("charAt with emoji should not error: {:?}", e),
@@ -1864,7 +1901,10 @@ fn string_charat_utf16_integration_regression() {
     let result = interpreter.evaluate_expression("'hi'.charAt(5)");
     match result {
         Ok(Value::Str(s)) => assert_eq!(s, ""),
-        Ok(other) => panic!("out of bounds charAt should return empty string, got {:?}", other),
+        Ok(other) => panic!(
+            "out of bounds charAt should return empty string, got {:?}",
+            other
+        ),
         Err(e) => panic!("out of bounds charAt should not error: {:?}", e),
     }
 
@@ -1872,7 +1912,10 @@ fn string_charat_utf16_integration_regression() {
     let result = interpreter.evaluate_expression("'test'.charAt(-1)");
     match result {
         Ok(Value::Str(s)) => assert_eq!(s, ""),
-        Ok(other) => panic!("negative index charAt should return empty string, got {:?}", other),
+        Ok(other) => panic!(
+            "negative index charAt should return empty string, got {:?}",
+            other
+        ),
         Err(e) => panic!("negative index charAt should not error: {:?}", e),
     }
 
@@ -1882,7 +1925,10 @@ fn string_charat_utf16_integration_regression() {
 
     match (result1, result2) {
         (Ok(Value::Str(char_result)), Ok(Value::Str(code_result))) => {
-            assert_eq!(char_result, code_result, "charAt and charCodeAt should be consistent");
+            assert_eq!(
+                char_result, code_result,
+                "charAt and charCodeAt should be consistent"
+            );
         }
         _ => {
             eprintln!("charAt/charCodeAt cross-validation skipped due to implementation limits");
@@ -1919,11 +1965,17 @@ fn string_charcodeat_utf16_integration_regression() {
     match result {
         Ok(Value::Int(code)) => {
             // Should return valid UTF-16 code unit (either high surrogate or emoji)
-            assert!(code >= 0 && code <= 65535, "charCodeAt should return valid UTF-16 code unit");
+            assert!(
+                code >= 0 && code <= 65535,
+                "charCodeAt should return valid UTF-16 code unit"
+            );
         }
         Ok(Value::Float(f)) => {
             let code = f.inner() as i64;
-            assert!(code >= 0 && code <= 65535, "charCodeAt should return valid UTF-16 code unit");
+            assert!(
+                code >= 0 && code <= 65535,
+                "charCodeAt should return valid UTF-16 code unit"
+            );
         }
         Ok(other) => panic!("charCodeAt should return number, got {:?}", other),
         Err(e) => panic!("charCodeAt with emoji should not error: {:?}", e),
@@ -1932,18 +1984,30 @@ fn string_charcodeat_utf16_integration_regression() {
     // Test 3: Out of bounds behavior - should return NaN
     let result = interpreter.evaluate_expression("'hi'.charCodeAt(5)");
     match result {
-        Ok(Value::Float(f)) => assert!(f.inner().is_nan(), "out of bounds charCodeAt should return NaN"),
+        Ok(Value::Float(f)) => assert!(
+            f.inner().is_nan(),
+            "out of bounds charCodeAt should return NaN"
+        ),
         Ok(Value::Int(_)) => panic!("out of bounds charCodeAt should return NaN, not int"),
-        Ok(other) => panic!("out of bounds charCodeAt should return NaN, got {:?}", other),
+        Ok(other) => panic!(
+            "out of bounds charCodeAt should return NaN, got {:?}",
+            other
+        ),
         Err(e) => panic!("out of bounds charCodeAt should not error: {:?}", e),
     }
 
     // Test 4: Negative index handling - should return NaN
     let result = interpreter.evaluate_expression("'test'.charCodeAt(-1)");
     match result {
-        Ok(Value::Float(f)) => assert!(f.inner().is_nan(), "negative index charCodeAt should return NaN"),
+        Ok(Value::Float(f)) => assert!(
+            f.inner().is_nan(),
+            "negative index charCodeAt should return NaN"
+        ),
         Ok(Value::Int(_)) => panic!("negative index charCodeAt should return NaN, not int"),
-        Ok(other) => panic!("negative index charCodeAt should return NaN, got {:?}", other),
+        Ok(other) => panic!(
+            "negative index charCodeAt should return NaN, got {:?}",
+            other
+        ),
         Err(e) => panic!("negative index charCodeAt should not error: {:?}", e),
     }
 
@@ -1967,7 +2031,10 @@ fn string_charcodeat_utf16_integration_regression() {
     match result {
         Ok(Value::Int(code)) => assert_eq!(code, 97), // 'a' = 97
         Ok(Value::Float(f)) => assert_eq!(f.inner(), 97.0),
-        Ok(other) => panic!("charCodeAt() should return first char code, got {:?}", other),
+        Ok(other) => panic!(
+            "charCodeAt() should return first char code, got {:?}",
+            other
+        ),
         Err(_) => eprintln!("charCodeAt() without args failed - acceptable"),
     }
 }
@@ -1989,7 +2056,7 @@ fn test_console_level_info_dispatch_integration() {
 
     // Test console.info() doesn't crash - validates missing Info match arm was added
     let result = interpreter.evaluate_expression("console.info('test message')");
-    
+
     // Should succeed without panic (Info level now handled in dispatch)
     if result.is_ok() {
         assert!(true, "console.info handled without crash");
@@ -2005,7 +2072,10 @@ fn test_console_debug_integration() {
     let config = InterpreterConfig::default();
     let mut interpreter = InterpreterCore::new(config).unwrap();
     let result = interpreter.evaluate_expression("console.debug(\"test\")");
-    assert!(result.is_ok() || result.is_err(), "console.debug handled gracefully");
+    assert!(
+        result.is_ok() || result.is_err(),
+        "console.debug handled gracefully"
+    );
 }
 
 #[test]
@@ -2014,7 +2084,10 @@ fn test_console_trace_integration() {
     let config = InterpreterConfig::default();
     let mut interpreter = InterpreterCore::new(config).unwrap();
     let result = interpreter.evaluate_expression("console.trace()");
-    assert!(result.is_ok() || result.is_err(), "console.trace handled gracefully");
+    assert!(
+        result.is_ok() || result.is_err(),
+        "console.trace handled gracefully"
+    );
 }
 
 #[test]
@@ -2023,5 +2096,8 @@ fn test_console_warn_integration() {
     let config = InterpreterConfig::default();
     let mut interpreter = InterpreterCore::new(config).unwrap();
     let result = interpreter.evaluate_expression("console.warn(\"warning\")");
-    assert!(result.is_ok() || result.is_err(), "console.warn handled gracefully");
+    assert!(
+        result.is_ok() || result.is_err(),
+        "console.warn handled gracefully"
+    );
 }

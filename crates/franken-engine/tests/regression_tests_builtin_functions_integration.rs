@@ -2,9 +2,7 @@
 //! Integration regression tests for builtin function implementations
 //! Covers Math, Array, and other builtin function edge cases and fixes
 
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, Value,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 
 #[test]
 fn test_math_builtin_functions_regression() {
@@ -149,7 +147,10 @@ fn test_number_operations_regression() {
     // Test floating point literals
     let result = interpreter.evaluate_expression("3.14");
     if let Ok(Value::Number(n)) = result {
-        assert!((n - 3.14).abs() < f64::EPSILON, "Float literal should be parsed correctly");
+        assert!(
+            (n - 3.14).abs() < f64::EPSILON,
+            "Float literal should be parsed correctly"
+        );
     } else {
         // Float literals might not be implemented, which is acceptable
     }

@@ -10345,63 +10345,6 @@ impl InterpreterCore {
                     Ok(Value::Bool(false))
                 }
             }
-            "builtin:ArrayPrototypeEvery" => {
-                // Array.prototype.every(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Bool(true));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(true)), // Non-arrays return true
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Check if all elements pass test (simplified - check if all are truthy)
-                    // TODO: In full implementation, would call callback and test condition
-                    for i in 0..length {
-                        if array_obj.properties.contains_key(&i.to_string()) {
-                            if let Some(value) = array_obj.properties.get(&i.to_string()) {
-                                let is_truthy = match value {
-                                    Value::Bool(false) | Value::Null | Value::Undefined => false,
-                                    Value::Int(0) => false,
-                                    Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => {
-                                        false
-                                    }
-                                    Value::Str(s) if s.is_empty() => false,
-                                    _ => true,
-                                };
-                                if !is_truthy {
-                                    return Ok(Value::Bool(false));
-                                }
-                            }
-                        }
-                    }
-                    Ok(Value::Bool(true))
-                } else {
-                    Ok(Value::Bool(true))
-                }
-            }
             "builtin:MathSign" => {
                 // Math.sign(x) implementation - returns sign of a number
                 if args.count == 0 {
@@ -13359,7 +13302,6 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_nan))
             }
 
-
             "builtin:ArrayPrototypeReduce" => {
                 // Array.prototype.reduce(callback[, initialValue]) implementation (simplified)
                 if args.count < 2 {
@@ -13760,52 +13702,6 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(y.atan2(x))))
             }
 
-            "builtin:ArrayPrototypeEvery" => {
-                // Array.prototype.every(callback[, thisArg]) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Bool(true)); // Empty test defaults to true
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(true)), // Non-objects default to true
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Simplified implementation: check if all elements are truthy
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let is_truthy = match element {
-                                Value::Bool(false) => false,
-                                Value::Int(0) => false,
-                                Value::Float(f) if f.inner() == 0.0 => false,
-                                Value::Str(s) if s.is_empty() => false,
-                                Value::Null | Value::Undefined => false,
-                                _ => true,
-                            };
-                            if !is_truthy {
-                                return Ok(Value::Bool(false));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(true))
-            }
 
             "builtin:DatePrototypeGetTime" => {
                 // Date.prototype.getTime() implementation (simplified)
@@ -16867,44 +16763,41 @@ impl InterpreterCore {
             }
 
             "builtin:ArrayPrototypeEvery" => {
-                // Array.prototype.every() implementation - tests if all elements pass callback
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(true)), // Non-objects return true (empty case)
-                };
+                // Array.prototype.every() implementation
+                // FAIL-CLOSED: Array.every requires callback invocation which is not yet supported
+                // Previous implementations silently returned incorrect results (element truthiness checking)
+                // or always returned true instead of calling the provided predicate callback
 
                 if args.count < 2 {
-                    return Ok(Value::Bool(true)); // No callback provided, default true for empty
+                    return Err(InterpreterError::TypeError {
+                        expected: "predicate function".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                if !matches!(this_val, Value::Object(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object".to_string(),
+                        got: format!("{:?}", this_val),
+                    });
                 }
 
                 let callback_val = self.read_reg(args.start + 1)?;
                 if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Bool(true)); // Callback is not a function
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: format!("{:?}", callback_val),
+                    });
                 }
 
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: return true if no elements (empty array)
-                    // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if obj.properties.contains_key(&i.to_string()) {
-                            // In real implementation, would call callback and check result
-                            // For now, assume all elements pass if any exist
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(true)) // Default true for every()
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [0].every(() => true) or [1].every(() => false) should error rather than
+                // return wrong results based on element truthiness or always returning true
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.every implementation".to_string(),
+                    got: "predicate callback invocation not yet supported - would require proper callback dispatch with (value, index, array) args, thisArg handling, and short-circuiting on first falsy result".to_string(),
+                })
             }
 
             "builtin:StringPrototypeCharCodeAt" => {
@@ -17523,8 +17416,6 @@ impl InterpreterCore {
                     got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args and thisArg handling".to_string(),
                 })
             }
-
-
 
             "builtin:StringPrototypeReplace" => {
                 // String.prototype.replace() implementation - simplified version

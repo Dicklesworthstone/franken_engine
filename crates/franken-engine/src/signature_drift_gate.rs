@@ -1256,7 +1256,9 @@ mod tests {
     #[test]
     fn downgrade_reason_serde() {
         let r = DowngradeReason::ExcessiveL1Drift;
+        // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DowngradeReason = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -1274,7 +1276,9 @@ mod tests {
     #[test]
     fn gate_verdict_serde() {
         let v = GateVerdict::Pass;
+        // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&v).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: GateVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
     }

@@ -14282,61 +14282,8 @@ impl InterpreterCore {
             }
 
 
-            "builtin:JSONStringify" => {
-                // JSON.stringify() implementation - simplified version
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let json_str = match value {
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(), // Note: undefined is not valid JSON
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Str(s) => format!("\"{}\"", s.replace('"', "\\\"")),
-                    Value::Object(_) => "{}".to_string(), // Simplified object representation
-                    _ => "null".to_string(),
-                };
-                Ok(Value::Str(json_str))
-            }
-
-            "builtin:JSONParse" => {
-                // JSON.parse() implementation - simplified version
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let str_val = self.read_reg(args.start + 1)?;
-                let json_str = match str_val {
-                    Value::Str(s) => s,
-                    _ => return Ok(Value::Undefined),
-                };
-
-                // Simplified JSON parsing - handle basic cases
-                let trimmed = json_str.trim();
-                if trimmed == "null" {
-                    Ok(Value::Null)
-                } else if trimmed == "true" {
-                    Ok(Value::Bool(true))
-                } else if trimmed == "false" {
-                    Ok(Value::Bool(false))
-                } else if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-                    let unquoted = &trimmed[1..trimmed.len() - 1];
-                    Ok(Value::Str(unquoted.replace("\\\"", "\"")))
-                } else if let Ok(int_val) = trimmed.parse::<i64>() {
-                    Ok(Value::Int(int_val))
-                } else if let Ok(float_val) = trimmed.parse::<f64>() {
-                    Ok(Value::Float(Float64::new(float_val)))
-                } else if trimmed == "{}" {
-                    // Empty object
-                    let obj_id = self.alloc_object_with_prototype(None)?;
-                    Ok(Value::Object(obj_id))
-                } else {
-                    Ok(Value::Undefined) // Parse error
-                }
-            }
+            // Removed duplicate JSONStringify - implementation at line 8242 has better JS compliance and correct argument handling
+            // Removed duplicate JSONParse - implementation at line 8286 has better JS compliance and correct argument handling
 
             // builtin:ArrayPrototypeFind - Duplicate removed, consolidated to line 12438
 

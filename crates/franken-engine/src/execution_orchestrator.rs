@@ -3229,6 +3229,7 @@ mod tests {
                 assert_eq!(requested_ms, 2);
                 assert_eq!(remaining_ms, 1);
             }
+            // SAFETY: Test validates orchestrator error for cell budget exhaustion
             other => panic!("unexpected error: {other:?}"),
         }
     }

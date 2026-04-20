@@ -1499,6 +1499,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "scenario_count_matches")
+            // SAFETY: Test-only unwrap expecting scenario_count_matches check to be present in verification report
             .unwrap();
         assert!(!failed.passed);
         assert_eq!(failed.error_code.as_deref(), Some(CODE_CONTAINMENT_COUNTS));

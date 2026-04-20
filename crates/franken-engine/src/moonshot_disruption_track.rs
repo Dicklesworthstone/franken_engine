@@ -500,7 +500,16 @@ pub fn execute_disruption_track(
     let mut execution = DisruptionTrackExecution::new(epoch, environment_fingerprint);
 
     // Record all gate results
-    for gate_result in gate_evidence.values() {
+    for (gate_id, gate_result) in gate_evidence {
+        if *gate_id != gate_result.gate_id {
+            return Err(DisruptionTrackError::InvalidEvidence {
+                gate_id: gate_id.bead_id().to_string(),
+                detail: format!(
+                    "gate evidence key does not match result gate id `{}`",
+                    gate_result.gate_id.bead_id()
+                ),
+            });
+        }
         execution.record_gate_result(gate_result.clone());
     }
 

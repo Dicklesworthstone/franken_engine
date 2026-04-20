@@ -181,3 +181,28 @@ fn passing_gate_missing_artifact_hash_is_rejected() {
         }
     );
 }
+
+#[test]
+fn mismatched_gate_key_and_result_id_is_rejected() {
+    let mut evidence = passing_evidence();
+    evidence.insert(
+        MoonshotGateId::NodeBunComparisonHarness,
+        passing_result(MoonshotGateId::DisruptionScorecard),
+    );
+
+    let error = execute_disruption_track(
+        &evidence,
+        &ScorecardSchema::default_schema(),
+        SecurityEpoch::from_raw(42),
+        "integration-env".to_string(),
+    )
+    .expect_err("gate evidence keys must match embedded gate result IDs");
+
+    assert_eq!(
+        error,
+        DisruptionTrackError::InvalidEvidence {
+            gate_id: "bd-1ze".to_string(),
+            detail: "gate evidence key does not match result gate id `bd-6pk`".to_string(),
+        }
+    );
+}

@@ -1646,7 +1646,11 @@ mod tests {
         let input = simple_input(vec![simple_spec("frag1", vec![])]);
         let result = a.analyze(&input).unwrap();
 
+        // SAFETY: TransportAnalysisResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TransportAnalysisResult,
+        // so from_str back to TransportAnalysisResult cannot fail (valid format + matching schema).
         let deserialized: TransportAnalysisResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result.outcome, deserialized.outcome);
         assert_eq!(result.result_hash, deserialized.result_hash);
@@ -1655,7 +1659,11 @@ mod tests {
     #[test]
     fn test_ledger_serde() {
         let ledger = SemanticTransportLedger::new(42);
+        // SAFETY: SemanticTransportLedger derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ledger).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SemanticTransportLedger,
+        // so from_str back to SemanticTransportLedger cannot fail (valid format + matching schema).
         let deserialized: SemanticTransportLedger = serde_json::from_str(&json).unwrap();
         assert_eq!(ledger.compiled_epoch, deserialized.compiled_epoch);
     }
@@ -1663,7 +1671,11 @@ mod tests {
     #[test]
     fn test_config_serde() {
         let config = TransportAnalyzerConfig::default();
+        // SAFETY: TransportAnalyzerConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TransportAnalyzerConfig,
+        // so from_str back to TransportAnalyzerConfig cannot fail (valid format + matching schema).
         let deserialized: TransportAnalyzerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.max_entries, deserialized.max_entries);
     }
@@ -2407,7 +2419,11 @@ mod tests {
             ContractDomain::Portal,
         ];
         for d in &domains {
+            // SAFETY: ContractDomain derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(d).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ContractDomain,
+            // so from_str back to ContractDomain cannot fail (valid format + matching schema).
             let back: ContractDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(*d, back);
         }
@@ -2520,7 +2536,11 @@ mod tests {
     #[test]
     fn test_behavioral_delta_serde() {
         let d = delta(500_000, true);
+        // SAFETY: BehavioralDelta derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BehavioralDelta,
+        // so from_str back to BehavioralDelta cannot fail (valid format + matching schema).
         let back: BehavioralDelta = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }

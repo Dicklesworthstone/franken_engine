@@ -751,6 +751,7 @@ mod tests {
         if let TaxonomyValidationError::MissingRequiredField { field } = &err {
             assert!(field.contains("timezone"));
         } else {
+            // SAFETY: Test-only panic to validate that TaxonomyValidationError matches expected MissingRequiredField variant
             panic!("expected MissingRequiredField");
         }
     }

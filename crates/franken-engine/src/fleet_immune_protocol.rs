@@ -1374,6 +1374,7 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         let packet = test_evidence("remote-1", "ext-1", 1, 500_000);
 
+        // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
         state.process_evidence(&packet).unwrap();
         assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
     }
@@ -1383,6 +1384,7 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
 
         let p1 = test_evidence("remote-1", "ext-1", 1, 500_000);
+        // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
         state.process_evidence(&p1).unwrap();
 
         // Same node, lower sequence → replay.
@@ -1396,6 +1398,7 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         let intent = test_intent("remote-1", "ext-1", ContainmentAction::Sandbox, 1, 1);
 
+        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
         state.process_intent(&intent).unwrap();
         assert_eq!(state.pending_intents.len(), 1);
     }
@@ -1404,6 +1407,7 @@ mod tests {
     fn state_resolve_intents() {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
 
+        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
         state
             .process_intent(&test_intent(
                 "node-a",
@@ -1413,6 +1417,7 @@ mod tests {
                 1,
             ))
             .unwrap();
+        // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
         state
             .process_intent(&test_intent(
                 "node-b",
@@ -1423,6 +1428,7 @@ mod tests {
             ))
             .unwrap();
 
+        // SAFETY: Test resolves valid extension intents; resolve_intents succeeds in controlled test environment.
         let winner = state.resolve_intents("ext-1").unwrap();
         assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
     }
@@ -1432,6 +1438,7 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         let hb = test_heartbeat("remote-1", 1, 5_000_000_000);
 
+        // SAFETY: Test processes valid heartbeat; process_heartbeat succeeds in controlled test environment.
         state.process_heartbeat(&hb).unwrap();
         assert_eq!(state.health.known_node_count(), 1);
     }
@@ -1477,7 +1484,9 @@ mod tests {
     #[test]
     fn evidence_packet_serde_round_trip() {
         let packet = test_evidence("node-1", "ext-1", 1, 500_000);
+        // SAFETY: Test serializes known-valid EvidencePacket; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&packet).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let decoded: EvidencePacket = serde_json::from_str(&json).unwrap();
         assert_eq!(packet, decoded);
     }
@@ -1485,7 +1494,9 @@ mod tests {
     #[test]
     fn containment_intent_serde_round_trip() {
         let intent = test_intent("node-1", "ext-1", ContainmentAction::Quarantine, 1, 1);
+        // SAFETY: Test serializes known-valid ContainmentIntent; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&intent).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let decoded: ContainmentIntent = serde_json::from_str(&json).unwrap();
         assert_eq!(intent, decoded);
     }

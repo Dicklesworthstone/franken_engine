@@ -7292,6 +7292,7 @@ mod tests {
                 assert!(detail.contains("artifact_id=sha256:"));
                 assert!(detail.contains("denied_flow_count=1"));
             }
+            // SAFETY: Test validates lowering pipeline error type matches expected variant
             other => panic!("unexpected error variant: {other:?}"),
         }
     }

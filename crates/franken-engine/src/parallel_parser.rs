@@ -2254,7 +2254,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = default_config();
+        // SAFETY: Test-only unwrap for serde serialization of known valid config struct
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
         let back: ParallelConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }

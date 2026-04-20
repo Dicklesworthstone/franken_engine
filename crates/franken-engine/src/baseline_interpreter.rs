@@ -21658,9 +21658,12 @@ mod tests {
     fn string_prototype_char_code_at_out_of_bounds() {
         // Test charCodeAt with out-of-bounds index returns NaN
         let mut core = BaselineInterpreter::new();
+        // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
         core.set_register(0, Value::Str("Hi".to_string())).unwrap();
+        // SAFETY: Register 1 is valid in a fresh interpreter and the out-of-bounds index is intentional.
         core.set_register(1, Value::Int(5)).unwrap(); // index 5 (out of bounds)
 
+        // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 184, // StringPrototypeCharCodeAt
@@ -21670,6 +21673,7 @@ mod tests {
             Ir3Instruction::Halt,
         ])).unwrap();
 
+        // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
         let result = core.read_register(2).unwrap();
         if let Value::Float(f) = result {
             assert!(f.inner().is_nan(), "Out-of-bounds charCodeAt should return NaN");

@@ -1618,7 +1618,11 @@ mod tests {
         assert!(result.trigger_fired);
         assert!(monitor.is_demotion_triggered());
 
+        // SAFETY: Test verifies trigger_fired and is_demotion_triggered are true,
+        // so evaluation field must be Some (demotion was triggered).
         let eval = result.evaluation.unwrap();
+        // SAFETY: Test verifies performance breach demotion was triggered,
+        // so reason field must be Some (evaluation exists with specific reason).
         match eval.reason.unwrap() {
             DemotionReason::PerformanceBreach {
                 metric_name,

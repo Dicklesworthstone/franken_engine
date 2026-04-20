@@ -842,7 +842,11 @@ mod tests {
             &RuntimeConfig::default(),
             SecurityEpoch::from_raw(1),
         );
-        assert_eq!(adapter.diagnostic_records(), context.diagnostics.as_slice());
+        let adapter_diagnostics = adapter.diagnostic_records();
+        assert_eq!(
+            adapter_diagnostics.as_slice(),
+            context.diagnostics.as_slice()
+        );
     }
 
     #[test]

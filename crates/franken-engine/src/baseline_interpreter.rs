@@ -13100,32 +13100,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringFromCharCode" => {
-                // String.fromCharCode(...charCodes) implementation
-                let mut result = String::new();
-
-                // Process all arguments as character codes
-                for i in 1..args.count {
-                    let code_val = self.read_reg(args.start + i)?;
-                    let code = match code_val {
-                        Value::Int(n) => (n as u32) & 0xFFFF, // Mask to 16 bits like JavaScript
-                        Value::Float(f) => (f.inner() as u32) & 0xFFFF,
-                        Value::Bool(true) => 1,
-                        Value::Bool(false) => 0,
-                        Value::Null => 0,
-                        _ => 0, // undefined and others default to 0
-                    };
-
-                    // Convert code to char if it's a valid Unicode code point
-                    if let Some(ch) = std::char::from_u32(code) {
-                        result.push(ch);
-                    } else {
-                        result.push('\u{FFFD}'); // Replacement character for invalid codes
-                    }
-                }
-
-                Ok(Value::Str(result))
-            }
+            // Removed duplicate StringFromCharCode - implementation at line ~10858 is identical
 
             "builtin:MathAcos" => {
                 // Math.acos(x) implementation

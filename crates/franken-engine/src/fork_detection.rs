@@ -779,6 +779,8 @@ impl ForkDetector {
 
     /// Get unacknowledged incidents for a zone.
     pub fn unacknowledged_incidents(&self, zone: &str) -> Vec<&ForkIncidentReport> {
+        // SAFETY: Caller must ensure zone exists in self.zones before calling this method.
+        // Function contract requires valid zone identifier from zones().
         self.zones
             .get(zone)
             .map(|z| z.incidents.iter().filter(|i| !i.acknowledged).collect())

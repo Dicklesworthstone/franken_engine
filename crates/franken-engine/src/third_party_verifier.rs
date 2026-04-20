@@ -1517,6 +1517,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "passed_count_matches")
+            // SAFETY: Test-only unwrap expecting passed_count_matches check to be present in verification report
             .unwrap();
         assert!(!failed.passed);
     }

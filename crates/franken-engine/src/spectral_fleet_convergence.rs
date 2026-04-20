@@ -841,8 +841,11 @@ mod tests {
     #[test]
     fn disconnected_graph_detected() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
+        // SAFETY: Test with valid node IDs should succeed topology creation
         let mut topo = GossipTopology::new(node_ids).unwrap();
+        // SAFETY: Test with valid node indices should succeed edge addition
         topo.add_edge(0, 1, MILLION).unwrap();
+        // SAFETY: Test with valid node indices should succeed edge addition
         topo.add_edge(2, 3, MILLION).unwrap();
         // 0-1 and 2-3 are disconnected.
         assert!(!topo.is_connected());

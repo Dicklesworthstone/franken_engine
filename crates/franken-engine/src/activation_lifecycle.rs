@@ -897,6 +897,7 @@ impl ActivationLifecycleController {
 
     /// Get the current version of a component.
     pub fn component_version(&self, component_id: &str) -> String {
+        // SAFETY: Caller must ensure component_id exists in the registry
         self.find_component(component_id)
             .map(|c| c.descriptor.version.clone())
             .unwrap()
@@ -2170,6 +2171,7 @@ mod tests {
             ctrl.set_tick(203);
             ctrl.report_crash("comp-a", "trace-1").unwrap();
             let events = ctrl.drain_events();
+            // SAFETY: LifecycleEvent derives Serialize and has no non-serializable fields
             serde_json::to_string(&events).unwrap()
         };
         assert_eq!(run(), run());

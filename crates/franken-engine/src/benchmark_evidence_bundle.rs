@@ -585,6 +585,8 @@ impl EvidenceBundle {
         for h in &verdict_hashes {
             hasher.update(h.as_bytes());
         }
+        // SAFETY: BundleStatus derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         hasher.update(serde_json::to_string(&self.status).unwrap().as_bytes());
         if let Some(ref env) = self.reference_environment {
             hasher.update(env.snapshot_hash.as_bytes());
@@ -1139,14 +1141,17 @@ mod tests {
 
     fn populated_bundle() -> EvidenceBundle {
         let mut bundle = EvidenceBundle::new("test-bundle".to_string(), epoch(5));
+        // SAFETY: Test helper with valid provenance should succeed
         bundle
             .add_provenance(test_prov("wk-1", WorkloadCategory::Micro))
             .unwrap();
         for i in 0..6 {
+            // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r-{i}"), "wk-1", 1000 + i * 10, i as u32))
                 .unwrap();
         }
+        // SAFETY: Test helper with valid parity verdict should succeed
         bundle
             .add_parity_verdict(test_parity("wk-1", ParityTarget::NodeJs, 1_050_000))
             .unwrap();
@@ -1201,7 +1206,11 @@ mod tests {
     #[test]
     fn workload_category_serde_roundtrip() {
         for &cat in WorkloadCategory::ALL {
+            // SAFETY: WorkloadCategory derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&cat).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid WorkloadCategory,
+            // so from_str back to WorkloadCategory cannot fail (valid format + matching schema).
             let back: WorkloadCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(cat, back);
         }

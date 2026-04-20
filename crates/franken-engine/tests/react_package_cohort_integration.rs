@@ -1321,3 +1321,219 @@ fn manifest_hash_varies_with_different_compatibility_patterns() {
     let _ = fs::remove_dir_all(&temp_dir1);
     let _ = fs::remove_dir_all(&temp_dir2);
 }
+
+// ---------------------------------------------------------------------------
+// Ecosystem Compatibility Gate Integration Tests (bd-1lsy.5.7.1.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn contract_satisfied_gates_on_ecosystem_compatibility() {
+    let temp_dir = unique_temp_dir("cohort_compat_gate_test");
+
+    // Create a minimal cohort matrix
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "test-pkg".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    // Write cohort bundle
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read the manifest
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let manifest: ReactCohortRunManifest = serde_json::from_str(&manifest_content).unwrap();
+
+    // Verify manifest includes ecosystem compatibility fields
+    assert!(
+        manifest.compat_gate_passed,
+        "Normal cohort should have compat_gate_passed=true"
+    );
+
+    // contract_satisfied should be true when both cohort validation AND ecosystem compatibility pass
+    assert!(
+        manifest.contract_satisfied,
+        "contract_satisfied should be true when both cohort and ecosystem gates pass"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn manifest_exposes_ecosystem_compatibility_verdict() {
+    let temp_dir = unique_temp_dir("cohort_compat_verdict_test");
+
+    // Create cohort and write bundle
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "verdict-test-pkg".to_string(),
+        version: "2.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::ESModule,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read the manifest and verify ecosystem compatibility fields are exposed
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let manifest: ReactCohortRunManifest = serde_json::from_str(&manifest_content).unwrap();
+
+    // Verify the manifest explicitly exposes ecosystem compatibility verdict
+    assert!(
+        manifest.compat_gate_passed,
+        "Manifest should expose ecosystem compatibility gate verdict"
+    );
+
+    // Verify it's included in JSON serialization
+    let parsed: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+    assert!(
+        parsed.get("compat_gate_passed").is_some(),
+        "Manifest JSON should include compat_gate_passed field"
+    );
+    assert_eq!(
+        parsed["compat_gate_passed"], true,
+        "compat_gate_passed should be true for valid cohort"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn ecosystem_gate_failure_fails_contract() {
+    use std::process::Command;
+    let temp_dir = unique_temp_dir("cohort_gate_failure_test");
+
+    // Create cohort matrix
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "gate-failure-test".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    // Write initial bundle
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Simulate ecosystem compatibility report failure by modifying the report
+    let compat_report_path = temp_dir.join("react_ecosystem_compat_report.json");
+    let original_report_content = fs::read_to_string(&compat_report_path).unwrap();
+    let mut report: serde_json::Value = serde_json::from_str(&original_report_content).unwrap();
+
+    // Force gate_passed to false to simulate ecosystem compatibility failure
+    report["gate_passed"] = false.into();
+    fs::write(
+        &compat_report_path,
+        serde_json::to_string_pretty(&report).unwrap(),
+    )
+    .unwrap();
+
+    // Re-generate bundle with failing ecosystem compatibility
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Read the new manifest
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let manifest: ReactCohortRunManifest = serde_json::from_str(&manifest_content).unwrap();
+
+    // Verify that ecosystem gate failure causes contract failure
+    assert!(
+        !manifest.compat_gate_passed,
+        "compat_gate_passed should be false when ecosystem compatibility fails"
+    );
+    assert!(
+        !manifest.contract_satisfied,
+        "contract_satisfied should be false when ecosystem compatibility gate fails"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn cohort_suite_script_gates_on_compatibility_verdict() {
+    let temp_dir = unique_temp_dir("suite_script_gate_test");
+
+    // Create a cohort that should pass
+    let mut matrix = CohortMatrix::new(test_epoch());
+    let package = ReactPackage {
+        name: "script-test-pkg".to_string(),
+        version: "1.0.0".to_string(),
+        subpath_entries: vec![SubpathEntry {
+            subpath: ".".to_string(),
+            format: ModuleFormat::CommonJs,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    matrix.add_package(package).unwrap();
+
+    // Write bundle
+    write_react_package_cohort_bundle(&matrix, &temp_dir).unwrap();
+
+    // Test that the script passes when both gates pass
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(&format!(
+            "cd {} && jq -e '.contract_satisfied == true and .compat_gate_passed == true' run_manifest.json",
+            temp_dir.display()
+        ))
+        .output()
+        .expect("Failed to execute jq check");
+
+    assert!(
+        output.status.success(),
+        "Script check should pass when both contract_satisfied and compat_gate_passed are true"
+    );
+
+    // Simulate gate failure by modifying manifest
+    let manifest_path = temp_dir.join("run_manifest.json");
+    let manifest_content = fs::read_to_string(&manifest_path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+
+    manifest["compat_gate_passed"] = false.into();
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    // Test that the script fails when ecosystem compatibility fails
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(&format!(
+            "cd {} && jq -e '.contract_satisfied == true and .compat_gate_passed == true' run_manifest.json",
+            temp_dir.display()
+        ))
+        .output()
+        .expect("Failed to execute jq check");
+
+    assert!(
+        !output.status.success(),
+        "Script check should fail when compat_gate_passed is false"
+    );
+
+    // Cleanup
+    let _ = fs::remove_dir_all(&temp_dir);
+}

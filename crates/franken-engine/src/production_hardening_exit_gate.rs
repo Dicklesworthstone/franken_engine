@@ -1343,9 +1343,8 @@ impl ProductionHardeningGateExecution {
                 }
                 ValidationStatus::Pending => {
                     failures.push(format!(
-                        "Rollout validation (PENDING): {} - {} phases required",
-                        format!("{:?}", rollout.stage),
-                        rollout.metrics_collection_duration_mins
+                        "Rollout validation (PENDING): {:?} - {} phases required",
+                        rollout.stage, rollout.metrics_collection_duration_mins
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
@@ -1360,9 +1359,8 @@ impl ProductionHardeningGateExecution {
                 }
                 ValidationStatus::Pending => {
                     failures.push(format!(
-                        "Fault injection drill (PENDING): {} - {} scenarios required",
-                        format!("{:?}", drill.fault_type),
-                        drill.duration_mins
+                        "Fault injection drill (PENDING): {:?} - {} scenarios required",
+                        drill.fault_type, drill.duration_mins
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending

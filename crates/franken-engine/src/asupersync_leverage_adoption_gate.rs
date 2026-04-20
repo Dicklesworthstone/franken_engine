@@ -309,27 +309,6 @@ fn mandatory_child_artifacts(
     ]
 }
 
-fn child_artifact(
-    bead_id: &str,
-    title: &str,
-    artifact_id: &str,
-    artifact_path_hint: &str,
-    impact: &str,
-) -> MandatoryChildArtifact {
-    MandatoryChildArtifact {
-        bead_id: bead_id.to_string(),
-        title: title.to_string(),
-        artifact_id: artifact_id.to_string(),
-        artifact_path_hint: artifact_path_hint.to_string(),
-        status: GateArtifactStatus::Satisfied,
-        stop_go_code: format!("{artifact_id}.satisfied"),
-        user_impact: impact.to_string(),
-        operator_impact: format!("{artifact_id} is linked in the final adoption record."),
-        next_action: "Keep artifact linked in run_manifest.json and decision_record.json."
-            .to_string(),
-    }
-}
-
 /// Validates a child artifact by checking if the artifact file exists and contains valid JSON.
 /// Regression fix for bd-2yez8: fail closed on missing/invalid artifacts instead of hardcoding Satisfied.
 fn validate_child_artifact(

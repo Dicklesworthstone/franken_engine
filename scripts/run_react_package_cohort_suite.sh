@@ -161,6 +161,14 @@ test -f "$run_dir/events.jsonl"
 test -f "$run_dir/commands.txt"
 test -f "$run_dir/trace_ids.json"
 
+# Fail-closed gate: verify both contract and ecosystem compatibility passed
+if ! jq -e '.contract_satisfied == true and .compat_gate_passed == true' "$run_dir/run_manifest.json" >/dev/null; then
+  echo "Error: React package cohort gate failed - either contract unsatisfied or ecosystem compatibility failed"
+  echo "Check run_manifest.json for details:"
+  jq '.contract_satisfied, .compat_gate_passed' "$run_dir/run_manifest.json"
+  exit 3
+fi
+
 run_mode
 
 printf 'react package cohort artifacts: %s\n' "$run_dir"

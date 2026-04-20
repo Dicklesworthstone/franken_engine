@@ -388,7 +388,7 @@ impl GapMatrix {
 
         // Assessment count to prevent collection boundary confusion
         hasher.update(b"ASSESSMENTS:");
-        hasher.update(&(assessments.len() as u64).to_be_bytes());
+        hasher.update((assessments.len() as u64).to_be_bytes());
 
         for a in &assessments {
             hasher.update(b"ASSESSMENT:");
@@ -398,7 +398,7 @@ impl GapMatrix {
 
             // Length-prefixed rationale to prevent boundary confusion
             hasher.update(b"|RATIONALE:");
-            hasher.update(&(a.rationale.len() as u64).to_be_bytes());
+            hasher.update((a.rationale.len() as u64).to_be_bytes());
             hasher.update(a.rationale.as_bytes());
 
             let mut sorted_cells: Vec<_> = a.cells.iter().collect();
@@ -410,7 +410,7 @@ impl GapMatrix {
 
             // Cell count to prevent cell boundary confusion
             hasher.update(b"|CELLS:");
-            hasher.update(&(sorted_cells.len() as u64).to_be_bytes());
+            hasher.update((sorted_cells.len() as u64).to_be_bytes());
 
             for c in &sorted_cells {
                 hasher.update(b"CELL:");
@@ -422,7 +422,7 @@ impl GapMatrix {
 
                 // Length-prefixed notes to prevent boundary confusion
                 hasher.update(b"|NOTES:");
-                hasher.update(&(c.notes.len() as u64).to_be_bytes());
+                hasher.update((c.notes.len() as u64).to_be_bytes());
                 hasher.update(c.notes.as_bytes());
             }
         }

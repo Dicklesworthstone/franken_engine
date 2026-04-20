@@ -1811,14 +1811,17 @@ mod tests {
     #[test]
     fn stress_interleaved_multi_domain_enrichment() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Registering a fresh ExtensionHeap domain with a positive budget is valid.
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             50000,
         )
         .unwrap();
+        // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 50000)
             .unwrap();
+        // SAFETY: Registering a fresh ScratchBuffer domain with a positive budget is valid.
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
@@ -1833,12 +1836,14 @@ mod tests {
         ];
         for i in 0u64..300 {
             let domain = domains[(i as usize) % 3];
+            // SAFETY: 100 allocations of 10 bytes per registered domain stay within each budget.
             reg.allocate(domain, 10).unwrap();
         }
         assert_eq!(reg.allocation_sequence(), 300);
         // Each domain got 100 allocations of 10 bytes
         assert_eq!(reg.total_used(), 3000);
         for domain in &domains {
+            // SAFETY: Each domain in domains was registered before the allocation loop.
             assert_eq!(reg.get(domain).unwrap().budget.used_bytes, 1000);
         }
     }

@@ -2428,7 +2428,9 @@ mod tests {
     #[test]
     fn compatibility_context_serde_round_trip() {
         let ctx = context();
+        // SAFETY: CompatibilityContext derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ctx).unwrap();
+        // SAFETY: JSON was just produced by valid CompatibilityContext serialization
         let back: CompatibilityContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, back);
     }
@@ -2441,7 +2443,9 @@ mod tests {
             CompatibilityMode::Native,
             "ok",
         );
+        // SAFETY: CompatibilityObservation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&obs).unwrap();
+        // SAFETY: JSON was just produced by valid CompatibilityObservation serialization
         let back: CompatibilityObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(obs, back);
     }
@@ -2453,13 +2457,16 @@ mod tests {
             message: "case not found".to_string(),
             event: None,
         };
+        // SAFETY: CompatibilityMatrixError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by valid CompatibilityMatrixError serialization
         let back: CompatibilityMatrixError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
 
     #[test]
     fn required_waiver_ids_empty_for_no_divergences() {
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let matrix = ModuleCompatibilityMatrix::from_entries(
             "v1".to_string(),
             vec![valid_entry("case-no-div")],
@@ -2493,6 +2500,7 @@ mod tests {
         });
         entry_b.explicit_shims = vec![valid_shim(CompatibilityMode::Native)];
 
+        // SAFETY: Test-only unwrap expecting valid entries to create matrix successfully
         let matrix =
             ModuleCompatibilityMatrix::from_entries("v1".to_string(), vec![entry_a, entry_b])
                 .unwrap();
@@ -2503,6 +2511,7 @@ mod tests {
 
     #[test]
     fn canonical_hash_stable_across_calls() {
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let matrix = ModuleCompatibilityMatrix::from_entries(
             "v1".to_string(),
             vec![valid_entry("case-hash")],
@@ -2515,6 +2524,7 @@ mod tests {
 
     #[test]
     fn entries_returns_all_added() {
+        // SAFETY: Test-only unwrap expecting valid entries to create matrix successfully
         let matrix = ModuleCompatibilityMatrix::from_entries(
             "v1".to_string(),
             vec![valid_entry("a"), valid_entry("b"), valid_entry("c")],
@@ -2576,6 +2586,7 @@ mod tests {
             migration_guidance: "switch to node_compat while migrating".to_string(),
         });
 
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         matrix
             .validate_with_waivers(&BTreeSet::from(["waiver-category".to_string()]), &context())
@@ -2587,6 +2598,7 @@ mod tests {
             CompatibilityMode::Native,
             "native-strict",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert_eq!(
             outcome.divergence_category,

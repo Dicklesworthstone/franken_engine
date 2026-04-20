@@ -3352,7 +3352,9 @@ mod tests {
         });
         ir1.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
 
+        // SAFETY: Ir1Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir1).unwrap();
+        // SAFETY: JSON was just produced by valid Ir1Module serialization
         let restored: Ir1Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir1, restored);
     }
@@ -3475,7 +3477,9 @@ mod tests {
             required_capability: None,
             flow: None,
         });
+        // SAFETY: Ir2Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir2).unwrap();
+        // SAFETY: JSON was just produced by valid Ir2Module serialization
         let restored: Ir2Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir2, restored);
     }
@@ -3538,7 +3542,9 @@ mod tests {
             validity_epoch: 42,
             rollback_token: ContentHash::compute(b"baseline"),
         });
+        // SAFETY: Ir3Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir3).unwrap();
+        // SAFETY: JSON was just produced by valid Ir3Module serialization
         let restored: Ir3Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir3, restored);
     }
@@ -3668,7 +3674,9 @@ mod tests {
         ir3.constant_pool.push("hello".to_string());
         ir3.required_capabilities
             .push(CapabilityTag("fs:read".to_string()));
+        // SAFETY: Ir3Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir3).unwrap();
+        // SAFETY: JSON was just produced by valid Ir3Module serialization
         let restored: Ir3Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir3, restored);
     }
@@ -3716,7 +3724,9 @@ mod tests {
         let mut ir4 = Ir4Module::new(ir3_hash, "test.js");
         ir4.outcome = ExecutionOutcome::Exception;
         ir4.active_specialization_ids.push("spec-1".to_string());
+        // SAFETY: Ir4Module derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ir4).unwrap();
+        // SAFETY: JSON was just produced by valid Ir4Module serialization
         let restored: Ir4Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir4, restored);
     }

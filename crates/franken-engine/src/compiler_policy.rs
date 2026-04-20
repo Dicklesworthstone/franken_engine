@@ -675,6 +675,7 @@ mod tests {
     }
 
     fn make_proof_id(tag: &str) -> EngineObjectId {
+        // SAFETY: Test helper with valid object domain, zone, schema, and data should succeed
         derive_id(
             ObjectDomain::PolicyObject,
             "test",
@@ -1284,7 +1285,7 @@ mod tests {
             vec![proof_id],
         );
         engine.evaluate(&region, "trace-1", 1000);
-
+        // SAFETY: Test just called evaluate() which should populate proof inputs
         let inputs = engine.last_applied_proof_inputs().unwrap();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].proof_type, ProofType::CapabilityWitness);
@@ -1471,6 +1472,7 @@ mod tests {
         engine.on_epoch_change(epoch1, epoch2, "trace-ec", 5000);
 
         assert!(engine.events().len() > events_before);
+        // SAFETY: Test just verified events collection is non-empty, so last() returns Some
         let last_event = engine.events().last().unwrap();
         assert_eq!(last_event.event, "epoch_change_invalidation");
         assert_eq!(
@@ -1568,7 +1570,11 @@ mod tests {
             replay_motif_proof("s3", SecurityEpoch::from_raw(3)),
         ];
         for proof in &proofs {
+            // SAFETY: SecurityProof derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(proof).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid SecurityProof,
+            // so from_str back to SecurityProof cannot fail (valid format + matching schema).
             let decoded: SecurityProof = serde_json::from_str(&json).unwrap();
             assert_eq!(proof, &decoded);
         }
@@ -1586,7 +1592,11 @@ mod tests {
                 governance_approved: true,
             },
         );
+        // SAFETY: CompilerPolicyConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CompilerPolicyConfig,
+        // so from_str back to CompilerPolicyConfig cannot fail (valid format + matching schema).
         let decoded: CompilerPolicyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, decoded);
     }
@@ -1605,7 +1615,11 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             timestamp_ns: 999,
         };
+        // SAFETY: SpecializationDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SpecializationDecision,
+        // so from_str back to SpecializationDecision cannot fail (valid format + matching schema).
         let decoded: SpecializationDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, decoded);
     }

@@ -1123,10 +1123,12 @@ impl ConformanceRunner {
             let category = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.category.clone());
+            // SAFETY: Conformance test assumes asset has IFC metadata for flow analysis
             let source_labels = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.source_labels.clone())
                 .unwrap();
+            // SAFETY: Conformance test assumes asset has IFC metadata for flow analysis
             let sink_clearances = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.sink_clearances.clone())
@@ -2222,7 +2224,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
-
+    // SAFETY: Path was just verified to have a parent, so file_name() returns Some
     let mut tmp_name = path.file_name().unwrap().to_owned();
     tmp_name.push(".tmp");
     let tmp = parent.join(tmp_name);

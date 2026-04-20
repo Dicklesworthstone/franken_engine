@@ -11578,6 +11578,7 @@ mod tests {
                 assert_eq!(requested, large_body_size * 8);
                 assert!(requested > limit, "requested should exceed limit");
             }
+            // SAFETY: Test validates allocation budget exceeded error for large allocations
             other => panic!("Expected AllocationBudgetExceeded error, got: {:?}", other),
         }
     }

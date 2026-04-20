@@ -1571,8 +1571,12 @@ mod tests {
     #[test]
     fn lane_id_serde_roundtrip() {
         let lane = LaneId::throughput_profile();
+        // SAFETY: LaneId derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&lane).unwrap();
         assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
+        // SAFETY: JSON was just produced by to_string of a valid LaneId,
+        // so from_str back to LaneId cannot fail (valid format + matching schema).
         let back: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, back);
     }

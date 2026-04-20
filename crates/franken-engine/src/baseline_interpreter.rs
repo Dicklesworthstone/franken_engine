@@ -10805,34 +10805,16 @@ impl InterpreterCore {
             }
 
             "builtin:ArrayPrototypeFindIndex" => {
-                // Array.prototype.findIndex(callback) implementation
-                if args.count < 2 {
-                    return Ok(Value::Int(-1));
-                }
+                // Array.prototype.findIndex(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
+                self.validate_array_callback_args(args, "Array.prototype.findIndex")?;
 
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Int(-1)),
-                    }
-                } else {
-                    return Ok(Value::Int(-1));
-                };
-
-                // For now, simplified implementation without function call support
-                // Return -1 since we can't execute callback functions yet
-                // TODO: Implement function call mechanism for full callback support
-                Ok(Value::Int(-1))
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [1,2,3].findIndex(x => x > 2) should error rather than
+                // silently return wrong values like -1 or first valid index
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.findIndex implementation".to_string(),
+                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and returning index of first element where callback returns truthy".to_string(),
+                })
             }
 
             "builtin:StringPrototypeCharCodeAt" => {
@@ -13375,52 +13357,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeFindIndex" => {
-                // Array.prototype.findIndex(callback[, thisArg]) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Int(-1));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Simplified implementation: find first truthy element
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let is_truthy = match element {
-                                Value::Bool(false) => false,
-                                Value::Int(0) => false,
-                                Value::Float(f) if f.inner() == 0.0 => false,
-                                Value::Str(s) if s.is_empty() => false,
-                                Value::Null | Value::Undefined => false,
-                                _ => true,
-                            };
-                            if is_truthy {
-                                return Ok(Value::Int(i as i64));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Int(-1))
-            }
+            // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
 
             "builtin:ObjectGetOwnPropertyNames" => {
                 // Object.getOwnPropertyNames(obj) implementation
@@ -16146,85 +16083,9 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
+            // builtin:ArrayPrototypeFind - Duplicate removed, consolidated to line 12438
 
-                if args.count < 2 {
-                    return Ok(Value::Undefined); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Undefined); // Callback is not a function
-                }
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: return first element if any exists
-                    // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            return Ok(element.clone());
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined) // No elements found
-            }
-
-            "builtin:ArrayPrototypeFindIndex" => {
-                // Array.prototype.findIndex() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Int(-1)), // Non-objects return -1
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Int(-1)); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Int(-1)); // Callback is not a function
-                }
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: return first valid index if any exists
-                    // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if obj.properties.contains_key(&i.to_string()) {
-                            return Ok(Value::Int(i as i64));
-                        }
-                    }
-                }
-
-                Ok(Value::Int(-1)) // No elements found
-            }
+            // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
 
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent() implementation using shared UTF-8 percent codec

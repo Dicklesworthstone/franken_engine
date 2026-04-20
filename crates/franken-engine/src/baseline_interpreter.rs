@@ -9935,43 +9935,7 @@ impl InterpreterCore {
                     Ok(Value::Undefined)
                 }
             }
-            "builtin:StringPrototypeSearch" => {
-                // String.prototype.search(regexp) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Int(-1));
-                }
-
-                // Get the this value (should be a string)
-                let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Int(-1)),
-                };
-
-                // Get pattern (simplified - treat as literal string)
-                let pattern_val = self.read_reg(args.start + 1)?;
-                let pattern_str = match pattern_val {
-                    Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Int(-1)),
-                };
-
-                // Find first occurrence and return index
-                if let Some(index) = this_str.find(&pattern_str) {
-                    Ok(Value::Int(index as i64))
-                } else {
-                    Ok(Value::Int(-1))
-                }
-            }
+            // Removed duplicate StringPrototypeSearch - implementation at line ~13482 has better JS fallbacks
             "builtin:ArrayPrototypeSome" => {
                 // Array.prototype.some(callback[, thisArg]) implementation (simplified)
                 if args.count == 0 {

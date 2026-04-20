@@ -156,6 +156,7 @@ impl SchedulerAutomaton {
             self.states.len(),
             self.transitions.len()
         );
+        // SAFETY: derive_id cannot fail with valid object domain, zone, schema, and data
         derive_id(
             ObjectDomain::EvidenceRecord,
             "invariants",

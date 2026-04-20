@@ -1851,10 +1851,13 @@ mod tests {
     #[test]
     fn budget_utilization_midpoint_enrichment() {
         let mut b = DomainBudget::new(200);
+        // SAFETY: Reserving 50 bytes from a 200-byte budget is within capacity.
         b.try_reserve(50).unwrap();
         assert!((b.utilization() - 0.25).abs() < f64::EPSILON);
+        // SAFETY: Reserving another 50 bytes keeps used bytes within the 200-byte budget.
         b.try_reserve(50).unwrap();
         assert!((b.utilization() - 0.50).abs() < f64::EPSILON);
+        // SAFETY: Reserving a third 50-byte chunk keeps used bytes within capacity.
         b.try_reserve(50).unwrap();
         assert!((b.utilization() - 0.75).abs() < f64::EPSILON);
     }

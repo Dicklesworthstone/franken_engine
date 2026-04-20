@@ -2462,9 +2462,13 @@ mod tests {
     fn simulated_seqlock_read_after_multiple_writes() {
         let policy = accepted_policy(3);
         let mut seqlock = SimulatedSeqlock::new("v1");
+        // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock.begin_write().unwrap();
+        // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock.commit_write("v2").unwrap();
+        // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock.begin_write().unwrap();
+        // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock.commit_write("v3").unwrap();
 
         let plan = [ReadInterference::Stable];

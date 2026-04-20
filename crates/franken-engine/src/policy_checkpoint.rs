@@ -644,6 +644,7 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
+        // SAFETY: Test helper unwrap, valid 32-byte array for signing key
         SigningKey::from_bytes([seed; 32]).unwrap()
     }
 

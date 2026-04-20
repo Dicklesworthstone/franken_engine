@@ -2701,12 +2701,17 @@ mod tests {
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
 
+        // SAFETY: proxy just allocated on heap, get() succeeds for valid ID
         let obj = heap.get(proxy).unwrap();
         assert!(obj.as_proxy().is_some());
+        // SAFETY: test just verified obj.as_proxy().is_some(), unwrap() succeeds
         assert!(!obj.as_proxy().unwrap().is_revoked());
 
+        // SAFETY: proxy is valid and not yet revoked, revoke_proxy() succeeds
         heap.revoke_proxy(proxy).unwrap();
+        // SAFETY: proxy still exists after revocation (object remains on heap)
         let obj = heap.get(proxy).unwrap();
+        // SAFETY: object is confirmed proxy from test setup, as_proxy() returns Some
         assert!(obj.as_proxy().unwrap().is_revoked());
     }
 

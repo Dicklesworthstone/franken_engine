@@ -2690,7 +2690,9 @@ mod tests {
             BudgetEventKind::EpochReset,
         ];
         for v in &variants {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: BudgetEventKind = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, v);
         }
@@ -2707,7 +2709,9 @@ mod tests {
             DemotionReason::OperatorOverride,
         ];
         for v in &variants {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: DemotionReason = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, v);
         }

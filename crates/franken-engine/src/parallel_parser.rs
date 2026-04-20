@@ -2380,7 +2380,9 @@ mod tests {
     fn chunk_plan_covers_entire_input() {
         let input = b"line1\nline2\nline3\nline4\nline5\n";
         let plan = compute_chunk_plan(input, 3);
+        // SAFETY: Test setup ensures compute_chunk_plan produces non-empty chunks
         assert_eq!(plan.chunks.first().unwrap().0, 0);
+        // SAFETY: Test setup ensures compute_chunk_plan produces non-empty chunks
         assert_eq!(plan.chunks.last().unwrap().1, input.len() as u64);
         // Chunks are contiguous.
         for w in plan.chunks.windows(2) {
@@ -2405,6 +2407,7 @@ mod tests {
         assert_eq!(plan.chunks.len(), 2);
 
         let split = plan.chunks[0].1 as usize;
+        // SAFETY: Test input is valid UTF-8 JavaScript source code
         let first_chunk = std::str::from_utf8(&source[..split]).unwrap();
         assert!(
             first_chunk.contains("}\n"),
@@ -2664,6 +2667,7 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let output = parse(&input).unwrap();
         // Should attempt parallel and succeed (or fall back).
         assert!(output.token_count > 0);

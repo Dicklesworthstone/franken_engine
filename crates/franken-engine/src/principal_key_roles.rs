@@ -654,6 +654,7 @@ mod tests {
 
     fn make_signing_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Signing, epoch);
+        // SAFETY: Test helper unwrap, derive_role_key produces valid 32-byte array
         SigningKey::from_bytes(derived).unwrap()
     }
 
@@ -664,6 +665,7 @@ mod tests {
 
     fn make_issuance_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Issuance, epoch);
+        // SAFETY: Test helper unwrap, derive_role_key produces valid 32-byte array
         SigningKey::from_bytes(derived).unwrap()
     }
 
@@ -789,6 +791,7 @@ mod tests {
                 epoch,
                 0,
             ))
+            // SAFETY: Test-only unwrap with valid key registration parameters
             .unwrap();
         store
             .register_key(make_role_entry(

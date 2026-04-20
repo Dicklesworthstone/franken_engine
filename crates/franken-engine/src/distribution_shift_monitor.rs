@@ -796,7 +796,9 @@ mod tests {
     #[test]
     fn test_kernel_kind_serde_linear() {
         let k = KernelKind::Linear;
+        // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).unwrap();
+        // SAFETY: JSON was just produced by valid KernelKind serialization
         let back: KernelKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, k);
     }
@@ -804,7 +806,9 @@ mod tests {
     #[test]
     fn test_kernel_kind_serde_polynomial() {
         let k = KernelKind::Polynomial { degree: 3 };
+        // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).unwrap();
+        // SAFETY: JSON was just produced by valid KernelKind serialization
         let back: KernelKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, k);
     }
@@ -814,7 +818,9 @@ mod tests {
         let k = KernelKind::GaussianRbf {
             bandwidth_millionths: 500_000,
         };
+        // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).unwrap();
+        // SAFETY: JSON was just produced by valid KernelKind serialization
         let back: KernelKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, k);
     }

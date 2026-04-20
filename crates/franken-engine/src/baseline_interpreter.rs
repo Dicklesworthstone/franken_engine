@@ -21616,10 +21616,13 @@ mod tests {
         let mut core = BaselineInterpreter::new();
 
         // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
+        // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
         core.set_register(0, Value::Str("😀".to_string())).unwrap();
 
         // Get first surrogate (high surrogate)
+        // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(0)).unwrap();
+        // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 184, // StringPrototypeCharCodeAt
@@ -21629,11 +21632,14 @@ mod tests {
             Ir3Instruction::Halt,
         ])).unwrap();
 
+        // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
         let result1 = core.read_register(2).unwrap();
         assert_eq!(result1, Value::Int(0xD83D), "First UTF-16 code unit should be high surrogate 0xD83D");
 
         // Get second surrogate (low surrogate)
+        // SAFETY: Register 1 remains valid and is overwritten with the second index.
         core.set_register(1, Value::Int(1)).unwrap();
+        // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 184, // StringPrototypeCharCodeAt
@@ -21643,6 +21649,7 @@ mod tests {
             Ir3Instruction::Halt,
         ])).unwrap();
 
+        // SAFETY: StringPrototypeCharCodeAt writes destination register 3 before halt.
         let result2 = core.read_register(3).unwrap();
         assert_eq!(result2, Value::Int(0xDE00), "Second UTF-16 code unit should be low surrogate 0xDE00");
     }

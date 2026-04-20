@@ -15,6 +15,7 @@ env_json="$artifact_dir/env.json"
 manifest_json="$artifact_dir/manifest.json"
 repro_lock="$artifact_dir/repro.lock"
 provenance_json="$artifact_dir/provenance.json"
+hash_validation_error_json="$artifact_dir/deterministic_hash_validation_error.json"
 fixture_catalog="crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json"
 
 # Generate baseline report or fallback to degraded state
@@ -107,6 +108,37 @@ fixture_count="$(jq -r '.fixture_count // 0' "$baseline_json")"
 p50_ns="$(jq -r '.latency.p50_ns // "null"' "$baseline_json")"
 p95_ns="$(jq -r '.latency.p95_ns // "null"' "$baseline_json")"
 p99_ns="$(jq -r '.latency.p99_ns // "null"' "$baseline_json")"
+deterministic_hash_validation="$(jq -r 'if has("deterministic_hash_validation") then .deterministic_hash_validation else "missing" end' "$baseline_json")"
+
+if [[ "$deterministic_hash_validation" != "true" ]]; then
+  jq -n \
+    --arg schema_version "franken-engine.parser-phase0-deterministic-hash-validation-error.v1" \
+    --arg component "parser_phase0_generator" \
+    --arg baseline_path "$baseline_json" \
+    --arg deterministic_hash_validation "$deterministic_hash_validation" \
+    --arg error_code "FE-PARSER-PHASE0-DETERMINISM-0001" \
+    --arg claim_id "claim.parser.scalar_reference_deterministic" \
+    --arg claim_status "rejected" \
+    --arg consumer_action "treat_as_unsupported_evidence" \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      schema_version: $schema_version,
+      generated_at_utc: $generated_at,
+      component: $component,
+      error_code: $error_code,
+      baseline_path: $baseline_path,
+      deterministic_hash_validation: $deterministic_hash_validation,
+      claim: {
+        claim_id: $claim_id,
+        status: $claim_status
+      },
+      consumer_action: $consumer_action,
+      explanation: "parser phase0 artifact generation refuses to publish deterministic evidence when fixture hash validation is not true"
+    }' > "$hash_validation_error_json"
+  echo "parser phase0 deterministic hash validation failed: $deterministic_hash_validation" >&2
+  echo "wrote fail-closed error artifact: $hash_validation_error_json" >&2
+  exit 1
+fi
 
 cat > "$proof_note" <<EOF_MD
 # Parser Phase0 Proof Note
@@ -127,6 +159,7 @@ cat > "$proof_note" <<EOF_MD
 
 - fixture_catalog: $fixture_catalog
 - fixture_count: $fixture_count
+- deterministic_hash_validation: $deterministic_hash_validation
 - canonical fixture hashes pinned in fixture catalog and verified in
   \`crates/franken-engine/tests/parser_phase0_semantic_fixtures.rs\`.
 
@@ -388,7 +421,8 @@ cat > "$manifest_json" <<EOF_MANIFEST
   },
   "validation": {
     "validator": "cargo test -p frankenengine-engine --test parser_trait_ast --test parser_edge_cases --test parser_phase0_semantic_fixtures --test parser_phase0_metamorphic",
-    "error_taxonomy": "ParseErrorCode + FE-REPRO-0001..FE-REPRO-0008"
+    "error_taxonomy": "ParseErrorCode + FE-REPRO-0001..FE-REPRO-0008",
+    "deterministic_hash_validation": true
   },
   "retention": {
     "min_days": 365,

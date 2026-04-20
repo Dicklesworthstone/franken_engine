@@ -91,6 +91,12 @@ fn gate_script() -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+fn generator_script() -> String {
+    let path = repo_root().join("scripts/generate_parser_phase0_artifacts.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 fn replay_script() -> String {
     let path = repo_root().join("scripts/e2e/parser_phase0_artifact_contract_replay.sh");
     fs::read_to_string(&path)
@@ -315,6 +321,38 @@ fn parser_phase0_artifact_contract_rejects_current_placeholder_signatures() {
             sample_placeholder
         ),
         "placeholder sample should be rejected by contract signatures"
+    );
+}
+
+#[test]
+fn parser_phase0_generator_fails_closed_on_failed_deterministic_hash_validation() {
+    let script = generator_script();
+    let guard_pos = script
+        .find("deterministic_hash_validation")
+        .expect("generator must inspect deterministic_hash_validation");
+    let observed_claim_pos = script
+        .find("\"status\": \"observed\"")
+        .expect("generator must still declare observed status only after validation");
+
+    assert!(
+        guard_pos < observed_claim_pos,
+        "deterministic hash validation guard must run before observed claim emission"
+    );
+    assert!(
+        script.contains("[[ \"$deterministic_hash_validation\" != \"true\" ]]"),
+        "generator must reject non-true deterministic_hash_validation"
+    );
+    assert!(
+        script.contains("FE-PARSER-PHASE0-DETERMINISM-0001"),
+        "generator must emit a stable fail-closed error code"
+    );
+    assert!(
+        script.contains("claim_status \"rejected\""),
+        "generator must bind rejected claim status into the error artifact"
+    );
+    assert!(
+        script.contains("exit 1"),
+        "generator must fail artifact generation instead of publishing observed evidence"
     );
 }
 

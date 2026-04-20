@@ -1646,6 +1646,8 @@ mod tests {
                     _ => panic!("expected named attribute"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX element parsing.
+            // Test expects element node type for JSX component expressions.
             _ => panic!("expected element"),
         }
     }

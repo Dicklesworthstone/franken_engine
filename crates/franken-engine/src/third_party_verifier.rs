@@ -2080,7 +2080,9 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
+        // SAFETY: VerifierEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ev).unwrap();
+        // SAFETY: JSON was just produced by valid VerifierEvent serialization
         let back: VerifierEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ev);
     }

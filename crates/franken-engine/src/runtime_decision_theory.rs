@@ -1773,6 +1773,8 @@ mod tests {
         for i in 0..10 {
             cvar.observe(i * MILLION);
         }
+        // SAFETY: Test has observed 10 values which exceeds min_observations (5),
+        // so var() must return Some (sufficient data for VaR calculation).
         let var = cvar.var().unwrap();
         // VaR at 80%: index = floor(10 * 0.8) = 8 → obs[8] = 8M.
         assert_eq!(var, 8 * MILLION);

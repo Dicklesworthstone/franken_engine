@@ -14754,49 +14754,7 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
-            "builtin:ArrayPrototypeReduce" => {
-                // Array.prototype.reduce() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Undefined); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Undefined); // Callback is not a function
-                }
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let _length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: return the initial value or first element
-                    let initial_value = if args.count >= 3 {
-                        self.read_reg(args.start + 2)?
-                    } else {
-                        // Use first element as initial value
-                        obj.properties.get("0").cloned().unwrap_or(Value::Undefined)
-                    };
-
-                    // In a full implementation, we would call the callback for each element
-                    // For now, just return the accumulated value (simplified)
-                    Ok(initial_value)
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
+            // Removed duplicate ArrayPrototypeReduce - implementation at line ~9273 properly fails-closed
 
 
             "builtin:ObjectGetOwnPropertyNames" => {
@@ -23435,6 +23393,50 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypeStartsWith ID should execute");
             assert_eq!(result, Value::Bool(true));
+        }
+    }
+
+    #[test]
+    fn array_prototype_fill_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [209_u32, 251_u32] {
+            let array_id = interpreter
+                .alloc_object_with_prototype(None)
+                .expect("test array allocation should succeed");
+            interpreter
+                .set_object_property(array_id, "length".to_string(), Value::Int(3))
+                .expect("test array length write should succeed");
+            interpreter
+                .set_object_property(array_id, "0".to_string(), Value::Str("a".to_string()))
+                .expect("test array element write should succeed");
+            interpreter
+                .set_object_property(array_id, "1".to_string(), Value::Str("b".to_string()))
+                .expect("test array element write should succeed");
+            interpreter
+                .set_object_property(array_id, "2".to_string(), Value::Str("c".to_string()))
+                .expect("test array element write should succeed");
+            interpreter.registers[0] = Value::Object(array_id);
+            interpreter.registers[1] = Value::Str("x".to_string());
+            interpreter.registers[2] = Value::Int(1);
+            interpreter.registers[3] = Value::Int(3);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:ArrayPrototypeFill".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 4 })
+                .expect("ArrayPrototypeFill ID should execute");
+            assert_eq!(result, Value::Object(array_id));
+
+            let array = interpreter
+                .heap
+                .get(array_id.0 as usize)
+                .expect("filled test array should remain allocated");
+            assert_eq!(array.properties.get("0"), Some(&Value::Str("a".to_string())));
+            assert_eq!(array.properties.get("1"), Some(&Value::Str("x".to_string())));
+            assert_eq!(array.properties.get("2"), Some(&Value::Str("x".to_string())));
         }
     }
 }

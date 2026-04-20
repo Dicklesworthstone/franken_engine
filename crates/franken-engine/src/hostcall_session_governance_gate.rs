@@ -1077,7 +1077,9 @@ mod tests {
     #[test]
     fn conformance_level_serde() {
         for c in ConformanceLevel::ALL {
+            // SAFETY: ConformanceLevel derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(c).unwrap();
+            // SAFETY: JSON was just produced by valid ConformanceLevel serialization
             let back: ConformanceLevel = serde_json::from_str(&json).unwrap();
             assert_eq!(*c, back);
         }
@@ -1100,7 +1102,9 @@ mod tests {
     #[test]
     fn degraded_reason_serde() {
         for r in DegradedModeReason::ALL {
+            // SAFETY: DegradedModeReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(r).unwrap();
+            // SAFETY: JSON was just produced by valid DegradedModeReason serialization
             let back: DegradedModeReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*r, back);
         }

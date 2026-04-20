@@ -485,8 +485,11 @@ mod tests {
 
     fn test_scheduler() -> MonitorScheduler {
         let mut sched = MonitorScheduler::new(test_config());
+        // SAFETY: test helper with valid probe should succeed
         sched.register_probe(health_probe("health-1")).unwrap();
+        // SAFETY: test helper with valid probe should succeed
         sched.register_probe(deep_probe("deep-1")).unwrap();
+        // SAFETY: test helper with valid probe should succeed
         sched
             .register_probe(integrity_probe("integrity-1"))
             .unwrap();
@@ -727,8 +730,11 @@ mod tests {
     #[test]
     fn record_execution_updates_state() {
         let mut sched = test_scheduler();
+        // SAFETY: recording execution for existing probe should succeed
         sched.record_execution("health-1", false).unwrap();
+        // SAFETY: probe lookup for known probe should succeed
         assert!(!sched.probe("health-1").unwrap().last_success);
+        // SAFETY: probe lookup for known probe should succeed
         assert_eq!(sched.probe("health-1").unwrap().execution_count, 1);
     }
 
@@ -812,7 +818,9 @@ mod tests {
                 skip_reason: None,
             }],
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
@@ -828,7 +836,9 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: SchedulerError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
@@ -846,7 +856,9 @@ mod tests {
             execution_count: 7,
             last_success: true,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ProbeState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
     }
@@ -854,7 +866,9 @@ mod tests {
     #[test]
     fn scheduler_config_serde_roundtrip() {
         let config = test_config();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: SchedulerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
@@ -869,7 +883,9 @@ mod tests {
             scheduled: true,
             skip_reason: None,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&dec).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(dec, restored);
     }
@@ -1277,11 +1293,14 @@ mod tests {
         let mut high_info = health_probe("high-info");
         high_info.information_gain_millionths = 900_000; // 0.9
 
+        // SAFETY: registering valid probe should succeed
         sched.register_probe(low_info).unwrap();
+        // SAFETY: registering valid probe should succeed
         sched.register_probe(high_info).unwrap();
 
         let result = sched.schedule(Regime::Normal);
         // high-info should be scheduled, low-info deferred
+        // SAFETY: test setup guarantees high-info probe exists in decisions
         let high = result
             .decisions
             .iter()

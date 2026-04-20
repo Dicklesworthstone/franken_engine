@@ -2289,6 +2289,7 @@ mod tests {
         let mut obj = OrdinaryObject::default();
         // SAFETY: Test creates valid PropertyDescriptor with data property.
         // define_own_property only fails on invariant violations (none expected here).
+        // SAFETY: Test setup with valid property descriptor and key should succeed
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
             .unwrap();
@@ -2448,6 +2449,7 @@ mod tests {
         assert!(!obj.extensible);
         assert!(obj.is_frozen());
         assert!(obj.is_sealed());
+        // SAFETY: Property "x" was defined above, so get_own_property("x") must return Some
         let d = obj.get_own_property(&str_key("x")).unwrap();
         assert!(!d.is_configurable());
         assert!(!d.is_writable());

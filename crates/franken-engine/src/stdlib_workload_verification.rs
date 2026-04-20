@@ -1316,7 +1316,9 @@ mod tests {
             DispatchStrategy::InlinedCallback,
             "test description",
         );
+        // SAFETY: WorkloadScenario derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&scenario).unwrap();
+        // SAFETY: JSON was just produced by valid WorkloadScenario serialization
         let decoded: WorkloadScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(scenario, decoded);
     }

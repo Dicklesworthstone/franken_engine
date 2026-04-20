@@ -24922,4 +24922,158 @@ mod tests {
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Int(50), "charCodeAt on number should coerce to string");
     }
+
+    #[test]
+    fn string_prototype_char_at_basic() {
+        // Test basic charAt functionality with ASCII characters
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Hello".to_string())).unwrap();
+        core.set_register(1, Value::Int(1)).unwrap(); // index 1
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // "Hello"[1] = 'e'
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Str("e".to_string()), "charAt(1) should return 'e'");
+    }
+
+    #[test]
+    fn string_prototype_char_at_utf16_surrogate_pairs() {
+        // Test charAt with UTF-16 surrogate pairs (characters outside BMP)
+        let mut core = BaselineInterpreter::new();
+
+        // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
+        core.set_register(0, Value::Str("😀".to_string())).unwrap();
+
+        // Get first surrogate character (high surrogate)
+        core.set_register(1, Value::Int(0)).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result1 = core.read_register(2).unwrap();
+        if let Value::Str(s) = result1 {
+            // Should be the high surrogate character represented as a string
+            assert_eq!(s.len(), 3, "High surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of high surrogate
+            let utf16_units: Vec<u16> = s.encode_utf16().collect();
+            assert_eq!(utf16_units[0], 0xD83D, "First character should be high surrogate 0xD83D");
+        } else {
+            panic!("Expected Str, got {:?}", result1);
+        }
+
+        // Get second surrogate character (low surrogate)
+        core.set_register(1, Value::Int(1)).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 3,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result2 = core.read_register(3).unwrap();
+        if let Value::Str(s) = result2 {
+            // Should be the low surrogate character represented as a string
+            assert_eq!(s.len(), 3, "Low surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of low surrogate
+            let utf16_units: Vec<u16> = s.encode_utf16().collect();
+            assert_eq!(utf16_units[0], 0xDE00, "Second character should be low surrogate 0xDE00");
+        } else {
+            panic!("Expected Str, got {:?}", result2);
+        }
+    }
+
+    #[test]
+    fn string_prototype_char_at_out_of_bounds() {
+        // Test charAt with out-of-bounds index returns empty string
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Hi".to_string())).unwrap();
+        core.set_register(1, Value::Int(5)).unwrap(); // index 5 (out of bounds)
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Str("".to_string()), "Out-of-bounds charAt should return empty string");
+    }
+
+    #[test]
+    fn string_prototype_char_at_negative_index() {
+        // Test charAt with negative index (should treat as 0)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Test".to_string())).unwrap();
+        core.set_register(1, Value::Int(-1)).unwrap(); // negative index
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // Should return first character 'T'
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Str("T".to_string()), "Negative index should be treated as 0");
+    }
+
+    #[test]
+    fn string_prototype_char_at_no_index() {
+        // Test charAt with no index argument (should default to 0)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("ABC".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 1 }, // no index argument
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // Should return first character 'A'
+        let result = core.read_register(1).unwrap();
+        assert_eq!(result, Value::Str("A".to_string()), "No index should default to 0");
+    }
+
+    #[test]
+    fn string_prototype_char_at_type_coercion() {
+        // Test charAt with non-string values (should coerce to string)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Int(456)).unwrap(); // should become "456"
+        core.set_register(1, Value::Int(2)).unwrap(); // index 2
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 30, // StringPrototypeCharAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // "456"[2] = '6'
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Str("6".to_string()), "charAt on number should coerce to string");
+    }
 }

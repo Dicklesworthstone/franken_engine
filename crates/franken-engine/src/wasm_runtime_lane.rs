@@ -744,10 +744,14 @@ mod tests {
     #[test]
     fn bounded_queue_push_pop() {
         let mut q = BoundedQueue::new(3);
+        // SAFETY: Queue capacity is 3, pushing 1 element cannot exceed capacity.
         q.push(1).unwrap();
+        // SAFETY: Queue capacity is 3, pushing 2nd element cannot exceed capacity.
         q.push(2).unwrap();
         assert_eq!(q.len(), 2);
+        // SAFETY: Queue has 2 elements, pop cannot fail.
         assert_eq!(q.pop().unwrap(), 1);
+        // SAFETY: Queue has 1 element remaining, pop cannot fail.
         assert_eq!(q.pop().unwrap(), 2);
         assert!(q.is_empty());
     }

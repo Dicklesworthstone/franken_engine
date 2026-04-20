@@ -943,6 +943,7 @@ mod tests {
         let mut cx = mock_cx(200000);
         let result = gate.evaluate(&mut cx);
 
+        // SAFETY: Test expects FrankenlabScenario check to exist in gate evaluation results
         let scenario_check = result
             .checks
             .iter()
@@ -959,6 +960,7 @@ mod tests {
         let mut cx = mock_cx(200000);
         let result = gate.evaluate(&mut cx);
 
+        // SAFETY: Test expects EvidenceReplay check to exist in gate evaluation results
         let replay_check = result
             .checks
             .iter()
@@ -973,6 +975,7 @@ mod tests {
         let mut cx = mock_cx(200000);
         let result = gate.evaluate(&mut cx);
 
+        // SAFETY: Test expects ObligationTracking check to exist in gate evaluation results
         let obligation_check = result
             .checks
             .iter()
@@ -1134,7 +1137,7 @@ mod tests {
         assert!(!result.gate_events.is_empty());
         // Should have: frankenlab, evidence replay, obligation, completeness, and final verdict.
         assert!(result.gate_events.len() >= 5);
-
+        // SAFETY: Test just verified gate_events has at least 5 elements, so last() returns Some
         let final_event = result.gate_events.last().unwrap();
         assert_eq!(final_event.event, "release_gate_evaluated");
         assert_eq!(final_event.outcome, "pass");
@@ -1520,7 +1523,11 @@ mod tests {
             seed: 42,
             result_digest: "abcdef0123456789".to_string(),
         };
+        // SAFETY: GateFailureReport derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateFailureReport,
+        // so from_str back to GateFailureReport cannot fail (valid format + matching schema).
         let back: GateFailureReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }

@@ -16368,7 +16368,9 @@ mod tests {
 
     #[allow(dead_code)]
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
+        // SAFETY: Test-only unwrap expecting QuickJS execution to succeed with valid module
         assert_eq!(quickjs_execute(module).unwrap().value, expected);
+        // SAFETY: Test-only unwrap expecting V8 execution to succeed with valid module
         assert_eq!(v8_execute(module).unwrap().value, expected);
     }
 
@@ -16423,6 +16425,7 @@ mod tests {
         }
 
         fn records(&self) -> Vec<HookRecord> {
+            // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
             self.records.lock().unwrap().clone()
         }
     }
@@ -16434,6 +16437,7 @@ mod tests {
             target: &ObjectRef,
             key: &PropertyKey,
         ) -> HookAction {
+            // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
             self.records.lock().unwrap().push(HookRecord::Property {
                 ctx: ctx.clone(),
                 target: *target,
@@ -16443,6 +16447,7 @@ mod tests {
         }
 
         fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction {
+            // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
             self.records.lock().unwrap().push(HookRecord::Call {
                 ctx: ctx.clone(),
                 callee: callee.clone(),
@@ -16457,6 +16462,7 @@ mod tests {
             kind: AllocKind,
             size_hint: usize,
         ) -> HookAction {
+            // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
             self.records.lock().unwrap().push(HookRecord::Allocation {
                 ctx: ctx.clone(),
                 kind,
@@ -16466,6 +16472,7 @@ mod tests {
         }
 
         fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction {
+            // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
             self.records.lock().unwrap().push(HookRecord::Import {
                 ctx: ctx.clone(),
                 specifier: specifier.to_string(),
@@ -16481,6 +16488,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
+        // SAFETY: Test-only unwrap expecting object allocation to succeed with valid parameters
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
             .properties
@@ -16488,6 +16496,7 @@ mod tests {
         core.registers[1] = Value::Object(oid);
         core.registers[2] = Value::Str("secret".to_string());
 
+        // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
             .execute(&test_module(vec![
                 Ir3Instruction::GetProperty {
@@ -16523,6 +16532,7 @@ mod tests {
         core.registers[1] = Value::Int(5);
         core.registers[3] = Value::Function(0);
 
+        // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
             .execute(&test_module_with_functions(
                 vec![
@@ -16569,6 +16579,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
+        // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
             .execute(&test_module(vec![
                 Ir3Instruction::NewObject { dst: 0 },

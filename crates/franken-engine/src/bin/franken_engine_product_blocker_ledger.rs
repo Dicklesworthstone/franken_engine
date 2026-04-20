@@ -384,22 +384,6 @@ fn validate_support_contract(contract: &SupportSurfaceContract) -> Result<(), St
     if readiness.product_ready_handoff_bead_id.trim().is_empty() {
         return Err("support contract product_ready_handoff_bead_id must be non-empty".to_string());
     }
-    if !readiness
-        .engine_ready_when_support_status_in
-        .iter()
-        .any(|status| status == "shipped")
-    {
-        return Err(
-            "support contract must treat at least support_status=shipped as engine-ready"
-                .to_string(),
-        );
-    }
-    if readiness.engine_blocked_when_support_status_in.is_empty() {
-        return Err(
-            "support contract must expose at least one engine-blocked support status".to_string(),
-        );
-    }
-
     let ready_statuses = readiness
         .engine_ready_when_support_status_in
         .iter()
@@ -412,6 +396,17 @@ fn validate_support_contract(contract: &SupportSurfaceContract) -> Result<(), St
         .map(|status| status.trim())
         .filter(|status| !status.is_empty())
         .collect::<BTreeSet<_>>();
+    if !ready_statuses.contains("shipped") {
+        return Err(
+            "support contract must treat at least support_status=shipped as engine-ready"
+                .to_string(),
+        );
+    }
+    if blocked_statuses.is_empty() {
+        return Err(
+            "support contract must expose at least one engine-blocked support status".to_string(),
+        );
+    }
     let contradictions = ready_statuses
         .intersection(&blocked_statuses)
         .copied()

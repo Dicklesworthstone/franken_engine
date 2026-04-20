@@ -1046,7 +1046,11 @@ impl EcosystemCompatibilityValidator {
                     .iter()
                     .any(|entry_point| entry_point == "react-dom/server"));
         let has_client_runtime = !pattern.mode.requires_client_hydration()
-            || pattern.required_packages.contains(&ReactPackage::ReactDom);
+            || (pattern.required_packages.contains(&ReactPackage::ReactDom)
+                && pattern
+                    .entry_points
+                    .iter()
+                    .any(|entry_point| entry_point == "react-dom/client"));
 
         Ok(has_server_runtime && has_client_runtime)
     }
@@ -1266,7 +1270,11 @@ fn failing_runtime_specifier(pattern: &EcosystemPattern) -> Option<&str> {
     }
 
     if pattern.mode.requires_client_hydration()
-        && !pattern.required_packages.contains(&ReactPackage::ReactDom)
+        && (!pattern.required_packages.contains(&ReactPackage::ReactDom)
+            || !pattern
+                .entry_points
+                .iter()
+                .any(|entry_point| entry_point == "react-dom/client"))
     {
         return Some("react-dom/client");
     }
@@ -1626,5 +1634,57 @@ mod tests {
         let display = format!("{}", error);
         assert!(display.contains("test"));
         assert!(display.contains("missing packages"));
+    }
+
+    #[test]
+    fn test_hydration_requires_react_dom_client_entrypoint() {
+        // Regression test for bd-1lsy.5.7.4: Patterns requiring client hydration
+        // should fail validation if ReactDom package is present but react-dom/client
+        // entrypoint is missing.
+
+        // Pattern with ReactDom package but missing react-dom/client entrypoint
+        let invalid_hydration_pattern = EcosystemPattern::new(
+            "invalid_hydration".to_string(),
+            "Hydration pattern missing client entrypoint".to_string(),
+            EcosystemMode::HybridRendering, // requires client hydration
+            CompileMode::Automatic,
+        )
+        .with_package(ReactPackage::React)
+        .with_package(ReactPackage::ReactDom) // Package present
+        .with_package(ReactPackage::ReactDomServer)
+        .with_entry_point("react".to_string())
+        .with_entry_point("react-dom".to_string())
+        .with_entry_point("react-dom/server".to_string());
+        // Missing: react-dom/client entrypoint
+
+        // Should fail validation
+        assert!(invalid_hydration_pattern.validate().is_err());
+
+        // failing_runtime_specifier should report react-dom/client
+        assert_eq!(
+            failing_runtime_specifier(&invalid_hydration_pattern),
+            Some("react-dom/client")
+        );
+
+        // Valid pattern should include react-dom/client entrypoint
+        let valid_hydration_pattern = EcosystemPattern::new(
+            "valid_hydration".to_string(),
+            "Valid hydration pattern with client entrypoint".to_string(),
+            EcosystemMode::HybridRendering, // requires client hydration
+            CompileMode::Automatic,
+        )
+        .with_package(ReactPackage::React)
+        .with_package(ReactPackage::ReactDom)
+        .with_package(ReactPackage::ReactDomServer)
+        .with_entry_point("react".to_string())
+        .with_entry_point("react-dom".to_string())
+        .with_entry_point("react-dom/server".to_string())
+        .with_entry_point("react-dom/client".to_string()); // Required for hydration
+
+        // Should pass validation
+        assert!(valid_hydration_pattern.validate().is_ok());
+
+        // failing_runtime_specifier should return None
+        assert_eq!(failing_runtime_specifier(&valid_hydration_pattern), None);
     }
 }

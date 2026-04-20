@@ -14,14 +14,14 @@
 //! Plan reference: Section 10.9, bd-1xm.
 //! Cross-refs: bd-6pk (disruption scorecard), bd-f7n (category-shift report).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::disruption_scorecard::{
-    compute_scorecard, DisruptionDimension, EvidenceInput, ScorecardResult, ScorecardSchema,
-    ScorecardError,
+    DisruptionDimension, EvidenceInput, ScorecardError, ScorecardResult, ScorecardSchema,
+    compute_scorecard,
 };
 use crate::hash_tiers::ContentHash;
 use crate::moonshot_contract::MoonshotContract;
@@ -102,16 +102,34 @@ impl MoonshotGateId {
     /// Human-readable description.
     pub fn description(self) -> &'static str {
         match self {
-            Self::NodeBunComparisonHarness => "Official Node/Bun comparison harness with reproducible benchmark artifacts",
+            Self::NodeBunComparisonHarness => {
+                "Official Node/Bun comparison harness with reproducible benchmark artifacts"
+            }
             Self::DisruptionScorecard => "Disruption scorecard enforcement as release blockers",
-            Self::AutonomousQuarantineMesh => "Autonomous quarantine mesh validated under fault injection",
-            Self::ProofCarryingOptimization => "Proof-carrying optimization pipeline with replayable validation artifacts",
-            Self::AdversarialCampaignRunner => "Continuous adversarial campaign runner with measurable compromise-rate suppression",
-            Self::PlasCapabilityWitness => "PLAS active with signed capability_witness artifacts and escrow-path replay",
-            Self::GaNativeLanes => "GA default lanes are fully native with zero mandatory delegate cells",
-            Self::DeterministicIfcProtection => "Deterministic IFC protections block unauthorized exfiltration",
-            Self::ProofSpecializedLanes => "Proof-specialized lanes demonstrate positive performance delta",
-            Self::CategoryShiftReport => "Category-shift report demonstrating beyond-parity capabilities",
+            Self::AutonomousQuarantineMesh => {
+                "Autonomous quarantine mesh validated under fault injection"
+            }
+            Self::ProofCarryingOptimization => {
+                "Proof-carrying optimization pipeline with replayable validation artifacts"
+            }
+            Self::AdversarialCampaignRunner => {
+                "Continuous adversarial campaign runner with measurable compromise-rate suppression"
+            }
+            Self::PlasCapabilityWitness => {
+                "PLAS active with signed capability_witness artifacts and escrow-path replay"
+            }
+            Self::GaNativeLanes => {
+                "GA default lanes are fully native with zero mandatory delegate cells"
+            }
+            Self::DeterministicIfcProtection => {
+                "Deterministic IFC protections block unauthorized exfiltration"
+            }
+            Self::ProofSpecializedLanes => {
+                "Proof-specialized lanes demonstrate positive performance delta"
+            }
+            Self::CategoryShiftReport => {
+                "Category-shift report demonstrating beyond-parity capabilities"
+            }
         }
     }
 
@@ -305,33 +323,30 @@ impl DisruptionTrackExecution {
 
     /// Check if all gates have completed.
     pub fn all_gates_complete(&self) -> bool {
-        MoonshotGateId::all()
-            .iter()
-            .all(|gate_id| {
-                self.gate_results
-                    .get(gate_id.bead_id())
-                    .map(|result| result.status.is_complete())
-                    .unwrap_or(false)
-            })
+        MoonshotGateId::all().iter().all(|gate_id| {
+            self.gate_results
+                .get(gate_id.bead_id())
+                .map(|result| result.status.is_complete())
+                .unwrap_or(false)
+        })
     }
 
     /// Check if all gates passed.
     pub fn all_gates_pass(&self) -> bool {
-        MoonshotGateId::all()
-            .iter()
-            .all(|gate_id| {
-                self.gate_results
-                    .get(gate_id.bead_id())
-                    .map(|result| result.status.is_pass())
-                    .unwrap_or(false)
-            })
+        MoonshotGateId::all().iter().all(|gate_id| {
+            self.gate_results
+                .get(gate_id.bead_id())
+                .map(|result| result.status.is_pass())
+                .unwrap_or(false)
+        })
     }
 
     /// Count gates by status.
     pub fn count_gates_by_status(&self) -> BTreeMap<MoonshotGateStatus, u64> {
         let mut counts = BTreeMap::new();
         for gate_id in MoonshotGateId::all() {
-            let status = self.gate_results
+            let status = self
+                .gate_results
                 .get(gate_id.bead_id())
                 .map(|result| result.status)
                 .unwrap_or(MoonshotGateStatus::Pending);
@@ -443,7 +458,10 @@ impl fmt::Display for DisruptionTrackError {
             Self::GateExecutionFailed { gate_id, reason } => {
                 write!(f, "gate {} execution failed: {}", gate_id, reason)
             }
-            Self::ContractValidationFailed { contract_id, detail } => {
+            Self::ContractValidationFailed {
+                contract_id,
+                detail,
+            } => {
                 write!(f, "contract {} validation failed: {}", contract_id, detail)
             }
             Self::MissingContract { contract_id } => {
@@ -482,7 +500,7 @@ pub fn execute_disruption_track(
     let mut execution = DisruptionTrackExecution::new(epoch, environment_fingerprint);
 
     // Record all gate results
-    for (gate_id, gate_result) in gate_evidence {
+    for gate_result in gate_evidence.values() {
         execution.record_gate_result(gate_result.clone());
     }
 
@@ -505,24 +523,65 @@ pub fn execute_disruption_track(
 fn collect_scorecard_evidence(
     gate_evidence: &BTreeMap<MoonshotGateId, MoonshotGateResult>,
 ) -> Result<Vec<EvidenceInput>, DisruptionTrackError> {
-    let mut evidence_inputs = Vec::new();
+    struct DimensionAggregate {
+        score_millionths: u64,
+        source_beads: BTreeSet<String>,
+        hash_parts: Vec<String>,
+    }
+
+    let mut aggregates: BTreeMap<DisruptionDimension, DimensionAggregate> = BTreeMap::new();
 
     // Map gate results to scorecard dimensions
     for (gate_id, gate_result) in gate_evidence {
         if gate_result.status.is_pass() {
-            if let (Some(score), Some(hash)) = (
-                gate_result.evidence_score_millionths,
-                &gate_result.evidence_hash,
-            ) {
-                evidence_inputs.push(EvidenceInput {
-                    dimension: gate_id.primary_dimension(),
-                    raw_score_millionths: score,
-                    source_beads: gate_result.implementation_beads.clone(),
-                    evidence_hash: hash.clone(),
+            let score = gate_result.evidence_score_millionths.ok_or_else(|| {
+                DisruptionTrackError::InvalidEvidence {
+                    gate_id: gate_id.bead_id().to_string(),
+                    detail: "passing gate result is missing an evidence score".to_string(),
+                }
+            })?;
+            let hash =
+                gate_result
+                    .evidence_hash
+                    .ok_or_else(|| DisruptionTrackError::InvalidEvidence {
+                        gate_id: gate_id.bead_id().to_string(),
+                        detail: "passing gate result is missing an evidence hash".to_string(),
+                    })?;
+
+            let aggregate = aggregates
+                .entry(gate_id.primary_dimension())
+                .or_insert_with(|| DimensionAggregate {
+                    score_millionths: score,
+                    source_beads: BTreeSet::new(),
+                    hash_parts: Vec::new(),
                 });
+
+            aggregate.score_millionths = aggregate.score_millionths.min(score);
+            if gate_result.implementation_beads.is_empty() {
+                aggregate.source_beads.insert(gate_id.bead_id().to_string());
+            } else {
+                aggregate
+                    .source_beads
+                    .extend(gate_result.implementation_beads.iter().cloned());
             }
+            aggregate
+                .hash_parts
+                .push(format!("{}:{}", gate_id.bead_id(), hash));
         }
     }
+
+    let evidence_inputs = aggregates
+        .into_iter()
+        .map(|(dimension, mut aggregate)| {
+            aggregate.hash_parts.sort();
+            EvidenceInput {
+                dimension,
+                raw_score_millionths: aggregate.score_millionths,
+                source_beads: aggregate.source_beads.into_iter().collect(),
+                evidence_hash: ContentHash::compute(aggregate.hash_parts.join("|").as_bytes()),
+            }
+        })
+        .collect();
 
     Ok(evidence_inputs)
 }
@@ -539,7 +598,7 @@ pub fn allows_frontier_release(execution: &DisruptionTrackExecution) -> bool {
 
 /// Validate moonshot contracts against execution state.
 pub fn validate_moonshot_contracts(
-    execution: &DisruptionTrackExecution,
+    _execution: &DisruptionTrackExecution,
     contracts: &[MoonshotContract],
 ) -> Result<(), DisruptionTrackError> {
     // Validate each contract's kill criteria are not triggered
@@ -557,7 +616,7 @@ pub fn validate_moonshot_contracts(
                     "kill criteria triggered: {}",
                     triggered
                         .iter()
-                        .map(|c| &c.criterion_id)
+                        .map(|c| c.criterion_id.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
@@ -804,10 +863,8 @@ mod tests {
 
     #[test]
     fn track_execution_new() {
-        let execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         assert_eq!(execution.schema_version, DISRUPTION_TRACK_SCHEMA_VERSION);
         assert!(execution.gate_results.is_empty());
         assert!(execution.scorecard_result.is_none());
@@ -815,10 +872,8 @@ mod tests {
 
     #[test]
     fn track_execution_record_gate_result() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         let result = sample_gate_result(MoonshotGateId::NodeBunComparisonHarness, true);
         execution.record_gate_result(result);
         assert_eq!(execution.gate_results.len(), 1);
@@ -827,10 +882,8 @@ mod tests {
 
     #[test]
     fn track_execution_all_gates_complete_false() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         // Add only one gate result
         let result = sample_gate_result(MoonshotGateId::NodeBunComparisonHarness, true);
         execution.record_gate_result(result);
@@ -839,10 +892,8 @@ mod tests {
 
     #[test]
     fn track_execution_all_gates_complete_true() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         // Add all gate results
         for gate_id in MoonshotGateId::all() {
             let result = sample_gate_result(*gate_id, true);
@@ -853,10 +904,8 @@ mod tests {
 
     #[test]
     fn track_execution_all_gates_pass() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         for gate_id in MoonshotGateId::all() {
             let result = sample_gate_result(*gate_id, true);
             execution.record_gate_result(result);
@@ -866,10 +915,8 @@ mod tests {
 
     #[test]
     fn track_execution_not_all_gates_pass() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         for (i, gate_id) in MoonshotGateId::all().iter().enumerate() {
             let result = sample_gate_result(*gate_id, i != 0); // First one fails
             execution.record_gate_result(result);
@@ -879,12 +926,10 @@ mod tests {
 
     #[test]
     fn track_execution_count_gates_by_status() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         // Add 3 passing gates, leave rest pending
-        for (i, gate_id) in MoonshotGateId::all().iter().enumerate().take(3) {
+        for gate_id in MoonshotGateId::all().iter().take(3) {
             let result = sample_gate_result(*gate_id, true);
             execution.record_gate_result(result);
         }
@@ -895,19 +940,15 @@ mod tests {
 
     #[test]
     fn track_execution_overall_status_pending() {
-        let execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pending);
     }
 
     #[test]
     fn track_execution_overall_status_pass() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         for gate_id in MoonshotGateId::all() {
             let result = sample_gate_result(*gate_id, true);
             execution.record_gate_result(result);
@@ -917,10 +958,8 @@ mod tests {
 
     #[test]
     fn track_execution_overall_status_fail() {
-        let mut execution = DisruptionTrackExecution::new(
-            SecurityEpoch::from_raw(1),
-            "test-env".to_string(),
-        );
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
         for (i, gate_id) in MoonshotGateId::all().iter().enumerate() {
             let result = sample_gate_result(*gate_id, i != 0); // First one fails
             execution.record_gate_result(result);
@@ -1047,7 +1086,10 @@ mod tests {
     fn disruption_track_error_from_scorecard_error() {
         let scorecard_error = ScorecardError::EmptyEvidenceBundle;
         let track_error = DisruptionTrackError::from(scorecard_error);
-        assert!(matches!(track_error, DisruptionTrackError::ScorecardError { .. }));
+        assert!(matches!(
+            track_error,
+            DisruptionTrackError::ScorecardError { .. }
+        ));
     }
 
     // -----------------------------------------------------------------------

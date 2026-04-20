@@ -714,3 +714,75 @@ fn rgc_408b_emit_bundle_fails_closed_on_contradictory_support_statuses() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+fn rgc_408b_emit_bundle_fails_closed_on_blank_only_blocked_support_statuses() {
+    let root = fresh_temp_dir("emit_fail_blank_blocked_support_contract");
+    let artifact_dir = root.join("bundle");
+    let beads_path = root.join("beads.json");
+    let support_contract_path = root.join("support_surface_contract.json");
+
+    fs::write(
+        &beads_path,
+        serde_json::to_string_pretty(&serde_json::json!([
+            {
+                "id": "bd-1lsy.5.2",
+                "status": "in_progress",
+                "assignee": "GentleDog",
+                "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            },
+            {
+                "id": "bd-1lsy.5.7.2",
+                "status": "open",
+                "assignee": "PearlTower",
+                "title": "[RGC-405B] Verify SSR and client-entry React module graphs with deterministic receipts"
+            },
+            {
+                "id": "bd-1lsy.5.9.2",
+                "status": "open",
+                "assignee": "BronzeGlen",
+                "title": "[RGC-407B] Implement the native-addon safety membrane and fast-path routing"
+            },
+            {
+                "id": "bd-1lsy.4.12.2",
+                "status": "closed",
+                "assignee": "PearlTower",
+                "title": "[RGC-312B] Implement deterministic RegExp compilation, automata caches, and tail-risk guards"
+            }
+        ]))
+        .expect("bead snapshot JSON should encode"),
+    )
+    .expect("bead snapshot should write");
+
+    fs::write(
+        &support_contract_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "readiness_answer_contract": {
+                "engine_ready_when_support_status_in": ["shipped"],
+                "engine_blocked_when_support_status_in": ["   ", "\t\n", ""],
+                "product_ready_state": "delegated_to_franken_node_handoff",
+                "product_ready_owner_repo": "franken_node",
+                "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+                "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
+            }
+        }))
+        .expect("support contract JSON should encode"),
+    )
+    .expect("support contract should write");
+
+    let config = blocker_ledger_bin::EmitConfig {
+        artifact_dir,
+        beads_json: beads_path,
+        support_contract_json: support_contract_path,
+        trace_id: "trace-test".to_string(),
+        decision_id: "decision-test".to_string(),
+        policy_id: "policy-test".to_string(),
+        generated_at_utc: "2026-03-21T21:45:00Z".to_string(),
+    };
+
+    let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
+    assert!(
+        error.contains("must expose at least one engine-blocked support status"),
+        "unexpected error: {error}"
+    );
+}

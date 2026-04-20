@@ -9257,49 +9257,62 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(result)))
             }
             "builtin:StringPrototypeReplace" => {
-                // String.prototype.replace(searchValue, replaceValue) implementation (simplified)
-                if args.count < 2 {
-                    return self.read_reg(args.start); // Return original string
-                }
-
-                // Get the this value (should be a string)
+                // String.prototype.replace() implementation - simplified version
                 let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
+                let str_text = match this_val {
                     Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(this_val),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
-                // Get search value
+                if args.count < 2 {
+                    return Ok(Value::Str(str_text)); // No search string provided
+                }
+
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
                     Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Str(this_str)),
-                };
-
-                // Get replace value
-                let replace_val = self.read_reg(args.start + 2)?;
-                let replace_str = match replace_val {
-                    Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "undefined".to_string(),
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Object(_) => "[object Object]".to_string(),
+                    _ => "[object Object]".to_string(),
                 };
 
-                // Perform simple string replacement (first occurrence only)
-                let result = this_str.replacen(&search_str, &replace_str, 1);
+                let replace_str = if args.count >= 3 {
+                    let replace_val = self.read_reg(args.start + 2)?;
+                    match replace_val {
+                        Value::Str(s) => s,
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "[object Object]".to_string(),
+                    }
+                } else {
+                    "undefined".to_string()
+                };
+
+                // Simple string replacement (only first occurrence)
+                let result = if let Some(index) = str_text.find(&search_str) {
+                    let mut result = String::new();
+                    result.push_str(&str_text[..index]);
+                    result.push_str(&replace_str);
+                    result.push_str(&str_text[index + search_str.len()..]);
+                    result
+                } else {
+                    str_text
+                };
+
                 Ok(Value::Str(result))
             }
             "builtin:MathLog" => {
@@ -13049,56 +13062,6 @@ impl InterpreterCore {
                 Ok(Value::Int(sign * result))
             }
 
-            "builtin:StringPrototypeReplace" => {
-                // String.prototype.replace(searchValue, replaceValue) implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
-                        }
-                    }
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Str(string_val));
-                }
-
-                let search_val = match self.read_reg(args.start + 1)? {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Str(string_val)),
-                };
-
-                let replace_val = if args.count >= 3 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        _ => String::new(),
-                    }
-                } else {
-                    "undefined".to_string()
-                };
-
-                // Simple string replacement (only first occurrence)
-                let result = string_val.replacen(&search_val, &replace_val, 1);
-                Ok(Value::Str(result))
-            }
 
             "builtin:ArrayPrototypeFilter" => {
                 // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
@@ -17355,65 +17318,6 @@ impl InterpreterCore {
                 })
             }
 
-            "builtin:StringPrototypeReplace" => {
-                // String.prototype.replace() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Str(str_text)); // No search string provided
-                }
-
-                let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let replace_str = if args.count >= 3 {
-                    let replace_val = self.read_reg(args.start + 2)?;
-                    match replace_val {
-                        Value::Str(s) => s,
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "[object Object]".to_string(),
-                    }
-                } else {
-                    "undefined".to_string()
-                };
-
-                // Simple string replacement (only first occurrence)
-                let result = if let Some(index) = str_text.find(&search_str) {
-                    let mut result = String::new();
-                    result.push_str(&str_text[..index]);
-                    result.push_str(&replace_str);
-                    result.push_str(&str_text[index + search_str.len()..]);
-                    result
-                } else {
-                    str_text // No match found
-                };
-
-                Ok(Value::Str(result))
-            }
 
             "builtin:MathRandom" => {
                 // Math.random implementation - deterministic with proper [0,1) range
@@ -24554,5 +24458,95 @@ mod tests {
         assert_eq!(entry.level, ConsoleLevel::Info);
         assert_eq!(entry.message, "Test 123");
         assert!(entry.instruction_index > 0, "Should have instruction index");
+    }
+
+    #[test]
+    fn string_prototype_replace_object_coercion() {
+        // Test that objects are properly coerced to "[object Object]"
+        let mut core = BaselineInterpreter::new();
+        let obj_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_register(0, Value::Object(obj_id)).unwrap();
+        core.set_register(1, Value::Str("object".to_string())).unwrap();
+        core.set_register(2, Value::Str("replacement".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 41, // StringPrototypeReplace
+                args: RegRange { start: 0, count: 3 },
+                dest: 3,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let result = core.read_register(3).unwrap();
+        assert_eq!(result, Value::Str("[replacement Object]".to_string()));
+    }
+
+    #[test]
+    fn string_prototype_replace_no_search_arg() {
+        // Test that no search argument returns original string
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("hello world".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 41, // StringPrototypeReplace
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let result = core.read_register(1).unwrap();
+        assert_eq!(result, Value::Str("hello world".to_string()));
+    }
+
+    #[test]
+    fn string_prototype_replace_iterator_coercion() {
+        // Test that other value types are coerced to "[object Object]" by default
+        let mut core = BaselineInterpreter::new();
+
+        // Using Value::Iterator as an example of non-primitive type
+        core.set_register(0, Value::Iterator(IteratorValue::new())).unwrap();
+        core.set_register(1, Value::Str("object".to_string())).unwrap();
+        core.set_register(2, Value::Str("replaced".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 41, // StringPrototypeReplace
+                args: RegRange { start: 0, count: 3 },
+                dest: 3,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let result = core.read_register(3).unwrap();
+        assert_eq!(result, Value::Str("[replaced Object]".to_string()));
+    }
+
+    #[test]
+    fn string_prototype_replace_builtin_function_coercion() {
+        // Test that builtin functions are coerced to "[object Object]"
+        let mut core = BaselineInterpreter::new();
+        let builtin_fn = BuiltinFunction::new(42, "TestFunction".to_string());
+        core.set_register(0, Value::BuiltinFunction(builtin_fn)).unwrap();
+        core.set_register(1, Value::Str("object".to_string())).unwrap();
+        core.set_register(2, Value::Str("function".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 41, // StringPrototypeReplace
+                args: RegRange { start: 0, count: 3 },
+                dest: 3,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+
+        let result = core.read_register(3).unwrap();
+        assert_eq!(result, Value::Str("[function Object]".to_string()));
     }
 }

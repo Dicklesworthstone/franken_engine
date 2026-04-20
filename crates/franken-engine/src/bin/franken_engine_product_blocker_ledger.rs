@@ -504,7 +504,11 @@ fn validate_downstream_handoff_bead(
     }
 
     // Optional: Validate basic bead integrity (has title for traceability)
-    if handoff_bead.title.as_ref().is_none_or(|t| t.trim().is_empty()) {
+    if handoff_bead
+        .title
+        .as_ref()
+        .is_none_or(|t| t.trim().is_empty())
+    {
         return Err(format!(
             "downstream handoff bead '{}' has empty or missing title - invalid bead state for delegation",
             handoff_bead_id

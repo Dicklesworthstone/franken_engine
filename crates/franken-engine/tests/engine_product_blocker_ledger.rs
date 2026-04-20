@@ -400,6 +400,12 @@ fn rgc_408b_emit_bundle_enriches_owners_from_bead_snapshot() {
                 "status": "closed",
                 "assignee": "PearlTower",
                 "title": "[RGC-312B] Implement deterministic RegExp compilation, automata caches, and tail-risk guards"
+            },
+            {
+                "id": "bd-1lsy.5.10.2",
+                "status": "closed",
+                "assignee": "PearlTower",
+                "title": "[RGC-408B] Handoff product-ready support contract to franken_node"
             }
         ]))
         .expect("bead snapshot JSON should encode"),
@@ -534,6 +540,12 @@ fn rgc_408b_emit_bundle_fails_closed_when_tracking_beads_are_missing() {
                 "status": "in_progress",
                 "assignee": "GentleDog",
                 "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            },
+            {
+                "id": "bd-1lsy.5.10.2",
+                "status": "closed",
+                "assignee": "PearlTower",
+                "title": "[RGC-408B] Handoff product-ready support contract to franken_node"
             }
         ]))
         .expect("bead snapshot JSON should encode"),

@@ -1045,6 +1045,7 @@ mod tests {
             EnforcementResult::Denied(denial) => {
                 assert_eq!(denial.target_id, EngineObjectId([3; 32]));
             }
+            // SAFETY: Test validates revocation enforcement denial for token batch check
             _ => panic!("expected denial"),
         }
     }

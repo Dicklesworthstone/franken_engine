@@ -5419,6 +5419,7 @@ mod tests {
             assert_eq!(m.get("index"), Some(&CanonicalValue::U64(7)));
             assert_eq!(m.len(), 2);
         } else {
+            // SAFETY: Test validates ScopeId canonical value returns expected Map format
             panic!("expected Map from ScopeId::canonical_value");
         }
     }

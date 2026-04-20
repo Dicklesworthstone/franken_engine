@@ -14543,74 +14543,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeEntries" => {
-                // Array.prototype.entries() implementation (ES2015 iterator method - simplified)
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Collect key-value pairs first without holding immutable borrow
-                let mut pairs = Vec::new();
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            pairs.push((i, element.clone()));
-                        }
-                    }
-                }
-
-                // Create entries array with mutable operations
-                let entries_array_id = self.alloc_object_with_prototype(None)?;
-
-                for (entry_index, (i, element)) in pairs.iter().enumerate() {
-                    // Create [index, value] pair
-                    let pair_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        pair_array_id,
-                        "0".to_string(),
-                        Value::Int(*i as i64),
-                    )?;
-                    self.set_object_property(pair_array_id, "1".to_string(), element.clone())?;
-                    self.set_object_property(pair_array_id, "length".to_string(), Value::Int(2))?;
-
-                    // Add pair to entries array
-                    self.set_object_property(
-                        entries_array_id,
-                        entry_index.to_string(),
-                        Value::Object(pair_array_id),
-                    )?;
-                }
-
-                self.set_object_property(
-                    entries_array_id,
-                    "length".to_string(),
-                    Value::Int(pairs.len() as i64),
-                )?;
-
-                Ok(Value::Object(entries_array_id))
-            }
+            // Removed duplicate ArrayPrototypeEntries - implementation at line ~11841 uses proper iterator semantics
 
             "builtin:WeakMapPrototypeGet" => {
                 // WeakMap.prototype.get(key) implementation (simplified)

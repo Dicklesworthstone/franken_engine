@@ -2014,6 +2014,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "signature_valid")
+            // SAFETY: Test-only unwrap expecting signature_valid check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

@@ -1620,7 +1620,9 @@ mod tests {
             to: RegimeKind::Stochastic,
             confidence_millionths: 900_000,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&rt).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: RegimeTransition = serde_json::from_str(&json).unwrap();
         assert_eq!(rt, restored);
     }

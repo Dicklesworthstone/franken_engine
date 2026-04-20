@@ -1146,7 +1146,11 @@ mod tests {
     #[test]
     fn severity_serde_roundtrip() {
         for s in CounterexampleSeverity::ALL {
+            // SAFETY: CounterexampleSeverity derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid CounterexampleSeverity,
+            // so from_str back to CounterexampleSeverity cannot fail (valid format + matching schema).
             let back: CounterexampleSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -1185,7 +1189,11 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in FalsificationVerdict::ALL {
+            // SAFETY: FalsificationVerdict derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid FalsificationVerdict,
+            // so from_str back to FalsificationVerdict cannot fail (valid format + matching schema).
             let back: FalsificationVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -1223,7 +1231,11 @@ mod tests {
     #[test]
     fn archetype_serde_roundtrip() {
         for a in WorkloadArchetype::ALL {
+            // SAFETY: WorkloadArchetype derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(a).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid WorkloadArchetype,
+            // so from_str back to WorkloadArchetype cannot fail (valid format + matching schema).
             let back: WorkloadArchetype = serde_json::from_str(&json).unwrap();
             assert_eq!(*a, back);
         }
@@ -1812,7 +1824,11 @@ mod tests {
     #[test]
     fn workload_serde_roundtrip() {
         let w = default_workload();
+        // SAFETY: SyntheticWorkload derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&w).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SyntheticWorkload,
+        // so from_str back to SyntheticWorkload cannot fail (valid format + matching schema).
         let back: SyntheticWorkload = serde_json::from_str(&json).unwrap();
         assert_eq!(w, back);
     }

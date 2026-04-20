@@ -1232,7 +1232,7 @@ impl ProductionHardeningGateExecution {
         100.0 // Based on replay audit results
     }
 
-    fn all_validations_passed(&self) -> bool {
+    pub fn all_validations_passed(&self) -> bool {
         self.security_matrix
             .iter()
             .all(|e| matches!(e.validation_status, ValidationStatus::Passed))
@@ -1756,7 +1756,7 @@ fn create_default_replay_audits() -> Vec<ReplayAuditConfig> {
 }
 
 /// Log structured production hardening events
-fn log_production_hardening_event(
+pub fn log_production_hardening_event(
     gate_id: &str,
     component: &str,
     event: &str,

@@ -1309,6 +1309,7 @@ mod tests {
             b"test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         let err = engine.ingest_proof(proof, 1_000).unwrap_err();
@@ -1333,6 +1334,7 @@ mod tests {
             b"test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         let err = engine.ingest_proof(proof, 1000).unwrap_err();
@@ -1357,6 +1359,7 @@ mod tests {
             b"test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         let err = engine.ingest_proof(proof, 1_500).unwrap_err();
@@ -1406,6 +1409,7 @@ mod tests {
     fn epoch_advance_invalidates_stale_proofs() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(engine.active_proofs().len(), 1);
@@ -1421,6 +1425,7 @@ mod tests {
     fn epoch_advance_preserves_current_epoch_proofs() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         // Advance to same epoch — nothing invalidated.
@@ -1434,6 +1439,7 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         let count = engine.invalidate_proof(&proof_id, "revoked", 2000);
@@ -1446,6 +1452,7 @@ mod tests {
     fn invalidation_cascade_events() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
@@ -1483,6 +1490,7 @@ mod tests {
                 "policy-001",
             );
             let proof_id = proof.proof_id.clone();
+            // SAFETY: Test with valid proof creation parameters should successfully ingest
             engine.ingest_proof(proof, 1000 + i * 100).unwrap();
             engine.invalidate_proof(&proof_id, "test-churn", 1000 + i * 100 + 50);
         }
@@ -1500,11 +1508,13 @@ mod tests {
         // Two rapid invalidations.
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"a", "policy-001");
         let p1_id = p1.proof_id.clone();
+        // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine.ingest_proof(p1, 100).unwrap();
         engine.invalidate_proof(&p1_id, "test", 200);
 
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
         let p2_id = p2.proof_id.clone();
+        // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine.ingest_proof(p2, 300).unwrap();
         engine.invalidate_proof(&p2_id, "test", 400);
 
@@ -1513,6 +1523,7 @@ mod tests {
         // Ingest a proof way later (outside window) and invalidate it.
         let p3 = make_proof(ProofType::ReplaySequenceMotif, b"c", "policy-001");
         let p3_id = p3.proof_id.clone();
+        // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine.ingest_proof(p3, 5000).unwrap();
         engine.invalidate_proof(&p3_id, "test", 5100);
 
@@ -1527,6 +1538,7 @@ mod tests {
     fn emit_receipt_for_activated_hypothesis() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
@@ -1539,6 +1551,7 @@ mod tests {
                 ActivationStageLocal::Shadow,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         assert_eq!(receipt.hypothesis_id, hyp_id);
@@ -1557,6 +1570,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"fake",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let err = engine
@@ -1582,6 +1596,7 @@ mod tests {
     fn events_have_monotonic_sequence() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         for (i, event) in engine.events().iter().enumerate() {
@@ -1593,6 +1608,7 @@ mod tests {
     fn events_record_epoch() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         for event in engine.events() {

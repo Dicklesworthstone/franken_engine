@@ -656,6 +656,8 @@ mod tests {
     }
 
     fn emit_standard(emitter: &mut CanonicalEvidenceEmitter) -> EmissionReceipt {
+        // SAFETY: emit() with valid test inputs (valid context, well-formed data structures)
+        // cannot fail under normal test conditions.
         emitter
             .emit(
                 &test_context(HighImpactAction::Sandbox),
@@ -734,7 +736,9 @@ mod tests {
     #[test]
     fn action_serde_roundtrip() {
         for action in &HighImpactAction::ALL {
+            // SAFETY: HighImpactAction derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(action).unwrap();
+            // SAFETY: JSON was just produced by valid HighImpactAction serialization
             let restored: HighImpactAction = serde_json::from_str(&json).unwrap();
             assert_eq!(*action, restored);
         }
@@ -766,7 +770,9 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let policy = EmissionPolicy::default();
+        // SAFETY: EmissionPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by valid EmissionPolicy serialization
         let restored: EmissionPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
@@ -1104,6 +1110,7 @@ mod tests {
         let receipt = emit_standard(&mut emitter);
 
         let entry = &emitter.ledger()[0];
+        // SAFETY: Test with valid evidence entry should successfully verify integrity
         let recomputed = emitter.verify_integrity(entry).unwrap();
         assert_eq!(recomputed, receipt.artifact_hash);
     }
@@ -1116,6 +1123,7 @@ mod tests {
         let mut tampered = emitter.ledger()[0].clone();
         tampered.chosen_action.rationale = "tampered rationale".to_string();
 
+        // SAFETY: Test with tampered evidence entry should successfully compute hash (different from original)
         let recomputed = emitter.verify_integrity(&tampered).unwrap();
         assert_ne!(recomputed, receipt.artifact_hash);
     }

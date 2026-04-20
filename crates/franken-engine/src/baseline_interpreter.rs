@@ -13104,70 +13104,7 @@ impl InterpreterCore {
 
             // Removed duplicate MathAcos - implementation at line ~11059 is identical
 
-            "builtin:ArrayPrototypeLastIndexOf" => {
-                // Array.prototype.lastIndexOf(searchElement[, fromIndex]) implementation
-                if args.count < 2 {
-                    return Ok(Value::Int(-1));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Int(-1)), // Non-objects can't be arrays
-                };
-
-                let search_element = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                if length == 0 {
-                    return Ok(Value::Int(-1));
-                }
-
-                let from_index = if args.count > 2 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Int(n) => {
-                            if n < 0 {
-                                (length as i64 + n).max(0) as usize
-                            } else {
-                                (n as usize).min(length - 1)
-                            }
-                        }
-                        Value::Float(f) => {
-                            if f.inner() < 0.0 {
-                                (length as f64 + f.inner()).max(0.0) as usize
-                            } else {
-                                (f.inner() as usize).min(length - 1)
-                            }
-                        }
-                        _ => length - 1,
-                    }
-                } else {
-                    length - 1
-                };
-
-                // Search backwards from fromIndex
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in (0..=from_index).rev() {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            if Self::values_equal(element, &search_element) {
-                                return Ok(Value::Int(i as i64));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Int(-1))
-            }
+            // Removed duplicate ArrayPrototypeLastIndexOf - implementation at line ~10742 is identical
 
             "builtin:RegExpPrototypeTest" => {
                 // RegExp.prototype.test(string) implementation (simplified)

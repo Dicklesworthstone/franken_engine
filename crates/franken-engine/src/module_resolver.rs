@@ -2217,7 +2217,10 @@ mod tests {
         let policy = CapabilityPolicyHook::new(granted);
 
         let request = ModuleRequest::new("franken:std/fs", ImportStyle::Import);
+        // SAFETY: Test uses built-in module "franken:std/fs" which exists in resolver.
+        // resolve() only fails for unknown modules or policy violations (both impossible here).
         let first = resolver.resolve(&request, &context(), &policy).unwrap();
+        // SAFETY: Same module request as above, guaranteed to succeed for same reasons.
         let second = resolver.resolve(&request, &context(), &policy).unwrap();
 
         assert_eq!(first.module.canonical_specifier, "franken:std/fs");

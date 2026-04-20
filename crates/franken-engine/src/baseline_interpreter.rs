@@ -5540,6 +5540,10 @@ impl InterpreterCore {
     }
 
     fn init_for_of_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Iterator(_)) {
+            return Ok(value);
+        }
+
         let values = self.collect_for_of_values(&value)?;
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
@@ -6721,6 +6725,59 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
         Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    fn array_prototype_iterator(
+        &mut self,
+        args: RegRange,
+        kind: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let array_id = match self.read_reg(args.start)? {
+            Value::Object(object_id) => Some(object_id),
+            _ => None,
+        };
+        let mut values = Vec::new();
+
+        if let Some(array_id) = array_id {
+            let length = self.array_like_length(array_id)?;
+            values.reserve(length);
+            for element_index in 0..length {
+                let index_value =
+                    i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
+                        expected: "array iterator index within i64".to_string(),
+                        got: element_index.to_string(),
+                    })?;
+                match kind {
+                    "entries" => {
+                        let element = self
+                            .array_index_value(array_id, element_index)?
+                            .unwrap_or(Value::Undefined);
+                        let entry_id =
+                            self.alloc_array_from_values(&[Value::Int(index_value), element])?;
+                        values.push(Value::Object(entry_id));
+                    }
+                    "keys" => values.push(Value::Int(index_value)),
+                    "values" => values.push(
+                        self.array_index_value(array_id, element_index)?
+                            .unwrap_or(Value::Undefined),
+                    ),
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "array iterator kind".to_string(),
+                            got: kind.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+            values,
+            next_index: 0,
+            done: false,
+            closed: false,
+        }))?;
+        Ok(Value::Iterator(handle))
     }
 
     fn canonical_array_index_property(key: &str, length: usize) -> Option<usize> {
@@ -11864,203 +11921,11 @@ impl InterpreterCore {
             }
 
             // Removed duplicate MathClz32 - implementation at line ~12775 has better type conversion
-            "builtin:ArrayPrototypeEntries" => {
-                // Array.prototype.entries() implementation - returns iterator for [index, value] pairs
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty iterator-like object
-                        let iterator_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__type".to_string(),
-                            Value::Str("ArrayIterator".to_string()),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__index".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__kind".to_string(),
-                            Value::Str("entries".to_string()),
-                        )?;
-                        return Ok(Value::Object(iterator_id));
-                    }
-                };
+            "builtin:ArrayPrototypeEntries" => self.array_prototype_iterator(args, "entries"),
 
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len,
-                        Some(Value::Float(len)) => len.inner() as i64,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
+            "builtin:ArrayPrototypeKeys" => self.array_prototype_iterator(args, "keys"),
 
-                // Create iterator object
-                let iterator_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    iterator_id,
-                    "__type".to_string(),
-                    Value::Str("ArrayIterator".to_string()),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__array".to_string(),
-                    Value::Object(array_id),
-                )?;
-                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
-                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
-                self.set_object_property(
-                    iterator_id,
-                    "__kind".to_string(),
-                    Value::Str("entries".to_string()),
-                )?;
-
-                Ok(Value::Object(iterator_id))
-            }
-
-            "builtin:ArrayPrototypeKeys" => {
-                // Array.prototype.keys() implementation - returns iterator for indices
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty iterator-like object
-                        let iterator_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__type".to_string(),
-                            Value::Str("ArrayIterator".to_string()),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__index".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__kind".to_string(),
-                            Value::Str("keys".to_string()),
-                        )?;
-                        return Ok(Value::Object(iterator_id));
-                    }
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len,
-                        Some(Value::Float(len)) => len.inner() as i64,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Create iterator object
-                let iterator_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    iterator_id,
-                    "__type".to_string(),
-                    Value::Str("ArrayIterator".to_string()),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__array".to_string(),
-                    Value::Object(array_id),
-                )?;
-                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
-                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
-                self.set_object_property(
-                    iterator_id,
-                    "__kind".to_string(),
-                    Value::Str("keys".to_string()),
-                )?;
-
-                Ok(Value::Object(iterator_id))
-            }
-
-            "builtin:ArrayPrototypeValues" => {
-                // Array.prototype.values() implementation - returns iterator for values
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty iterator-like object
-                        let iterator_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__type".to_string(),
-                            Value::Str("ArrayIterator".to_string()),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__index".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        self.set_object_property(
-                            iterator_id,
-                            "__kind".to_string(),
-                            Value::Str("values".to_string()),
-                        )?;
-                        return Ok(Value::Object(iterator_id));
-                    }
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len,
-                        Some(Value::Float(len)) => len.inner() as i64,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Create iterator object
-                let iterator_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    iterator_id,
-                    "__type".to_string(),
-                    Value::Str("ArrayIterator".to_string()),
-                )?;
-                self.set_object_property(
-                    iterator_id,
-                    "__array".to_string(),
-                    Value::Object(array_id),
-                )?;
-                self.set_object_property(iterator_id, "__index".to_string(), Value::Int(0))?;
-                self.set_object_property(iterator_id, "__length".to_string(), Value::Int(length))?;
-                self.set_object_property(
-                    iterator_id,
-                    "__kind".to_string(),
-                    Value::Str("values".to_string()),
-                )?;
-
-                Ok(Value::Object(iterator_id))
-            }
+            "builtin:ArrayPrototypeValues" => self.array_prototype_iterator(args, "values"),
 
             "builtin:ObjectSetPrototypeOf" => {
                 // Object.setPrototypeOf(obj, prototype) implementation
@@ -16461,6 +16326,21 @@ mod tests {
         array_id
     }
 
+    fn assert_entry_pair(
+        core: &InterpreterCore,
+        value: Value,
+        expected_index: i64,
+        expected_value: Value,
+    ) {
+        let Value::Object(pair_id) = value else {
+            panic!("expected entry pair object, got {value:?}");
+        };
+        let properties = &core.heap[pair_id.0 as usize].properties;
+        assert_eq!(properties.get("0"), Some(&Value::Int(expected_index)));
+        assert_eq!(properties.get("1"), Some(&expected_value));
+        assert_eq!(properties.get("length"), Some(&Value::Int(2)));
+    }
+
     #[test]
     fn parseint_nan_radix_defaults_for_global_and_number_parseint_builtin_ids() {
         let mut interpreter = quickjs_test_core();
@@ -17791,6 +17671,97 @@ mod tests {
             properties.get("4294967295"),
             Some(&Value::Str("uint32-max".to_string()))
         );
+    }
+
+    #[test]
+    fn array_entries_returns_runtime_iterator_pairs_for_sparse_arrays() {
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[
+                (0, Value::Str("first".to_string())),
+                (2, Value::Str("third".to_string())),
+            ],
+        );
+        core.registers[0] = Value::Object(array_id);
+
+        let iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        assert!(matches!(iterator, Value::Iterator(_)));
+        assert_eq!(
+            core.init_for_of_iterator(iterator.clone()).unwrap(),
+            iterator
+        );
+
+        let first = core.advance_for_of_iterator(iterator.clone()).unwrap();
+        assert_entry_pair(&core, first.unwrap(), 0, Value::Str("first".to_string()));
+        let second = core.advance_for_of_iterator(iterator.clone()).unwrap();
+        assert_entry_pair(&core, second.unwrap(), 1, Value::Undefined);
+        let third = core.advance_for_of_iterator(iterator.clone()).unwrap();
+        assert_entry_pair(&core, third.unwrap(), 2, Value::Str("third".to_string()));
+        assert_eq!(core.advance_for_of_iterator(iterator).unwrap(), None);
+    }
+
+    #[test]
+    fn array_keys_and_values_match_sparse_entry_projection() {
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[
+                (0, Value::Str("first".to_string())),
+                (2, Value::Str("third".to_string())),
+            ],
+        );
+        core.registers[0] = Value::Object(array_id);
+
+        let keys = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeKeys",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let values = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            core.advance_for_of_iterator(keys.clone()).unwrap(),
+            Some(Value::Int(0))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(keys.clone()).unwrap(),
+            Some(Value::Int(1))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(keys.clone()).unwrap(),
+            Some(Value::Int(2))
+        );
+        assert_eq!(core.advance_for_of_iterator(keys).unwrap(), None);
+        assert_eq!(
+            core.advance_for_of_iterator(values.clone()).unwrap(),
+            Some(Value::Str("first".to_string()))
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(values.clone()).unwrap(),
+            Some(Value::Undefined)
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(values.clone()).unwrap(),
+            Some(Value::Str("third".to_string()))
+        );
+        assert_eq!(core.advance_for_of_iterator(values).unwrap(), None);
     }
 
     #[test]

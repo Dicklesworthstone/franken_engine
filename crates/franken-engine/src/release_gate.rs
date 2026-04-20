@@ -1341,6 +1341,7 @@ mod tests {
             Verdict::Fail { reason } => {
                 assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
             }
+            // SAFETY: Test-only panic to validate gate verdict matches expected Fail variant
             _ => panic!("expected fail verdict"),
         }
     }

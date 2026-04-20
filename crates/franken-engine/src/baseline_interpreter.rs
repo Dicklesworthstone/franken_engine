@@ -11789,36 +11789,7 @@ impl InterpreterCore {
 
             // StringPrototypePadEnd: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:ObjectPrototypeHasOwnProperty" => {
-                // Object.prototype.hasOwnProperty(prop) implementation
-                let this_val = self.read_reg(args.start)?;
-                let obj_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects don't have own properties
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let prop_val = self.read_reg(args.start + 1)?;
-                let prop_name = match prop_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                // Check if the object has the property as an own property
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    Ok(Value::Bool(obj.properties.contains_key(&prop_name)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
-            }
+            // Removed duplicate ObjectPrototypeHasOwnProperty - implementation at line 9134 (builtin:ObjectHasOwnProperty) is identical
 
             "builtin:ArrayPrototypeFind" => {
                 // Array.prototype.find(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
@@ -12961,33 +12932,7 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ObjectPropertyIsEnumerable" => {
-                // Object.propertyIsEnumerable(property) implementation
-                if args.count < 2 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let obj_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Primitives don't have enumerable properties
-                };
-
-                let prop_val = self.read_reg(args.start + 1)?;
-                let prop_key = match prop_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                // Simplified implementation: all own properties are enumerable
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
-            }
+            // Removed duplicate ObjectPropertyIsEnumerable - implementation at line 12025 (builtin:ObjectPrototypePropertyIsEnumerable) is identical
 
             // StringPrototypeTrimStart: Removed duplicate dispatch arm (use first occurrence instead)
 
@@ -22152,6 +22097,7 @@ mod tests {
         // Test ConsoleError (ID 101)
         core.console_output.clear();
         core.registers[0] = Value::Str("Error message".to_string());
+        // SAFETY: the console-error regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:ConsoleError".to_string(),
@@ -22168,6 +22114,7 @@ mod tests {
         // Test ConsoleWarn (ID 102)
         core.console_output.clear();
         core.registers[0] = Value::Str("Warn message".to_string());
+        // SAFETY: the console-warn regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:ConsoleWarn".to_string(),
@@ -22184,6 +22131,7 @@ mod tests {
         // Test ConsoleInfo (ID 384) - the critical one from audit
         core.console_output.clear();
         core.registers[0] = Value::Str("Info message".to_string());
+        // SAFETY: the console-info regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:ConsoleInfo".to_string(),

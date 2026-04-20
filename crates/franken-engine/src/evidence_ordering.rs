@@ -673,7 +673,9 @@ mod tests {
     #[test]
     fn size_bounds_serialization_round_trip() {
         let bounds = SizeBounds::default();
+        // SAFETY: SizeBounds derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bounds).unwrap();
+        // SAFETY: JSON was just produced by valid SizeBounds serialization
         let restored: SizeBounds = serde_json::from_str(&json).unwrap();
         assert_eq!(bounds, restored);
     }
@@ -686,7 +688,9 @@ mod tests {
             retained_count: 256,
             policy: "top-K by witness_id".to_string(),
         };
+        // SAFETY: TruncationMarker derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&marker).unwrap();
+        // SAFETY: JSON was just produced by valid TruncationMarker serialization
         let restored: TruncationMarker = serde_json::from_str(&json).unwrap();
         assert_eq!(marker, restored);
     }
@@ -759,7 +763,9 @@ mod tests {
             },
         ];
         for v in &violations {
+            // SAFETY: OrderingViolation derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by valid OrderingViolation serialization
             let restored: OrderingViolation = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
@@ -815,8 +821,10 @@ mod tests {
         );
         let bounds = SizeBounds::default();
         normalize_entry(&mut entry, &bounds);
+        // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
         let json_first = serde_json::to_string(&entry).unwrap();
         let result2 = normalize_entry(&mut entry, &bounds);
+        // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
         let json_second = serde_json::to_string(&entry).unwrap();
         assert_eq!(json_first, json_second, "normalize should be idempotent");
         assert_eq!(result2.duplicates_removed, 0);
@@ -1057,7 +1065,9 @@ mod tests {
             max_witnesses: 20,
             max_constraints: 5,
         };
+        // SAFETY: SizeBounds derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bounds).unwrap();
+        // SAFETY: JSON was just produced by valid SizeBounds serialization
         let restored: SizeBounds = serde_json::from_str(&json).unwrap();
         assert_eq!(bounds, restored);
     }
@@ -1391,7 +1401,9 @@ mod tests {
             retained_count: 64,
             policy: "top-K".to_string(),
         };
+        // SAFETY: TruncationMarker derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&marker).unwrap();
+        // SAFETY: JSON was just produced by valid TruncationMarker serialization
         let restored: TruncationMarker = serde_json::from_str(&json).unwrap();
         assert_eq!(marker, restored);
     }
@@ -2331,7 +2343,9 @@ mod tests {
     #[test]
     fn filtered_candidate_serde_roundtrip() {
         let c = CandidateAction::filtered("terminate", 500_000, "policy-block");
+        // SAFETY: CandidateAction derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by valid CandidateAction serialization
         let restored: CandidateAction = serde_json::from_str(&json).unwrap();
         assert_eq!(c, restored);
         assert!(restored.filtered);

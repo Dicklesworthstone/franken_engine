@@ -1891,6 +1891,8 @@ mod tests {
         for (surface, cap) in diagonals {
             let entry = m
                 .lookup(surface, cap)
+                // SAFETY: Test-only panic to validate gap matrix diagonal completeness.
+                // All capabilities should have diagonal entries in coverage matrix.
                 .unwrap_or_else(|| panic!("missing diagonal entry for {surface}x{cap}"));
             assert_eq!(
                 entry.status,

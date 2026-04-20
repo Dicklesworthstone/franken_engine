@@ -1261,7 +1261,9 @@ mod tests {
             EnvValue::Tdz,
         ];
         for val in &values {
+            // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(val).unwrap();
+            // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
             let back: EnvValue = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, val);
         }
@@ -1270,7 +1272,9 @@ mod tests {
     #[test]
     fn binding_slot_serde_roundtrip() {
         let slot = BindingSlot::new_lexical("x".into(), 42, BindingKind::Let);
+        // SAFETY: Test serializes known-valid BindingSlot; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&slot).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: BindingSlot = serde_json::from_str(&json).unwrap();
         assert_eq!(back, slot);
     }
@@ -1291,7 +1295,9 @@ mod tests {
             max_capture_label: Label::Internal,
             creation_env: EnvironmentHandle(0),
         };
+        // SAFETY: Test serializes known-valid Closure; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&closure).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: Closure = serde_json::from_str(&json).unwrap();
         assert_eq!(back, closure);
     }
@@ -1354,8 +1360,10 @@ mod tests {
         let mut chain = fresh_chain();
         let fn_id = ScopeId { depth: 1, index: 0 };
         let fn_handle = chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test gets valid environment handle; get_env_mut succeeds in controlled test environment.
         let env = chain.get_env_mut(fn_handle).unwrap();
         env.this_binding = Some(EnvValue::ObjectRef(99));
+        // SAFETY: Test gets valid environment handle; get_env succeeds in controlled test environment.
         let env = chain.get_env(fn_handle).unwrap();
         assert_eq!(env.this_binding, Some(EnvValue::ObjectRef(99)));
     }
@@ -1367,13 +1375,17 @@ mod tests {
         let mut chain = fresh_chain();
         let catch_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(catch_id, ScopeKind::Catch);
+        // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
         chain.declare_let("err".into(), 1).unwrap();
+        // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("err", EnvValue::Str("oops".into()), Label::Public)
             .unwrap();
+        // SAFETY: Test gets valid initialized binding; get_value succeeds in controlled test environment.
         let val = chain.get_value("err").unwrap();
         assert_eq!(*val, EnvValue::Str("oops".into()));
         // Catch is not a var scope.
+        // SAFETY: Test pops valid non-empty scope chain; pop_scope succeeds in controlled test environment.
         chain.pop_scope().unwrap();
         let result = chain.get_value("err");
         assert!(result.is_err());
@@ -1388,9 +1400,11 @@ mod tests {
         chain.push_scope(mod_id, ScopeKind::Module);
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
         chain.declare_var("modVar".into(), 1).unwrap();
         // Should be in the module scope, not global.
         let mod_handle = EnvironmentHandle(1);
+        // SAFETY: Test gets valid environment handle; get_env succeeds in controlled test environment.
         let mod_env = chain.get_env(mod_handle).unwrap();
         assert!(mod_env.get_binding("modVar").is_some());
     }
@@ -1400,6 +1414,7 @@ mod tests {
     #[test]
     fn write_to_tdz_binding_fails() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 1).unwrap();
         let result = chain.set_value("x", EnvValue::Number(1), Label::Public);
         assert!(matches!(result, Err(ScopeError::TemporalDeadZone { .. })));
@@ -1418,18 +1433,23 @@ mod tests {
     #[test]
     fn resolve_binding_identifies_correct_scope() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
         chain.declare_var("global_var".into(), 1).unwrap();
 
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
         chain.declare_let("fn_local".into(), 2).unwrap();
+        // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("fn_local", EnvValue::Number(1), Label::Public)
             .unwrap();
 
+        // SAFETY: Test resolves valid declared binding; resolve_binding succeeds in controlled test environment.
         let (_, scope) = chain.resolve_binding("global_var").unwrap();
         assert_eq!(scope, ScopeId { depth: 0, index: 0 });
 
+        // SAFETY: Test resolves valid declared binding; resolve_binding succeeds in controlled test environment.
         let (_, scope) = chain.resolve_binding("fn_local").unwrap();
         assert_eq!(scope, fn_id);
     }

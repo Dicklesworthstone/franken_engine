@@ -585,6 +585,7 @@ impl AsyncModuleEvaluator {
                     if rejected_dependency.is_none() {
                         rejected_dependency = Some((
                             dep.clone(),
+                            // SAFETY: Rejected phase guarantees rejection_reason_hash is Some
                             dep_state.rejection_reason_hash.clone().unwrap(),
                             dep_state.rejection_reason_description.clone(),
                         ));

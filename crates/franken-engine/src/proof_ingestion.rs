@@ -1217,6 +1217,7 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
+        // SAFETY: Test with valid proof and budget should succeed
         engine.ingest_proof(proof, 1000).unwrap();
 
         assert!(engine.active_proofs().contains_key(&proof_id));
@@ -1228,6 +1229,7 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
+        // SAFETY: Test with valid proof and budget should succeed
         engine.ingest_proof(proof, 1000).unwrap();
 
         let hyps = engine.hypotheses_for_proof(&proof_id);

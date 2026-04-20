@@ -1386,7 +1386,9 @@ mod tests {
     #[test]
     fn test_policy_serde_roundtrip() {
         let policy = OverridePolicy::permissive();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: OverridePolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, back);
     }
@@ -1472,7 +1474,9 @@ mod tests {
     fn test_receipt_serde_roundtrip() {
         let contract = test_contract();
         let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateSelectionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, back);
     }
@@ -1540,7 +1544,9 @@ mod tests {
             100,
             ContentHash::compute(b"module"),
         );
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&snap).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, back);
     }
@@ -1670,7 +1676,9 @@ mod tests {
         let contract = test_contract();
         let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let instance = SubstrateInstance::from_contract(&contract, receipt);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&instance).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateInstance = serde_json::from_str(&json).unwrap();
         assert_eq!(instance, back);
     }
@@ -1709,6 +1717,7 @@ mod tests {
             "debug fallback",
         );
         assert!(result.is_ok());
+        // SAFETY: result verified to be Ok above
         let instance = result.unwrap();
         assert_eq!(instance.substrate_kind, SubstrateKind::FlatArray);
         assert_eq!(selector.overridden_count(), 1);

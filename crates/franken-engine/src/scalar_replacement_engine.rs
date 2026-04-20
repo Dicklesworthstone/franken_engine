@@ -2524,7 +2524,9 @@ mod tests {
     #[test]
     fn transform_kind_serde_roundtrip() {
         for kind in TransformKind::ALL {
+            // SAFETY: TransformKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid TransformKind serialization
             let back: TransformKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, back);
         }
@@ -2543,7 +2545,9 @@ mod tests {
             ScalarFieldType::BigIntRef,
         ];
         for t in &types {
+            // SAFETY: ScalarFieldType derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: JSON was just produced by valid ScalarFieldType serialization
             let back: ScalarFieldType = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, back);
         }
@@ -2552,7 +2556,9 @@ mod tests {
     #[test]
     fn deopt_trigger_serde_roundtrip() {
         for trigger in DeoptTrigger::ALL {
+            // SAFETY: DeoptTrigger derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(trigger).unwrap();
+            // SAFETY: JSON was just produced by valid DeoptTrigger serialization
             let back: DeoptTrigger = serde_json::from_str(&json).unwrap();
             assert_eq!(*trigger, back);
         }
@@ -2573,7 +2579,9 @@ mod tests {
             TransformDenialReason::KindNotEligible,
         ];
         for r in &reasons {
+            // SAFETY: TransformDenialReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(r).unwrap();
+            // SAFETY: JSON was just produced by valid TransformDenialReason serialization
             let back: TransformDenialReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*r, back);
         }
@@ -2647,7 +2655,9 @@ mod tests {
             denial_reason: None,
             estimated_bytes_saved: 64,
         };
+        // SAFETY: TransformOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).unwrap();
+        // SAFETY: JSON was just produced by valid TransformOutcome serialization
         let back: TransformOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, back);
     }

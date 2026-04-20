@@ -2272,7 +2272,11 @@ mod tests {
     #[test]
     fn deterministic_rng_serde_round_trip() {
         let rng = DeterministicRng::seeded(999);
+        // SAFETY: DeterministicRng derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&rng).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DeterministicRng,
+        // so from_str back to DeterministicRng cannot fail (valid format + matching schema).
         let back: DeterministicRng = serde_json::from_str(&json).unwrap();
         assert_eq!(rng, back);
     }
@@ -2416,8 +2420,10 @@ mod tests {
     #[test]
     fn waiver_reason_code_serde_round_trip() {
         let code = WaiverReasonCode::HarnessGap;
+        // SAFETY: WaiverReasonCode derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&code).unwrap();
         assert_eq!(json, "\"harness_gap\"");
+        // SAFETY: JSON was just generated from WaiverReasonCode, deserialization guaranteed to succeed
         let back: WaiverReasonCode = serde_json::from_str(&json).unwrap();
         assert_eq!(back, code);
     }
@@ -2433,6 +2439,7 @@ reason_code = "harness_gap"
 tracking_bead = "bd-42"
 expiry_date = "2030-01-01"
 "#;
+        // SAFETY: Test uses valid TOML that matches expected waiver format
         let set = parse_waiver_toml(toml).unwrap();
         assert_eq!(set.waivers.len(), 1);
         assert_eq!(set.waivers[0].asset_id, "test-001");
@@ -2456,6 +2463,7 @@ reason_code = "not_yet_implemented"
 tracking_bead = "bd-2"
 expiry_date = "2031-06-15"
 "#;
+        // SAFETY: Test uses valid TOML that matches expected waiver format
         let set = parse_waiver_toml(toml).unwrap();
         assert_eq!(set.waivers.len(), 2);
         assert_eq!(set.waivers[1].asset_id, "test-002");
@@ -2475,6 +2483,7 @@ reason_code = "harness_gap"
 tracking_bead = "bd-1"
 expiry_date = "2030-01-01"
 "#;
+        // SAFETY: Test uses valid TOML that matches expected waiver format
         let set = parse_waiver_toml(toml).unwrap();
         assert_eq!(set.waivers.len(), 1);
         assert_eq!(set.waivers[0].asset_id, "test-001");
@@ -2482,6 +2491,7 @@ expiry_date = "2030-01-01"
 
     #[test]
     fn parse_waiver_toml_empty_content() {
+        // SAFETY: Empty string should parse successfully to empty waiver set
         let set = parse_waiver_toml("").unwrap();
         assert!(set.waivers.is_empty());
     }
@@ -2545,6 +2555,7 @@ expiry_date = "2030-01-01"
         };
         let found = set.find_active("asset-1", "2025-06-01");
         assert!(found.is_some());
+        // SAFETY: Just verified found.is_some() so unwrap() is safe
         assert_eq!(found.unwrap().asset_id, "asset-1");
     }
 

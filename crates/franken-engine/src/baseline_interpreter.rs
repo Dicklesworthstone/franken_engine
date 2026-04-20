@@ -14603,36 +14603,7 @@ impl InterpreterCore {
                 Ok(Value::Str(trimmed))
             }
 
-            "builtin:MathSign" => {
-                // Math.sign(x) implementation
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let val = self.read_reg(args.start)?;
-                let num = match val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let result = if num.is_nan() {
-                    f64::NAN
-                } else if num > 0.0 {
-                    1.0
-                } else if num < 0.0 {
-                    -1.0
-                } else {
-                    // Handle +0, -0
-                    num // Preserves sign of zero
-                };
-
-                Ok(Value::Float(Float64::new(result)))
-            }
+            // Removed duplicate MathSign - implementation at line ~10088 is identical
 
             "builtin:ArrayPrototypeGroup" => {
                 // Array.prototype.group(callback) implementation (simplified)

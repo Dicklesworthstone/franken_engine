@@ -823,7 +823,9 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
+        // SAFETY: estimator with known observations has valid non-empty alphabet
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
+        // SAFETY: coder was created successfully, encoding known symbols cannot fail
         let compressed = coder.encode(&[0, 1, 0, 1, 0]).unwrap();
         assert!(!compressed.compressed_data.is_empty());
         assert_eq!(compressed.original_symbol_count, 5);

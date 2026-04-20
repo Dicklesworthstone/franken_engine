@@ -1890,6 +1890,7 @@ mod tests {
             witness: "w".to_string(),
             line: 7,
         };
+        // SAFETY: Exemption derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ex).unwrap();
         assert!(json.contains("\"exemption_id\""));
         assert!(json.contains("\"module_path\""));

@@ -1702,6 +1702,8 @@ mod tests {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 3);
             }
+            // SAFETY: Test-only panic to validate JSX element parsing.
+            // Test expects element node type for JSX component with attributes.
             _ => panic!("expected element"),
         }
     }

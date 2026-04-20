@@ -247,6 +247,8 @@ mod tests {
             let keys: Vec<&String> = decoded_map.keys().collect();
             assert_eq!(keys, vec!["alpha", "beta"]);
         } else {
+            // SAFETY: Test-only panic to validate Map serialization format.
+            // Test expects CanonicalValue::Map from golden vector decoding.
             panic!("expected Map");
         }
         assert_eq!(decoded, value);

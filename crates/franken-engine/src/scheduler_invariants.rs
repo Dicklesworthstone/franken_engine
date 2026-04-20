@@ -358,6 +358,7 @@ impl VerificationStatus {
 impl VerificationResult {
     pub fn derive_id(&self) -> EngineObjectId {
         let canonical = format!("verification-{}-{}", self.property_id, self.status.as_str());
+        // SAFETY: derive_id cannot fail with valid object domain, zone, schema, and data
         derive_id(
             ObjectDomain::EvidenceRecord,
             "invariants",
@@ -1098,7 +1099,9 @@ mod tests {
             InterferenceSeverity::Serious,
             InterferenceSeverity::Critical,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: InterferenceSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(s, back);
         }
@@ -1198,7 +1201,9 @@ mod tests {
         for prop in canonical_scheduler_properties() {
             reg.add_property(prop);
         }
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: InvariantRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, back);
     }
@@ -1327,7 +1332,9 @@ mod tests {
     #[test]
     fn state_id_serde_roundtrip() {
         let s = StateId::new("test-state");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: StateId = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }

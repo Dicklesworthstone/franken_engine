@@ -1133,9 +1133,13 @@ mod tests {
     #[test]
     fn record_execution_multiple_times() {
         let mut sched = test_scheduler();
+        // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched.record_execution("health-1", true).unwrap();
+        // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched.record_execution("health-1", false).unwrap();
+        // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched.record_execution("health-1", true).unwrap();
+        // SAFETY: Test scenario with valid probe ID from test_scheduler; probe lookup should succeed
         let state = sched.probe("health-1").unwrap();
         assert_eq!(state.execution_count, 3);
         assert!(state.last_success);

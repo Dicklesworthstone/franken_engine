@@ -1100,10 +1100,14 @@ mod tests {
             ..TournamentConfig::default()
         };
 
+        // SAFETY: Test with valid config1 and matrix should create first harness successfully
         let mut h1 = CoevolutionHarness::new(config1, matrix.clone()).unwrap();
+        // SAFETY: Test with valid config2 and matrix should create second harness successfully
         let mut h2 = CoevolutionHarness::new(config2, matrix).unwrap();
 
+        // SAFETY: First test harness with valid configuration should run successfully
         let r1 = h1.run().unwrap();
+        // SAFETY: Second test harness with valid configuration should run successfully
         let r2 = h2.run().unwrap();
         // Different seeds should usually produce different trajectories
         // (though in degenerate cases they might match)
@@ -1120,8 +1124,11 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
+        // SAFETY: Test with valid config and matrix should create harness successfully
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with valid configuration should run successfully
         let result = harness.run().unwrap();
+        // SAFETY: Test result with trajectory recording enabled contains trajectory
         let traj = result.trajectory.as_ref().unwrap();
         assert_eq!(traj.round_count(), 50);
         assert_eq!(traj.attacker_cumulative_regret.len(), 50);
@@ -1136,7 +1143,9 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
+        // SAFETY: Test with valid config (trajectory disabled) and matrix should create harness successfully
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with trajectory disabled should run successfully
         let result = harness.run().unwrap();
         assert!(result.trajectory.is_none());
     }
@@ -1148,8 +1157,11 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
+        // SAFETY: Test with valid config and matrix should create harness successfully for regret test
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with valid configuration should run successfully for regret test
         let result = harness.run().unwrap();
+        // SAFETY: Test result with default trajectory tracking should have trajectory data
         let traj = result.trajectory.unwrap();
         for r in &traj.attacker_cumulative_regret {
             assert!(*r >= 0, "negative attacker regret: {r}");
@@ -1477,7 +1489,9 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
+        // SAFETY: Test with valid config and matrix should create harness successfully for serde test
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with valid configuration should run successfully for serde test
         let result = harness.run().unwrap();
         // SAFETY: TournamentResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).

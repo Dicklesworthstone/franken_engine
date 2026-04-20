@@ -1937,6 +1937,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "report_digest_matches")
+            // SAFETY: Test-only unwrap expecting report_digest_matches check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

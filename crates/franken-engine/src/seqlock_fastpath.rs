@@ -381,7 +381,9 @@ mod tests {
     #[test]
     fn fast_path_read_source_serde_round_trip() {
         for source in [FastPathReadSource::FastPath, FastPathReadSource::Fallback] {
+            // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
             let json = serde_json::to_string(&source).unwrap();
+            // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
             let back: FastPathReadSource = serde_json::from_str(&json).unwrap();
             assert_eq!(source, back);
         }

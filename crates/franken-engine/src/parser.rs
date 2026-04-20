@@ -2896,6 +2896,7 @@ fn is_named_import_clause(clause: &str) -> bool {
         }
 
         let mut parts = specifier.split_whitespace();
+        // SAFETY: specifier is non-empty after early return check above
         let first = parts.next().unwrap();
         let second = parts.next();
         let third = parts.next();
@@ -2955,6 +2956,7 @@ fn parse_named_import_specifiers(
         }
 
         let mut parts = specifier.split_whitespace();
+        // SAFETY: specifier is non-empty after early return check above
         let import_name = parts.next().unwrap();
         let second = parts.next();
         let third = parts.next();

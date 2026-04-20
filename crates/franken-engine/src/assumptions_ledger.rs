@@ -648,6 +648,7 @@ mod tests {
         let mut ledger = default_ledger();
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
+            // SAFETY: Test assumes assumption recording succeeds with valid input
             .unwrap();
         assert_eq!(ledger.assumption_count(), 1);
         assert!(ledger.assumption("a1").is_some());

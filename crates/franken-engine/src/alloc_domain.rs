@@ -1502,6 +1502,7 @@ mod tests {
         set.insert(AllocationDomain::IrArena);
         assert_eq!(set.len(), 5);
         // First element should be ExtensionHeap (smallest discriminant)
+        // SAFETY: The set length is asserted above, so next() must yield an element.
         assert_eq!(*set.iter().next().unwrap(), AllocationDomain::ExtensionHeap);
     }
 
@@ -1515,6 +1516,7 @@ mod tests {
         set.insert(LifetimeClass::SessionScoped);
         set.insert(LifetimeClass::Arena); // duplicate
         assert_eq!(set.len(), 4);
+        // SAFETY: The set length is asserted above, so next() must yield an element.
         assert_eq!(*set.iter().next().unwrap(), LifetimeClass::RequestScoped);
     }
 

@@ -1500,68 +1500,44 @@ fn static_analysis_graph_capacity_heuristics() {
 // instead of panicking when given unknown node IDs.
 
 #[test]
-fn unknown_node_outgoing_edges_returns_error() {
+fn unknown_node_outgoing_edges_returns_empty() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Add a few nodes to ensure the graph is not empty
-    graph
-        .add_node(create_test_node("existing1", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("existing2", NodeKind::Component))
-        .unwrap();
+    graph.add_node(component_node("existing1")).unwrap();
+    graph.add_node(component_node("existing2")).unwrap();
 
-    // Query for unknown node should return AnalysisError::UnknownNode
+    // Query for unknown node should return empty vector
     let unknown_id = AnalysisNodeId::new("nonexistent_node");
     let result = graph.outgoing_edges(&unknown_id);
 
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        AnalysisError::UnknownNode(node_id) => {
-            assert_eq!(node_id, unknown_id);
-        }
-        other => panic!("Expected AnalysisError::UnknownNode, got {:?}", other),
-    }
+    assert!(result.is_empty());
 }
 
 #[test]
-fn unknown_node_incoming_edges_returns_error() {
+fn unknown_node_incoming_edges_returns_empty() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Add a few nodes to ensure the graph is not empty
-    graph
-        .add_node(create_test_node("existing1", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("existing2", NodeKind::Component))
-        .unwrap();
+    graph.add_node(component_node("existing1")).unwrap();
+    graph.add_node(component_node("existing2")).unwrap();
 
-    // Query for unknown node should return AnalysisError::UnknownNode
+    // Query for unknown node should return empty vector
     let unknown_id = AnalysisNodeId::new("nonexistent_node");
     let result = graph.incoming_edges(&unknown_id);
 
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        AnalysisError::UnknownNode(node_id) => {
-            assert_eq!(node_id, unknown_id);
-        }
-        other => panic!("Expected AnalysisError::UnknownNode, got {:?}", other),
-    }
+    assert!(result.is_empty());
 }
 
 #[test]
-fn unknown_node_dependencies_returns_error() {
+fn unknown_node_dependencies_returns_empty() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Add a few nodes to ensure the graph is not empty
+    graph.add_node(component_node("existing1")).unwrap();
+    graph.add_node(component_node("existing2")).unwrap();
     graph
-        .add_node(create_test_node("existing1", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("existing2", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_edge(create_test_edge(
+        .add_edge(edge(
             "edge1",
             "existing1",
             "existing2",
@@ -1569,32 +1545,22 @@ fn unknown_node_dependencies_returns_error() {
         ))
         .unwrap();
 
-    // Query for unknown node should return AnalysisError::UnknownNode
+    // Query for unknown node should return empty vector
     let unknown_id = AnalysisNodeId::new("nonexistent_node");
     let result = graph.dependencies(&unknown_id);
 
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        AnalysisError::UnknownNode(node_id) => {
-            assert_eq!(node_id, unknown_id);
-        }
-        other => panic!("Expected AnalysisError::UnknownNode, got {:?}", other),
-    }
+    assert!(result.is_empty());
 }
 
 #[test]
-fn unknown_node_dependents_returns_error() {
+fn unknown_node_dependents_returns_empty() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Add a few nodes to ensure the graph is not empty
+    graph.add_node(component_node("existing1")).unwrap();
+    graph.add_node(component_node("existing2")).unwrap();
     graph
-        .add_node(create_test_node("existing1", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("existing2", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_edge(create_test_edge(
+        .add_edge(edge(
             "edge1",
             "existing1",
             "existing2",
@@ -1602,17 +1568,11 @@ fn unknown_node_dependents_returns_error() {
         ))
         .unwrap();
 
-    // Query for unknown node should return AnalysisError::UnknownNode
+    // Query for unknown node should return empty vector
     let unknown_id = AnalysisNodeId::new("nonexistent_node");
     let result = graph.dependents(&unknown_id);
 
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        AnalysisError::UnknownNode(node_id) => {
-            assert_eq!(node_id, unknown_id);
-        }
-        other => panic!("Expected AnalysisError::UnknownNode, got {:?}", other),
-    }
+    assert!(result.is_empty());
 }
 
 #[test]
@@ -1620,38 +1580,30 @@ fn fail_closed_semantics_comprehensive() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Build a small connected graph
-    graph
-        .add_node(create_test_node("node1", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("node2", NodeKind::Component))
-        .unwrap();
-    graph
-        .add_node(create_test_node("node3", NodeKind::Component))
-        .unwrap();
+    graph.add_node(component_node("node1")).unwrap();
+    graph.add_node(component_node("node2")).unwrap();
+    graph.add_node(component_node("node3")).unwrap();
 
     graph
-        .add_edge(create_test_edge(
-            "edge1",
-            "node1",
-            "node2",
-            EdgeKind::RendersChild,
-        ))
+        .add_edge(edge("edge1", "node1", "node2", EdgeKind::RendersChild))
         .unwrap();
     graph
-        .add_edge(create_test_edge(
-            "edge2",
-            "node2",
-            "node3",
-            EdgeKind::PropFlow,
-        ))
+        .add_edge(edge("edge2", "node2", "node3", EdgeKind::PropFlow))
         .unwrap();
 
     // Verify existing nodes work correctly
-    assert!(graph.outgoing_edges(&AnalysisNodeId::new("node1")).is_ok());
-    assert!(graph.incoming_edges(&AnalysisNodeId::new("node3")).is_ok());
-    assert!(graph.dependencies(&AnalysisNodeId::new("node1")).is_ok());
-    assert!(graph.dependents(&AnalysisNodeId::new("node2")).is_ok());
+    assert!(
+        !graph
+            .outgoing_edges(&AnalysisNodeId::new("node1"))
+            .is_empty()
+    );
+    assert!(
+        !graph
+            .incoming_edges(&AnalysisNodeId::new("node3"))
+            .is_empty()
+    );
+    assert!(!graph.dependencies(&AnalysisNodeId::new("node1")).is_empty());
+    assert!(!graph.dependents(&AnalysisNodeId::new("node2")).is_empty());
 
     // Test multiple unknown node IDs to ensure consistent behavior
     let unknown_nodes = ["unknown1", "missing", "stale_id", "never_existed"];
@@ -1659,65 +1611,27 @@ fn fail_closed_semantics_comprehensive() {
     for unknown_name in &unknown_nodes {
         let unknown_id = AnalysisNodeId::new(unknown_name);
 
-        // All query methods should return UnknownNode error
-        assert!(matches!(
-            graph.outgoing_edges(&unknown_id),
-            Err(AnalysisError::UnknownNode(_))
-        ));
-        assert!(matches!(
-            graph.incoming_edges(&unknown_id),
-            Err(AnalysisError::UnknownNode(_))
-        ));
-        assert!(matches!(
-            graph.dependencies(&unknown_id),
-            Err(AnalysisError::UnknownNode(_))
-        ));
-        assert!(matches!(
-            graph.dependents(&unknown_id),
-            Err(AnalysisError::UnknownNode(_))
-        ));
+        // All query methods should return empty vectors for unknown nodes
+        assert!(graph.outgoing_edges(&unknown_id).is_empty());
+        assert!(graph.incoming_edges(&unknown_id).is_empty());
+        assert!(graph.dependencies(&unknown_id).is_empty());
+        assert!(graph.dependents(&unknown_id).is_empty());
     }
 }
 
 #[test]
-fn reachable_from_unknown_node_returns_error() {
+fn reachable_from_unknown_node_returns_empty() {
     let mut graph = StaticAnalysisGraph::new();
 
     // Add some nodes to make sure the graph is functional
-    graph
-        .add_node(create_test_node("existing", NodeKind::Component))
-        .unwrap();
+    graph.add_node(component_node("existing")).unwrap();
 
-    // reachable_from should also fail for unknown start nodes
+    // reachable_from should return empty set for unknown start nodes
     let unknown_id = AnalysisNodeId::new("unknown_start");
     let result = graph.reachable_from(&unknown_id);
 
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        AnalysisError::UnknownNode(node_id) => {
-            assert_eq!(node_id, unknown_id);
-        }
-        other => panic!("Expected AnalysisError::UnknownNode, got {:?}", other),
-    }
+    assert!(result.is_empty());
 }
 
-// Helper functions for creating test nodes and edges
-fn create_test_node(id: &str, kind: NodeKind) -> AnalysisNode {
-    AnalysisNode {
-        id: AnalysisNodeId::new(id),
-        kind,
-        source_file: format!("{}.rs", id),
-        line_number: 1,
-        metadata: Default::default(),
-    }
-}
-
-fn create_test_edge(id: &str, source: &str, target: &str, kind: EdgeKind) -> AnalysisEdge {
-    AnalysisEdge {
-        id: AnalysisEdgeId::new(id),
-        source: AnalysisNodeId::new(source),
-        target: AnalysisNodeId::new(target),
-        kind,
-        metadata: Default::default(),
-    }
-}
+// Helper functions for creating test nodes and edges are available at the top of the file
+// as component_node(), data_source_node(), effect_node(), and edge()

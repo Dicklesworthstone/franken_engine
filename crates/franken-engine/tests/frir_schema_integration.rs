@@ -1324,9 +1324,15 @@ fn witness_chain_verify_empty_is_invalid() {
         passes: Vec::new(),
         source_hash: make_hash(b"src"),
         final_output_hash: make_hash(b"out"),
+        output_hash: make_hash(b"out"),
         target_lane: LaneTarget::Js,
         complete: false,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: false,
+            errors: vec!["Empty chain".to_string()],
+            pass_verdicts: Vec::new(),
+        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1343,9 +1349,15 @@ fn witness_chain_verify_source_hash_mismatch() {
         passes: vec![w.clone()],
         source_hash: make_hash(b"wrong-source"),
         final_output_hash: w.output_hash,
+        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: false,
+            errors: vec!["Source hash mismatch".to_string()],
+            pass_verdicts: vec![WitnessVerdict::Valid],
+        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1361,9 +1373,15 @@ fn witness_chain_verify_final_output_mismatch() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: make_hash(b"wrong-final"),
+        output_hash: make_hash(b"wrong-final"),
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: false,
+            errors: vec!["Final output hash mismatch".to_string()],
+            pass_verdicts: vec![WitnessVerdict::Valid],
+        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1380,9 +1398,15 @@ fn witness_chain_verify_broken_link_between_passes() {
         passes: vec![w0.clone(), w1.clone()],
         source_hash: w0.input_hash,
         final_output_hash: w1.output_hash,
+        output_hash: w1.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: false,
+            errors: vec!["Broken link between passes".to_string()],
+            pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Invalid],
+        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1399,9 +1423,15 @@ fn witness_chain_verify_pass_with_invalid_verdict() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: w.output_hash,
+        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: false,
+            errors: vec!["Failed invariant check".to_string()],
+            pass_verdicts: vec![WitnessVerdict::Invalid],
+        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1418,9 +1448,15 @@ fn witness_chain_total_cost_single_pass() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: w.output_hash,
+        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: true,
+            errors: Vec::new(),
+            pass_verdicts: vec![WitnessVerdict::Valid],
+        },
     };
     assert_eq!(chain.total_cost_millionths(), 50_000);
 }
@@ -1441,9 +1477,19 @@ fn witness_chain_offline_online_split() {
         passes: vec![w0, w1, w2],
         source_hash: make_hash(b"source"),
         final_output_hash: make_hash(b"analyzed"),
+        output_hash: make_hash(b"analyzed"),
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: true,
+            errors: Vec::new(),
+            pass_verdicts: vec![
+                WitnessVerdict::Valid,
+                WitnessVerdict::Valid,
+                WitnessVerdict::Valid,
+            ],
+        },
     };
     assert_eq!(chain.offline_pass_count(), 2);
     assert_eq!(chain.online_pass_count(), 1);
@@ -1458,9 +1504,15 @@ fn witness_chain_serde_roundtrip() {
         passes: vec![w1.clone(), w2.clone()],
         source_hash: w1.input_hash,
         final_output_hash: w2.output_hash,
+        output_hash: w2.output_hash,
         target_lane: LaneTarget::Wasm,
         complete: true,
         chain_hash: make_hash(b"chain"),
+        verification: ChainVerification {
+            valid: true,
+            errors: Vec::new(),
+            pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Valid],
+        },
     };
     let json = serde_json::to_string(&chain).unwrap();
     let back: WitnessChain = serde_json::from_str(&json).unwrap();
@@ -2127,24 +2179,54 @@ fn json_field_names_equivalence_witness() {
 // FrirArtifact — metadata compaction
 // =========================================================================
 
-#[test]
-fn frir_artifact_compact_metadata_single_pass() {
-    let mut artifact = FrirArtifact {
+fn make_artifact_from_passes(passes: Vec<PassWitness>) -> FrirArtifact {
+    let source_hash = passes
+        .first()
+        .map(|pass| pass.input_hash)
+        .unwrap_or_else(|| make_hash(b"input"));
+    let output_hash = passes
+        .last()
+        .map(|pass| pass.output_hash)
+        .unwrap_or_else(|| make_hash(b"output"));
+    let mut chain_hash_input = Vec::new();
+    for pass in &passes {
+        chain_hash_input.extend_from_slice(pass.witness_hash.as_bytes());
+    }
+
+    FrirArtifact {
         schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        frir_version: FrirVersion::V1_0,
-        source_hash: make_hash(b"source"),
+        frir_version: FrirVersion::CURRENT,
+        source_hash,
         target_lane: LaneTarget::Js,
+        pipeline_config: PipelineConfig::production(),
+        fallback_reasons: vec![],
         witness_chain: WitnessChain {
-            input_hash: make_hash(b"input"),
-            output_hash: make_hash(b"output"),
-            passes: vec![make_witness(0, PassKind::Parse, b"source", b"parsed")],
-            verification: ChainVerification::Verified,
+            schema_version: FRIR_SCHEMA_VERSION.to_string(),
+            frir_version: FrirVersion::CURRENT,
+            passes,
+            source_hash,
+            final_output_hash: output_hash,
+            output_hash,
+            target_lane: LaneTarget::Js,
+            complete: true,
+            chain_hash: make_hash(&chain_hash_input),
+            verification: ChainVerification {
+                valid: true,
+                errors: Vec::new(),
+                pass_verdicts: Vec::new(),
+            },
         },
         equivalence_witnesses: vec![],
         aggregated_effects: vec![],
         required_capabilities: BTreeSet::new(),
-        output_hash: make_hash(b"output"),
-    };
+        output_hash,
+    }
+}
+
+#[test]
+fn frir_artifact_compact_metadata_single_pass() {
+    let mut artifact =
+        make_artifact_from_passes(vec![make_witness(0, PassKind::Parse, b"source", b"parsed")]);
 
     // Store original pass count for comparison
     let original_invariants_len = artifact.witness_chain.passes[0].invariants_checked.len();
@@ -2161,22 +2243,7 @@ fn frir_artifact_compact_metadata_single_pass() {
 
 #[test]
 fn frir_artifact_compact_metadata_no_passes() {
-    let mut artifact = FrirArtifact {
-        schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        frir_version: FrirVersion::V1_0,
-        source_hash: make_hash(b"source"),
-        target_lane: LaneTarget::Js,
-        witness_chain: WitnessChain {
-            input_hash: make_hash(b"input"),
-            output_hash: make_hash(b"output"),
-            passes: vec![], // Empty passes
-            verification: ChainVerification::Verified,
-        },
-        equivalence_witnesses: vec![],
-        aggregated_effects: vec![],
-        required_capabilities: BTreeSet::new(),
-        output_hash: make_hash(b"output"),
-    };
+    let mut artifact = make_artifact_from_passes(vec![]);
 
     // compact_metadata should no-op on empty passes
     artifact.compact_metadata();
@@ -2191,39 +2258,24 @@ fn frir_artifact_compact_metadata_deduplication() {
     pass1.invariants_checked = vec![
         make_invariant(InvariantKind::TypeSafety, true),
         make_invariant(InvariantKind::SemanticEquivalence, true),
-        make_invariant(InvariantKind::PerformanceRelevance, true),
+        make_invariant(InvariantKind::Determinism, true),
     ];
 
     let mut pass2 = make_witness(1, PassKind::ScopeResolve, b"parsed", b"resolved");
     pass2.invariants_checked = vec![
         make_invariant(InvariantKind::TypeSafety, true), // Duplicate
         make_invariant(InvariantKind::SemanticEquivalence, true), // Duplicate
-        make_invariant(InvariantKind::MemorySafety, true), // Unique to pass2
+        make_invariant(InvariantKind::EffectContainment, true), // Unique to pass2
     ];
 
-    let mut pass3 = make_witness(2, PassKind::Optimize, b"resolved", b"optimized");
+    let mut pass3 = make_witness(2, PassKind::EGraphOptimization, b"resolved", b"optimized");
     pass3.invariants_checked = vec![
         make_invariant(InvariantKind::TypeSafety, true), // Duplicate
-        make_invariant(InvariantKind::PerformanceRelevance, true), // Duplicate
-        make_invariant(InvariantKind::ResourceUsage, true), // Unique to pass3
+        make_invariant(InvariantKind::Determinism, true), // Duplicate
+        make_invariant(InvariantKind::ResourceBound, true), // Unique to pass3
     ];
 
-    let mut artifact = FrirArtifact {
-        schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        frir_version: FrirVersion::V1_0,
-        source_hash: make_hash(b"source"),
-        target_lane: LaneTarget::Js,
-        witness_chain: WitnessChain {
-            input_hash: make_hash(b"input"),
-            output_hash: make_hash(b"output"),
-            passes: vec![pass1, pass2, pass3],
-            verification: ChainVerification::Verified,
-        },
-        equivalence_witnesses: vec![],
-        aggregated_effects: vec![],
-        required_capabilities: BTreeSet::new(),
-        output_hash: make_hash(b"output"),
-    };
+    let mut artifact = make_artifact_from_passes(vec![pass1, pass2, pass3]);
 
     // Before compaction: each pass has its invariants
     assert_eq!(artifact.witness_chain.passes[0].invariants_checked.len(), 3);
@@ -2236,28 +2288,28 @@ fn frir_artifact_compact_metadata_deduplication() {
     // Pass 0 (first): keeps all invariants (3)
     assert_eq!(artifact.witness_chain.passes[0].invariants_checked.len(), 3);
 
-    // Pass 1: should keep TypeSafety (always preserved) + unique MemorySafety
+    // Pass 1: should keep TypeSafety (always preserved) + unique EffectContainment
     let pass1_invariants: BTreeSet<_> = artifact.witness_chain.passes[1]
         .invariants_checked
         .iter()
         .map(|inv| inv.kind)
         .collect();
     assert!(pass1_invariants.contains(&InvariantKind::TypeSafety));
-    assert!(pass1_invariants.contains(&InvariantKind::MemorySafety));
+    assert!(pass1_invariants.contains(&InvariantKind::EffectContainment));
     // Should not contain duplicates
     assert!(!pass1_invariants.contains(&InvariantKind::SemanticEquivalence));
     assert_eq!(pass1_invariants.len(), 2);
 
-    // Pass 2: should keep TypeSafety (always preserved) + unique ResourceUsage
+    // Pass 2: should keep TypeSafety (always preserved) + unique ResourceBound
     let pass2_invariants: BTreeSet<_> = artifact.witness_chain.passes[2]
         .invariants_checked
         .iter()
         .map(|inv| inv.kind)
         .collect();
     assert!(pass2_invariants.contains(&InvariantKind::TypeSafety));
-    assert!(pass2_invariants.contains(&InvariantKind::ResourceUsage));
+    assert!(pass2_invariants.contains(&InvariantKind::ResourceBound));
     // Should not contain duplicates
-    assert!(!pass2_invariants.contains(&InvariantKind::PerformanceRelevance));
+    assert!(!pass2_invariants.contains(&InvariantKind::Determinism));
     assert_eq!(pass2_invariants.len(), 2);
 }
 
@@ -2275,22 +2327,7 @@ fn frir_artifact_compact_metadata_preserves_type_safety() {
         make_invariant(InvariantKind::TypeSafety, true), // Duplicate, but should be preserved
     ];
 
-    let mut artifact = FrirArtifact {
-        schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        frir_version: FrirVersion::V1_0,
-        source_hash: make_hash(b"source"),
-        target_lane: LaneTarget::Js,
-        witness_chain: WitnessChain {
-            input_hash: make_hash(b"input"),
-            output_hash: make_hash(b"output"),
-            passes: vec![pass1, pass2],
-            verification: ChainVerification::Verified,
-        },
-        equivalence_witnesses: vec![],
-        aggregated_effects: vec![],
-        required_capabilities: BTreeSet::new(),
-        output_hash: make_hash(b"output"),
-    };
+    let mut artifact = make_artifact_from_passes(vec![pass1, pass2]);
 
     artifact.compact_metadata();
 
@@ -2302,5 +2339,36 @@ fn frir_artifact_compact_metadata_preserves_type_safety() {
     assert_eq!(
         artifact.witness_chain.passes[1].invariants_checked[0].kind,
         InvariantKind::TypeSafety
+    );
+}
+
+#[test]
+fn frir_artifact_compact_metadata_preserves_failed_duplicate_invariants() {
+    let mut pass1 = make_witness(0, PassKind::Parse, b"source", b"parsed");
+    pass1.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true),
+        make_invariant(InvariantKind::SemanticEquivalence, true),
+    ];
+
+    let mut pass2 = make_witness(1, PassKind::ScopeResolve, b"parsed", b"resolved");
+    pass2.invariants_checked = vec![
+        make_invariant(InvariantKind::TypeSafety, true),
+        make_invariant(InvariantKind::SemanticEquivalence, false),
+    ];
+
+    let mut artifact = make_artifact_from_passes(vec![pass1, pass2]);
+    assert!(!artifact.is_valid());
+
+    artifact.compact_metadata();
+
+    assert!(!artifact.is_valid());
+    assert!(
+        artifact.witness_chain.passes[1]
+            .invariants_checked
+            .iter()
+            .any(
+                |invariant| invariant.kind == InvariantKind::SemanticEquivalence
+                    && !invariant.passed
+            )
     );
 }

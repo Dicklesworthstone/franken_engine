@@ -2201,7 +2201,9 @@ mod tests {
             100_000,
         );
         let outcome = record_outcome(&p, 350_000);
+        // SAFETY: ExperimentOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).unwrap();
+        // SAFETY: JSON was just produced by valid ExperimentOutcome serialization
         let back: ExperimentOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(back, outcome);
     }
@@ -2255,7 +2257,9 @@ mod tests {
     #[test]
     fn plan_serde_round_trip() {
         let plan = franken_engine_acquisition_manifest();
+        // SAFETY: ExperimentPlan derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&plan).unwrap();
+        // SAFETY: JSON was just produced by valid ExperimentPlan serialization
         let back: ExperimentPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(back, plan);
     }

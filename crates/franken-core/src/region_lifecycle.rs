@@ -545,6 +545,7 @@ mod tests {
     #[test]
     fn drain_from_cancel_requested_succeeds() {
         let mut region = test_region();
+        // SAFETY: test region starts in Running state, cancel should succeed
         region.cancel(CancelReason::OperatorShutdown).unwrap();
         assert!(region.drain(DrainDeadline::default()).is_ok());
         assert_eq!(region.state(), RegionState::Draining);
@@ -553,6 +554,7 @@ mod tests {
     #[test]
     fn finalize_before_drain_fails() {
         let mut region = test_region();
+        // SAFETY: test region starts in Running state, cancel should succeed
         region.cancel(CancelReason::OperatorShutdown).unwrap();
         let err = region.finalize().unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);
@@ -571,8 +573,11 @@ mod tests {
     #[test]
     fn full_lifecycle_cancel_drain_finalize() {
         let mut region = test_region();
+        // SAFETY: test region starts in Running state, cancel should succeed
         region.cancel(CancelReason::OperatorShutdown).unwrap();
+        // SAFETY: region is in CancelRequested state, drain should succeed
         region.drain(DrainDeadline::default()).unwrap();
+        // SAFETY: region is in Draining state, finalize should succeed
         let result = region.finalize().unwrap();
         assert!(result.success);
         assert_eq!(region.state(), RegionState::Closed);

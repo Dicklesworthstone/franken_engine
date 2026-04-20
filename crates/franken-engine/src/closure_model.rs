@@ -1070,13 +1070,18 @@ mod tests {
     #[test]
     fn ifc_label_propagates_on_init() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("secret".into(), 1).unwrap();
+        // SAFETY: Test initializes valid binding with secret label; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("secret", EnvValue::Str("key".into()), Label::Secret)
             .unwrap();
+        // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
         let handle = chain.current_handle().unwrap();
+        // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
         let env = chain.get_env(handle).unwrap();
         assert!(env.max_label >= Label::Secret);
+        // SAFETY: Test gets declared binding; get_binding succeeds in controlled test environment.
         let slot = env.get_binding("secret").unwrap();
         assert_eq!(slot.label, Label::Secret);
     }
@@ -1084,7 +1089,9 @@ mod tests {
     #[test]
     fn ifc_label_propagates_on_set() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
         chain.declare_var("data".into(), 1).unwrap();
+        // SAFETY: Test sets valid confidential value; set_value succeeds in controlled test environment.
         chain
             .set_value(
                 "data",
@@ -1092,6 +1099,7 @@ mod tests {
                 Label::Confidential,
             )
             .unwrap();
+        // SAFETY: Test gets global environment; get_env succeeds in controlled test environment.
         let global = chain.get_env(EnvironmentHandle(0)).unwrap();
         assert!(global.max_label >= Label::Confidential);
     }

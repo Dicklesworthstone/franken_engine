@@ -959,7 +959,9 @@ mod tests {
     #[test]
     fn toml_roundtrip_default() {
         let config = RuntimeConfig::default();
+        // SAFETY: RuntimeConfig derives Serialize and has no non-serializable fields
         let toml_str = toml::to_string(&config).unwrap();
+        // SAFETY: TOML was just produced by valid RuntimeConfig serialization
         let restored: RuntimeConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(config, restored);
     }
@@ -967,7 +969,9 @@ mod tests {
     #[test]
     fn json_roundtrip_default() {
         let config = RuntimeConfig::default();
+        // SAFETY: RuntimeConfig derives Serialize and has no non-serializable fields
         let json_str = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by valid RuntimeConfig serialization
         let restored: RuntimeConfig = serde_json::from_str(&json_str).unwrap();
         assert_eq!(config, restored);
     }

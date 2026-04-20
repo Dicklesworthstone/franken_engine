@@ -1036,6 +1036,7 @@ mod tests {
             witness: "w".to_string(),
             line: 0,
         });
+        // SAFETY: ExemptionRegistry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&reg).unwrap();
         let restored: ExemptionRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, restored);

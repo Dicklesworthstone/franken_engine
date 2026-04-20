@@ -1114,12 +1114,16 @@ mod tests {
     }
 
     fn activate_component(ctrl: &mut ActivationLifecycleController, id: &str, version: &str) {
+        // SAFETY: Test helper with valid descriptor should succeed registration
         ctrl.register(test_descriptor(id, version), "trace-1")
             .unwrap();
+        // SAFETY: Test helper with passing validation should succeed activation begin
         ctrl.begin_activation(id, &passing_validation(id, version), "trace-1")
             .unwrap();
+        // SAFETY: Test helper secret injection should succeed with valid secrets
         ctrl.inject_secrets(id, &[EphemeralSecret::new("key1", vec![0xAA])], "trace-1")
             .unwrap();
+        // SAFETY: Test helper activation completion should succeed after proper setup
         ctrl.complete_activation(id, 1, "trace-1").unwrap();
     }
 
@@ -1128,6 +1132,7 @@ mod tests {
     #[test]
     fn register_component() {
         let mut ctrl = make_controller();
+        // SAFETY: Test registering component with valid descriptor should succeed
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
             .unwrap();
         assert_eq!(ctrl.component_count(), 1);
@@ -1137,6 +1142,7 @@ mod tests {
     #[test]
     fn reject_duplicate_registration() {
         let mut ctrl = make_controller();
+        // SAFETY: Test first registration with valid descriptor should succeed
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
             .unwrap();
         let err = ctrl
@@ -1156,12 +1162,14 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
         assert!(ctrl.known_good("comp-a").is_some());
+        // SAFETY: Test just verified known_good("comp-a") is Some above
         assert_eq!(ctrl.known_good("comp-a").unwrap().version, "1.0.0");
     }
 
     #[test]
     fn activation_fails_if_validation_fails() {
         let mut ctrl = make_controller();
+        // SAFETY: Test registration with valid descriptor should succeed before testing validation failure
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
             .unwrap();
         let err = ctrl

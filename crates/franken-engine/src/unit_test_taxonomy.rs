@@ -812,7 +812,11 @@ mod tests {
     #[test]
     fn determinism_contract_serde_roundtrip() {
         let contract = DeterminismContract::default_frx20();
+        // SAFETY: DeterminismContract derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&contract).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DeterminismContract,
+        // so from_str back to DeterminismContract cannot fail (valid format + matching schema).
         let back: DeterminismContract = serde_json::from_str(&json).unwrap();
         assert_eq!(back, contract);
     }
@@ -959,7 +963,11 @@ mod tests {
     #[test]
     fn fixture_entry_serde_roundtrip() {
         let entry = valid_fixture_entry();
+        // SAFETY: FixtureRegistryEntry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FixtureRegistryEntry,
+        // so from_str back to FixtureRegistryEntry cannot fail (valid format + matching schema).
         let back: FixtureRegistryEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(back, entry);
     }
@@ -968,7 +976,11 @@ mod tests {
     fn fixture_entry_none_trace_path_serde() {
         let mut entry = valid_fixture_entry();
         entry.trace_path = None;
+        // SAFETY: FixtureRegistryEntry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FixtureRegistryEntry,
+        // so from_str back to FixtureRegistryEntry cannot fail (valid format + matching schema).
         let back: FixtureRegistryEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(back.trace_path, None);
     }
@@ -1037,7 +1049,11 @@ mod tests {
     #[test]
     fn lane_coverage_serde_roundtrip() {
         let lc = valid_lane_coverage();
+        // SAFETY: LaneCoverageContract derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&lc).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LaneCoverageContract,
+        // so from_str back to LaneCoverageContract cannot fail (valid format + matching schema).
         let back: LaneCoverageContract = serde_json::from_str(&json).unwrap();
         assert_eq!(back, lc);
     }

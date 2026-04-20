@@ -1753,6 +1753,8 @@ mod tests {
             }
             // SAFETY: Test-only panic to validate tampered receipt security enforcement.
             // Test expects FlowBlocked error for tampered receipts. Any other error type is test failure.
+            // SAFETY: Test-only panic to validate tampered receipt security enforcement.
+            // Test expects FlowBlocked error for tampered receipts. Any other error type is test failure.
             other => panic!("expected FlowBlocked for tampered receipt, got {other:?}"),
         }
         assert_eq!(lattice.events().len(), event_count_before + 1);

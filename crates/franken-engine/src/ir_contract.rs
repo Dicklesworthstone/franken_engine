@@ -5261,6 +5261,7 @@ mod tests {
                     instr,
                 );
             } else {
+                // SAFETY: Test-only panic to validate IR3 instruction canonical value format
                 panic!("expected Map for {:?}", instr);
             }
         }

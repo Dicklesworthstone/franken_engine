@@ -161,14 +161,14 @@ impl AsupersyncLeverageAdoptionGate {
     }
 }
 
-pub fn build_asupersync_leverage_adoption_gate() -> AsupersyncLeverageAdoptionGate {
+pub fn build_asupersync_leverage_adoption_gate() -> Result<AsupersyncLeverageAdoptionGate, String> {
     let topology = build_topology_promotion_assessment();
     build_asupersync_leverage_adoption_gate_from_topology(topology)
 }
 
 pub fn build_asupersync_leverage_adoption_gate_from_topology(
     topology: TopologyPromotionAssessment,
-) -> AsupersyncLeverageAdoptionGate {
+) -> Result<AsupersyncLeverageAdoptionGate, String> {
     let mandatory_child_artifacts = mandatory_child_artifacts(&topology);
     let diagnostic_contract_index = diagnostic_contract_index();
     let outstanding_risk_ids = mandatory_child_artifacts
@@ -245,8 +245,8 @@ pub fn build_asupersync_leverage_adoption_gate_from_topology(
         verification_commands,
         content_hash: String::new(),
     };
-    gate.content_hash = content_hash_for_gate(&gate);
-    gate
+    gate.content_hash = content_hash_for_gate(&gate)?;
+    Ok(gate)
 }
 
 pub fn render_operator_summary(gate: &AsupersyncLeverageAdoptionGate) -> String {
@@ -380,13 +380,14 @@ fn diagnostic_contract_index() -> Vec<DiagnosticContractEntry> {
     ]
 }
 
-fn content_hash_for_gate(gate: &AsupersyncLeverageAdoptionGate) -> String {
+fn content_hash_for_gate(gate: &AsupersyncLeverageAdoptionGate) -> Result<String, String> {
     let mut canonical = gate.clone();
     canonical.content_hash.clear();
-    let encoded = serde_json::to_vec(&canonical).expect("adoption gate should serialize");
+    let encoded = serde_json::to_vec(&canonical)
+        .map_err(|e| format!("Failed to serialize adoption gate for hashing: {}", e))?;
     let mut hasher = Sha256::new();
     hasher.update(&encoded);
-    format!("sha256:{:x}", hasher.finalize())
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -395,7 +396,7 @@ mod tests {
 
     #[test]
     fn gate_is_go_targeted_and_fail_closed_over_children() {
-        let gate = build_asupersync_leverage_adoption_gate();
+        let gate = build_asupersync_leverage_adoption_gate().unwrap();
         assert_eq!(gate.verdict, AdoptionGateVerdict::GoTargeted);
         assert!(gate.is_go());
         assert!(!gate.has_outstanding_child_artifacts());
@@ -414,8 +415,8 @@ mod tests {
 
     #[test]
     fn content_hash_and_summary_are_stable() {
-        let first = build_asupersync_leverage_adoption_gate();
-        let second = build_asupersync_leverage_adoption_gate();
+        let first = build_asupersync_leverage_adoption_gate().unwrap();
+        let second = build_asupersync_leverage_adoption_gate().unwrap();
         assert_eq!(first.content_hash, second.content_hash);
         assert!(first.content_hash.starts_with("sha256:"));
         let summary = render_operator_summary(&first);

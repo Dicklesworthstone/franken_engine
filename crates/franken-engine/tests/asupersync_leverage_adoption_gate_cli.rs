@@ -49,7 +49,7 @@ fn assert_required_files(out_dir: &Path) {
 
 #[test]
 fn adoption_gate_contract_links_closed_wave_artifacts() {
-    let gate = build_asupersync_leverage_adoption_gate();
+    let gate = build_asupersync_leverage_adoption_gate().unwrap();
     assert_eq!(gate.verdict, AdoptionGateVerdict::GoTargeted);
     assert_eq!(
         gate.topology_decision,

@@ -160,7 +160,7 @@ fn run(out_dir: PathBuf, seed: u64) -> Result<(), Box<dyn std::error::Error>> {
     let step_logs_dir = out_dir.join("step_logs");
     fs::create_dir_all(&step_logs_dir)?;
 
-    let gate = build_asupersync_leverage_adoption_gate();
+    let gate = build_asupersync_leverage_adoption_gate()?;
     let hash_fragment = &gate.content_hash[7..19];
     let trace_id = format!("trace-asupersync-adoption-{hash_fragment}-{seed}");
     let decision_id = format!("decision-asupersync-adoption-{hash_fragment}-{seed}");

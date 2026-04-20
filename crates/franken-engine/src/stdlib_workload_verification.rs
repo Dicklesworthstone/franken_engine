@@ -1336,7 +1336,9 @@ mod tests {
             content_hash: ContentHash::compute(b""),
         };
         result.seal();
+        // SAFETY: ScenarioResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid ScenarioResult serialization
         let decoded: ScenarioResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, decoded);
     }

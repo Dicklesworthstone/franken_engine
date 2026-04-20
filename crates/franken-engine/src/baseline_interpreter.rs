@@ -12145,28 +12145,7 @@ impl InterpreterCore {
                 Ok(Value::Str(trimmed.to_string()))
             }
 
-            "builtin:StringPrototypeTrimEnd" => {
-                // String.prototype.trimEnd() implementation - remove trailing whitespace
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
-                        }
-                    }
-                };
-
-                // Remove trailing whitespace
-                let trimmed = string_val.trim_end();
-                Ok(Value::Str(trimmed.to_string()))
-            }
+            // Removed duplicate StringPrototypeTrimEnd - implementation at line ~13975 is more JS-compliant
 
             // StringPrototypePadStart: Removed duplicate dispatch arm (use first occurrence instead)
 

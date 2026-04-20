@@ -999,6 +999,7 @@ impl EvidenceLog {
         self.receipts.push(receipt);
         self.receipt_counter += 1;
 
+        // SAFETY: We just pushed a receipt above, so receipts is non-empty and last() cannot return None
         self.receipts.last().unwrap()
     }
 
@@ -14403,13 +14404,7 @@ impl InterpreterCore {
             }
 
 
-            "builtin:StringPrototypeToUpperCase" => {
-                // String.prototype.toUpperCase() implementation
-                let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
-
-                Ok(Value::Str(str_text.to_uppercase()))
-            }
+            // StringPrototypeToUpperCase: Removed duplicate dispatch arm (use first occurrence at line 8136)
 
             "builtin:MathHypot" => {
                 // Math.hypot(...values) implementation (Euclidean norm)
@@ -15735,13 +15730,7 @@ impl InterpreterCore {
                 Ok(Value::Str(str_text.to_lowercase()))
             }
 
-            "builtin:StringPrototypeToUpperCase" => {
-                // String.prototype.toUpperCase() implementation
-                let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
-
-                Ok(Value::Str(str_text.to_uppercase()))
-            }
+            // StringPrototypeToUpperCase: Removed duplicate dispatch arm (use first occurrence at line 8137)
 
             // ObjectPrototypeToString: Removed duplicate dispatch arm (use first occurrence instead)
 
@@ -16553,17 +16542,21 @@ impl InterpreterCore {
                 // Parse main number part with exponent support
                 while let Some(&c) = chars.peek() {
                     if c.is_ascii_digit() {
+                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
                         result_str.push(chars.next().unwrap());
                     } else if c == '.' && !has_dot && !has_exponent {
+                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
                         result_str.push(chars.next().unwrap());
                         has_dot = true;
                     } else if (c == 'e' || c == 'E') && !has_exponent {
+                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
                         result_str.push(chars.next().unwrap());
                         has_exponent = true;
 
                         // Handle exponent sign
                         if let Some(&next_char) = chars.peek() {
                             if next_char == '+' || next_char == '-' {
+                                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
                                 result_str.push(chars.next().unwrap());
                             }
                         }

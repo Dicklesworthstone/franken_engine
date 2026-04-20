@@ -1680,6 +1680,7 @@ mod tests {
     fn engine_add_input() {
         let mut engine = SynthesisEngine::new(epoch());
         let input = make_input("s1", WorkloadDomain::BranchHeavy);
+        // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine.add_input(input).unwrap();
         assert_eq!(engine.input_count(), 1);
         assert!(

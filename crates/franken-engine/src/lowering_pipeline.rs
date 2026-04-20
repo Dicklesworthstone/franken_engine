@@ -37,6 +37,12 @@ const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const IFC_FLOW_PROOF_ERROR_CODE: &str = "FE-LOWER-IFC-0001";
 const IFC_FLOW_PROOF_SCHEMA_VERSION: &str = "frankenengine.ir2_flow_proof_witness.v1";
 
+/// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
+const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
+
+/// Maximum number of bindings to preallocate based on AST size (prevents pathological growth).
+const MAX_PREALLOC_BINDINGS: usize = 250_000; // 250K bindings max
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoweringContext {
     pub trace_id: String,
@@ -236,6 +242,8 @@ pub enum LoweringPipelineError {
     #[error("Value stack underflow during lowering")]
     #[allow(dead_code)]
     ValueStackUnderflow,
+    #[error("Lowering preallocation budget exceeded: requested {requested} but limit is {limit}")]
+    AllocationBudgetExceeded { requested: usize, limit: usize },
 }
 
 #[allow(dead_code)]
@@ -472,8 +480,14 @@ pub fn lower_ir0_to_ir1(
 
     let ir0_hash = ir0.content_hash();
 
-    // Estimate ops capacity based on AST size for higher lowering throughput
-    let estimated_ops = ir0.tree.body.len().saturating_mul(8); // ~8 ops per statement
+    // Estimate ops capacity based on AST size, bounded by lowering budget
+    let estimated_ops = ir0.tree.body.len().saturating_mul(8).min(MAX_PREALLOC_OPS); // ~8 ops per statement
+    if ir0.tree.body.len().saturating_mul(8) > MAX_PREALLOC_OPS {
+        return Err(LoweringPipelineError::AllocationBudgetExceeded {
+            requested: ir0.tree.body.len().saturating_mul(8),
+            limit: MAX_PREALLOC_OPS,
+        });
+    }
     let mut ir1 =
         Ir1Module::with_capacity(ir0_hash, ir0.header.source_label.clone(), estimated_ops);
     let mut binding_index = 0u32;
@@ -483,8 +497,14 @@ pub fn lower_ir0_to_ir1(
         ParseGoal::Module => ScopeKind::Module,
     };
 
-    // Preallocate capacity based on AST size for higher lowering throughput
-    let estimated_bindings = ir0.tree.body.len().saturating_mul(4); // ~4 bindings per statement
+    // Preallocate bindings capacity based on AST size, bounded by lowering budget
+    let estimated_bindings = ir0.tree.body.len().saturating_mul(4).min(MAX_PREALLOC_BINDINGS); // ~4 bindings per statement
+    if ir0.tree.body.len().saturating_mul(4) > MAX_PREALLOC_BINDINGS {
+        return Err(LoweringPipelineError::AllocationBudgetExceeded {
+            requested: ir0.tree.body.len().saturating_mul(4),
+            limit: MAX_PREALLOC_BINDINGS,
+        });
+    }
     let mut bindings = Vec::<ResolvedBinding>::with_capacity(estimated_bindings);
     let mut binding_lookup = BTreeMap::<String, BindingId>::new();
     let declared_root_bindings =
@@ -11513,5 +11533,96 @@ mod tests {
             first_store, internal_source.binding_id,
             "initializer should land in the internal source binding"
         );
+    }
+
+    #[test]
+    fn oversized_ast_fails_preallocation_budget_for_ops() {
+        use crate::ast::{ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
+
+        // Create an IR0 module with a large body that would exceed MAX_PREALLOC_OPS
+        // MAX_PREALLOC_OPS = 1_000_000, so we need body.len() * 8 > 1_000_000
+        // Therefore body.len() > 125_000
+        let large_body_size = 130_000; // Well over the threshold
+
+        let large_body: Vec<Statement> = (0..large_body_size)
+            .map(|i| Statement::Expression(Expression::Literal(format!("stmt_{}", i))))
+            .collect();
+
+        let ir0 = Ir0Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir0,
+                source_hash: None,
+                source_label: "test_oversized".to_string(),
+            },
+            tree: SyntaxTree {
+                goal: ParseGoal::Script,
+                body: large_body,
+                span: SourceSpan { start: 0, end: 100 },
+            },
+        };
+
+        // Attempt to lower - should fail with AllocationBudgetExceeded, not panic
+        let result = lower_ir0_to_ir1(&ir0);
+        match result {
+            Err(LoweringPipelineError::AllocationBudgetExceeded { requested, limit }) => {
+                assert_eq!(limit, MAX_PREALLOC_OPS);
+                assert_eq!(requested, large_body_size * 8);
+                assert!(requested > limit, "requested should exceed limit");
+            }
+            other => panic!(
+                "Expected AllocationBudgetExceeded error, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn oversized_ast_fails_preallocation_budget_for_bindings() {
+        use crate::ast::{ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
+
+        // Create an IR0 module with a large body that would exceed MAX_PREALLOC_BINDINGS
+        // MAX_PREALLOC_BINDINGS = 250_000, so we need body.len() * 4 > 250_000
+        // Therefore body.len() > 62_500
+        let large_body_size = 65_000; // Well over the threshold
+
+        let large_body: Vec<Statement> = (0..large_body_size)
+            .map(|i| Statement::Expression(Expression::Literal(format!("stmt_{}", i))))
+            .collect();
+
+        let ir0 = Ir0Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir0,
+                source_hash: None,
+                source_label: "test_oversized_bindings".to_string(),
+            },
+            tree: SyntaxTree {
+                goal: ParseGoal::Script,
+                body: large_body,
+                span: SourceSpan { start: 0, end: 100 },
+            },
+        };
+
+        // Attempt to lower - should fail with AllocationBudgetExceeded for ops first
+        // (since ops budget is checked first and will trigger at 65_000 * 8 = 520_000 > 1_000_000 is false,
+        //  but bindings budget is 65_000 * 4 = 260_000 > 250_000 is true)
+
+        // Actually, let me recalculate: 65_000 * 8 = 520_000 < 1_000_000 (ops OK)
+        // 65_000 * 4 = 260_000 > 250_000 (bindings exceed) - so bindings should fail
+        let result = lower_ir0_to_ir1(&ir0);
+        match result {
+            Err(LoweringPipelineError::AllocationBudgetExceeded { requested, limit }) => {
+                assert_eq!(limit, MAX_PREALLOC_BINDINGS);
+                assert_eq!(requested, large_body_size * 4);
+                assert!(requested > limit, "requested should exceed limit");
+            }
+            other => panic!(
+                "Expected AllocationBudgetExceeded error for bindings, got: {:?}",
+                other
+            ),
+        }
     }
 }

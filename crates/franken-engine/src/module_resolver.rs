@@ -2732,6 +2732,8 @@ mod tests {
                     &AllowAllPolicy,
                 )
                 .unwrap_or_else(|error| {
+                    // SAFETY: Test-only panic to validate fallback target resolution logic.
+                    // Test expects successful resolution for all import styles with registered fallback.
                     panic!(
                         "fallback_target exports entry should resolve for style {style:?}: {error}"
                     )

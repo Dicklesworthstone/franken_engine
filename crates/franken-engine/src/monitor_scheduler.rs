@@ -1006,6 +1006,7 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
+        // SAFETY: Test-only unwrap with valid probe configuration
         sched.register_probe(health_probe("h1")).unwrap();
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 0);

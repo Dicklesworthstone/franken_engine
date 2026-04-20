@@ -20,7 +20,7 @@
 
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseResult};
-use frankenengine_engine::static_semantics::analyze;
+use frankenengine_engine::static_semantics::{analyze, StaticErrorKind};
 
 fn parse(source: &str, goal: ParseGoal) -> ParseResult<SyntaxTree> {
     CanonicalEs2020Parser.parse(source, goal)
@@ -222,10 +222,14 @@ fn tla_await_in_function_still_requires_async() {
 
     // Static semantics should reject await in non-async function,
     // even though top-level await is allowed
-    let _result = analyze(&tree);
-    // TODO: This might need more sophisticated error detection
-    // For now, just verify it parses
-    assert!(tree.body.len() > 0);
+    let result = analyze(&tree);
+    assert!(!result.passed(), "Static semantics should reject await in non-async function");
+    assert_eq!(result.errors.len(), 1, "Should have exactly one error");
+    assert_eq!(
+        result.errors[0].kind,
+        StaticErrorKind::AwaitOutsideAsync,
+        "Error should be AwaitOutsideAsync"
+    );
 }
 
 #[test]

@@ -11921,53 +11921,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeAt" => {
-                // String.prototype.at(index) implementation - access with negative indexing
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Undefined),
-                        }
-                    }
-                };
-
-                let index = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(idx) => idx,
-                        Value::Float(idx) => idx.inner() as i64,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                let chars: Vec<char> = string_val.chars().collect();
-                let length = chars.len() as i64;
-
-                if length == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                // Handle negative indexing
-                let actual_index = if index < 0 { length + index } else { index };
-
-                // Check bounds
-                if actual_index < 0 || actual_index >= length {
-                    return Ok(Value::Undefined);
-                }
-
-                // Get the character at the index
-                let ch = chars[actual_index as usize];
-                Ok(Value::Str(ch.to_string()))
-            }
+            // Removed duplicate StringPrototypeAt - implementation at line ~13959 is more complete
 
             "builtin:ObjectGetOwnPropertyDescriptor" => {
                 // Object.getOwnPropertyDescriptor(obj, prop) implementation
@@ -17430,9 +17384,7 @@ impl InterpreterCore {
             378 => Some("builtin:ParseFloat".to_string()),
             379 => Some("builtin:IsNaN".to_string()),
             380 => Some("builtin:IsFinite".to_string()),
-            381 => Some("builtin:ConsoleLog".to_string()),
-            382 => Some("builtin:ConsoleError".to_string()),
-            383 => Some("builtin:ConsoleWarn".to_string()),
+            // 381-383: Removed duplicate console mappings (use 100-102 instead)
             384 => Some("builtin:ConsoleInfo".to_string()),
             385 => Some("builtin:ArrayPrototypeSort".to_string()),
             386 => Some("builtin:StringPrototypeToLocaleLowerCase".to_string()),
@@ -24475,5 +24427,130 @@ mod tests {
             Value::Float(f) => assert_eq!(f.inner(), f64::NEG_INFINITY, "Math.round(-Infinity) should be -Infinity"),
             _ => panic!("Math.round(-Infinity) should be -Infinity, got {:?}", result),
         }
+    }
+
+    #[test]
+    fn console_builtin_id_deduplication_audit_fix() {
+        // Regression test for bd-7f1a4: Verify duplicate console builtin IDs are removed
+        // and only correct mappings remain after audit fix
+
+        let core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Verify correct console builtin IDs (100-102) are mapped
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(100),
+            Some("builtin:ConsoleLog".to_string()),
+            "ID 100 should map to ConsoleLog"
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(101),
+            Some("builtin:ConsoleError".to_string()),
+            "ID 101 should map to ConsoleError"
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(102),
+            Some("builtin:ConsoleWarn".to_string()),
+            "ID 102 should map to ConsoleWarn"
+        );
+
+        // Verify ConsoleInfo (ID 384) is mapped
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(384),
+            Some("builtin:ConsoleInfo".to_string()),
+            "ID 384 should map to ConsoleInfo"
+        );
+
+        // Verify duplicate IDs (381-383) are NOT mapped after audit fix
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(381),
+            None,
+            "ID 381 should NOT be mapped (duplicate ConsoleLog removed)"
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(382),
+            None,
+            "ID 382 should NOT be mapped (duplicate ConsoleError removed)"
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(383),
+            None,
+            "ID 383 should NOT be mapped (duplicate ConsoleWarn removed)"
+        );
+    }
+
+    #[test]
+    fn console_builtin_captured_output_all_levels() {
+        // Comprehensive test that all console levels capture output correctly
+        // with proper level/message/instruction metadata as required by audit
+
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test ConsoleLog (ID 100)
+        core.registers[0] = Value::Str("Log message".to_string());
+        core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ConsoleLog".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Log);
+        assert_eq!(core.console_output[0].message, "Log message");
+        assert_eq!(core.console_output[0].instruction_index, 1);
+
+        // Test ConsoleError (ID 101)
+        core.console_output.clear();
+        core.registers[0] = Value::Str("Error message".to_string());
+        core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ConsoleError".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Error);
+        assert_eq!(core.console_output[0].message, "Error message");
+
+        // Test ConsoleWarn (ID 102)
+        core.console_output.clear();
+        core.registers[0] = Value::Str("Warn message".to_string());
+        core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ConsoleWarn".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Warn);
+        assert_eq!(core.console_output[0].message, "Warn message");
+
+        // Test ConsoleInfo (ID 384) - the critical one from audit
+        core.console_output.clear();
+        core.registers[0] = Value::Str("Info message".to_string());
+        core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ConsoleInfo".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Info);
+        assert_eq!(core.console_output[0].message, "Info message");
+
+        // Verify ConsoleInfo no longer silently drops output as mentioned in audit
+        assert!(!core.console_output[0].message.is_empty(),
+               "ConsoleInfo should capture output, not silently drop it");
     }
 }

@@ -17433,6 +17433,7 @@ mod tests {
                         value.is_nan(),
                         "parseInt builtin ID {builtin_id} input {input:?} should return NaN"
                     ),
+                    // SAFETY: Test validates parseInt builtin returns NaN for invalid input cases
                     other => panic!(
                         "parseInt builtin ID {builtin_id} input {input:?} expected NaN, got {other:?}"
                     ),

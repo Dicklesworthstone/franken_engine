@@ -2838,6 +2838,8 @@ mod tests {
         if let LaneAction::RouteTo(lane) = &outcome.action {
             assert_eq!(lane.to_string(), DETERMINISTIC_PROFILE_LABEL);
         } else {
+            // SAFETY: Test-only panic to validate degraded regime decision logic
+            // expects RouteTo action for safe lane routing. Any other action type is test failure.
             panic!("expected RouteTo, got {:?}", outcome.action);
         }
     }

@@ -2315,6 +2315,7 @@ mod tests {
             ..default_config()
         };
         let input = make_input("var x = 1; var y = 2;", &config);
+        // SAFETY: Test-only unwrap expecting valid JS variable declarations to parse successfully
         let output = parse(&input).unwrap();
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(

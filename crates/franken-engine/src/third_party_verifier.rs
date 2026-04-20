@@ -1757,6 +1757,8 @@ mod tests {
         let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report.clone(), Some(key_hex));
+        // SAFETY: Test uses valid attestation input from helper functions with valid signing key.
+        // generate_attestation only fails on malformed inputs (impossible here).
         let attestation = generate_attestation(&input).unwrap();
         assert!(attestation.signature_hex.is_some());
         assert!(attestation.signer_verification_key_hex.is_some());

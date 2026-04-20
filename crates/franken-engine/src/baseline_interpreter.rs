@@ -12272,56 +12272,7 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:StringPrototypeIncludes" => {
-                // String.prototype.includes(searchString[, position]) implementation
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Bool(false)),
-                        }
-                    }
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let search_string = match self.read_reg(args.start + 1)? {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                let position = if args.count >= 3 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => f.inner().max(0.0) as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Check if string contains search string starting from position
-                if position >= string_val.len() {
-                    return Ok(Value::Bool(false));
-                }
-
-                let substring = &string_val[position..];
-                Ok(Value::Bool(substring.contains(&search_string)))
-            }
+            // StringPrototypeIncludes: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:NumberIsNaNMethod" => {
                 // Number.isNaN(value) implementation - determines if value is exactly NaN

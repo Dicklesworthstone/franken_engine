@@ -2061,6 +2061,7 @@ mod tests {
                 assert!(map.contains_key("end_column"));
                 assert_eq!(map.len(), 6);
             }
+            // SAFETY: Test validates canonical value returns expected Map format for SourceSpan
             _ => panic!("canonical_value must be a Map"),
         }
     }

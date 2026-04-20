@@ -13039,27 +13039,7 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ObjectSetPrototypeOf" => {
-                // Object.setPrototypeOf(obj, prototype) implementation (simplified)
-                if args.count < 3 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                let proto_val = self.read_reg(args.start + 2)?;
-
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(obj_val), // Can't set prototype of non-objects
-                };
-
-                // Simplified implementation: set __proto__ property
-                if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                    obj.properties.insert("__proto__".to_string(), proto_val);
-                }
-
-                Ok(obj_val) // Return the modified object
-            }
+            // Removed duplicate ObjectSetPrototypeOf - implementation at line ~11927 uses correct prototype field
 
             // StringPrototypeToLowerCase: Removed duplicate dispatch arm (use first occurrence at line 8124)
 

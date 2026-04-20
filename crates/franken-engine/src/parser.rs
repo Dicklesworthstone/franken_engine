@@ -3105,6 +3105,7 @@ fn validate_named_export_specifiers(
         }
 
         let mut parts = specifier.split_whitespace();
+        // SAFETY: specifier is non-empty after early return check above
         let local = parts.next().unwrap();
         let second = parts.next();
         let third = parts.next();
@@ -3494,6 +3495,7 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
         if rest.is_empty() {
             return Some(kind);
         }
+        // SAFETY: rest is non-empty after early return check above
         let next_char = rest.chars().next().unwrap();
         if next_char.is_whitespace() || next_char == '[' || next_char == '{' {
             return Some(kind);
@@ -3509,6 +3511,7 @@ fn parse_variable_declaration(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<VariableDeclaration> {
     let keyword = kind.as_str();
+    // SAFETY: strip_prefix cannot fail as caller validated keyword match
     let body = statement
         .strip_prefix(keyword)
         .map(str::trim_start)

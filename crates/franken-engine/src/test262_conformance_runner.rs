@@ -582,7 +582,7 @@ mod tests {
 
         let result = runner.run_conformance(epoch);
         assert!(result.is_ok());
-
+        // SAFETY: Test just verified result.is_ok(), so unwrap() cannot panic
         let report = result.unwrap();
         assert!(report.overall.total_tests > 0);
         assert_eq!(report.security_epoch, epoch);

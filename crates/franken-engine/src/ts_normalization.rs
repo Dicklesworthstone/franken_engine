@@ -578,6 +578,8 @@ pub fn normalize_typescript_to_es2020(
         source_hash: sha256_hex(&normalized_newlines),
         normalized_hash: sha256_hex(&normalized_source),
         compiler_options_hash: sha256_hex(
+            // SAFETY: CompilerOptions derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             &serde_json::to_string(&config.compiler_options).unwrap(),
         ),
         decisions,
@@ -1889,6 +1891,8 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
         let placeholder = format!("/*__namespace:{namespace_name}__*/");
         let namespace_block = render_namespace_block(
             &namespace_name,
+            // SAFETY: namespace_order contains only keys that exist in namespace_assignments
+            // (built together in the same parsing pass)
             &namespace_assignments.remove(&namespace_name).unwrap(),
         )
         .join("\n");
@@ -3156,6 +3160,7 @@ export const version = 1;
     fn accepts_commonjs_module() {
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.module = "commonjs".to_string();
+        // SAFETY: Test with valid TypeScript source and config should succeed normalization
         let output =
             normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p").unwrap();
         assert!(output.normalized_source.contains("const x = 1"));

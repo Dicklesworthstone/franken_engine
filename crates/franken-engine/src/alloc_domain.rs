@@ -1865,6 +1865,7 @@ mod tests {
     #[test]
     fn budget_remaining_after_exact_fill_enrichment() {
         let mut b = DomainBudget::new(u64::MAX);
+        // SAFETY: Reserving exactly u64::MAX bytes from a u64::MAX budget is an exact fit.
         b.try_reserve(u64::MAX).unwrap();
         assert_eq!(b.remaining(), 0);
         assert!((b.utilization() - 1.0).abs() < f64::EPSILON);
@@ -1873,6 +1874,7 @@ mod tests {
     #[test]
     fn budget_release_zero_is_noop_enrichment() {
         let mut b = DomainBudget::new(100);
+        // SAFETY: Reserving 50 bytes from a 100-byte budget is within capacity.
         b.try_reserve(50).unwrap();
         b.release(0);
         assert_eq!(b.used_bytes, 50);

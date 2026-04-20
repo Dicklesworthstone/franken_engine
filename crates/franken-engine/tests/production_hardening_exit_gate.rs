@@ -693,3 +693,48 @@ fn test_production_hardening_structured_logging() {
     // In a real implementation, we'd capture and validate log output format
     println!("📝 Structured logging validation: events logged successfully");
 }
+
+#[test]
+fn test_containment_slo_enforcement() {
+    // Regression test for bd-2476.1: Verify that 150ms containment time
+    // fails against 100ms SLO for memory-corruption attack vector
+
+    let gate_id = "slo-test".to_string();
+    let mut gate = ProductionHardeningGateExecution::new(gate_id);
+
+    // The default security matrix includes memory-corruption with 100ms SLO,
+    // but validate_attack_containment returns 150ms, which should fail
+    let result = gate.execute_production_hardening_gate();
+
+    // Should fail because 150ms > 100ms (memory-corruption SLO)
+    assert!(
+        result.is_err(),
+        "Production hardening gate should fail when containment exceeds SLO thresholds"
+    );
+
+    // Verify the specific failure reason mentions SLO violation
+    let error_message = result.unwrap_err();
+    assert!(
+        error_message.contains("Security matrix validation failed"),
+        "Error should indicate security matrix validation failure, got: {}",
+        error_message
+    );
+
+    // Verify the gate status indicates security matrix validation failed
+    assert_eq!(
+        gate.status,
+        ProductionReadinessStatus::SecurityMatrixValidation,
+        "Gate should be stuck at SecurityMatrixValidation due to SLO violation"
+    );
+
+    // Verify no production readiness is claimed
+    assert!(
+        !gate.all_validations_passed(),
+        "Gate should not pass all validations when SLO is exceeded"
+    );
+
+    assert_eq!(
+        gate.completed_at, None,
+        "Gate should not have completion timestamp when validation fails"
+    );
+}

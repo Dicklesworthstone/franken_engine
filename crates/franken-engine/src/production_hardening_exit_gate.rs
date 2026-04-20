@@ -458,7 +458,8 @@ impl ProductionHardeningGateExecution {
             // Validate attack vector containment
             let containment_result = Self::validate_attack_containment(&entry.attack_vector)?;
 
-            if containment_result.contained_within_slo {
+            // Check actual containment time against SLO threshold, not just stub boolean
+            if containment_result.actual_containment_ms <= entry.slo_threshold_ms {
                 entry.validation_status = ValidationStatus::Passed;
                 entry
                     .evidence_artifacts
@@ -1120,8 +1121,10 @@ impl ProductionHardeningGateExecution {
     fn validate_attack_containment(
         _attack_vector: &str,
     ) -> Result<AttackContainmentResult, String> {
+        // PLACEHOLDER: This stub returns hardcoded values that will fail SLO validation.
+        // The 150ms result exceeds most default SLO thresholds (100ms, 50ms) and should
+        // cause production readiness validation to fail until real measurement is implemented.
         Ok(AttackContainmentResult {
-            contained_within_slo: true,
             actual_containment_ms: 150,
             evidence_file: "containment_evidence.json".to_string(),
         })
@@ -1270,7 +1273,7 @@ impl ProductionHardeningGateExecution {
         // Include both Failed and Pending validations as blockers
         for entry in &self.security_matrix {
             match &entry.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Security matrix (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1281,13 +1284,13 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for campaign in &self.fuzz_campaigns {
             match &campaign.completion_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Fuzz campaign (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1297,13 +1300,13 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for test in &self.property_tests {
             match &test.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Property test (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1313,13 +1316,13 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for test in &self.metamorphic_tests {
             match &test.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Metamorphic test (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1329,29 +1332,30 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for rollout in &self.rollout_validation {
             match &rollout.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Rollout validation (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
                     failures.push(format!(
                         "Rollout validation (PENDING): {} - {} phases required",
-                        format!("{:?}", rollout.stage), rollout.metrics_collection_duration_mins
+                        format!("{:?}", rollout.stage),
+                        rollout.metrics_collection_duration_mins
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for drill in &self.fault_injection_drills {
             match &drill.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Fault injection drill (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1362,30 +1366,29 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for drill in &self.quarantine_drills {
             match &drill.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Quarantine drill (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
                     failures.push(format!(
                         "Quarantine drill (PENDING): {} - {} scenarios required",
-                        drill.malicious_extension_type,
-                        drill.fleet_size
+                        drill.malicious_extension_type, drill.fleet_size
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         for audit in &self.replay_audits {
             match &audit.validation_status {
-                ValidationStatus::Failed(ref msg) => {
+                ValidationStatus::Failed(msg) => {
                     failures.push(format!("Replay audit (FAILED): {}", msg));
                 }
                 ValidationStatus::Pending => {
@@ -1395,12 +1398,12 @@ impl ProductionHardeningGateExecution {
                     ));
                 }
                 ValidationStatus::InProgress => {} // Treated as blockers like Pending
-                ValidationStatus::Passed => {} // No blockers
+                ValidationStatus::Passed => {}     // No blockers
             }
         }
 
         match &self.e2e_deployment_status {
-            ValidationStatus::Failed(ref msg) => {
+            ValidationStatus::Failed(msg) => {
                 failures.push(format!("E2E deployment (FAILED): {}", msg));
             }
             ValidationStatus::Pending => {
@@ -1409,8 +1412,8 @@ impl ProductionHardeningGateExecution {
                         .to_string(),
                 );
             }
-                ValidationStatus::InProgress => {} // Treated as blockers like Pending
-            ValidationStatus::Passed => {} // No blockers
+            ValidationStatus::InProgress => {} // Treated as blockers like Pending
+            ValidationStatus::Passed => {}     // No blockers
         }
 
         failures
@@ -1421,7 +1424,6 @@ impl ProductionHardeningGateExecution {
 
 #[derive(Debug)]
 struct AttackContainmentResult {
-    contained_within_slo: bool,
     actual_containment_ms: u64,
     evidence_file: String,
 }
@@ -1810,6 +1812,8 @@ pub fn execute_production_hardening_gate(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]

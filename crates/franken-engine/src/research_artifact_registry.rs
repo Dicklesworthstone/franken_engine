@@ -228,6 +228,27 @@ impl ResearchArtifactRegistry {
     }
 }
 
+    /// Construct a registry containing the golden artifact test bundle entry.
+    pub fn with_golden_artifact_test_bundle_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "golden-artifact-test-bundle-0001".to_string(),
+            title: "Golden Artifact Test Bundle".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text: "Comprehensive golden artifact testing strategy defining golden format standards, scrubbing rules, approval workflows, regression cadence, and cross-platform stability requirements."
+                .to_string(),
+            bundle_path: "docs/GOLDEN_ARTIFACT_TEST_BUNDLE.md".to_string(),
+            artifact_type: "testing_framework".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+}
+
 impl Default for ResearchArtifactRegistry {
     fn default() -> Self {
         Self::new()
@@ -381,5 +402,17 @@ mod tests {
         assert_eq!(artifact.artifact_type, "provenance_bundle");
         assert_eq!(artifact.title, "Data Provenance Bundle");
         assert!(artifact.bundle_path.ends_with("DATA_PROVENANCE_BUNDLE.md"));
+    }
+
+    #[test]
+    fn test_golden_artifact_test_bundle_entry() {
+        let registry = ResearchArtifactRegistry::with_golden_artifact_test_bundle_entry();
+
+        let artifact = registry
+            .get_artifact("golden-artifact-test-bundle-0001")
+            .expect("expected golden artifact test bundle");
+        assert_eq!(artifact.artifact_type, "testing_framework");
+        assert_eq!(artifact.title, "Golden Artifact Test Bundle");
+        assert!(artifact.bundle_path.ends_with("GOLDEN_ARTIFACT_TEST_BUNDLE.md"));
     }
 }

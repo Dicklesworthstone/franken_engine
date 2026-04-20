@@ -904,7 +904,9 @@ mod tests {
             reads
         });
 
+        // SAFETY: Test thread without panic paths; join() will succeed
         writer.join().unwrap();
+        // SAFETY: Test thread without panic paths; join() will succeed
         let total_reads = reader.join().unwrap();
         assert_eq!(total_reads, 200);
 

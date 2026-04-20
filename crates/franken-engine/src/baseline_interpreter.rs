@@ -23527,4 +23527,24 @@ mod tests {
             assert_eq!(result, Value::Str("700".to_string()));
         }
     }
+
+    #[test]
+    fn string_prototype_starts_with_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [39_u32, 229_u32] {
+            interpreter.registers[0] = Value::Str("alpha".to_string());
+            interpreter.registers[1] = Value::Str("ph".to_string());
+            interpreter.registers[2] = Value::Int(2);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeStartsWith".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("StringPrototypeStartsWith ID should execute");
+            assert_eq!(result, Value::Bool(true));
+        }
+    }
 }

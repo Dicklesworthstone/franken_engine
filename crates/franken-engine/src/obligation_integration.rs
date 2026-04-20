@@ -1464,6 +1464,8 @@ mod tests {
                 // Cell should be in Draining state
                 assert_ne!(current_state, RegionState::Running);
             }
+            // SAFETY: Test-only panic to validate obligation rejection error type.
+            // Test expects CellNotRunning when attempting operations during cell drain phase.
             other => panic!("expected CellNotRunning, got: {other}"),
         }
     }

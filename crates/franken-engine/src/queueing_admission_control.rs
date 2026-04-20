@@ -573,6 +573,8 @@ impl Default for AdmissionControlPolicy {
 impl AdmissionControlPolicy {
     /// Content hash for audit.
     pub fn policy_hash(&self) -> ContentHash {
+        // SAFETY: AdmissionPolicy derives Serialize and has no non-serializable fields.
+        // to_vec on derived Serialize types only fails on writer errors (impossible with Vec<u8>).
         let bytes = serde_json::to_vec(self).unwrap();
         ContentHash::compute(&bytes)
     }

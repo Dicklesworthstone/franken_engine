@@ -3510,6 +3510,8 @@ mod tests {
     }
 
     fn test_extension_id() -> EngineObjectId {
+        // SAFETY: Test helper uses valid parameters for engine object ID derivation.
+        // derive_id only fails on invalid domain or malformed inputs (both impossible here).
         engine_object_id::derive_id(
             ObjectDomain::Attestation,
             "test-ext",

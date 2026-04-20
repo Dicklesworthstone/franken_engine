@@ -896,6 +896,7 @@ mod tests {
         if let TaxonomyValidationError::MissingRequiredField { field } = &err {
             assert!(field.contains("e2e_family"));
         } else {
+            // SAFETY: Test validates taxonomy error for e2e_family field validation
             panic!("expected MissingRequiredField");
         }
     }

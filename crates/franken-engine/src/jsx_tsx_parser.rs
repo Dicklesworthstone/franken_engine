@@ -1742,9 +1742,11 @@ mod tests {
                     JsxChild::Element(inner) => {
                         assert_eq!(inner.name.to_string_repr(), "span");
                     }
+                    // SAFETY: Test-only panic to validate JSX child type matches expected nested Element
                     _ => panic!("expected nested element"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

@@ -1086,6 +1086,7 @@ mod tests {
         let measurement = test_measurement(&root);
         verifier.approve_measurement(measurement.composite_hash());
 
+        // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
         let mut challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
             .unwrap();

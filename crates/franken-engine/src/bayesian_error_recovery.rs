@@ -1605,7 +1605,11 @@ mod tests {
                 tokens: vec!["x".to_string()],
             }],
         );
+        // SAFETY: RepairDiff derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&diff).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RepairDiff,
+        // so from_str back to RepairDiff cannot fail (valid format + matching schema).
         let back: RepairDiff = serde_json::from_str(&json).unwrap();
         assert_eq!(diff, back);
     }
@@ -1625,7 +1629,11 @@ mod tests {
     #[test]
     fn recovery_error_serde_roundtrip() {
         let e = RecoveryError::NoCandidates { error_position: 42 };
+        // SAFETY: RecoveryError derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&e).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryError,
+        // so from_str back to RecoveryError cannot fail (valid format + matching schema).
         let back: RecoveryError = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
     }
@@ -1781,7 +1789,11 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        // SAFETY: RecoveryResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryResult,
+        // so from_str back to RecoveryResult cannot fail (valid format + matching schema).
         let back: RecoveryResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result.result_digest, back.result_digest);
         assert_eq!(result.recovered, back.recovered);
@@ -1814,7 +1826,11 @@ mod tests {
             action: Some("fail_strict".to_string()),
             replay_command: None,
         };
+        // SAFETY: RecoveryEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&evt).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryEvent,
+        // so from_str back to RecoveryEvent cannot fail (valid format + matching schema).
         let back: RecoveryEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(evt, back);
     }
@@ -1850,7 +1866,11 @@ mod tests {
             cost: 5,
             is_typo_fix: true,
         };
+        // SAFETY: RepairCandidate derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&rc).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RepairCandidate,
+        // so from_str back to RepairCandidate cannot fail (valid format + matching schema).
         let back: RepairCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(rc, back);
     }
@@ -1871,7 +1891,11 @@ mod tests {
             explanation: "test".to_string(),
             replay_command: "repro".to_string(),
         };
+        // SAFETY: RecoveryDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryDecision,
+        // so from_str back to RecoveryDecision cannot fail (valid format + matching schema).
         let back: RecoveryDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }
@@ -1900,7 +1924,11 @@ mod tests {
             confidence_met: true,
             selected_repair: None,
         };
+        // SAFETY: RecoveryAttempt derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryAttempt,
+        // so from_str back to RecoveryAttempt cannot fail (valid format + matching schema).
         let back: RecoveryAttempt = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
@@ -2066,7 +2094,11 @@ mod tests {
             RecoveryMode::ExecutionRecovery,
         ];
         for v in &variants {
+            // SAFETY: RecoveryMode derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RecoveryMode,
+            // so from_str back to RecoveryMode cannot fail (valid format + matching schema).
             let back: RecoveryMode = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -2080,7 +2112,11 @@ mod tests {
             ErrorState::Unrecoverable,
         ];
         for v in &variants {
+            // SAFETY: ErrorState derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ErrorState,
+            // so from_str back to ErrorState cannot fail (valid format + matching schema).
             let back: ErrorState = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -2094,7 +2130,11 @@ mod tests {
             RecoveryAction::FailStrict,
         ];
         for v in &variants {
+            // SAFETY: RecoveryAction derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RecoveryAction,
+            // so from_str back to RecoveryAction cannot fail (valid format + matching schema).
             let back: RecoveryAction = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -2146,7 +2186,11 @@ mod tests {
             },
         ];
         for v in &variants {
+            // SAFETY: RepairEdit derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RepairEdit,
+            // so from_str back to RepairEdit cannot fail (valid format + matching schema).
             let back: RepairEdit = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -2165,7 +2209,11 @@ mod tests {
             RecoveryError::NoCandidates { error_position: 42 },
         ];
         for v in &variants {
+            // SAFETY: RecoveryError derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RecoveryError,
+            // so from_str back to RecoveryError cannot fail (valid format + matching schema).
             let back: RecoveryError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }

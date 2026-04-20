@@ -1521,6 +1521,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::ExtensionTrust, 1))
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
+        // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(&[sk])
         .unwrap();
 

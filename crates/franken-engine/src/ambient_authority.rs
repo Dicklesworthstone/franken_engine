@@ -1038,6 +1038,7 @@ mod tests {
         });
         // SAFETY: ExemptionRegistry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: JSON was just produced by valid ExemptionRegistry serialization
         let restored: ExemptionRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, restored);
     }
@@ -1454,7 +1455,9 @@ mod tests {
             modules_audited: vec!["m".to_string()],
             passed: false,
         };
+        // SAFETY: AuditResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid AuditResult serialization
         let restored: AuditResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
@@ -2070,7 +2073,9 @@ mod tests {
             suggested_alternative: "alt".to_string(),
             exempted: true,
         };
+        // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&f).unwrap();
+        // SAFETY: JSON was just produced by valid AuditFinding serialization
         let restored: AuditFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(f, restored);
         assert!(restored.exempted);

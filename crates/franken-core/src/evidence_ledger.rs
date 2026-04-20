@@ -1384,6 +1384,8 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
+    // SAFETY: serde_json::json! macro creates valid JSON Value with no non-serializable data.
+    // to_string_pretty on valid JSON Value only fails on writer errors (impossible with String).
     .unwrap();
 
     let mut primary_files = vec![
@@ -1470,6 +1472,8 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
+    // SAFETY: serde_json::json! macro creates valid JSON Value with no non-serializable data.
+    // to_string_pretty on valid JSON Value only fails on writer errors (impossible with String).
     .unwrap();
     primary_files.push(BundleFileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1507,6 +1511,8 @@ fn write_stitching_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
+    // SAFETY: serde_json::json! macro creates valid JSON Value with no non-serializable data.
+    // to_string_pretty on valid JSON Value only fails on writer errors (impossible with String).
     .unwrap();
     let manifest_artifact = BundleFileArtifact::text("manifest.json", &manifest_json);
 
@@ -1735,6 +1741,8 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
+    // SAFETY: serde_json::Value is always serializable to Vec<u8>.
+    // to_vec only fails on writer errors, impossible with Vec<u8> allocation.
     let bytes = serde_json::to_vec(value).unwrap();
     sha256_hex(&bytes)
 }

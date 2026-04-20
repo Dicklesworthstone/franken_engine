@@ -3621,8 +3621,11 @@ impl InterpreterCore {
                                     self.map_function_index_to_builtin_capability(func_idx)
                                 {
                                     // Dispatch as a builtin hostcall
-                                    let result =
-                                        self.dispatch_builtin_hostcall(&builtin_cap, args)?;
+                                    let result = self.dispatch_builtin_hostcall(
+                                        &builtin_cap,
+                                        args,
+                                        Some(module),
+                                    )?;
                                     self.write_reg(dst, result)?;
                                     self.ip += 1;
                                     continue;
@@ -3959,7 +3962,7 @@ impl InterpreterCore {
                     } else if capability.0.starts_with("timer:") {
                         self.dispatch_timer_hostcall(&capability.0, args)?
                     } else if capability.0.starts_with("builtin:") {
-                        self.dispatch_builtin_hostcall(&capability.0, args)?
+                        self.dispatch_builtin_hostcall(&capability.0, args, Some(module))?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
@@ -6949,10 +6952,426 @@ impl InterpreterCore {
         }
     }
 
+    fn array_prototype_reduce(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        self.validate_array_callback_args(args, "Array.prototype.reduce")?;
+
+        let array_id = match self.read_reg(args.start)? {
+            Value::Object(object_id) => object_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let callback = self.read_reg(args.start + 1)?;
+        let length = self.array_like_length(array_id)?;
+        let mut next_index = 0usize;
+        let mut accumulator = if args.count > 2 {
+            self.read_reg(args.start + 2)?
+        } else {
+            let mut first_present = None;
+            for element_index in 0..length {
+                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                    first_present = Some((element_index, value));
+                    break;
+                }
+            }
+            let Some((element_index, value)) = first_present else {
+                return Err(InterpreterError::TypeError {
+                    expected: "non-empty array or initialValue".to_string(),
+                    got: "empty Array.prototype.reduce without initialValue".to_string(),
+                });
+            };
+            next_index = element_index.saturating_add(1);
+            value
+        };
+
+        for element_index in next_index..length {
+            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+                continue;
+            };
+            accumulator = self.invoke_simple_reduce_callback(
+                module,
+                &callback,
+                accumulator,
+                current_value,
+                element_index,
+                array_id,
+            )?;
+        }
+
+        Ok(accumulator)
+    }
+
+    fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
+        let object = self
+            .heap
+            .get(array_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
+        Ok(match object.properties.get("length") {
+            Some(Value::Int(length)) if *length > 0 => {
+                usize::try_from(*length).unwrap_or(usize::MAX)
+            }
+            Some(Value::Float(length)) if length.inner() > 0.0 => length.inner() as usize,
+            _ => 0,
+        })
+    }
+
+    fn array_index_value(
+        &self,
+        array_id: ObjectId,
+        element_index: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let object = self
+            .heap
+            .get(array_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
+        Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    fn invoke_simple_reduce_callback(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        accumulator: Value,
+        current_value: Value,
+        element_index: usize,
+        array_id: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed reducer callback".to_string(),
+            got: "Array.prototype.reduce called without module context".to_string(),
+        })?;
+        let function_index = match callback {
+            Value::Function(index) => *index,
+            Value::Closure(closure_id) => {
+                self.closures
+                    .get(*closure_id as usize)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "valid reducer closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    })?
+                    .function_index
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "function".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let function = module.function_table.get(function_index as usize).ok_or(
+            InterpreterError::FunctionNotFound {
+                index: function_index,
+                table_size: module.function_table.len() as u32,
+            },
+        )?;
+        let register_count = self.config.max_registers as usize;
+        let mut local_registers = vec![Value::Undefined; register_count];
+        Self::write_local_register(&mut local_registers, 0, accumulator)?;
+        Self::write_local_register(&mut local_registers, 1, current_value)?;
+        Self::write_local_register(&mut local_registers, 2, Value::Int(element_index as i64))?;
+        Self::write_local_register(&mut local_registers, 3, Value::Object(array_id))?;
+
+        let mut instruction_pointer = function.entry as usize;
+        for _step in 0..self.config.instruction_budget {
+            let instruction = module
+                .instructions
+                .get(instruction_pointer)
+                .ok_or(InterpreterError::InstructionOutOfBounds {
+                    ip: instruction_pointer,
+                    count: module.instructions.len(),
+                })?
+                .clone();
+            match instruction {
+                Ir3Instruction::LoadInt { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadFloat { dst, bits } => {
+                    Self::write_local_register(
+                        &mut local_registers,
+                        dst,
+                        Value::Float(Float64::new(f64::from_bits(bits))),
+                    )?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadStr { dst, pool_index } => {
+                    let value = module
+                        .constant_pool
+                        .get(pool_index as usize)
+                        .cloned()
+                        .ok_or(InterpreterError::StringPoolOutOfBounds {
+                            index: pool_index,
+                            pool_size: module.constant_pool.len() as u32,
+                        })?;
+                    Self::write_local_register(&mut local_registers, dst, Value::Str(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadBool { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadNull { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Null)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadUndefined { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Move { dst, src } => {
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Add { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = self.eval_add_values(&left, &right)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Sub { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_arith_values(&left, &right, "sub")?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Mul { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_arith_values(&left, &right, "mul")?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Div { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_div_values(&left, &right)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::GetProperty { obj, key, dst } => {
+                    let object_value = Self::read_local_register(&local_registers, obj)?;
+                    let key_value = Self::read_local_register(&local_registers, key)?;
+                    let value = match object_value {
+                        Value::Object(object_id) => self
+                            .heap
+                            .get(object_id.0 as usize)
+                            .and_then(|object| {
+                                object.properties.get(&Self::property_key(&key_value))
+                            })
+                            .cloned()
+                            .unwrap_or(Value::Undefined),
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    };
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::SetProperty { obj, key, val } => {
+                    let object_value = Self::read_local_register(&local_registers, obj)?;
+                    let key_value = Self::read_local_register(&local_registers, key)?;
+                    let property_value = Self::read_local_register(&local_registers, val)?;
+                    match object_value {
+                        Value::Object(object_id) => {
+                            self.set_object_property(
+                                object_id,
+                                Self::property_key(&key_value),
+                                property_value,
+                            )?;
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    }
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Jump { target } => {
+                    instruction_pointer = target as usize;
+                }
+                Ir3Instruction::JumpIf { cond, target } => {
+                    let value = Self::read_local_register(&local_registers, cond)?;
+                    if value.is_truthy() {
+                        instruction_pointer = target as usize;
+                    } else {
+                        instruction_pointer += 1;
+                    }
+                }
+                Ir3Instruction::Return { value } => {
+                    return Self::read_local_register(&local_registers, value);
+                }
+                Ir3Instruction::Halt => {
+                    return Ok(Value::Undefined);
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "simple synchronous reducer callback".to_string(),
+                        got: format!("unsupported reducer instruction {other:?}"),
+                    });
+                }
+            }
+        }
+
+        Err(InterpreterError::BudgetExhausted {
+            executed: self.config.instruction_budget,
+            budget: self.config.instruction_budget,
+        })
+    }
+
+    fn read_local_register(registers: &[Value], register: u32) -> Result<Value, InterpreterError> {
+        registers
+            .get(register as usize)
+            .cloned()
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register,
+                max: registers.len() as u32,
+            })
+    }
+
+    fn write_local_register(
+        registers: &mut [Value],
+        register: u32,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let max_registers = registers.len() as u32;
+        let slot =
+            registers
+                .get_mut(register as usize)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register,
+                    max: max_registers,
+                })?;
+        *slot = value;
+        Ok(())
+    }
+
+    fn eval_add_values(&self, left: &Value, right: &Value) -> Result<Value, InterpreterError> {
+        match (left, right) {
+            (Value::Int(left_int), Value::Int(right_int)) => {
+                Ok(Value::Int(left_int.wrapping_add(*right_int)))
+            }
+            (Value::Float(left_float), Value::Float(right_float)) => Ok(Value::Float(
+                Float64::new(left_float.inner() + right_float.inner()),
+            )),
+            (Value::Int(left_int), Value::Float(right_float)) => Ok(Value::Float(Float64::new(
+                *left_int as f64 + right_float.inner(),
+            ))),
+            (Value::Float(left_float), Value::Int(right_int)) => Ok(Value::Float(Float64::new(
+                left_float.inner() + *right_int as f64,
+            ))),
+            (Value::Str(left_string), Value::Str(right_string)) => {
+                self.check_string_limit(left_string.len().saturating_add(right_string.len()))?;
+                Ok(Value::Str(format!("{left_string}{right_string}")))
+            }
+            (Value::Str(left_string), other) => {
+                let other_string = Self::value_to_primitive_string(other);
+                self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
+                Ok(Value::Str(format!("{left_string}{other_string}")))
+            }
+            (other, Value::Str(right_string)) => {
+                let other_string = Self::value_to_primitive_string(other);
+                self.check_string_limit(other_string.len().saturating_add(right_string.len()))?;
+                Ok(Value::Str(format!("{other_string}{right_string}")))
+            }
+            _ => {
+                let left_number =
+                    Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
+                        expected: "number or string".to_string(),
+                        got: format!("{} + {}", left.type_name(), right.type_name()),
+                    })?;
+                let right_number =
+                    Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
+                        expected: "number or string".to_string(),
+                        got: format!("{} + {}", left.type_name(), right.type_name()),
+                    })?;
+                Self::number_value(left_number + right_number)
+            }
+        }
+    }
+
+    fn eval_arith_values(
+        left: &Value,
+        right: &Value,
+        operator: &str,
+    ) -> Result<Value, InterpreterError> {
+        if let (Value::Int(left_int), Value::Int(right_int)) = (left, right) {
+            return Ok(Value::Int(match operator {
+                "sub" => left_int.wrapping_sub(*right_int),
+                "mul" => left_int.wrapping_mul(*right_int),
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "sub or mul".to_string(),
+                        got: operator.to_string(),
+                    });
+                }
+            }));
+        }
+        let left_number = Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
+        })?;
+        let right_number = Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
+        })?;
+        let result = match operator {
+            "sub" => left_number - right_number,
+            "mul" => left_number * right_number,
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "sub or mul".to_string(),
+                    got: operator.to_string(),
+                });
+            }
+        };
+        Self::number_value(result)
+    }
+
+    fn eval_div_values(left: &Value, right: &Value) -> Result<Value, InterpreterError> {
+        let left_number = Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} / {}", left.type_name(), right.type_name()),
+        })?;
+        let right_number = Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} / {}", left.type_name(), right.type_name()),
+        })?;
+        Self::number_value(left_number / right_number)
+    }
+
+    fn number_value(value: f64) -> Result<Value, InterpreterError> {
+        if value.fract() == 0.0
+            && !value.is_nan()
+            && !value.is_infinite()
+            && value >= i64::MIN as f64
+            && value <= i64::MAX as f64
+        {
+            Ok(Value::Int(value as i64))
+        } else {
+            Ok(Value::Float(Float64::new(value)))
+        }
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
         args: RegRange,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         match cap {
             // Array methods
@@ -9057,18 +9476,7 @@ impl InterpreterCore {
                 self.set_object_property(promise_id, "__value".to_string(), value)?;
                 Ok(Value::Object(promise_id))
             }
-            "builtin:ArrayPrototypeReduce" => {
-                // Array.prototype.reduce(callback[, initialValue]) implementation - fail-closed until proper callback dispatch
-                self.validate_array_callback_args(args, "Array.prototype.reduce")?;
-
-                // Fail-closed until proper callback dispatch is implemented
-                // Programs like [1,2,3].reduce((acc, val) => acc + val, 0) should error rather than
-                // silently return wrong values like the initial value or first element
-                Err(InterpreterError::TypeError {
-                    expected: "supported Array.prototype.reduce implementation".to_string(),
-                    got: "reducer callback invocation not yet supported - would require proper callback dispatch with (accumulator, currentValue, index, array) args, thisArg handling, proper initial value semantics, and handling empty arrays without initial value (TypeError)".to_string(),
-                })
-            }
+            "builtin:ArrayPrototypeReduce" => self.array_prototype_reduce(args, module),
             "builtin:StringPrototypePadStart" => {
                 // String.prototype.padStart(targetLength[, padString]) implementation
                 if args.count == 0 {
@@ -16116,6 +16524,50 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn array_reduce_module(
+        args_count: u32,
+        reducer_instructions: Vec<Ir3Instruction>,
+        constant_pool: Vec<String>,
+    ) -> Ir3Module {
+        let reducer_entry = 2;
+        let mut instructions = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ArrayPrototypeReduce".to_string()),
+                args: RegRange {
+                    start: 0,
+                    count: args_count,
+                },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ];
+        instructions.extend(reducer_instructions);
+
+        let mut module = test_module_with_functions(
+            instructions,
+            vec![Ir3FunctionDesc {
+                entry: reducer_entry,
+                arity: 4,
+                frame_size: 8,
+                name: Some("reduce_callback".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool = constant_pool;
+        module
+    }
+
+    fn seed_array(core: &mut InterpreterCore, length: i64, values: &[(usize, Value)]) -> ObjectId {
+        let array_id = core.alloc_object_with_prototype(None).unwrap();
+        for (index, value) in values {
+            core.set_object_property(array_id, index.to_string(), value.clone())
+                .unwrap();
+        }
+        core.set_object_property(array_id, "length".to_string(), Value::Int(length))
+            .unwrap();
+        array_id
+    }
+
     #[test]
     fn parseint_nan_radix_defaults_for_global_and_number_parseint_builtin_ids() {
         let mut interpreter = quickjs_test_core();
@@ -17088,6 +17540,210 @@ mod tests {
     }
 
     #[test]
+    fn array_reduce_invokes_reducer_with_initial_value() {
+        let module = array_reduce_module(
+            3,
+            vec![
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            Vec::new(),
+        );
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[(0, Value::Int(1)), (1, Value::Int(2)), (2, Value::Int(3))],
+        );
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Int(10);
+
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Int(16));
+    }
+
+    #[test]
+    fn array_reduce_uses_first_present_sparse_element_without_initial() {
+        let module = array_reduce_module(
+            2,
+            vec![
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            Vec::new(),
+        );
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(&mut core, 4, &[(1, Value::Int(5)), (3, Value::Int(7))]);
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Int(12));
+    }
+
+    #[test]
+    fn array_reduce_empty_without_initial_value_errors() {
+        let module = array_reduce_module(
+            2,
+            vec![
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            Vec::new(),
+        );
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(&mut core, 0, &[]);
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+
+        let error = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            error,
+            InterpreterError::TypeError { expected, got }
+                if expected == "non-empty array or initialValue"
+                    && got == "empty Array.prototype.reduce without initialValue"
+        ));
+    }
+
+    #[test]
+    fn array_reduce_callback_receives_index_and_array_for_side_effects() {
+        let module = array_reduce_module(
+            3,
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 3,
+                    key: 4,
+                    val: 2,
+                },
+                Ir3Instruction::Add {
+                    dst: 5,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 5 },
+            ],
+            vec!["lastIndex".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[(0, Value::Int(2)), (1, Value::Int(4)), (2, Value::Int(6))],
+        );
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Int(0);
+
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Int(12));
+        assert_eq!(
+            core.heap[array_id.0 as usize].properties.get("lastIndex"),
+            Some(&Value::Int(2))
+        );
+    }
+
+    #[test]
+    fn array_reduce_returns_object_accumulator_after_callback_mutation() {
+        let module = array_reduce_module(
+            3,
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 4,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 4,
+                    val: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["latest".to_string()],
+        );
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            2,
+            &[
+                (0, Value::Str("first".to_string())),
+                (1, Value::Str("second".to_string())),
+            ],
+        );
+        let accumulator_id = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Object(accumulator_id);
+
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Object(accumulator_id));
+        assert_eq!(
+            core.heap[accumulator_id.0 as usize]
+                .properties
+                .get("latest"),
+            Some(&Value::Str("second".to_string()))
+        );
+    }
+
+    #[test]
+    fn array_reduce_metamorphic_initial_zero_matches_no_initial_sum() {
+        let reducer = vec![
+            Ir3Instruction::Add {
+                dst: 4,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Return { value: 4 },
+        ];
+
+        let no_initial = {
+            let module = array_reduce_module(2, reducer.clone(), Vec::new());
+            let mut core = quickjs_test_core();
+            let array_id = seed_array(
+                &mut core,
+                3,
+                &[(0, Value::Int(2)), (1, Value::Int(4)), (2, Value::Int(6))],
+            );
+            core.registers[0] = Value::Object(array_id);
+            core.registers[1] = Value::Function(0);
+            core.execute(&module).unwrap().value
+        };
+
+        let initial_zero = {
+            let module = array_reduce_module(3, reducer, Vec::new());
+            let mut core = quickjs_test_core();
+            let array_id = seed_array(
+                &mut core,
+                3,
+                &[(0, Value::Int(2)), (1, Value::Int(4)), (2, Value::Int(6))],
+            );
+            core.registers[0] = Value::Object(array_id);
+            core.registers[1] = Value::Function(0);
+            core.registers[2] = Value::Int(0);
+            core.execute(&module).unwrap().value
+        };
+
+        assert_eq!(no_initial, initial_zero);
+        assert_eq!(initial_zero, Value::Int(12));
+    }
+
+    #[test]
     fn reexecution_restores_initial_register_seed_without_runtime_leakage() {
         let m = test_module_with_functions(
             vec![
@@ -17261,7 +17917,7 @@ mod tests {
             let mut core = quickjs_test_core();
             core.registers.resize(1, Value::Undefined);
             core.registers[0] = value;
-            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 })
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 }, None)
                 .unwrap()
         }
 
@@ -17296,7 +17952,7 @@ mod tests {
             let mut core = quickjs_test_core();
             core.registers.resize(1, Value::Undefined);
             core.registers[0] = value;
-            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 })
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 }, None)
                 .unwrap()
         }
 

@@ -1390,6 +1390,7 @@ mod tests {
             }),
         };
 
+        // SAFETY: Test-only unwrap expecting valid entries to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let mut waivers = BTreeSet::new();
         waivers.insert("w-hidden".to_string());

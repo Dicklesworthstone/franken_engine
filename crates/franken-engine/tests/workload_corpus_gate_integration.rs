@@ -826,6 +826,57 @@ fn seed_corpus_async_flag() {
 // Reproducibility Tests (bd-1lsy.8.4.3.1)
 // ---------------------------------------------------------------------------
 
+fn run_workload_corpus_gate_invalid(args: &[&str]) -> serde_json::Value {
+    use std::process::Command;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_workload_corpus_gate"))
+        .args(args)
+        .output()
+        .expect("Failed to execute gate binary");
+
+    assert!(
+        !output.status.success(),
+        "invalid invocation unexpectedly succeeded: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(2));
+
+    serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+        panic!(
+            "stderr should be structured JSON ({error}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+#[test]
+fn gate_cli_rejects_unknown_option() {
+    let error = run_workload_corpus_gate_invalid(&["--min-family", "99"]);
+
+    assert_eq!(error["component"], "franken_workload_corpus_gate");
+    assert_eq!(error["argument"], "--min-family");
+    assert_eq!(error["error"], "unknown option");
+}
+
+#[test]
+fn gate_cli_rejects_nonnumeric_equivalence_threshold() {
+    let error = run_workload_corpus_gate_invalid(&["--min-equivalence-rate", "nope"]);
+
+    assert_eq!(error["component"], "franken_workload_corpus_gate");
+    assert_eq!(error["argument"], "--min-equivalence-rate");
+    assert_eq!(error["error"], "invalid integer value: nope");
+}
+
+#[test]
+fn gate_cli_rejects_missing_option_value() {
+    let error = run_workload_corpus_gate_invalid(&["--min-per-family"]);
+
+    assert_eq!(error["component"], "franken_workload_corpus_gate");
+    assert_eq!(error["argument"], "--min-per-family");
+    assert_eq!(error["error"], "missing value");
+}
+
 #[test]
 fn gate_events_reset_between_runs() {
     use std::fs;

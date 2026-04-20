@@ -22,11 +22,23 @@ const POLICY_ID: &str = "franken-engine.workload-corpus-gate.policy.v1";
 
 enum CliAction {
     Help,
+    Error {
+        argument: String,
+        message: String,
+    },
     Run {
         out_dir: PathBuf,
         min_per_family: Option<usize>,
         min_equivalence_rate: Option<u64>,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CliErrorOutput {
+    schema_version: String,
+    component: String,
+    error: String,
+    argument: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,9 +90,7 @@ struct Event {
     data: serde_json::Value,
 }
 
-fn parse_args() -> CliAction {
-    let args: Vec<String> = env::args().collect();
-
+fn parse_args_from(args: &[String]) -> CliAction {
     if args.len() < 2 {
         return CliAction::Help;
     }
@@ -97,33 +107,69 @@ fn parse_args() -> CliAction {
                 match args[i].as_str() {
                     "--out-dir" => {
                         if i + 1 < args.len() {
+                            if args[i + 1].starts_with("--") {
+                                return CliAction::Error {
+                                    argument: args[i].clone(),
+                                    message: "missing value".to_string(),
+                                };
+                            }
                             out_dir = Some(PathBuf::from(&args[i + 1]));
                             i += 2;
                         } else {
-                            return CliAction::Help;
+                            return CliAction::Error {
+                                argument: args[i].clone(),
+                                message: "missing value".to_string(),
+                            };
                         }
                     }
                     "--min-per-family" => {
                         if i + 1 < args.len() {
-                            if let Ok(val) = args[i + 1].parse::<usize>() {
-                                min_per_family = Some(val);
-                            }
+                            let raw = &args[i + 1];
+                            let val = match raw.parse::<usize>() {
+                                Ok(val) => val,
+                                Err(_) => {
+                                    return CliAction::Error {
+                                        argument: args[i].clone(),
+                                        message: format!("invalid integer value: {raw}"),
+                                    };
+                                }
+                            };
+                            min_per_family = Some(val);
                             i += 2;
                         } else {
-                            return CliAction::Help;
+                            return CliAction::Error {
+                                argument: args[i].clone(),
+                                message: "missing value".to_string(),
+                            };
                         }
                     }
                     "--min-equivalence-rate" => {
                         if i + 1 < args.len() {
-                            if let Ok(val) = args[i + 1].parse::<u64>() {
-                                min_equivalence_rate = Some(val);
-                            }
+                            let raw = &args[i + 1];
+                            let val = match raw.parse::<u64>() {
+                                Ok(val) => val,
+                                Err(_) => {
+                                    return CliAction::Error {
+                                        argument: args[i].clone(),
+                                        message: format!("invalid integer value: {raw}"),
+                                    };
+                                }
+                            };
+                            min_equivalence_rate = Some(val);
                             i += 2;
                         } else {
-                            return CliAction::Help;
+                            return CliAction::Error {
+                                argument: args[i].clone(),
+                                message: "missing value".to_string(),
+                            };
                         }
                     }
-                    _ => i += 1,
+                    unknown => {
+                        return CliAction::Error {
+                            argument: unknown.to_string(),
+                            message: "unknown option".to_string(),
+                        };
+                    }
                 }
             }
 
@@ -134,6 +180,11 @@ fn parse_args() -> CliAction {
             }
         }
     }
+}
+
+fn parse_args() -> CliAction {
+    let args: Vec<String> = env::args().collect();
+    parse_args_from(&args)
 }
 
 fn print_help() {
@@ -240,6 +291,17 @@ fn verdict_label(verdict: &GateVerdict) -> &'static str {
     }
 }
 
+fn emit_cli_error(argument: String, message: String) -> Result<(), Box<dyn std::error::Error>> {
+    let output = CliErrorOutput {
+        schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        error: message,
+        argument,
+    };
+    eprintln!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let action = parse_args();
 
@@ -247,6 +309,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Help => {
             print_help();
             Ok(())
+        }
+        CliAction::Error { argument, message } => {
+            emit_cli_error(argument, message)?;
+            std::process::exit(2);
         }
         CliAction::Run {
             out_dir,

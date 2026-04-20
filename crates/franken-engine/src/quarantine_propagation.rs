@@ -578,6 +578,7 @@ mod tests {
         let instance_ids = manager.fleet_simulator.instance_ids();
         let originator = &instance_ids[0];
 
+        // SAFETY: issue_quarantine_decision with valid originator and reason should succeed
         let evidence_hash = manager
             .issue_quarantine_decision(
                 originator,

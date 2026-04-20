@@ -717,7 +717,11 @@ mod tests {
     #[test]
     fn test_occurrence_serde_roundtrip() {
         let occ = sample_occurrence("FLAT-SERDE");
+        // SAFETY: FlatteningOccurrence derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&occ).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FlatteningOccurrence,
+        // so from_str back to FlatteningOccurrence cannot fail (valid format + matching schema).
         let back: FlatteningOccurrence = serde_json::from_str(&json).unwrap();
         assert_eq!(occ, back);
     }
@@ -949,7 +953,11 @@ mod tests {
             by_domain: BTreeMap::from([("Budget".to_string(), 2), ("Capability".to_string(), 1)]),
             by_severity: BTreeMap::from([("High".to_string(), 1), ("Low".to_string(), 2)]),
         };
+        // SAFETY: FlatteningSummary derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FlatteningSummary,
+        // so from_str back to FlatteningSummary cannot fail (valid format + matching schema).
         let back: FlatteningSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -958,7 +966,11 @@ mod tests {
     fn test_inventory_serde_roundtrip() {
         let mut inv = FlatteningInventory::new(SecurityEpoch::from_raw(99));
         inv.add(sample_occurrence("RND-1"));
+        // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&inv).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FlatteningInventory,
+        // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
     }

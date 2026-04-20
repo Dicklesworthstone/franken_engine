@@ -989,7 +989,11 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: ProofError derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ProofError,
+            // so from_str back to ProofError cannot fail (valid format + matching schema).
             let restored: ProofError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
@@ -1063,7 +1067,11 @@ mod tests {
     #[test]
     fn proof_type_serde_roundtrip() {
         for pt in [ProofType::Inclusion, ProofType::Consistency] {
+            // SAFETY: ProofType derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&pt).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ProofType,
+            // so from_str back to ProofType cannot fail (valid format + matching schema).
             let restored: ProofType = serde_json::from_str(&json).unwrap();
             assert_eq!(pt, restored);
         }

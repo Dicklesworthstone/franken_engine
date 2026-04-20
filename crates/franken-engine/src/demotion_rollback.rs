@@ -1749,6 +1749,8 @@ mod tests {
                 attempted_capability,
                 ..
             } => assert_eq!(attempted_capability, "network_send"),
+            // SAFETY: Test-only panic to catch unexpected DemotionReason variants
+            // in capability violation validation. Expected reason is CapabilityViolation only.
             other => panic!("unexpected reason: {other}"),
         }
     }

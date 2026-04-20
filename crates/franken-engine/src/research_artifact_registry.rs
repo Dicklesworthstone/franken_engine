@@ -226,7 +226,6 @@ impl ResearchArtifactRegistry {
             .filter(|artifact| artifact.artifact_type == artifact_type)
             .collect()
     }
-}
 
     /// Construct a registry containing the golden artifact test bundle entry.
     pub fn with_golden_artifact_test_bundle_entry() -> Self {
@@ -241,6 +240,26 @@ impl ResearchArtifactRegistry {
                 .to_string(),
             bundle_path: "docs/GOLDEN_ARTIFACT_TEST_BUNDLE.md".to_string(),
             artifact_type: "testing_framework".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the conformance harness manifest entry.
+    pub fn with_conformance_harness_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "conformance-harness-manifest-0001".to_string(),
+            title: "Conformance Harness Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text: "Conformance harness manifest defining target specs, cross-implementation matrices, golden input sets, diff modes, and compliance scorecards."
+                .to_string(),
+            bundle_path: "docs/CONFORMANCE_HARNESS_MANIFEST.md".to_string(),
+            artifact_type: "conformance_harness".to_string(),
         };
 
         registry.register_artifact(artifact);
@@ -414,5 +433,21 @@ mod tests {
         assert_eq!(artifact.artifact_type, "testing_framework");
         assert_eq!(artifact.title, "Golden Artifact Test Bundle");
         assert!(artifact.bundle_path.ends_with("GOLDEN_ARTIFACT_TEST_BUNDLE.md"));
+    }
+
+    #[test]
+    fn test_conformance_harness_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_conformance_harness_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("conformance-harness-manifest-0001")
+            .expect("expected conformance harness manifest artifact");
+        assert_eq!(artifact.artifact_type, "conformance_harness");
+        assert_eq!(artifact.title, "Conformance Harness Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("CONFORMANCE_HARNESS_MANIFEST.md")
+        );
     }
 }

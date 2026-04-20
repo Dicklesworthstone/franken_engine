@@ -2234,6 +2234,8 @@ mod tests {
                 "result_digest": ""
             }
         }"#;
+        // SAFETY: Test uses hand-crafted valid JSON matching ContainmentClaimBundle schema.
+        // from_str only fails on malformed JSON or schema mismatches (impossible with this literal).
         let bundle: ContainmentClaimBundle = serde_json::from_str(json).unwrap();
         assert_eq!(
             bundle.detection_latency_sla_ns,
@@ -2247,6 +2249,8 @@ mod tests {
     fn claimed_benchmark_outcome_serde_defaults() {
         // blockers defaults to empty vec via #[serde(default)]
         let json = r#"{"score_vs_node": 0.95, "score_vs_bun": 0.92, "publish_allowed": true}"#;
+        // SAFETY: Test uses hand-crafted valid JSON matching ClaimedBenchmarkOutcome schema.
+        // from_str only fails on malformed JSON or schema mismatches (impossible with this literal).
         let outcome: ClaimedBenchmarkOutcome = serde_json::from_str(json).unwrap();
         assert!(outcome.blockers.is_empty());
         assert!(outcome.publish_allowed);
@@ -2264,7 +2268,11 @@ mod tests {
                 "behavior-mismatch".to_string(),
             ],
         };
+        // SAFETY: ClaimedBenchmarkOutcome derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&outcome).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ClaimedBenchmarkOutcome,
+        // so from_str back to ClaimedBenchmarkOutcome cannot fail (valid format + matching schema).
         let back: ClaimedBenchmarkOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome.blockers, back.blockers);
         assert_eq!(outcome.publish_allowed, back.publish_allowed);

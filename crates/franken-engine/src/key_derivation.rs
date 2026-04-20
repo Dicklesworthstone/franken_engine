@@ -1443,7 +1443,9 @@ mod tests {
             context: DerivationContext::with("k", "v"),
             output_len: 32,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&req).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DerivationRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, req);
     }
@@ -1496,7 +1498,9 @@ mod tests {
     #[test]
     fn key_domain_serde_roundtrip_all() {
         for domain in KeyDomain::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(domain).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: KeyDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(*domain, back);
         }
@@ -1700,6 +1704,7 @@ mod tests {
         let ctx = DerivationContext::empty();
         let mut key_bytes_set = std::collections::BTreeSet::new();
         for domain in KeyDomain::ALL {
+            // SAFETY: cache operation with test deriver should succeed
             let key = cache.get_or_derive(*domain, &ctx, "t").unwrap().clone();
             key_bytes_set.insert(key.key_bytes);
         }
@@ -1756,11 +1761,13 @@ mod tests {
             SecurityEpoch::from_raw(10),
             32,
         );
+        // SAFETY: cache operation with test deriver should succeed
         cache
             .get_or_derive(KeyDomain::Symbol, &DerivationContext::empty(), "t1")
             .unwrap();
         assert_eq!(cache.events()[0].epoch, SecurityEpoch::from_raw(10));
 
+        // SAFETY: advancing cache epoch with valid epoch should succeed
         cache.advance_epoch(SecurityEpoch::from_raw(11)).unwrap();
         cache
             .get_or_derive(KeyDomain::Symbol, &DerivationContext::empty(), "t2")

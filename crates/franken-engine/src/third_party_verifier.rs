@@ -1982,6 +1982,7 @@ mod tests {
     fn verify_attestation_only_sig_key_no_sig() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let mut attestation = generate_attestation(&input).unwrap();
         attestation.signer_verification_key_hex = Some("abcd".to_string());
         // signature_hex is still None → inconsistent

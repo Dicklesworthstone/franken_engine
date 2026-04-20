@@ -1066,6 +1066,7 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
+        // SAFETY: Test scenario with valid probe configuration; registration should succeed
         sched
             .register_probe(ProbeConfig {
                 probe_id: "neg".to_string(),
@@ -1075,6 +1076,7 @@ mod tests {
                 base_relevance_millionths: 1_000_000,
             })
             .unwrap();
+        // SAFETY: Test scenario with valid health probe; registration should succeed
         sched.register_probe(health_probe("h1")).unwrap();
 
         let result = sched.schedule(Regime::Normal);

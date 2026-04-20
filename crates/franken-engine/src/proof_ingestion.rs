@@ -2306,6 +2306,7 @@ mod tests {
     fn plas_hypothesis_speedup_matches_config() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         for h in &hypotheses {
@@ -2317,6 +2318,7 @@ mod tests {
     fn ifc_hypothesis_optimization_class_and_risk() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses.len(), 1);

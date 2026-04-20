@@ -2150,6 +2150,7 @@ mod tests {
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
         let attestation = generate_attestation(&input).unwrap();
+        // SAFETY: VerificationAttestation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&attestation).unwrap();
         let back: VerificationAttestation = serde_json::from_str(&json).unwrap();
         assert_eq!(back, attestation);

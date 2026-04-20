@@ -2814,6 +2814,8 @@ reason_code = "harness_gap"
             ProfileDecision::Excluded { rationale } => {
                 assert_eq!(rationale, "WIP feature");
             }
+            // SAFETY: Test-only panic to validate profile exclude serde roundtrip
+            // expects specific Test262ProfileExclude::Excluded variant
             other => panic!("expected Excluded, got {:?}", other),
         }
     }

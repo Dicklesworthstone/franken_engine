@@ -1129,7 +1129,9 @@ mod tests {
     #[test]
     fn experiment_kind_serde_round_trip() {
         for &kind in ExperimentKind::ALL {
+            // SAFETY: ExperimentKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just produced by valid ExperimentKind serialization
             let back: ExperimentKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, kind);
         }
@@ -1163,7 +1165,9 @@ mod tests {
     #[test]
     fn acquisition_signal_serde_round_trip() {
         for &signal in AcquisitionSignal::ALL {
+            // SAFETY: AcquisitionSignal derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&signal).unwrap();
+            // SAFETY: JSON was just produced by valid AcquisitionSignal serialization
             let back: AcquisitionSignal = serde_json::from_str(&json).unwrap();
             assert_eq!(back, signal);
         }
@@ -1247,7 +1251,9 @@ mod tests {
             250_000,
             150_000,
         );
+        // SAFETY: ExperimentProposal derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&p).unwrap();
+        // SAFETY: JSON was just produced by valid ExperimentProposal serialization
         let back: ExperimentProposal = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
     }
@@ -1481,6 +1487,7 @@ mod tests {
         );
 
         let w = default_weights();
+        // SAFETY: Test with valid proposals and budget should produce valid experiment plan
         let plan = select_experiments(vec![p1, p2], 500_000, &w).unwrap();
         assert_eq!(plan.proposals.len(), 2);
         assert_eq!(plan.total_expected_gain_millionths, 1_100_000);
@@ -1531,6 +1538,7 @@ mod tests {
 
         let w = default_weights();
         // Budget only fits the cheap one.
+        // SAFETY: Test with budget sufficient for at least one proposal should succeed
         let plan = select_experiments(vec![p1, p2], 200_000, &w).unwrap();
         assert_eq!(plan.proposals.len(), 1);
         assert_eq!(plan.proposals[0].proposal_id, "cheap");
@@ -1548,6 +1556,7 @@ mod tests {
             100_000,
         );
         let w = default_weights();
+        // SAFETY: Test with single proposal and maximum budget should succeed
         let plan = select_experiments(vec![p1], MILLIONTHS, &w).unwrap();
         assert_ne!(plan.content_hash, ContentHash::compute(b""));
     }

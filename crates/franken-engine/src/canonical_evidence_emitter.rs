@@ -993,6 +993,8 @@ mod tests {
         // Emit 2 entries OK.
         let mut ctx1 = test_context(HighImpactAction::Sandbox);
         ctx1.decision_id = "dec-001".to_string();
+        // SAFETY: emit() with valid test inputs (valid context, well-formed data structures)
+        // cannot fail under normal test conditions.
         emitter
             .emit(
                 &ctx1,
@@ -1006,6 +1008,8 @@ mod tests {
 
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".to_string();
+        // SAFETY: emit() with valid test inputs (valid context, well-formed data structures)
+        // cannot fail under normal test conditions.
         emitter
             .emit(
                 &ctx2,

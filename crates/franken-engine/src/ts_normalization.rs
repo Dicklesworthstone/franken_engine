@@ -3873,7 +3873,11 @@ abstract class Base { }"#;
     #[test]
     fn ts_compiler_options_serde_round_trip() {
         let opts = TsCompilerOptions::default();
+        // SAFETY: TsCompilerOptions derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&opts).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsCompilerOptions,
+        // so from_str back to TsCompilerOptions cannot fail (valid format + matching schema).
         let back: TsCompilerOptions = serde_json::from_str(&json).unwrap();
         assert_eq!(opts, back);
     }
@@ -3881,7 +3885,11 @@ abstract class Base { }"#;
     #[test]
     fn ts_normalization_config_serde_round_trip() {
         let config = TsNormalizationConfig::default();
+        // SAFETY: TsNormalizationConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsNormalizationConfig,
+        // so from_str back to TsNormalizationConfig cannot fail (valid format + matching schema).
         let back: TsNormalizationConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }
@@ -3893,7 +3901,11 @@ abstract class Base { }"#;
             changed: true,
             detail: "detail".to_string(),
         };
+        // SAFETY: NormalizationDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid NormalizationDecision,
+        // so from_str back to NormalizationDecision cannot fail (valid format + matching schema).
         let back: NormalizationDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }
@@ -3909,7 +3921,11 @@ abstract class Base { }"#;
             outcome: "pass".to_string(),
             error_code: None,
         };
+        // SAFETY: NormalizationEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&e).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid NormalizationEvent,
+        // so from_str back to NormalizationEvent cannot fail (valid format + matching schema).
         let back: NormalizationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
     }
@@ -3920,7 +3936,11 @@ abstract class Base { }"#;
             symbol: "hostcall".to_string(),
             capability: "fs.read".to_string(),
         };
+        // SAFETY: CapabilityIntent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ci).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CapabilityIntent,
+        // so from_str back to CapabilityIntent cannot fail (valid format + matching schema).
         let back: CapabilityIntent = serde_json::from_str(&json).unwrap();
         assert_eq!(ci, back);
     }

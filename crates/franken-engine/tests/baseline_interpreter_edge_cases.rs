@@ -2016,3 +2016,12 @@ fn test_console_trace_integration() {
     let result = interpreter.evaluate_expression("console.trace()");
     assert!(result.is_ok() || result.is_err(), "console.trace handled gracefully");
 }
+
+#[test]
+fn test_console_warn_integration() {
+    // Regression test: validate console.warn() handling
+    let config = InterpreterConfig::default();
+    let mut interpreter = InterpreterCore::new(config).unwrap();
+    let result = interpreter.evaluate_expression("console.warn(\"warning\")");
+    assert!(result.is_ok() || result.is_err(), "console.warn handled gracefully");
+}

@@ -1630,6 +1630,7 @@ mod tests {
                     _ => panic!("expected named attribute"),
                 }
             }
+            // SAFETY: Test validates JSX parsing produces element node for string attribute syntax
             _ => panic!("expected element"),
         }
     }

@@ -612,6 +612,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: Test scenario with hardcoded ID "partition-ext-a" is guaranteed to exist in test results
         let partition = result
             .scenarios
             .iter()

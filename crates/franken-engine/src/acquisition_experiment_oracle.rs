@@ -1807,7 +1807,9 @@ mod tests {
             AcquisitionError::InternalError("oops".to_string()),
         ];
         for err in &variants {
+            // SAFETY: AcquisitionError derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was just produced by valid AcquisitionError serialization
             let back: AcquisitionError = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, err);
         }

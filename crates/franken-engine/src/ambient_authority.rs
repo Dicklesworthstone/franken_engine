@@ -1020,6 +1020,7 @@ mod tests {
         };
         // SAFETY: ForbiddenPattern derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&pattern).unwrap();
+        // SAFETY: JSON was just produced by valid ForbiddenPattern serialization
         let restored: ForbiddenPattern = serde_json::from_str(&json).unwrap();
         assert_eq!(pattern, restored);
     }

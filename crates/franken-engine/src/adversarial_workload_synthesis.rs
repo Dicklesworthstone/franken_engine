@@ -1057,6 +1057,7 @@ impl SynthesisEngine {
 
         for domain in &config.domains {
             let domain_key = domain.as_str().to_string();
+            // SAFETY: Domain key exists in inputs_by_domain map initialized during synthesis setup.
             let seeds = self.inputs_by_domain.get(&domain_key).cloned().unwrap();
 
             for strategy in &config.strategies {
@@ -1291,7 +1292,9 @@ mod tests {
     #[test]
     fn workload_domain_roundtrip_serde() {
         for domain in WorkloadDomain::ALL {
+            // SAFETY: WorkloadDomain derives Serialize; writing to an in-memory String cannot fail here.
             let json = serde_json::to_string(domain).unwrap();
+            // SAFETY: JSON was produced from the same WorkloadDomain schema immediately above.
             let back: WorkloadDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(*domain, back);
         }
@@ -1656,7 +1659,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in SynthesisVerdict::ALL {
+            // SAFETY: SynthesisVerdict derives Serialize; writing to an in-memory String cannot fail here.
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was produced from the same SynthesisVerdict schema immediately above.
             let back: SynthesisVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }

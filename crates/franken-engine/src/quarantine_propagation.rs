@@ -558,6 +558,7 @@ mod tests {
 
     #[test]
     fn test_protocol_manager_initialization() {
+        // SAFETY: FleetSimulator::new with valid count and test thresholds should succeed
         let fleet = FleetSimulator::new(5, test_thresholds()).unwrap();
         let manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
@@ -569,6 +570,7 @@ mod tests {
 
     #[test]
     fn test_issue_quarantine_decision() {
+        // SAFETY: FleetSimulator::new with valid count and test thresholds should succeed
         let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));

@@ -2206,6 +2206,7 @@ mod tests {
         let bundle = make_containment_bundle(result);
         let report = verify_containment_claim(&bundle);
 
+        // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
         let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let attestation = generate_attestation(&input).unwrap();

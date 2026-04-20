@@ -1650,6 +1650,7 @@ mod tests {
             reg.get(&cid).unwrap().lifecycle,
             CellLifecycle::Decommissioned
         );
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().transition_receipts.len(), 4);
     }
 
@@ -1658,14 +1659,18 @@ mod tests {
         let mut reg = CellRegistry::new();
         let root = test_trust_root();
         let epoch = test_epoch();
+        // SAFETY: create_cell cannot fail with valid test inputs
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
 
         // Go to Active.
         let m = test_measurement(&root);
+        // SAFETY: measure_cell cannot fail with valid test inputs
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
+        // SAFETY: attest_cell cannot fail with valid test inputs
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
+        // SAFETY: activate_cell cannot fail with valid test inputs
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
         // Suspend.

@@ -8040,6 +8040,7 @@ mod tests {
             Statement::Expression(expr) => {
                 assert_eq!(expr.expression, Expression::NumericLiteral(42));
             }
+            // SAFETY: Test validates parsed statement is expression type for numeric literal
             _ => panic!("expected expression statement"),
         }
     }

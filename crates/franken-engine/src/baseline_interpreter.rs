@@ -14228,20 +14228,7 @@ impl InterpreterCore {
 
             // StringPrototypeEndsWith: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:NumberIsNaN" => {
-                // Number.isNaN() implementation - checks if value is NaN
-                if args.count == 0 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let result = match value {
-                    Value::Float(f) => f.inner().is_nan(),
-                    _ => false, // Only Float NaN is considered NaN
-                };
-
-                Ok(Value::Bool(result))
-            }
+            // Removed duplicate NumberIsNaN - implementation at line ~8618 has correct argument handling
 
             // Removed duplicate NumberIsFinite - implementation at line ~8630 has correct argument handling
 

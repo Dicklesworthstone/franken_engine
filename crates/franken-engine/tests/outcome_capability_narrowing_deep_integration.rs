@@ -51,7 +51,7 @@ fn deep_outcome_cascade_three_boundaries_preserve() {
     assert!(!v.has_violations());
     assert_eq!(v.transitions().len(), 3);
 
-    // Propagate Timeout through all three
+    // Propagate Timeout through all three (reverse order)
     let p1 = v.record_outcome_propagation(
         "boundary_3",
         BoundaryOutcome::Timeout,
@@ -62,6 +62,41 @@ fn deep_outcome_cascade_three_boundaries_preserve() {
     assert_eq!(p2, BoundaryOutcome::Timeout);
     let p3 = v.record_outcome_propagation("boundary_1", p2, BoundaryOutcome::Success);
     assert_eq!(p3, BoundaryOutcome::Timeout);
+
+    // Verify evidence is preserved on all transitions
+    let transitions = v.transitions();
+    assert_eq!(transitions.len(), 3);
+
+    // Find each boundary and verify evidence is preserved
+    let boundary_1 = transitions
+        .iter()
+        .find(|t| t.boundary_label == "boundary_1")
+        .expect("boundary_1 should exist");
+    assert_eq!(boundary_1.child_outcome, Some(BoundaryOutcome::Timeout));
+    assert_eq!(
+        boundary_1.propagated_outcome,
+        Some(BoundaryOutcome::Timeout)
+    );
+
+    let boundary_2 = transitions
+        .iter()
+        .find(|t| t.boundary_label == "boundary_2")
+        .expect("boundary_2 should exist");
+    assert_eq!(boundary_2.child_outcome, Some(BoundaryOutcome::Timeout));
+    assert_eq!(
+        boundary_2.propagated_outcome,
+        Some(BoundaryOutcome::Timeout)
+    );
+
+    let boundary_3 = transitions
+        .iter()
+        .find(|t| t.boundary_label == "boundary_3")
+        .expect("boundary_3 should exist");
+    assert_eq!(boundary_3.child_outcome, Some(BoundaryOutcome::Timeout));
+    assert_eq!(
+        boundary_3.propagated_outcome,
+        Some(BoundaryOutcome::Timeout)
+    );
 }
 
 #[test]
@@ -867,4 +902,95 @@ fn deep_different_epochs_different_validators() {
     let r1 = v1.build_report();
     let r2 = v2.build_report();
     assert_ne!(r1.epoch, r2.epoch);
+}
+
+// ---------------------------------------------------------------------------
+// Regression test: repeated boundary labels with out-of-order propagation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_outcome_repeated_boundary_labels_preserve_evidence() {
+    let mut v = CapabilityNarrowingValidator::new(OutcomePropagationRule::Preserve, epoch(1));
+    let full = CapabilityGrant::full();
+    let sandbox = CapabilityGrant::sandbox();
+    let compute = CapabilityGrant::compute_only();
+
+    // Create multiple transitions with the same boundary label
+    let d1 = v.validate_narrowing("t0", "t1", "repeated_boundary", &full, &sandbox);
+    let d2 = v.validate_narrowing("t1", "t2", "repeated_boundary", &sandbox, &compute);
+    let d3 = v.validate_narrowing(
+        "t2",
+        "t3",
+        "different_boundary",
+        &compute,
+        &CapabilityGrant::none(),
+    );
+
+    assert_eq!(d1, NarrowingDirection::Narrowed);
+    assert_eq!(d2, NarrowingDirection::Narrowed);
+    assert_eq!(d3, NarrowingDirection::Narrowed);
+    assert!(!v.has_violations());
+    assert_eq!(v.transitions().len(), 3);
+
+    // Record outcomes out-of-order for the repeated boundary
+    let p1 = v.record_outcome_propagation(
+        "repeated_boundary",
+        BoundaryOutcome::Timeout,
+        BoundaryOutcome::Success,
+    );
+    assert_eq!(p1, BoundaryOutcome::Timeout);
+
+    let p2 = v.record_outcome_propagation(
+        "repeated_boundary",
+        BoundaryOutcome::Failure,
+        BoundaryOutcome::Success,
+    );
+    assert_eq!(p2, BoundaryOutcome::Failure);
+
+    let p3 = v.record_outcome_propagation(
+        "different_boundary",
+        BoundaryOutcome::Success,
+        BoundaryOutcome::Success,
+    );
+    assert_eq!(p3, BoundaryOutcome::Success);
+
+    // Verify evidence is preserved on correct transitions
+    let transitions = v.transitions();
+    assert_eq!(transitions.len(), 3);
+
+    // The first repeated_boundary (t0->t1) should get the first outcome
+    let transition_0_1 = transitions
+        .iter()
+        .find(|t| t.parent_trace_id == "t0" && t.child_trace_id == "t1")
+        .expect("t0->t1 transition should exist");
+    assert_eq!(transition_0_1.boundary_label, "repeated_boundary");
+    assert_eq!(transition_0_1.child_outcome, Some(BoundaryOutcome::Timeout));
+    assert_eq!(
+        transition_0_1.propagated_outcome,
+        Some(BoundaryOutcome::Timeout)
+    );
+
+    // The second repeated_boundary (t1->t2) should get the second outcome
+    let transition_1_2 = transitions
+        .iter()
+        .find(|t| t.parent_trace_id == "t1" && t.child_trace_id == "t2")
+        .expect("t1->t2 transition should exist");
+    assert_eq!(transition_1_2.boundary_label, "repeated_boundary");
+    assert_eq!(transition_1_2.child_outcome, Some(BoundaryOutcome::Failure));
+    assert_eq!(
+        transition_1_2.propagated_outcome,
+        Some(BoundaryOutcome::Failure)
+    );
+
+    // The different boundary should get its outcome
+    let transition_2_3 = transitions
+        .iter()
+        .find(|t| t.parent_trace_id == "t2" && t.child_trace_id == "t3")
+        .expect("t2->t3 transition should exist");
+    assert_eq!(transition_2_3.boundary_label, "different_boundary");
+    assert_eq!(transition_2_3.child_outcome, Some(BoundaryOutcome::Success));
+    assert_eq!(
+        transition_2_3.propagated_outcome,
+        Some(BoundaryOutcome::Success)
+    );
 }

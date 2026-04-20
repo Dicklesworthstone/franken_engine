@@ -519,12 +519,15 @@ impl CapabilityNarrowingValidator {
             });
         }
 
-        // Update the last transition if it matches
-        if let Some(last) = self.transitions.last_mut()
-            && last.boundary_label == boundary_label
+        // Find the most recent unmatched transition with the given boundary_label
+        if let Some(transition) = self
+            .transitions
+            .iter_mut()
+            .rev()
+            .find(|t| t.boundary_label == boundary_label && t.child_outcome.is_none())
         {
-            last.child_outcome = Some(child_outcome);
-            last.propagated_outcome = Some(propagated);
+            transition.child_outcome = Some(child_outcome);
+            transition.propagated_outcome = Some(propagated);
         }
 
         propagated

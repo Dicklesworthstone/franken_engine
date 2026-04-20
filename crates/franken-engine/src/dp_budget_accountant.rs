@@ -606,10 +606,12 @@ mod tests {
     }
 
     fn test_accountant() -> BudgetAccountant {
+        // SAFETY: Test helper with valid AccountantConfig should always succeed
         BudgetAccountant::new(test_config()).unwrap()
     }
 
     fn test_accountant_advanced() -> BudgetAccountant {
+        // SAFETY: Test helper with valid AccountantConfig should always succeed
         BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::Advanced,
             ..test_config()
@@ -673,6 +675,7 @@ mod tests {
     #[test]
     fn consume_basic_ok() {
         let mut acc = test_accountant();
+        // SAFETY: Test with valid budget parameters should succeed
         let record = acc
             .consume(100_000, 10_000, "noise addition", 2_000_000_000)
             .unwrap();
@@ -688,6 +691,7 @@ mod tests {
     fn consume_multiple_ok() {
         let mut acc = test_accountant();
         for i in 0..5 {
+            // SAFETY: Test with valid budget parameters should succeed
             acc.consume(100_000, 10_000, &format!("op-{i}"), (i + 2) * 1_000_000_000)
                 .unwrap();
         }

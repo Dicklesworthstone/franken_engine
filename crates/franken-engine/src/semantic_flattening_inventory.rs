@@ -1154,11 +1154,15 @@ mod tests {
             api_surface: "api".to_string(),
             line_hint: None,
         };
+        // SAFETY: BoundaryPoint derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&bp).unwrap();
         assert!(
             json.contains("null"),
             "None line_hint should serialize as null"
         );
+        // SAFETY: JSON was just produced by to_string of a valid BoundaryPoint,
+        // so from_str back to BoundaryPoint cannot fail (valid format + matching schema).
         let back: BoundaryPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(bp, back);
     }
@@ -1562,7 +1566,11 @@ mod tests {
             "Log full ID".to_string(),
             "bd-fix-101".to_string(),
         ));
+        // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
+        // to_string_pretty on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string_pretty(&inv).unwrap();
+        // SAFETY: JSON was just produced by to_string_pretty of a valid FlatteningInventory,
+        // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
         assert_eq!(inv.content_hash(), back.content_hash());
@@ -1743,8 +1751,12 @@ mod tests {
     #[test]
     fn test_inventory_schema_version_preserved_through_serde() {
         let inv = FlatteningInventory::new(SecurityEpoch::from_raw(50));
+        // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&inv).unwrap();
         assert!(json.contains(FLATTENING_SCHEMA_VERSION));
+        // SAFETY: JSON was just produced by to_string of a valid FlatteningInventory,
+        // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(back.schema_version, FLATTENING_SCHEMA_VERSION);
     }

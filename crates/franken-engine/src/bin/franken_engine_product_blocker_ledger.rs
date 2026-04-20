@@ -756,6 +756,12 @@ mod tests {
 
     fn test_support_contract() -> SupportSurfaceContract {
         SupportSurfaceContract {
+            allowed_support_statuses: vec![
+                "shipped".to_string(),
+                "candidate".to_string(),
+                "deferred".to_string(),
+                "unsupported".to_string(),
+            ],
             readiness_answer_contract: ReadinessAnswerContract {
                 engine_ready_when_support_status_in: vec!["shipped".to_string()],
                 engine_blocked_when_support_status_in: vec![
@@ -768,6 +774,7 @@ mod tests {
                 product_ready_handoff_bead_id: "bd-1lsy.5.10.3".to_string(),
                 operator_rule_summary: "engine-ready rows are shipped".to_string(),
             },
+            surface_rows: Vec::new(),
         }
     }
 

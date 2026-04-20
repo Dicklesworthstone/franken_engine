@@ -12436,55 +12436,16 @@ impl InterpreterCore {
             }
 
             "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find(callback[, thisArg]) implementation
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
+                // Array.prototype.find(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
+                self.validate_array_callback_args(args, "Array.prototype.find")?;
 
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                // Simplified implementation without function call support
-                // Return first element that exists and is truthy
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let is_truthy = match element {
-                                Value::Bool(false) | Value::Null | Value::Undefined => false,
-                                Value::Int(0) => false,
-                                Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => false,
-                                Value::Str(s) if s.is_empty() => false,
-                                _ => true,
-                            };
-                            if is_truthy {
-                                return Ok(element.clone());
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined)
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [1,2,3].find(x => x > 2) should error rather than
+                // silently return wrong values like the first element or first truthy element
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.find implementation".to_string(),
+                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and returning first element where callback returns truthy".to_string(),
+                })
             }
 
             "builtin:StringPrototypeStartsWith" => {

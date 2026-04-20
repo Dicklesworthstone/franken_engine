@@ -438,6 +438,8 @@ pub struct HeapObject {
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
+    /// Whether this object was created as a true Array instance.
+    pub is_array: bool,
 }
 
 impl HeapObject {
@@ -4083,7 +4085,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::NewArray { dst } => {
                     self.run_pre_allocation_hook(module, AllocKind::Array, 0)?;
-                    let id = self.alloc_object_with_prototype(None)?;
+                    let id = self.alloc_array_with_prototype(None)?;
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
                 }
@@ -5768,7 +5770,7 @@ impl InterpreterCore {
     }
 
     fn alloc_array_from_values(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
-        let id = self.alloc_object_with_prototype(None)?;
+        let id = self.alloc_array_with_prototype(None)?;
         for (index, value) in values.iter().cloned().enumerate() {
             self.set_object_property(id, index.to_string(), value)?;
         }
@@ -6592,6 +6594,28 @@ impl InterpreterCore {
             Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
             Value::Promise(_) => "[object Promise]".to_string(),
             Value::BuiltinFunction(_) => "[object Function]".to_string(),
+        }
+    }
+
+    fn value_to_object_to_string_tag(value: &Value) -> String {
+        match value {
+            Value::Undefined => "[object Undefined]".to_string(),
+            Value::Null => "[object Null]".to_string(),
+            Value::Bool(_) => "[object Boolean]".to_string(),
+            Value::Int(_) | Value::Float(_) => "[object Number]".to_string(),
+            Value::Str(_) => "[object String]".to_string(),
+            Value::Object(_) => "[object Object]".to_string(),
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::BuiltinFunction(_) => "[object Function]".to_string(),
+            Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
+            Value::Generator(_) => "[object Generator]".to_string(),
+            Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
+            Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
+            Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
+            Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
+            Value::Iterator(_) => "[object Iterator]".to_string(),
+            Value::Promise(_) => "[object Promise]".to_string(),
         }
     }
 
@@ -12307,17 +12331,11 @@ impl InterpreterCore {
                 // Object.prototype.toString() implementation
                 let this_val = self.read_reg(args.start)?;
 
-                match this_val {
-                    Value::Undefined => Ok(Value::Str("[object Undefined]".to_string())),
-                    Value::Null => Ok(Value::Str("[object Null]".to_string())),
-                    Value::Bool(_) => Ok(Value::Str("[object Boolean]".to_string())),
-                    Value::Int(_) => Ok(Value::Str("[object Number]".to_string())),
-                    Value::Float(_) => Ok(Value::Str("[object Number]".to_string())),
-                    Value::Str(_) => Ok(Value::Str("[object String]".to_string())),
+                match &this_val {
                     Value::Object(obj_id) => {
-                        // Check if it's an array (simplified)
+                        // Check explicit array metadata first.
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if obj.properties.contains_key("length") {
+                            if obj.is_array {
                                 Ok(Value::Str("[object Array]".to_string()))
                             } else {
                                 Ok(Value::Str("[object Object]".to_string()))
@@ -12326,7 +12344,9 @@ impl InterpreterCore {
                             Ok(Value::Str("[object Object]".to_string()))
                         }
                     }
-                    _ => Ok(Value::Str("[object Unknown]".to_string())),
+                    _ => Ok(Value::Str(InterpreterCore::value_to_object_to_string_tag(
+                        &this_val,
+                    ))),
                 }
             }
 
@@ -15521,6 +15541,22 @@ impl InterpreterCore {
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
+        self.alloc_object_with_prototype_and_flags(prototype, false)
+    }
+
+    /// Allocate a new array object with an explicit prototype link.
+    pub fn alloc_array_with_prototype(
+        &mut self,
+        prototype: Option<ObjectId>,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.alloc_object_with_prototype_and_flags(prototype, true)
+    }
+
+    fn alloc_object_with_prototype_and_flags(
+        &mut self,
+        prototype: Option<ObjectId>,
+        is_array: bool,
+    ) -> Result<ObjectId, InterpreterError> {
         // Check HeapAllocate capability before allocating objects
         if !self
             .config
@@ -15547,6 +15583,7 @@ impl InterpreterCore {
             );
         let mut object = HeapObject::new();
         object.prototype = prototype;
+        object.is_array = is_array;
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
         if requested_bytes > self.config.max_total_memory_bytes {
@@ -20922,7 +20959,8 @@ mod tests {
                         .map(|(i, val)| (i.to_string(), val.clone()))
                         .chain(std::iter::once(("length".to_string(), Value::Int(5))))
                         .collect(),
-                    prototype_id: None,
+                    prototype: None,
+                    ..Default::default()
                 },
             );
 
@@ -20931,7 +20969,8 @@ mod tests {
                 200,
                 HeapObject {
                     properties: BTreeMap::new(),
-                    prototype_id: None,
+                    prototype: None,
+                    ..Default::default()
                 },
             );
 
@@ -21182,7 +21221,8 @@ mod tests {
                         .map(|(i, val)| (i.to_string(), val.clone()))
                         .chain(std::iter::once(("length".to_string(), Value::Int(6))))
                         .collect(),
-                    prototype_id: None,
+                    prototype: None,
+                    ..Default::default()
                 },
             );
 
@@ -21190,7 +21230,8 @@ mod tests {
                 200,
                 HeapObject {
                     properties: BTreeMap::new(),
-                    prototype_id: None,
+                    prototype: None,
+                    ..Default::default()
                 },
             );
 
@@ -23161,6 +23202,7 @@ mod tests {
                 ("1".to_string(), Value::Str("second".to_string())),
                 ("2".to_string(), Value::Str("third".to_string())),
             ]),
+            ..Default::default()
         });
         core.registers[0] = Value::Object(array_id);
 
@@ -23194,22 +23236,65 @@ mod tests {
         // Verify ObjectPrototypeToString functionality preserved after removing duplicates
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
 
-        // Test with different value types
-        core.registers[0] = Value::Null;
-        let result = core.execute(&test_module(vec![
-            Ir3Instruction::CallBuiltin {
-                builtin: "builtin:ObjectPrototypeToString".to_string(),
-                args: RegRange { start: 0, count: 1 },
-                dst: 10,
-            },
-            Ir3Instruction::Halt,
-        ]));
+        let run_to_string = |core: &mut InterpreterCore, value: Value, expected: &str| {
+            core.registers[0] = value;
+            let result = core
+                .execute(&test_module(vec![
+                    Ir3Instruction::CallBuiltin {
+                        builtin: "builtin:ObjectPrototypeToString".to_string(),
+                        args: RegRange { start: 0, count: 1 },
+                        dst: 10,
+                    },
+                    Ir3Instruction::Halt,
+                ]))
+                .expect("ObjectPrototypeToString should run successfully");
+            assert_eq!(result, Value::Str(expected.to_string()));
+        };
 
-        // Verify the call succeeded
-        assert!(
-            result.is_ok(),
-            "ObjectPrototypeToString should work after deduplication"
+        run_to_string(&mut core, Value::Undefined, "[object Undefined]");
+        run_to_string(&mut core, Value::Null, "[object Null]");
+        run_to_string(&mut core, Value::Bool(false), "[object Boolean]");
+        run_to_string(&mut core, Value::Int(7), "[object Number]");
+        run_to_string(&mut core, Value::Float(Float64::new(1.5)), "[object Number]");
+        run_to_string(&mut core, Value::Str("test".to_string()), "[object String]");
+
+        // Array-like object with length property should not be treated as an array.
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "length".to_string(), Value::Int(1))
+            .unwrap();
+        core.set_object_property(object_id, "0".to_string(), Value::Int(99))
+            .unwrap();
+        run_to_string(&mut core, Value::Object(object_id), "[object Object]");
+
+        // Arrays should still return the array tag.
+        let array_id = core.alloc_array_from_values(&[Value::Str("x".to_string())]).unwrap();
+        run_to_string(&mut core, Value::Object(array_id), "[object Array]");
+
+        // Runtime callable and object-like tags.
+        run_to_string(&mut core, Value::Function(1), "[object Function]");
+        run_to_string(&mut core, Value::Closure(2), "[object Function]");
+        run_to_string(
+            &mut core,
+            Value::BuiltinFunction(BuiltinFunction::require("console")),
+            "[object Function]",
         );
+        run_to_string(&mut core, Value::Iterator(3), "[object Iterator]");
+        run_to_string(&mut core, Value::GeneratorFunction(4), "[object GeneratorFunction]");
+        run_to_string(&mut core, Value::Generator(5), "[object Generator]");
+        run_to_string(&mut core, Value::AsyncFunction(6), "[object AsyncFunction]");
+        run_to_string(&mut core, Value::AsyncFunctionObject(7), "[object AsyncFunction]");
+        run_to_string(
+            &mut core,
+            Value::AsyncGeneratorFunction(8),
+            "[object AsyncGeneratorFunction]",
+        );
+        run_to_string(
+            &mut core,
+            Value::AsyncGeneratorObject(9),
+            "[object AsyncGenerator]",
+        );
+        run_to_string(&mut core, Value::Promise(10), "[object Promise]");
+
     }
 
     #[test]
@@ -23420,6 +23505,26 @@ mod tests {
                     .expect("StringPrototypeEndsWith ID should execute");
                 assert_eq!(result, Value::Bool(*expected));
             }
+        }
+    }
+
+    #[test]
+    fn string_prototype_ends_with_utf16_boundary_fails_closed() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [40_u32, 230_u32, 336_u32] {
+            interpreter.registers[0] = Value::Str("A😀B".to_string());
+            interpreter.registers[1] = Value::Str("😀".to_string());
+            interpreter.registers[2] = Value::Int(2);
+
+            let result = interpreter.call_builtin_by_id(
+                builtin_id,
+                RegRange { start: 0, count: 3 },
+            );
+            assert!(
+                matches!(result, Err(InterpreterError::TypeError { .. })),
+                "String.prototype.endsWith should reject non-materializable UTF-16 boundary"
+            );
         }
     }
 

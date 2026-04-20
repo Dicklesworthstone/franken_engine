@@ -826,6 +826,8 @@ mod tests {
     fn challenge_from_running() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
             .unwrap();

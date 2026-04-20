@@ -1376,7 +1376,9 @@ mod tests {
     #[test]
     fn feature_family_serde_roundtrip() {
         let fam = FeatureFamily::ControlFlow;
+        // SAFETY: FeatureFamily derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&fam).unwrap();
+        // SAFETY: JSON was just produced by valid FeatureFamily serialization
         let back: FeatureFamily = serde_json::from_str(&json).unwrap();
         assert_eq!(fam, back);
     }
@@ -1441,7 +1443,9 @@ mod tests {
     #[test]
     fn embedding_validity_serde() {
         let v = EmbeddingValidity::Valid;
+        // SAFETY: EmbeddingValidity derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&v).unwrap();
+        // SAFETY: JSON was just produced by valid EmbeddingValidity serialization
         let back: EmbeddingValidity = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
     }
@@ -1595,7 +1599,9 @@ mod tests {
                 ("b", FeatureFamily::MemoryAccess, 200_000, 50),
             ],
         );
+        // SAFETY: WorkloadEmbedding derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&emb).unwrap();
+        // SAFETY: JSON was just produced by valid WorkloadEmbedding serialization
         let back: WorkloadEmbedding = serde_json::from_str(&json).unwrap();
         assert_eq!(emb, back);
     }
@@ -1610,7 +1616,9 @@ mod tests {
             ],
         );
         // After normalization: lo → 0, hi → MILLION
+        // SAFETY: Test embedding constructed with "lo" feature should contain that feature name
         let lo = emb.value_for("lo").unwrap();
+        // SAFETY: Test embedding constructed with "hi" feature should contain that feature name
         let hi = emb.value_for("hi").unwrap();
         assert_eq!(lo, 0);
         assert_eq!(hi, MILLION);

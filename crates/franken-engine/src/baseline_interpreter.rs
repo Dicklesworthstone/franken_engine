@@ -14855,59 +14855,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeSubstr" => {
-                // String.prototype.substr(start, length) implementation (deprecated but widely used)
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let start = if args.count > 1 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => n as i32,
-                        Value::Float(f) => f.inner() as i32,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                let length = if args.count > 2 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Int(n) => Some(n as usize),
-                        Value::Float(f) => Some(f.inner() as usize),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                let chars: Vec<char> = str_text.chars().collect();
-                let str_len = chars.len() as i32;
-
-                // Handle negative start (count from end)
-                let actual_start = if start < 0 {
-                    (str_len + start).max(0) as usize
-                } else {
-                    (start as usize).min(chars.len())
-                };
-
-                let actual_length = length.unwrap_or(chars.len() - actual_start);
-                let end_pos = (actual_start + actual_length).min(chars.len());
-
-                if actual_start >= chars.len() {
-                    Ok(Value::Str("".to_string()))
-                } else {
-                    let result: String = chars[actual_start..end_pos].iter().collect();
-                    Ok(Value::Str(result))
-                }
-            }
+            // Removed duplicate StringPrototypeSubstr - implementation at line ~11150 is identical
 
             "builtin:NumberPrototypeToFixed" => {
                 // Number.prototype.toFixed(digits) implementation

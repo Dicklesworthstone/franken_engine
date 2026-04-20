@@ -1457,6 +1457,8 @@ mod tests {
                 assert_eq!(expected, "wrong-slot");
                 assert_eq!(got, "test-slot-001");
             }
+            // SAFETY: Test-only panic to catch unexpected DemotionError variants
+            // in slot mismatch validation. Expected errors are SlotMismatch only.
             other => panic!("unexpected error: {other}"),
         }
     }

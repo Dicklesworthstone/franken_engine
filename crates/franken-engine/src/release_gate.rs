@@ -1392,6 +1392,7 @@ mod tests {
             Verdict::Fail { reason } => {
                 assert!(reason.contains("GATE_TIMEOUT"));
             }
+            // SAFETY: Test-only panic to validate gate timeout verdict matches expected Fail variant
             _ => panic!("expected timeout fail verdict"),
         }
 

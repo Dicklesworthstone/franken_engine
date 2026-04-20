@@ -955,7 +955,9 @@ mod tests {
     #[test]
     fn transferable_kind_serde_roundtrip() {
         for kind in TransferableKind::ALL {
+            // SAFETY: TransferableKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid TransferableKind serialization
             let back: TransferableKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, back);
         }
@@ -972,7 +974,9 @@ mod tests {
     #[test]
     fn drift_kind_serde_roundtrip() {
         for kind in DriftKind::ALL {
+            // SAFETY: DriftKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid DriftKind serialization
             let back: DriftKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, back);
         }
@@ -992,7 +996,9 @@ mod tests {
             TransferVerdict::Rejected,
             TransferVerdict::Deferred,
         ] {
+            // SAFETY: TransferVerdict derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by valid TransferVerdict serialization
             let back: TransferVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -1397,7 +1403,9 @@ mod tests {
     #[test]
     fn transfer_candidate_serde_roundtrip() {
         let candidate = specimen_candidate("c1", TransferableKind::RewritePack, 800_000);
+        // SAFETY: TransferCandidate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&candidate).unwrap();
+        // SAFETY: JSON was just produced by valid TransferCandidate serialization
         let back: TransferCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(candidate, back);
     }
@@ -1411,7 +1419,9 @@ mod tests {
             decision_hash: ContentHash::compute(b"test"),
             epoch: SecurityEpoch::from_raw(1),
         };
+        // SAFETY: TransferDecision derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just produced by valid TransferDecision serialization
         let back: TransferDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, back);
     }

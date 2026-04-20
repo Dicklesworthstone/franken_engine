@@ -981,6 +981,8 @@ mod tests {
         for i in 0..n {
             let ts = 1_700_000_000_000 + (i as u64) * 1000;
             let req = make_request(&format!("action_{i}"), ts);
+            // SAFETY: emit() with valid test inputs (valid context and request structure)
+            // cannot fail under normal test conditions.
             emitter.emit(&mut cx, &req).unwrap();
         }
         emitter.entries().to_vec()
@@ -1028,7 +1030,9 @@ mod tests {
     #[test]
     fn violation_type_serde_roundtrip() {
         let vt = ReplayViolationType::ChainHashMismatch;
+        // SAFETY: ReplayViolationType derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&vt).unwrap();
+        // SAFETY: JSON was just produced by valid ReplayViolationType serialization
         let back: ReplayViolationType = serde_json::from_str(&json).unwrap();
         assert_eq!(vt, back);
     }
@@ -1048,7 +1052,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = ReplayConfig::default();
+        // SAFETY: ReplayConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cfg).unwrap();
+        // SAFETY: JSON was just produced by valid ReplayConfig serialization
         let back: ReplayConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
     }
@@ -1365,7 +1371,9 @@ mod tests {
         let ledger = build_ledger(3);
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
+        // SAFETY: ReplayResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid ReplayResult serialization
         let back: ReplayResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }

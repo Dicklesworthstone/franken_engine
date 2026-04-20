@@ -5118,6 +5118,87 @@ fn test_array_map_deduplication_regression() {
 }
 
 // ---------------------------------------------------------------------------
+// Array.prototype.forEach regression tests - d1018316
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_array_for_each_fail_closed_behavior() {
+    // Regression test for d1018316: Array.prototype.forEach should fail closed
+    // rather than silently iterating without invoking callback side effects.
+    use frankenengine_engine::baseline_interpreter::{
+        BaselineInterpreter, InterpreterError, Value,
+    };
+
+    let mut interpreter = BaselineInterpreter::new();
+
+    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    interpreter
+        .set_object_property(array_id, "length".to_string(), Value::Int(2))
+        .unwrap();
+    interpreter
+        .set_object_property(array_id, "0".to_string(), Value::Int(1))
+        .unwrap();
+    interpreter
+        .set_object_property(array_id, "1".to_string(), Value::Int(2))
+        .unwrap();
+
+    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    let callback = Value::Function(callback_id);
+
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter.write_reg(1, callback).unwrap();
+
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 2);
+    match result {
+        Err(InterpreterError::TypeError { expected, got }) => {
+            assert!(
+                expected.contains("supported Array.prototype.forEach implementation"),
+                "forEach fail-closed error should identify unsupported implementation, got: {expected}"
+            );
+            assert!(
+                got.contains("callback invocation not yet supported"),
+                "forEach fail-closed error should mention callback dispatch gap, got: {got}"
+            );
+        }
+        other => panic!("Array.forEach should fail closed with TypeError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_array_for_each_callback_validation_regression() {
+    // Regression test for d1018316: Array.prototype.forEach should reject
+    // missing and non-function callbacks instead of returning Undefined.
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value};
+
+    let mut interpreter = BaselineInterpreter::new();
+
+    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    interpreter
+        .set_object_property(array_id, "length".to_string(), Value::Int(1))
+        .unwrap();
+    interpreter
+        .set_object_property(array_id, "0".to_string(), Value::Int(1))
+        .unwrap();
+
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    let missing_callback = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 1);
+    assert!(
+        missing_callback.is_err(),
+        "Array.forEach without callback should fail closed"
+    );
+
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter
+        .write_reg(1, Value::Str("not-a-function".to_string()))
+        .unwrap();
+    let non_function_callback = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 2);
+    assert!(
+        non_function_callback.is_err(),
+        "Array.forEach with non-function callback should fail closed"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Math.sqrt and Math.pow regression tests - bd-af8b7
 // ---------------------------------------------------------------------------
 

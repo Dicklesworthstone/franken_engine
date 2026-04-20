@@ -1939,7 +1939,9 @@ mod tests {
     #[test]
     fn key_role_serde_all_variants() {
         for role in KeyRole::ALL {
+            // SAFETY: KeyRole derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(role).unwrap();
+            // SAFETY: JSON was just produced by valid KeyRole serialization
             let back: KeyRole = serde_json::from_str(&json).unwrap();
             assert_eq!(*role, back);
         }

@@ -1701,6 +1701,7 @@ mod tests {
     #[test]
     fn engine_validate_config_empty_domains() {
         let mut engine = SynthesisEngine::new(epoch());
+        // SAFETY: Test-only unwrap for add_input with valid input to empty engine
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
             .unwrap();

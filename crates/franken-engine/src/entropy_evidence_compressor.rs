@@ -740,7 +740,9 @@ mod tests {
         est.observe(0);
         est.observe(1);
         est.observe(0);
+        // SAFETY: EntropyEstimator serialization is infallible for well-formed internal state
         let json = serde_json::to_string(&est).unwrap();
+        // SAFETY: deserializing our own freshly serialized JSON data cannot fail
         let restored: EntropyEstimator = serde_json::from_str(&json).unwrap();
         assert_eq!(est, restored);
     }
@@ -784,7 +786,9 @@ mod tests {
     fn sufficient_statistic_serde_roundtrip() {
         let est = EntropyEstimator::new();
         let ss = SufficientStatistic::from_estimator(&est, 0, 0, ContentHash::compute(b"empty"));
+        // SAFETY: SufficientStatistic serialization is infallible for well-formed internal state
         let json = serde_json::to_string(&ss).unwrap();
+        // SAFETY: deserializing our own freshly serialized JSON data cannot fail
         let restored: SufficientStatistic = serde_json::from_str(&json).unwrap();
         assert_eq!(ss, restored);
     }
@@ -798,6 +802,7 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
+        // SAFETY: estimator with known observations (0,1 pairs) has valid non-empty alphabet
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
         assert_eq!(coder.alphabet_size, 2);
     }

@@ -689,7 +689,9 @@ mod tests {
     #[test]
     fn proof_status_serde() {
         for s in ProofStatus::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: ProofStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -718,7 +720,9 @@ mod tests {
     #[test]
     fn origin_serde() {
         for o in CandidateOrigin::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(o).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CandidateOrigin = serde_json::from_str(&json).unwrap();
             assert_eq!(*o, back);
         }
@@ -751,7 +755,9 @@ mod tests {
     #[test]
     fn proof_serde() {
         let p = EquivalenceProof::verified(8, 400_000);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&p).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: EquivalenceProof = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
     }
@@ -791,7 +797,9 @@ mod tests {
     #[test]
     fn candidate_serde() {
         let c = verified_candidate("c1", 1_200_000);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SynthesisCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }
@@ -814,7 +822,9 @@ mod tests {
     #[test]
     fn budget_serde() {
         let b = SynthesisBudget::default();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&b).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SynthesisBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(b, back);
     }
@@ -859,6 +869,7 @@ mod tests {
             verified_candidate("c2", 1_300_000),
         ];
         let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        // SAFETY: test setup guarantees report has verified candidates
         let best = r.best_candidate().unwrap();
         assert_eq!(best.candidate_id, "c2");
         assert_eq!(best.speedup_millionths, 1_300_000);
@@ -881,7 +892,9 @@ mod tests {
     fn report_serde() {
         let candidates = vec![verified_candidate("c1", 1_100_000), refuted_candidate("c2")];
         let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SynthesisReport = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -924,7 +937,9 @@ mod tests {
         let candidates = vec![refuted_candidate("c1")];
         let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
         a.ingest(&r);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: CounterexampleArchive = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }

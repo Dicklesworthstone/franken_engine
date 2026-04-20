@@ -860,6 +860,7 @@ mod tests {
         assert_eq!(result.status, MoonshotGateStatus::Error);
         assert!(result.evidence_score_millionths.is_none());
         assert!(result.evidence_hash.is_none());
+        // SAFETY: Test verifies error_message is Some when status is Error
         assert_eq!(
             result.error_message.as_ref().unwrap(),
             "Evidence validation failed"
@@ -1011,6 +1012,7 @@ mod tests {
             "test-env".to_string(),
         );
         assert!(result.is_ok());
+        // SAFETY: Just verified result.is_ok() above
         let execution = result.unwrap();
         assert!(execution.scorecard_result.is_some());
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pass);
@@ -1143,7 +1145,9 @@ mod tests {
     #[test]
     fn moonshot_gate_id_serde_roundtrip() {
         for gate_id in MoonshotGateId::all() {
+            // SAFETY: MoonshotGateId derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(gate_id).unwrap();
+            // SAFETY: JSON was just produced by valid MoonshotGateId serialization
             let back: MoonshotGateId = serde_json::from_str(&json).unwrap();
             assert_eq!(*gate_id, back);
         }
@@ -1159,7 +1163,9 @@ mod tests {
             MoonshotGateStatus::Error,
         ];
         for status in &statuses {
+            // SAFETY: MoonshotGateStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(status).unwrap();
+            // SAFETY: JSON was just produced by valid MoonshotGateStatus serialization
             let back: MoonshotGateStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*status, back);
         }
@@ -1168,7 +1174,9 @@ mod tests {
     #[test]
     fn moonshot_gate_result_serde_roundtrip() {
         let result = sample_gate_result(MoonshotGateId::NodeBunComparisonHarness, true);
+        // SAFETY: MoonshotGateResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid MoonshotGateResult serialization
         let back: MoonshotGateResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }

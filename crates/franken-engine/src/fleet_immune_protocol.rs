@@ -1232,8 +1232,10 @@ mod tests {
     fn accumulator_additive_deltas() {
         let mut acc = EvidenceAccumulator::new();
 
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
             .unwrap();
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-2", "ext-1", 1, 200_000))
             .unwrap();
 
@@ -1245,8 +1247,10 @@ mod tests {
     fn accumulator_negative_deltas() {
         let mut acc = EvidenceAccumulator::new();
 
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 500_000))
             .unwrap();
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-2", "ext-1", 1, -200_000))
             .unwrap();
 
@@ -1258,6 +1262,7 @@ mod tests {
         let mut acc = EvidenceAccumulator::new();
         let packet = test_evidence("node-1", "ext-1", 1, 500_000);
 
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&packet).unwrap();
         let err = acc.ingest(&packet).unwrap_err();
         assert!(matches!(err, ProtocolError::DuplicateEvidence { .. }));
@@ -1268,8 +1273,10 @@ mod tests {
     fn accumulator_per_extension_isolation() {
         let mut acc = EvidenceAccumulator::new();
 
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
             .unwrap();
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-2", 2, 700_000))
             .unwrap();
 
@@ -1284,8 +1291,10 @@ mod tests {
 
         // Same evidence in same order.
         for acc in [&mut acc1, &mut acc2] {
+            // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
             acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
                 .unwrap();
+            // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
             acc.ingest(&test_evidence("node-2", "ext-1", 1, 200_000))
                 .unwrap();
         }
@@ -1296,8 +1305,10 @@ mod tests {
     #[test]
     fn accumulator_extensions_returns_all() {
         let mut acc = EvidenceAccumulator::new();
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-a", 1, 100))
             .unwrap();
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-b", 2, 200))
             .unwrap();
 

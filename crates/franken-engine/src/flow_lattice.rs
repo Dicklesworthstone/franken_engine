@@ -1868,6 +1868,8 @@ mod tests {
             FlowLatticeError::FlowBlocked { detail } => {
                 assert!(detail.contains("replay linkage does not match trace"));
             }
+            // SAFETY: Test-only panic to validate cross-trace replay protection.
+            // Test expects FlowBlocked error for cross-trace replays. Any other error type is test failure.
             other => panic!("expected FlowBlocked for cross-trace replay, got {other:?}"),
         }
         assert_eq!(lattice.events().len(), 1);

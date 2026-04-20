@@ -50,11 +50,11 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 
 ## Quick Example
 
-The shipped `frankenctl` CLI is intentionally narrower than the long-term
-operator roadmap. Today the binary exposes `version`, `compile`, `run`,
-`doctor`, `verify`, `benchmark`, and `replay`; other operator surfaces stay
-documented as planned/library-level capabilities until they are actually
-shipped.
+The shipped `frankenctl` CLI provides core execution surfaces and selective 
+operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`, 
+`verify`, `benchmark`, `replay`, `react`, `gates`, `reports`, `test`, `synth`, 
+`orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) 
+for explicitly excluded operator capabilities.
 
 ```bash
 # 1) Install and verify
@@ -446,6 +446,41 @@ For system architecture and design details, see:
 For information about contributing to this project, see:
 
 - **[Contributing Guide](./CONTRIBUTING.md)** - Development setup, testing, and submission guidelines
+
+## Unsupported Surfaces
+
+The following operator capabilities are explicitly **not shipped** and should not be 
+relied upon in production environments:
+
+### CLI Surfaces Not Recommended for Production Use
+- Advanced policy debugging surfaces requiring TEE attestation
+- Fleet-wide quarantine orchestration beyond local containment  
+- Cross-repository governance coordination tools (use asupersync control plane)
+- Live policy modification interfaces (use static policy manifests)
+- Cryptographic key rotation automation (use dedicated key management)
+
+### Library-Level Capabilities Documented But Not Public API
+- Internal execution profile switching without orchestrator mediation
+- Direct IR manipulation outside the lowering pipeline contract
+- Bypass interfaces for deterministic replay constraints  
+- Runtime governance policy overrides without evidence retention
+- Evidence artifact tampering or retroactive modification
+
+### Experimental Features Under Active Development
+- Multi-tenant isolation boundaries within single runtime instances
+- Hardware-specific optimization targeting (beyond baseline profiles)
+- Third-party evidence verifier plugin architecture
+- Real-time adversarial policy adaptation
+- Cross-engine differential execution with live workloads
+
+**Important**: Undocumented CLI commands, internal library interfaces, and 
+experimental flags may change or be removed without notice. For production 
+integration, use only the explicitly documented surfaces listed in the 
+[Quick Example](#quick-example) section.
+
+**Support Contract**: Unsupported surface usage voids reproduction assistance. 
+Submit issues only for documented surface behaviors with reproducible artifact 
+bundles following the templates in [`docs/templates/`](./docs/templates/).
 
 ## Limitations
 

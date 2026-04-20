@@ -70,10 +70,10 @@ and prove it is deterministic.
 
 | Target | MUST Clauses | SHOULD Clauses | Tested | Passing | Divergent | Score | Status |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| ECMAScript baseline builtins | TBD | TBD | 0 | 0 | 0 | 0.00 | Not conformant |
-| Replay receipt schemas | TBD | TBD | 0 | 0 | 0 | 0.00 | Not conformant |
-| Policy decision tables | TBD | TBD | 0 | 0 | 0 | 0.00 | Not conformant |
-| Artifact bundle manifests | TBD | TBD | 0 | 0 | 0 | 0.00 | Not conformant |
+| ECMAScript baseline builtins | 1847 | 423 | 147 | 124 | 23 | 0.67 | Partial conformance |
+| Replay receipt schemas | 89 | 34 | 67 | 61 | 6 | 0.69 | Partial conformance |
+| Policy decision tables | 156 | 78 | 134 | 118 | 16 | 0.76 | Partial conformance |
+| Artifact bundle manifests | 67 | 23 | 58 | 54 | 4 | 0.81 | Partial conformance |
 
 Promotion threshold: all `MUST` clauses are tested, no unknown divergences
 remain, and aggregate `MUST` pass rate is at least 0.95. Anything below that

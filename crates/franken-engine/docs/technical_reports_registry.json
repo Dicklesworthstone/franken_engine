@@ -5,41 +5,43 @@
   "reports": [
     {
       "id": "FKTR-2026-001",
-      "title": "[PLACEHOLDER] Runtime Security Isolation in WebAssembly Extensions",
+      "title": "Baseline Interpreter Unimplemented Features Analysis",
       "authors": ["FrankenEngine Research Team"],
-      "date": "2026-TBD",
-      "type": "Research",
-      "status": "Planned",
-      "artifact_bundle": "artifacts/technical_reports/FKTR-2026-001/",
+      "date": "2026-04-20",
+      "type": "Assessment",
+      "status": "Complete",
+      "artifact_bundle": "crates/franken-engine/docs/BASELINE_UNIMPLEMENTED_AUDIT.md",
       "external_replication": false,
       "doi": null,
       "contributions": [
-        "Novel capability-based isolation model for WebAssembly",
-        "Performance evaluation against existing sandboxing approaches",
-        "Formal security model with proofs"
+        "Comprehensive audit of 42 TODO items in baseline interpreter",
+        "Critical assessment of callback function execution gaps",
+        "Risk classification for async function support limitations",
+        "Roadmap for JavaScript runtime completeness"
       ],
-      "dependencies": ["bd-25b7", "bd-f7n"],
-      "reproducible": false,
-      "validation_status": "not_started"
+      "dependencies": [],
+      "reproducible": true,
+      "validation_status": "complete"
     },
     {
       "id": "FKTR-2026-002",
-      "title": "[PLACEHOLDER] Deterministic Replay for WebAssembly Security Analysis",
+      "title": "Critical Infrastructure Test Coverage Analysis",
       "authors": ["FrankenEngine Research Team"],
-      "date": "2026-TBD",
-      "type": "Methodology",
-      "status": "Planned",
-      "artifact_bundle": "artifacts/technical_reports/FKTR-2026-002/",
+      "date": "2026-04-20",
+      "type": "Assessment",
+      "status": "Complete",
+      "artifact_bundle": "crates/franken-engine/docs/UNTESTED_MODULES_AUDIT.md",
       "external_replication": false,
       "doi": null,
       "contributions": [
-        "Deterministic replay framework for security analysis",
-        "Benchmark suite for replay consistency validation",
-        "Case studies on real-world extension vulnerabilities"
+        "Comprehensive test coverage analysis of 477 source modules",
+        "Critical security risk assessment for guardplane adapter",
+        "Capability management testing gap identification",
+        "Integration vs unit testing strategy evaluation"
       ],
-      "dependencies": ["bd-3gsv", "bd-1ze"],
-      "reproducible": false,
-      "validation_status": "not_started"
+      "dependencies": [],
+      "reproducible": true,
+      "validation_status": "complete"
     },
     {
       "id": "FKTR-2026-003",
@@ -170,7 +172,7 @@
   "external_replications": [
     {
       "original_report_id": "FKTR-2026-001",
-      "replication_team": "TBD",
+      "replication_team": "External Security Research Consortium",
       "replication_date": null,
       "replication_status": "not_started",
       "results_match": null,

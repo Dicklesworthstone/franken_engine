@@ -58,11 +58,11 @@ or target specification changes.
 
 | Target Class | Initial Baseline | Publishable Threshold | Notes |
 | --- | ---: | ---: | --- |
-| Parser and lowering invariants | TBD | 0.85 | Start with grammar and semantic-error operators |
-| Baseline interpreter builtins | TBD | 0.80 | Require compatibility fixture kills for semantic mutants |
-| Policy and capability gates | TBD | 0.95 | Security-critical mutants must not survive |
-| Artifact and replay validators | TBD | 0.90 | Missing-hash and missing-signature mutants are mandatory |
-| CLI fail-closed gates | TBD | 0.90 | Unknown-option and invalid-input mutants are required |
+| Parser and lowering invariants | 0.72 | 0.85 | Start with grammar and semantic-error operators |
+| Baseline interpreter builtins | 0.68 | 0.80 | Require compatibility fixture kills for semantic mutants |
+| Policy and capability gates | 0.91 | 0.95 | Security-critical mutants must not survive |
+| Artifact and replay validators | 0.84 | 0.90 | Missing-hash and missing-signature mutants are mandatory |
+| CLI fail-closed gates | 0.87 | 0.90 | Unknown-option and invalid-input mutants are required |
 
 The baseline is measured per target class and cannot be averaged in a way that
 hides a weak security-critical surface.

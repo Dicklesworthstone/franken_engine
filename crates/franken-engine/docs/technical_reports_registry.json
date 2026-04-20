@@ -143,6 +143,28 @@
       "dependencies": ["bd-2501"],
       "reproducible": true,
       "validation_status": "draft_skeleton"
+    },
+    {
+      "id": "FKTR-2026-008",
+      "title": "Untested Modules Audit Report",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-04-20",
+      "type": "Assessment",
+      "status": "Complete",
+      "artifact_bundle": "crates/franken-engine/docs/UNTESTED_MODULES_AUDIT.md",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Comprehensive test coverage analysis of 477 source modules",
+        "Critical infrastructure risk assessment for untested components",
+        "Security vulnerability analysis of guardplane adapter",
+        "Capability management testing gap identification",
+        "Scientific integrity validation gap analysis",
+        "Integration vs unit testing strategy evaluation"
+      ],
+      "dependencies": [],
+      "reproducible": true,
+      "validation_status": "complete"
     }
   ],
   "external_replications": [
@@ -183,7 +205,7 @@
     "minimum_adopted_tools": 1
   },
   "current_status": {
-    "publishable_reports": 4,
+    "publishable_reports": 5,
     "externally_replicated_claims": 0,
     "adopted_tools": 0,
     "section_16_complete": false

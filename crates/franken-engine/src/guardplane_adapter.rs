@@ -68,6 +68,34 @@ impl GuardplaneTrustLevel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardplaneDiagnosticRecord {
+    pub code: String,
+    pub metadata_key: String,
+    pub metadata_value: String,
+    pub message: String,
+}
+
+impl GuardplaneDiagnosticRecord {
+    fn metadata_parse_error(key: &str, value: &str, message: &str) -> Self {
+        Self {
+            code: "guardplane.metadata_parse_error".to_string(),
+            metadata_key: key.to_string(),
+            metadata_value: value.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    fn metadata_clamped(key: &str, value: &str, message: &str) -> Self {
+        Self {
+            code: "guardplane.metadata_clamped".to_string(),
+            metadata_key: key.to_string(),
+            metadata_value: value.to_string(),
+            message: message.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardplaneExtensionContext {
     pub extension_id: String,
     pub declared_capabilities: BTreeSet<String>,
@@ -76,6 +104,7 @@ pub struct GuardplaneExtensionContext {
     pub witness_confidence_millionths: i64,
     pub required_capabilities: BTreeSet<String>,
     pub denied_capabilities: BTreeSet<String>,
+    pub diagnostics: Vec<GuardplaneDiagnosticRecord>,
 }
 
 impl GuardplaneExtensionContext {

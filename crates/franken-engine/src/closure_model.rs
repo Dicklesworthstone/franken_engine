@@ -1107,7 +1107,9 @@ mod tests {
     #[test]
     fn capture_carries_ifc_label() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("classified".into(), 1).unwrap();
+        // SAFETY: Test initializes valid confidential binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding(
                 "classified",
@@ -1118,6 +1120,7 @@ mod tests {
 
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
         let captures = chain.compute_captures(&["classified".into()]).unwrap();
         assert_eq!(captures[0].label, Label::Confidential);
     }
@@ -1127,7 +1130,9 @@ mod tests {
     #[test]
     fn nested_scope_chain_traversal() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
         chain.declare_var("a".into(), 1).unwrap();
+        // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("a", EnvValue::Number(1), Label::Public)
             .unwrap();

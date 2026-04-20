@@ -774,6 +774,7 @@ mod tests {
     #[test]
     fn advance_epoch_ok() {
         let mut acc = test_accountant();
+        // SAFETY: Test with budget consumption within limits should succeed
         acc.consume(300_000, 30_000, "op1", 2_000_000_000).unwrap();
         let summary = acc
             .advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)

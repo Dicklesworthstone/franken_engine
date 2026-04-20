@@ -40,6 +40,67 @@ impl ResearchArtifactRegistry {
         }
     }
 
+    /// Construct a registry containing the first external evaluation framework entry.
+    pub fn with_external_evaluation_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "ext-eval-framework-0001".to_string(),
+            title: "FrankenEngine External Evaluation Framework".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Core Team".to_string()],
+            abstract_text: "External evaluation framework for adversarial testing, reproducibility, and red-team reporting."
+                .to_string(),
+            bundle_path: "docs/EXTERNAL_EVALUATION_FRAMEWORK.md".to_string(),
+            artifact_type: "evaluation_framework".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the open specifications publication entry.
+    pub fn with_open_specs_publication_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "open-specs-publication-0001".to_string(),
+            title: "Open Specifications Publication".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Core Team".to_string()],
+            abstract_text:
+                "Public protocol specification outline for trust, replay, and policy primitives."
+                    .to_string(),
+            bundle_path: "docs/OPEN_SPECS_PUBLICATION.md".to_string(),
+            artifact_type: "open_specification".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the proof sketch template entry.
+    pub fn with_proof_sketch_template_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "proof-sketch-template-0001".to_string(),
+            title: "Proof Sketch Template".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Core Team".to_string()],
+            abstract_text: "Template and checklist for documenting protocol claims and mechanized proof artifacts."
+                .to_string(),
+            bundle_path: "docs/PROOF_SKETCH_TEMPLATE.md".to_string(),
+            artifact_type: "proof_template".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -109,5 +170,54 @@ mod tests {
         // Non-existent type
         let datasets = registry.get_artifacts_by_type("dataset");
         assert_eq!(datasets.len(), 0);
+    }
+
+    #[test]
+    fn test_external_evaluation_entry() {
+        let registry = ResearchArtifactRegistry::with_external_evaluation_entry();
+
+        let artifact = registry
+            .get_artifact("ext-eval-framework-0001")
+            .expect("expected seeded external evaluation entry");
+        assert_eq!(artifact.artifact_type, "evaluation_framework");
+        assert_eq!(
+            artifact.title,
+            "FrankenEngine External Evaluation Framework"
+        );
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("EXTERNAL_EVALUATION_FRAMEWORK.md")
+        );
+
+        let evaluations = registry.get_artifacts_by_type("evaluation_framework");
+        assert_eq!(evaluations.len(), 1);
+    }
+
+    #[test]
+    fn test_open_specs_publication_entry() {
+        let registry = ResearchArtifactRegistry::with_open_specs_publication_entry();
+
+        let artifact = registry
+            .get_artifact("open-specs-publication-0001")
+            .expect("expected open specifications publication artifact");
+        assert_eq!(artifact.artifact_type, "open_specification");
+        assert_eq!(artifact.title, "Open Specifications Publication");
+        assert!(artifact.bundle_path.ends_with("OPEN_SPECS_PUBLICATION.md"));
+
+        let open_specs = registry.get_artifacts_by_type("open_specification");
+        assert_eq!(open_specs.len(), 1);
+    }
+
+    #[test]
+    fn test_proof_sketch_template_entry() {
+        let registry = ResearchArtifactRegistry::with_proof_sketch_template_entry();
+
+        let artifact = registry
+            .get_artifact("proof-sketch-template-0001")
+            .expect("expected proof sketch template artifact");
+        assert_eq!(artifact.artifact_type, "proof_template");
+        assert_eq!(artifact.title, "Proof Sketch Template");
+        assert!(artifact.bundle_path.ends_with("PROOF_SKETCH_TEMPLATE.md"));
     }
 }

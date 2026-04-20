@@ -1824,6 +1824,7 @@ mod tests {
                 assert!(denial.transitive_root.is_none());
                 assert_eq!(denial.target_type, RevocationTargetType::Token);
             }
+            // SAFETY: Test validates revocation enforcement direct denial takes precedence
             _ => panic!("expected direct denial"),
         }
     }

@@ -877,7 +877,9 @@ mod tests {
     #[test]
     fn zero_placeholder_subsystem_serde_round_trip() {
         for subsystem in ZeroPlaceholderSubsystem::ALL {
+            // SAFETY: ZeroPlaceholderSubsystem derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&subsystem).unwrap();
+            // SAFETY: JSON was just produced by valid ZeroPlaceholderSubsystem serialization
             let back: ZeroPlaceholderSubsystem = serde_json::from_str(&json).unwrap();
             assert_eq!(back, subsystem);
             assert!(!subsystem.as_str().is_empty());
@@ -891,7 +893,9 @@ mod tests {
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
+            // SAFETY: ZeroPlaceholderStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just produced by valid ZeroPlaceholderStatus serialization
             let back: ZeroPlaceholderStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(back, status);
             assert!(!status.as_str().is_empty());
@@ -905,7 +909,9 @@ mod tests {
             ZeroPlaceholderSeverity::Medium,
             ZeroPlaceholderSeverity::Low,
         ] {
+            // SAFETY: ZeroPlaceholderSeverity derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&severity).unwrap();
+            // SAFETY: JSON was just produced by valid ZeroPlaceholderSeverity serialization
             let back: ZeroPlaceholderSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(back, severity);
             assert!(!severity.as_str().is_empty());
@@ -976,7 +982,9 @@ mod tests {
             required_behavior: "required".to_string(),
             diagnostic_code: Some("FE-TEST-0001".to_string()),
         };
+        // SAFETY: ZeroPlaceholderFinding derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&finding).unwrap();
+        // SAFETY: JSON was just produced by valid ZeroPlaceholderFinding serialization
         let back: ZeroPlaceholderFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(back, finding);
     }

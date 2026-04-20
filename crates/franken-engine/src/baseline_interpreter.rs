@@ -16257,6 +16257,7 @@ mod tests {
         assert_string_split_result(result, vec!["hello"], &mut core);
 
         core.registers[1] = Value::Undefined;
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",

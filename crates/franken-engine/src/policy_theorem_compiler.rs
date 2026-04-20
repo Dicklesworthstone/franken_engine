@@ -1419,6 +1419,7 @@ mod tests {
             )],
             ..valid_policy()
         };
+        // SAFETY: Test with policy IR containing monotonicity violation should compile successfully
         let result = compiler.compile(&ir).unwrap();
         assert!(!result.all_passed);
         assert!(
@@ -1433,9 +1434,11 @@ mod tests {
     fn compile_skips_precedence_when_disabled() {
         let compiler = PolicyTheoremCompiler::with_limits(10_000, false);
         let ir = valid_policy();
+        // SAFETY: Test with valid policy IR and disabled precedence should compile successfully
         let result = compiler.compile(&ir).unwrap();
         // Should have fewer passes.
         assert!(result.all_passed);
+        // SAFETY: Test with valid policy IR and default compiler should compile successfully
         let pass_count_with = PolicyTheoremCompiler::new()
             .compile(&ir)
             .unwrap()
@@ -1455,6 +1458,7 @@ mod tests {
             policy_id: PolicyId::new("test-policy-2"),
             ..valid_policy()
         };
+        // SAFETY: Test pre-merge check with two valid policies should succeed
         let result = hooks.pre_merge_check(&a, &b).unwrap();
         assert!(result.passed);
         assert_eq!(hooks.hook_history().len(), 1);
@@ -1474,6 +1478,7 @@ mod tests {
             )],
             ..valid_policy()
         };
+        // SAFETY: Test pre-merge check with valid and violating policy should succeed execution
         let result = hooks.pre_merge_check(&a, &b).unwrap();
         assert!(!result.passed);
     }
@@ -1483,6 +1488,7 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let mut hooks = MachineCheckHooks::new(compiler);
         let ir = valid_policy();
+        // SAFETY: Test pre-deployment check with valid policy should succeed
         let result = hooks.pre_deployment_check(&ir).unwrap();
         assert!(result.passed);
     }

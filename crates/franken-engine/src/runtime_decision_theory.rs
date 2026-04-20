@@ -1643,7 +1643,11 @@ mod tests {
             RegimeLabel::Recovery,
         ];
         for label in &labels {
+            // SAFETY: RegimeLabel derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(label).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RegimeLabel,
+            // so from_str back to RegimeLabel cannot fail (valid format + matching schema).
             let back: RegimeLabel = serde_json::from_str(&json).unwrap();
             assert_eq!(*label, back);
         }

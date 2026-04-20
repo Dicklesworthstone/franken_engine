@@ -951,18 +951,21 @@ mod tests {
 
     #[test]
     fn delta_millionths_positive() {
+        // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
         let d = delta_millionths(2000, 1000).unwrap();
         assert_eq!(d, 1_000_000); // 100% improvement
     }
 
     #[test]
     fn delta_millionths_negative() {
+        // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
         let d = delta_millionths(500, 1000).unwrap();
         assert_eq!(d, -500_000); // -50%
     }
 
     #[test]
     fn delta_millionths_equal() {
+        // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
         let d = delta_millionths(100, 100).unwrap();
         assert_eq!(d, 0);
     }
@@ -976,6 +979,7 @@ mod tests {
     fn improvement_millionths_uses_inverted_delta() {
         // improvement_millionths(baseline=1000, optimized=500) means
         // 500 is better than 1000 for latency → positive improvement
+        // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
         let i = improvement_millionths(1000, 500).unwrap();
         assert_eq!(i, 500_000); // 50%
     }
@@ -1353,7 +1357,11 @@ mod tests {
     #[test]
     fn lane_workload_metrics_serde_round_trip() {
         let m = test_workload("w1", 100, 50);
+        // SAFETY: LaneWorkloadMetrics derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&m).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LaneWorkloadMetrics,
+        // so from_str back to LaneWorkloadMetrics cannot fail (valid format + matching schema).
         let back: LaneWorkloadMetrics = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
     }
@@ -1361,7 +1369,11 @@ mod tests {
     #[test]
     fn proof_attribution_sample_serde_round_trip() {
         let s = test_attribution("p1", "s1");
+        // SAFETY: ProofAttributionSample derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ProofAttributionSample,
+        // so from_str back to ProofAttributionSample cannot fail (valid format + matching schema).
         let back: ProofAttributionSample = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -1379,7 +1391,11 @@ mod tests {
             workload_id: None,
             proof_id: None,
         };
+        // SAFETY: ConstrainedAmbientEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&e).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientEvent,
+        // so from_str back to ConstrainedAmbientEvent cannot fail (valid format + matching schema).
         let back: ConstrainedAmbientEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
     }
@@ -1387,7 +1403,11 @@ mod tests {
     #[test]
     fn decision_serde_round_trip() {
         let decision = run_constrained_ambient_benchmark_lane(&valid_request());
+        // SAFETY: ConstrainedAmbientBenchmarkDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientBenchmarkDecision,
+        // so from_str back to ConstrainedAmbientBenchmarkDecision cannot fail (valid format + matching schema).
         let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, back);
     }

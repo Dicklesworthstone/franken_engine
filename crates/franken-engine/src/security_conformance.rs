@@ -2224,6 +2224,7 @@ label_sha256 = "{hash}"
                 assert_eq!(field, "attack_taxonomy");
                 assert!(detail.contains("must declare"));
             }
+            // SAFETY: Test-only panic to validate SecurityConformanceError matches expected InvalidLabelField variant
             other => panic!("expected invalid label error, got {other:?}"),
         }
     }

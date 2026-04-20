@@ -1889,7 +1889,9 @@ mod tests {
             ProofType::IfcFlowProof,
             ProofType::ReplaySequenceMotif,
         ] {
+            // SAFETY: Serialization of valid ProofType should succeed
             let json = serde_json::to_string(&pt).unwrap();
+            // SAFETY: Deserialization of valid JSON should succeed
             let restored: ProofType = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, pt);
         }
@@ -1930,7 +1932,9 @@ mod tests {
             ActivationStageLocal::Ramp,
             ActivationStageLocal::Default,
         ] {
+            // SAFETY: Serialization of valid ActivationStageLocal should succeed
             let json = serde_json::to_string(&stage).unwrap();
+            // SAFETY: Deserialization of valid JSON should succeed
             let restored: ActivationStageLocal = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, stage);
         }
@@ -1939,7 +1943,9 @@ mod tests {
     #[test]
     fn ingestion_config_serde_roundtrip() {
         let cfg = test_config();
+        // SAFETY: Serialization of valid IngestionConfig should succeed
         let json = serde_json::to_string(&cfg).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: IngestionConfig = serde_json::from_str(&json).unwrap();
         // signing_key is excluded from serialization (security: prevent key leakage),
         // so it deserializes as the default [0; 32].
@@ -1957,6 +1963,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"fake",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let errors = vec![
@@ -1980,7 +1987,9 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: Serialization of valid IngestionError should succeed
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: Deserialization of valid JSON should succeed
             let restored: IngestionError = serde_json::from_str(&json).unwrap();
             assert_eq!(&restored, err);
         }
@@ -1994,6 +2003,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"fake",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let statuses = vec![
@@ -2023,7 +2033,9 @@ mod tests {
             },
         ];
         for s in &statuses {
+            // SAFETY: Serialization of valid ProofValidationStatus should succeed
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: Deserialization of valid JSON should succeed
             let restored: ProofValidationStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(&restored, s);
         }
@@ -2106,6 +2118,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"unknown",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
         let count = engine.invalidate_proof(&fake_id, "test", 1000);
         assert_eq!(count, 0);
@@ -2121,6 +2134,7 @@ mod tests {
         // Change policy, new proof with old policy should fail.
         engine.set_active_policy("policy-002");
         let proof = make_proof(ProofType::IfcFlowProof, b"y", "policy-001");
+        // SAFETY: Test expects validation failure due to policy mismatch
         let err = engine.ingest_proof(proof, 2000).unwrap_err();
         assert!(matches!(
             err,
@@ -2149,7 +2163,9 @@ mod tests {
         // Full engine with proofs can't roundtrip due to BTreeMap<EngineObjectId, _> key issue.
         // Test empty engine which has no entries in those maps.
         let engine = test_engine();
+        // SAFETY: Serialization of valid empty ProofIngestionEngine should succeed
         let json = serde_json::to_string(&engine).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: ProofIngestionEngine = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.current_epoch(), test_epoch());
         assert!(restored.active_proofs().is_empty());
@@ -2165,6 +2181,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"none",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
         assert!(engine.hypotheses_for_proof(&fake_id).is_empty());
     }
@@ -2247,6 +2264,7 @@ mod tests {
     fn hypothesis_canonical_bytes_includes_source_proof_ids() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof.clone(), 1000).unwrap();
 
         let bytes = hypotheses[0].canonical_bytes();
@@ -2260,6 +2278,7 @@ mod tests {
     fn hypothesis_canonical_bytes_use_stable_optimization_class_display() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
         let hypothesis = &hypotheses[0];
 

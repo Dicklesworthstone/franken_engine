@@ -673,9 +673,11 @@ mod tests {
         sched.register_probe(deep_probe("deep-1")).unwrap(); // costs 2.0, won't fit
 
         sched.schedule(Regime::Normal);
+        // SAFETY: Test-only unwrap, probe "deep-1" was just registered
         assert_eq!(sched.probe("deep-1").unwrap().staleness, 1); // not executed
 
         sched.schedule(Regime::Normal);
+        // SAFETY: Test-only unwrap, probe "deep-1" was just registered
         assert_eq!(sched.probe("deep-1").unwrap().staleness, 2);
     }
 
@@ -685,6 +687,7 @@ mod tests {
         sched.register_probe(health_probe("h1")).unwrap(); // cheap
 
         sched.schedule(Regime::Normal); // h1 should be scheduled
+        // SAFETY: Test-only unwrap, probe "h1" was just registered
         assert_eq!(sched.probe("h1").unwrap().staleness, 0);
     }
 

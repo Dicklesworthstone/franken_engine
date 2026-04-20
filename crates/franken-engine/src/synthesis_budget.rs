@@ -1299,7 +1299,9 @@ mod tests {
             increase_likely_helpful: true,
             recommended_multiplier: Some(2_000_000),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&fb).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: FallbackResult = serde_json::from_str(&json).unwrap();
         assert_eq!(fb, restored);
     }
@@ -1354,11 +1356,15 @@ mod tests {
         let mut monitor = BudgetMonitor::new(contract);
 
         // Phase 1: Static Analysis.
+        // SAFETY: Test-only unwrap with valid synthesis phase transition
         monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        // SAFETY: Test-only unwrap with valid consumption values
         monitor.record_consumption(200, 20, 2).unwrap();
 
         // Phase 2: Ablation.
+        // SAFETY: Test-only unwrap with valid synthesis phase transition
         monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
+        // SAFETY: Test-only unwrap with valid consumption values
         monitor.record_consumption(300, 30, 3).unwrap();
 
         // Phase 3: Theorem Checking.
@@ -1696,8 +1702,11 @@ mod tests {
         m.record_consumption(500, 50, 5).unwrap();
 
         let util = m.utilization();
+        // SAFETY: Test-only unwrap, Time dimension always exists in utilization map
         assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 500_000); // 50%
+        // SAFETY: Test-only unwrap, Compute dimension always exists in utilization map
         assert_eq!(*util.get(&BudgetDimension::Compute).unwrap(), 500_000);
+        // SAFETY: Test-only unwrap, Depth dimension always exists in utilization map
         assert_eq!(*util.get(&BudgetDimension::Depth).unwrap(), 500_000);
     }
 

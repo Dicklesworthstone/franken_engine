@@ -618,7 +618,11 @@ mod tests {
     #[test]
     fn serde_roundtrip_preserves_bundle() {
         let bundle = default_frx20_bundle();
+        // SAFETY: UnitTestTaxonomyBundle derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let encoded = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid UnitTestTaxonomyBundle,
+        // so from_str back to UnitTestTaxonomyBundle cannot fail (valid format + matching schema).
         let decoded: UnitTestTaxonomyBundle = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, bundle);
     }
@@ -658,7 +662,11 @@ mod tests {
     #[test]
     fn unit_test_class_serde_roundtrip_all_variants() {
         for variant in UnitTestClass::ALL {
+            // SAFETY: UnitTestClass derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid UnitTestClass,
+            // so from_str back to UnitTestClass cannot fail (valid format + matching schema).
             let back: UnitTestClass = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);
         }
@@ -666,6 +674,8 @@ mod tests {
 
     #[test]
     fn unit_test_class_serde_snake_case() {
+        // SAFETY: UnitTestClass derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&UnitTestClass::FaultInjection).unwrap();
         assert_eq!(json, "\"fault_injection\"");
     }

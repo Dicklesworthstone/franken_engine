@@ -943,13 +943,33 @@ pub fn evaluate_matrix(
         CellVerdict::Pass
     };
 
-    // Compute input hash including mismatch details for content addressability.
+    // Compute input hash including ALL artifact content (passing + mismatched) for content addressability.
     let mut ih = Sha256::new();
     for cell in cells {
         ih.update(cell.workload_class.as_str().as_bytes());
         ih.update((cell.artifacts_a.len() as u64).to_le_bytes());
         ih.update((cell.artifacts_b.len() as u64).to_le_bytes());
         ih.update((cell.mismatches.len() as u64).to_le_bytes());
+
+        // Include ALL artifacts_a content for content addressability
+        for artifact in &cell.artifacts_a {
+            ih.update(artifact.kind.to_string().as_bytes());
+            ih.update(artifact.surface.to_string().as_bytes());
+            ih.update(artifact.content_hash.as_bytes());
+            ih.update(artifact.size_bytes.to_le_bytes());
+            ih.update(artifact.workload_class.as_str().as_bytes());
+        }
+
+        // Include ALL artifacts_b content for content addressability
+        for artifact in &cell.artifacts_b {
+            ih.update(artifact.kind.to_string().as_bytes());
+            ih.update(artifact.surface.to_string().as_bytes());
+            ih.update(artifact.content_hash.as_bytes());
+            ih.update(artifact.size_bytes.to_le_bytes());
+            ih.update(artifact.workload_class.as_str().as_bytes());
+        }
+
+        // Include mismatch details for failed artifacts
         for m in &cell.mismatches {
             ih.update(m.class.as_str().as_bytes());
             ih.update(m.severity.as_str().as_bytes());
@@ -960,6 +980,7 @@ pub fn evaluate_matrix(
             update_optional_content_hash(&mut ih, m.content_hash_a);
             update_optional_content_hash(&mut ih, m.content_hash_b);
         }
+
         ih.update(cell.verdict.as_str().as_bytes());
     }
     let input_hash = ContentHash::compute(&ih.finalize());

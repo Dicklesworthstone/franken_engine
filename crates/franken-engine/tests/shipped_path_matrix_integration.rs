@@ -1572,3 +1572,71 @@ fn test_classified_mismatch_with_none_hashes() {
     let back: ClassifiedMismatch = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
 }
+
+// ---------------------------------------------------------------------------
+// Receipt input hash regression for passing artifacts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_receipt_hash_binds_passing_artifact_content() {
+    // Regression test for bd-1lsy.9.6.5: Two passing cells with different artifact
+    // content should produce different receipt input hashes for content addressability.
+
+    let cfg = relaxed_config();
+
+    // Cell 1: Pass with artifact content "payload_1"
+    let artifacts_a1 = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"payload_1",
+        WorkloadClass::PureJs,
+    )];
+    let artifacts_b1 = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"payload_1",
+        WorkloadClass::PureJs,
+    )];
+    let cell1 = build_cell(WorkloadClass::PureJs, artifacts_a1.clone(), artifacts_b1.clone(), &cfg);
+
+    // Cell 2: Pass with different artifact content "payload_2"
+    let artifacts_a2 = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"payload_2",  // Different content
+        WorkloadClass::PureJs,
+    )];
+    let artifacts_b2 = vec![art(
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"payload_2",  // Different content
+        WorkloadClass::PureJs,
+    )];
+    let cell2 = build_cell(WorkloadClass::PureJs, artifacts_a2.clone(), artifacts_b2.clone(), &cfg);
+
+    // Both cells should pass (same structure, just different content)
+    assert_eq!(cell1.verdict, CellVerdict::Pass);
+    assert_eq!(cell2.verdict, CellVerdict::Pass);
+    assert!(cell1.mismatches.is_empty());
+    assert!(cell2.mismatches.is_empty());
+
+    // But the receipt input hashes should be different due to different artifact content
+    let report1 = evaluate_matrix(vec![cell1], &cfg, epoch()).unwrap();
+    let report2 = evaluate_matrix(vec![cell2], &cfg, epoch()).unwrap();
+
+    assert_ne!(
+        report1.receipt.input_hash,
+        report2.receipt.input_hash,
+        "Passing cells with different artifact content should have different receipt input hashes"
+    );
+
+    // Verify same content produces same hash (determinism check)
+    let cell1_dup = build_cell(WorkloadClass::PureJs, artifacts_a1, artifacts_b1, &cfg);
+    let report1_dup = evaluate_matrix(vec![cell1_dup], &cfg, epoch()).unwrap();
+
+    assert_eq!(
+        report1.receipt.input_hash,
+        report1_dup.receipt.input_hash,
+        "Identical passing cells should have identical receipt input hashes"
+    );
+}

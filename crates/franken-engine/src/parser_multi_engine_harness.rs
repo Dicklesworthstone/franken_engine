@@ -2159,6 +2159,7 @@ mod tests {
             normalized_ast: None,
             normalized_diagnostic: None,
         };
+        // SAFETY: EngineRunOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).unwrap();
         assert!(json.contains("\"deterministic\":true"));
         assert!(json.contains("\"duration_us\":42"));
@@ -2182,6 +2183,7 @@ mod tests {
             first_run: outcome.clone(),
             second_run: outcome,
         };
+        // SAFETY: EngineFixtureResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"engine_id\":\"e1\""));
         assert!(json.contains("\"derived_seed\":99"));
@@ -2201,6 +2203,7 @@ mod tests {
                 ("semantic".to_string(), 2),
             ]),
         };
+        // SAFETY: MultiEngineHarnessSummary derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("\"total_fixtures\":100"));
         assert!(json.contains("\"divergent_fixtures\":3"));
@@ -2295,6 +2298,7 @@ mod tests {
                 second_run: outcome,
             }],
         };
+        // SAFETY: MultiEngineFixtureResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"equivalent_across_engines\":true"));
     }
@@ -2308,6 +2312,7 @@ mod tests {
             "source": "var x = 1;",
             "expected_hash": "sha256:abc"
         }"#;
+        // SAFETY: Test uses valid JSON that matches HarnessFixtureSpec schema
         let spec: HarnessFixtureSpec = serde_json::from_str(json).unwrap();
         assert_eq!(spec.id, "fix-1");
         assert_eq!(spec.goal, "script");
@@ -2329,6 +2334,7 @@ mod tests {
             }}"#,
             EXPECTED_FIXTURE_SCHEMA_VERSION, EXPECTED_FIXTURE_PARSER_MODE
         );
+        // SAFETY: Test uses valid JSON that matches HarnessFixtureCatalog schema
         let catalog: HarnessFixtureCatalog = serde_json::from_str(&json).unwrap();
         assert_eq!(catalog.fixtures.len(), 1);
         assert_eq!(catalog.fixtures[0].id, "f-1");
@@ -2665,7 +2671,9 @@ mod tests {
             DriftCategory::Harness,
             DriftCategory::Artifact,
         ] {
+            // SAFETY: DriftCategory derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&cat).unwrap();
+            // SAFETY: JSON was just generated from DriftCategory, deserialization guaranteed to succeed
             let back: DriftCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(cat, back);
         }
@@ -2718,7 +2726,9 @@ mod tests {
     #[test]
     fn drift_severity_serde_roundtrip() {
         for sev in [DriftSeverity::Minor, DriftSeverity::Critical] {
+            // SAFETY: DriftSeverity derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&sev).unwrap();
+            // SAFETY: JSON was just generated from DriftSeverity, deserialization guaranteed to succeed
             let back: DriftSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(sev, back);
         }
@@ -2744,7 +2754,9 @@ mod tests {
             owner_hint: "parser-core".to_string(),
             remediation_hint: "replay".to_string(),
         };
+        // SAFETY: DriftClassification derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&dc).unwrap();
+        // SAFETY: JSON was just generated from DriftClassification, deserialization guaranteed to succeed
         let back: DriftClassification = serde_json::from_str(&json).unwrap();
         assert_eq!(dc, back);
     }
@@ -2762,7 +2774,9 @@ mod tests {
             minimized_bytes: 500,
             fixed_point: true,
         };
+        // SAFETY: DriftMinimizationStats derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&stats).unwrap();
+        // SAFETY: JSON was just generated from DriftMinimizationStats, deserialization guaranteed to succeed
         let back: DriftMinimizationStats = serde_json::from_str(&json).unwrap();
         assert_eq!(stats, back);
     }
@@ -2772,7 +2786,9 @@ mod tests {
     #[test]
     fn ast_normalization_adapter_serde_roundtrip() {
         let adapter = AstNormalizationAdapter::CanonicalHashPassthroughV1;
+        // SAFETY: AstNormalizationAdapter derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&adapter).unwrap();
+        // SAFETY: JSON was just generated from AstNormalizationAdapter, deserialization guaranteed to succeed
         let back: AstNormalizationAdapter = serde_json::from_str(&json).unwrap();
         assert_eq!(adapter, back);
     }
@@ -2780,7 +2796,9 @@ mod tests {
     #[test]
     fn diagnostic_normalization_adapter_serde_roundtrip() {
         let adapter = DiagnosticNormalizationAdapter::ParserDiagnosticsTaxonomyV1;
+        // SAFETY: DiagnosticNormalizationAdapter derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&adapter).unwrap();
+        // SAFETY: JSON was just generated from DiagnosticNormalizationAdapter, deserialization guaranteed to succeed
         let back: DiagnosticNormalizationAdapter = serde_json::from_str(&json).unwrap();
         assert_eq!(adapter, back);
     }
@@ -2794,7 +2812,9 @@ mod tests {
             adapter: AstNormalizationAdapter::CanonicalHashPassthroughV1,
             canonical_hash: "sha256:abc123".to_string(),
         };
+        // SAFETY: NormalizedAstArtifact derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&artifact).unwrap();
+        // SAFETY: JSON was just generated from NormalizedAstArtifact, deserialization guaranteed to succeed
         let back: NormalizedAstArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(artifact, back);
     }
@@ -2811,7 +2831,9 @@ mod tests {
             parse_error_code: Some("unexpected_token".to_string()),
             canonical_hash: "sha256:def456".to_string(),
         };
+        // SAFETY: NormalizedDiagnosticArtifact derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&artifact).unwrap();
+        // SAFETY: JSON was just generated from NormalizedDiagnosticArtifact, deserialization guaranteed to succeed
         let back: NormalizedDiagnosticArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(artifact, back);
     }
@@ -2888,7 +2910,9 @@ mod tests {
             promotion_hooks: vec!["hook-1".to_string()],
             provenance_hash: "sha256:ccc".to_string(),
         };
+        // SAFETY: DriftReproPack derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&pack).unwrap();
+        // SAFETY: JSON was just generated from DriftReproPack, deserialization guaranteed to succeed
         let back: DriftReproPack = serde_json::from_str(&json).unwrap();
         assert_eq!(pack, back);
     }

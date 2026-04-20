@@ -872,6 +872,7 @@ mod tests {
             NarrowingViolation::CapabilityWidening { widened_tokens, .. } => {
                 assert!(!widened_tokens.is_empty());
             }
+            // SAFETY: Test validates narrowing violation type matches expected CapabilityWidening variant
             other => panic!("expected CapabilityWidening, got {:?}", other),
         }
     }

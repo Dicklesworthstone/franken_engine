@@ -14465,49 +14465,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeKeys" => {
-                // Array.prototype.keys() implementation (ES2015 iterator method - simplified)
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Simplified implementation: return array of indices (instead of iterator)
-                let keys_array_id = self.alloc_object_with_prototype(None)?;
-
-                for i in 0..length {
-                    self.set_object_property(keys_array_id, i.to_string(), Value::Int(i as i64))?;
-                }
-
-                self.set_object_property(
-                    keys_array_id,
-                    "length".to_string(),
-                    Value::Int(length as i64),
-                )?;
-
-                Ok(Value::Object(keys_array_id))
-            }
+            // Removed duplicate ArrayPrototypeKeys - implementation at line ~11907 uses proper iterator semantics
 
             "builtin:WeakMapPrototypeHas" => {
                 // WeakMap.prototype.has(key) implementation (simplified)

@@ -1090,6 +1090,7 @@ mod tests {
         acc.advance_epoch(SecurityEpoch::from_raw(2), 5_000_000_000)
             .unwrap();
         // Consume in epoch 2.
+        // SAFETY: Test-only unwrap with valid budget consumption parameters
         acc.consume(400_000, 40_000, "ep2", 6_000_000_000).unwrap();
         // Lifetime is 800K eps, we've spent 800K. Next should fail.
         let err = acc
@@ -1166,7 +1167,9 @@ mod tests {
             estimated_remaining_operations: 42,
             exhausted: false,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&fc).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: BudgetForecast = serde_json::from_str(&json).unwrap();
         assert_eq!(fc, decoded);
     }
@@ -1174,7 +1177,9 @@ mod tests {
     #[test]
     fn accountant_config_serde_roundtrip() {
         let cfg = test_config();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&cfg).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: AccountantConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, decoded);
     }

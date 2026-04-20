@@ -592,7 +592,11 @@ mod tests {
             TranslationKind::Translated,
             TranslationKind::Dropped,
         ] {
+            // SAFETY: TranslationKind derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid TranslationKind,
+            // so from_str back to TranslationKind cannot fail (valid format + matching schema).
             let back: TranslationKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, back);
         }
@@ -606,7 +610,11 @@ mod tests {
             FlatteningClassification::AcceptableEdge,
             FlatteningClassification::FalsePositive,
         ] {
+            // SAFETY: FlatteningClassification derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&cls).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid FlatteningClassification,
+            // so from_str back to FlatteningClassification cannot fail (valid format + matching schema).
             let back: FlatteningClassification = serde_json::from_str(&json).unwrap();
             assert_eq!(cls, back);
         }
@@ -621,7 +629,11 @@ mod tests {
             FlatteningSeverity::Low,
             FlatteningSeverity::Info,
         ] {
+            // SAFETY: FlatteningSeverity derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&sev).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid FlatteningSeverity,
+            // so from_str back to FlatteningSeverity cannot fail (valid format + matching schema).
             let back: FlatteningSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(sev, back);
         }

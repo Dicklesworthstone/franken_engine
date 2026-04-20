@@ -1676,7 +1676,9 @@ mod tests {
     fn bounded_queue_push_to_full_then_reject() {
         let mut q = BoundedQueue::<u32>::new(2);
         assert!(!q.is_full());
+        // SAFETY: Queue capacity is 2, pushing first element cannot exceed capacity
         q.push(10).unwrap();
+        // SAFETY: Queue capacity is 2, pushing second element cannot exceed capacity
         q.push(20).unwrap();
         assert!(q.is_full());
         let err = q.push(30).unwrap_err();
@@ -1686,11 +1688,17 @@ mod tests {
     #[test]
     fn bounded_queue_pop_fifo_order() {
         let mut q = BoundedQueue::new(3);
+        // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
         q.push(1u32).unwrap();
+        // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
         q.push(2).unwrap();
+        // SAFETY: Queue capacity is 3, pushing third element cannot exceed capacity
         q.push(3).unwrap();
+        // SAFETY: Queue has 3 elements, pop cannot fail
         assert_eq!(q.pop().unwrap(), 1);
+        // SAFETY: Queue has 2 elements remaining, pop cannot fail
         assert_eq!(q.pop().unwrap(), 2);
+        // SAFETY: Queue has 1 element remaining, pop cannot fail
         assert_eq!(q.pop().unwrap(), 3);
         assert_eq!(q.pop().unwrap_err(), QueueError::Empty);
     }
@@ -1698,7 +1706,9 @@ mod tests {
     #[test]
     fn bounded_queue_drain_all_empties() {
         let mut q = BoundedQueue::new(3);
+        // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
         q.push(1u32).unwrap();
+        // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
         q.push(2).unwrap();
         let drained = q.drain_all();
         assert_eq!(drained.len(), 2);
@@ -1708,7 +1718,9 @@ mod tests {
     #[test]
     fn bounded_queue_clear() {
         let mut q = BoundedQueue::new(3);
+        // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
         q.push(1u32).unwrap();
+        // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
         q.push(2).unwrap();
         q.clear();
         assert!(q.is_empty());

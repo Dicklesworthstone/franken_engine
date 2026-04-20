@@ -2046,13 +2046,32 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Gates)),
         "zero-placeholder" => {
-            // Simplified parsing - in full implementation, parse --out-dir and --waivers
-            let out_dir = PathBuf::from("artifacts/gates/zero_placeholder");
+            if args.len() == 1 {
+                return Err("gates zero-placeholder requires --out-dir <dir>".to_string());
+            }
+
+            let mut out_dir: Option<PathBuf> = None;
+            let mut waivers: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "zero-placeholder"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--waivers" => {
+                        waivers = Some(PathBuf::from(next_arg(args, &mut index, "--waivers")?))
+                    }
+                    flag => return Err(format!("unknown zero-placeholder flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates zero-placeholder requires --out-dir <dir>".to_string())?;
+
             Ok(CommandSpec::Gates(GatesArgs {
-                mode: GatesMode::ZeroPlaceholder {
-                    out_dir,
-                    waivers: None,
-                },
+                mode: GatesMode::ZeroPlaceholder { out_dir, waivers },
             }))
         }
         "signature-drift" => {
@@ -2075,15 +2094,42 @@ fn parse_reports_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Reports)),
-        "parser-oracle" => Ok(CommandSpec::Reports(ReportsArgs {
-            mode: ReportsMode::ParserOracle {
-                config: None,
-                out: None,
-            },
-        })),
-        "lowering-gap" => Ok(CommandSpec::Reports(ReportsArgs {
-            mode: ReportsMode::LoweringGap { out: None },
-        })),
+        "parser-oracle" => {
+            let mut config: Option<PathBuf> = None;
+            let mut out: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "parser-oracle"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+                    flag => return Err(format!("unknown parser-oracle flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            Ok(CommandSpec::Reports(ReportsArgs {
+                mode: ReportsMode::ParserOracle { config, out },
+            }))
+        }
+        "lowering-gap" => {
+            let mut out: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "lowering-gap"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+                    flag => return Err(format!("unknown lowering-gap flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            Ok(CommandSpec::Reports(ReportsArgs {
+                mode: ReportsMode::LoweringGap { out },
+            }))
+        }
         other => Err(format!("unknown reports subcommand `{other}`")),
     }
 }
@@ -2096,20 +2142,58 @@ fn parse_test_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Test)),
         "test262" => {
-            let out_dir = PathBuf::from("artifacts/test/test262");
+            if args.len() == 1 {
+                return Err("test test262 requires --out-dir <dir>".to_string());
+            }
+
+            let mut out_dir: Option<PathBuf> = None;
+            let mut suite_path: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "test262"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--suite-path" => {
+                        suite_path =
+                            Some(PathBuf::from(next_arg(args, &mut index, "--suite-path")?))
+                    }
+                    flag => return Err(format!("unknown test262 flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir =
+                out_dir.ok_or_else(|| "test test262 requires --out-dir <dir>".to_string())?;
+
             Ok(CommandSpec::Test(TestArgs {
                 mode: TestMode::Test262 {
                     out_dir,
-                    suite_path: None,
+                    suite_path,
                 },
             }))
         }
-        "lockstep" => Ok(CommandSpec::Test(TestArgs {
-            mode: TestMode::Lockstep {
-                config: None,
-                out: None,
-            },
-        })),
+        "lockstep" => {
+            let mut config: Option<PathBuf> = None;
+            let mut out: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "lockstep"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+                    flag => return Err(format!("unknown lockstep flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            Ok(CommandSpec::Test(TestArgs {
+                mode: TestMode::Lockstep { config, out },
+            }))
+        }
         other => Err(format!("unknown test subcommand `{other}`")),
     }
 }
@@ -2122,14 +2206,46 @@ fn parse_synth_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Synth)),
         "kernel-contract" => {
-            let out_dir = PathBuf::from("artifacts/synth/kernel_contract");
+            if args.len() == 1 {
+                return Err("synth kernel-contract requires --out-dir <dir>".to_string());
+            }
+
+            let mut out_dir: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "kernel-contract"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    flag => return Err(format!("unknown kernel-contract flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "synth kernel-contract requires --out-dir <dir>".to_string())?;
+
             Ok(CommandSpec::Synth(SynthArgs {
                 mode: SynthMode::KernelContract { out_dir },
             }))
         }
-        "law-mining" => Ok(CommandSpec::Synth(SynthArgs {
-            mode: SynthMode::LawMining { out: None },
-        })),
+        "law-mining" => {
+            let mut out: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "law-mining"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+                    flag => return Err(format!("unknown law-mining flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            Ok(CommandSpec::Synth(SynthArgs {
+                mode: SynthMode::LawMining { out },
+            }))
+        }
         other => Err(format!("unknown synth subcommand `{other}`")),
     }
 }
@@ -2141,11 +2257,43 @@ fn parse_orchestrate_command(args: &[String]) -> Result<CommandSpec, String> {
 
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Orchestrate)),
-        "context-refactor" => Ok(CommandSpec::Orchestrate(OrchestrateArgs {
-            mode: OrchestrateMode::ContextRefactor { out: None },
-        })),
+        "context-refactor" => {
+            let mut out: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "context-refactor"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+                    flag => return Err(format!("unknown context-refactor flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            Ok(CommandSpec::Orchestrate(OrchestrateArgs {
+                mode: OrchestrateMode::ContextRefactor { out },
+            }))
+        }
         "tail-latency" => {
-            let out_dir = PathBuf::from("artifacts/orchestrate/tail_latency");
+            if args.len() == 1 {
+                return Err("orchestrate tail-latency requires --out-dir <dir>".to_string());
+            }
+
+            let mut out_dir: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "tail-latency"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    flag => return Err(format!("unknown tail-latency flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "orchestrate tail-latency requires --out-dir <dir>".to_string())?;
+
             Ok(CommandSpec::Orchestrate(OrchestrateArgs {
                 mode: OrchestrateMode::TailLatency { out_dir },
             }))
@@ -2162,13 +2310,37 @@ fn parse_runtime_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Runtime)),
         "diagnostics" => {
-            // Simplified parsing - in full implementation, parse --input, --out-dir, --summary
-            let input = PathBuf::from("runtime_input.json");
+            if args.len() == 1 {
+                return Err("runtime diagnostics requires --input <file>".to_string());
+            }
+
+            let mut input: Option<PathBuf> = None;
+            let mut out_dir: Option<PathBuf> = None;
+            let mut summary = false;
+
+            let mut index = 1; // Skip "diagnostics"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--input" => {
+                        input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?))
+                    }
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--summary" => summary = true,
+                    flag => return Err(format!("unknown diagnostics flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let input =
+                input.ok_or_else(|| "runtime diagnostics requires --input <file>".to_string())?;
+
             Ok(CommandSpec::Runtime(RuntimeArgs {
                 mode: RuntimeMode::Diagnostics {
                     input,
-                    out_dir: None,
-                    summary: false,
+                    out_dir,
+                    summary,
                 },
             }))
         }
@@ -7031,5 +7203,179 @@ mod tests {
             ),
             "error should include parse remediation, got: {error}"
         );
+    }
+
+    // Tests for bd-1lsy.10.1.2: Regression tests proving advertised flags reach execution
+
+    #[test]
+    fn parse_gates_zero_placeholder_command_parses_advertised_flags() {
+        let args = vec![
+            "gates".to_string(),
+            "zero-placeholder".to_string(),
+            "--out-dir".to_string(),
+            "test/gates/out".to_string(),
+            "--waivers".to_string(),
+            "waivers.json".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid gates command");
+        if let CommandSpec::Gates(gates_args) = result {
+            if let GatesMode::ZeroPlaceholder { out_dir, waivers } = gates_args.mode {
+                assert_eq!(out_dir, PathBuf::from("test/gates/out"));
+                assert_eq!(waivers, Some(PathBuf::from("waivers.json")));
+            } else {
+                panic!("expected ZeroPlaceholder mode");
+            }
+        } else {
+            panic!("expected Gates command");
+        }
+    }
+
+    #[test]
+    fn parse_reports_parser_oracle_command_parses_advertised_flags() {
+        let args = vec![
+            "reports".to_string(),
+            "parser-oracle".to_string(),
+            "--config".to_string(),
+            "oracle.json".to_string(),
+            "--out".to_string(),
+            "report.json".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid reports command");
+        if let CommandSpec::Reports(reports_args) = result {
+            if let ReportsMode::ParserOracle { config, out } = reports_args.mode {
+                assert_eq!(config, Some(PathBuf::from("oracle.json")));
+                assert_eq!(out, Some(PathBuf::from("report.json")));
+            } else {
+                panic!("expected ParserOracle mode");
+            }
+        } else {
+            panic!("expected Reports command");
+        }
+    }
+
+    #[test]
+    fn parse_test_test262_command_parses_advertised_flags() {
+        let args = vec![
+            "test".to_string(),
+            "test262".to_string(),
+            "--out-dir".to_string(),
+            "test/262/out".to_string(),
+            "--suite-path".to_string(),
+            "test262/suite".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid test command");
+        if let CommandSpec::Test(test_args) = result {
+            if let TestMode::Test262 {
+                out_dir,
+                suite_path,
+            } = test_args.mode
+            {
+                assert_eq!(out_dir, PathBuf::from("test/262/out"));
+                assert_eq!(suite_path, Some(PathBuf::from("test262/suite")));
+            } else {
+                panic!("expected Test262 mode");
+            }
+        } else {
+            panic!("expected Test command");
+        }
+    }
+
+    #[test]
+    fn parse_synth_kernel_contract_command_parses_advertised_flags() {
+        let args = vec![
+            "synth".to_string(),
+            "kernel-contract".to_string(),
+            "--out-dir".to_string(),
+            "synth/kernel/out".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid synth command");
+        if let CommandSpec::Synth(synth_args) = result {
+            if let SynthMode::KernelContract { out_dir } = synth_args.mode {
+                assert_eq!(out_dir, PathBuf::from("synth/kernel/out"));
+            } else {
+                panic!("expected KernelContract mode");
+            }
+        } else {
+            panic!("expected Synth command");
+        }
+    }
+
+    #[test]
+    fn parse_orchestrate_tail_latency_command_parses_advertised_flags() {
+        let args = vec![
+            "orchestrate".to_string(),
+            "tail-latency".to_string(),
+            "--out-dir".to_string(),
+            "orchestrate/latency/out".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid orchestrate command");
+        if let CommandSpec::Orchestrate(orchestrate_args) = result {
+            if let OrchestrateMode::TailLatency { out_dir } = orchestrate_args.mode {
+                assert_eq!(out_dir, PathBuf::from("orchestrate/latency/out"));
+            } else {
+                panic!("expected TailLatency mode");
+            }
+        } else {
+            panic!("expected Orchestrate command");
+        }
+    }
+
+    #[test]
+    fn parse_runtime_diagnostics_command_parses_advertised_flags() {
+        let args = vec![
+            "runtime".to_string(),
+            "diagnostics".to_string(),
+            "--input".to_string(),
+            "runtime.json".to_string(),
+            "--out-dir".to_string(),
+            "runtime/out".to_string(),
+            "--summary".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid runtime command");
+        if let CommandSpec::Runtime(runtime_args) = result {
+            if let RuntimeMode::Diagnostics {
+                input,
+                out_dir,
+                summary,
+            } = runtime_args.mode
+            {
+                assert_eq!(input, PathBuf::from("runtime.json"));
+                assert_eq!(out_dir, Some(PathBuf::from("runtime/out")));
+                assert_eq!(summary, true);
+            } else {
+                panic!("expected Diagnostics mode");
+            }
+        } else {
+            panic!("expected Runtime command");
+        }
+    }
+
+    #[test]
+    fn parse_gates_zero_placeholder_command_rejects_unknown_flag() {
+        let args = vec![
+            "gates".to_string(),
+            "zero-placeholder".to_string(),
+            "--out-dir".to_string(),
+            "test/out".to_string(),
+            "--unknown-flag".to_string(),
+        ];
+        let result = parse_command(&args);
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert!(error.contains("unknown zero-placeholder flag `--unknown-flag`"));
+    }
+
+    #[test]
+    fn parse_runtime_diagnostics_command_requires_input_flag() {
+        let args = vec![
+            "runtime".to_string(),
+            "diagnostics".to_string(),
+            "--out-dir".to_string(),
+            "out".to_string(),
+        ];
+        let result = parse_command(&args);
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert!(error.contains("runtime diagnostics requires --input <file>"));
     }
 }

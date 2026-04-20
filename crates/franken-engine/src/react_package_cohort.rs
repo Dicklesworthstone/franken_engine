@@ -1902,6 +1902,7 @@ mod tests {
         assert!(err.is_err());
         match err.unwrap_err() {
             CohortError::SubpathMissing(msg) => assert!(msg.contains("nonexistent")),
+            // SAFETY: Test-only panic to validate CohortError matches expected SubpathMissing variant
             other => panic!("unexpected error: {other}"),
         }
     }

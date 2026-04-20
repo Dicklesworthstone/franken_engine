@@ -13702,7 +13702,6 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(y.atan2(x))))
             }
 
-
             "builtin:DatePrototypeGetTime" => {
                 // Date.prototype.getTime() implementation (simplified)
                 let this_val = self.read_reg(args.start)?;

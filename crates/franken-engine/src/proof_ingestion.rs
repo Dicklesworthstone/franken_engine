@@ -1242,7 +1242,9 @@ mod tests {
 
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"plas-1", "policy-001");
         let p2 = make_proof(ProofType::IfcFlowProof, b"ifc-1", "policy-001");
+        // SAFETY: Test with valid proof and budget should succeed
         engine.ingest_proof(p1, 1000).unwrap();
+        // SAFETY: Test with valid proof and budget should succeed
         engine.ingest_proof(p2, 1000).unwrap();
 
         let dce = engine.hypotheses_by_kind(&HypothesisKind::DeadCodeElimination);
@@ -1257,6 +1259,7 @@ mod tests {
     fn rejects_duplicate_proof() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with valid proof and budget should succeed on first ingestion
         engine.ingest_proof(proof.clone(), 1000).unwrap();
 
         let err = engine.ingest_proof(proof, 2000).unwrap_err();
@@ -1281,6 +1284,7 @@ mod tests {
             b"test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         let err = engine.ingest_proof(proof, 1000).unwrap_err();

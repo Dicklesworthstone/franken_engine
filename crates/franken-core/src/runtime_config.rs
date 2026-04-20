@@ -982,6 +982,7 @@ mod tests {
 
     #[test]
     fn empty_toml_produces_default() {
+        // SAFETY: Empty TOML string is valid and should parse successfully to defaults
         let config = RuntimeConfig::from_toml("").unwrap();
         assert_eq!(config, RuntimeConfig::default());
     }
@@ -992,6 +993,7 @@ mod tests {
 [execution]
 deterministic_budget = 50000
 "#;
+        // SAFETY: Test TOML string is valid and should parse successfully
         let config = RuntimeConfig::from_toml(toml_str).unwrap();
         assert_eq!(config.execution.deterministic_budget, 50_000);
         // All other fields should be defaults.

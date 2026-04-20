@@ -1492,6 +1492,7 @@ mod tests {
         );
         // SAFETY: ResourceCertificate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cert).unwrap();
+        // SAFETY: JSON was just produced by valid ResourceCertificate serialization
         let back: ResourceCertificate = serde_json::from_str(&json).unwrap();
         assert_eq!(cert, back);
     }

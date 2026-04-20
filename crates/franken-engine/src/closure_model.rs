@@ -1707,22 +1707,30 @@ mod tests {
     #[test]
     fn enrichment_scope_chain_serde_roundtrip() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
         chain.declare_var("g".into(), 1).unwrap();
+        // SAFETY: Test sets value for valid declared binding; set_value succeeds in controlled test environment.
         chain
             .set_value("g", EnvValue::Number(1_000_000), Label::Public)
             .unwrap();
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
         chain.declare_let("local".into(), 2).unwrap();
+        // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("local", EnvValue::Str("hello".into()), Label::Internal)
             .unwrap();
+        // SAFETY: Test serializes known-valid ScopeChain; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&chain).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ScopeChain = serde_json::from_str(&json).unwrap();
         assert_eq!(back.depth(), chain.depth());
         // Verify bindings survived the round-trip.
+        // SAFETY: Test gets valid round-tripped binding; get_value succeeds in controlled test environment.
         let val = back.get_value("g").unwrap();
         assert_eq!(*val, EnvValue::Number(1_000_000));
+        // SAFETY: Test gets valid round-tripped binding; get_value succeeds in controlled test environment.
         let val = back.get_value("local").unwrap();
         assert_eq!(*val, EnvValue::Str("hello".into()));
     }
@@ -1765,6 +1773,7 @@ mod tests {
             vec![],                      // no captures
             EnvironmentHandle(u32::MAX), // max handle value
         );
+        // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
         let c = store.get(h).unwrap();
         assert_eq!(c.name, "");
         assert_eq!(c.arity, 0);

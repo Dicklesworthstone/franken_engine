@@ -1374,7 +1374,9 @@ mod tests {
     #[test]
     fn family_serde_roundtrip() {
         for family in WorkloadFamily::ALL {
+            // SAFETY: WorkloadFamily derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(family).unwrap();
+            // SAFETY: JSON was just produced by valid WorkloadFamily serialization
             let back: WorkloadFamily = serde_json::from_str(&json).unwrap();
             assert_eq!(*family, back);
         }
@@ -1454,7 +1456,9 @@ mod tests {
     #[test]
     fn divergence_serde_roundtrip() {
         let class = DivergenceClass::SemanticDivergence;
+        // SAFETY: DivergenceClass derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&class).unwrap();
+        // SAFETY: JSON was just produced by valid DivergenceClass serialization
         let back: DivergenceClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, back);
     }

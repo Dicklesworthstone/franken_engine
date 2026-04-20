@@ -2334,6 +2334,7 @@ mod tests {
     fn replay_hypothesis_optimization_class_and_speedup() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses.len(), 1);
@@ -2349,6 +2350,7 @@ mod tests {
     fn plas_hypothesis_classes_dce_and_dispatch() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses[0].risk, RiskLevel::Low);
@@ -2391,6 +2393,7 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         let receipt = engine
@@ -2402,6 +2405,7 @@ mod tests {
                 ActivationStageLocal::Ramp,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         assert!(receipt.proof_input_ids.contains(&proof_id));
@@ -2412,6 +2416,7 @@ mod tests {
     fn receipt_signature_deterministic() {
         let mut engine1 = test_engine();
         let proof1 = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hyps1 = engine1.ingest_proof(proof1, 1000).unwrap();
         let r1 = engine1
             .emit_receipt(
@@ -2422,10 +2427,12 @@ mod tests {
                 ActivationStageLocal::Canary,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         let mut engine2 = test_engine();
         let proof2 = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hyps2 = engine2.ingest_proof(proof2, 1000).unwrap();
         let r2 = engine2
             .emit_receipt(
@@ -2436,6 +2443,7 @@ mod tests {
                 ActivationStageLocal::Canary,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         assert_eq!(r1.receipt_id, r2.receipt_id);
@@ -2446,6 +2454,7 @@ mod tests {
     fn multiple_receipts_from_same_hypothesis() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
@@ -2458,6 +2467,7 @@ mod tests {
                 ActivationStageLocal::Shadow,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         let r2 = engine
@@ -2469,6 +2479,7 @@ mod tests {
                 ActivationStageLocal::Canary,
                 3000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         // Different timestamps produce different receipt IDs.
@@ -2484,6 +2495,7 @@ mod tests {
     fn receipt_emission_generates_event() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
         let pre_event_count = engine.events().len();
 
@@ -2496,10 +2508,12 @@ mod tests {
                 ActivationStageLocal::Default,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
         // One new event for receipt emission.
         assert_eq!(engine.events().len(), pre_event_count + 1);
+        // SAFETY: Test expects events array to be non-empty after adding events
         let last_event = engine.events().last().unwrap();
         assert!(matches!(
             &last_event.event_type,
@@ -2529,6 +2543,7 @@ mod tests {
             b"boundary-test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         assert!(engine.ingest_proof(proof, 5000).is_ok());
@@ -2546,6 +2561,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"evt",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let variants = vec![
@@ -2577,7 +2593,9 @@ mod tests {
         ];
 
         for v in &variants {
+            // SAFETY: Serialization of valid IngestionEventType should succeed
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: Deserialization of valid JSON should succeed
             let restored: IngestionEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(&restored, v);
         }

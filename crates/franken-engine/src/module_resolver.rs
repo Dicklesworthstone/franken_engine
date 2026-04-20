@@ -2678,6 +2678,7 @@ mod tests {
     #[test]
     fn package_exports_reject_targets_that_escape_package_root() {
         let mut resolver = DeterministicModuleResolver::new("/repo");
+        // SAFETY: Test scenario with valid package definition and exports; registration should succeed
         resolver
             .register_external_package(ExternalPackageDefinition::new("locked-pkg").with_export(
                 ".",
@@ -2690,6 +2691,7 @@ mod tests {
                 },
             ))
             .unwrap();
+        // SAFETY: Test scenario with valid module definition; registration should succeed
         resolver
             .register_external_module(
                 "other-pkg/private.js",

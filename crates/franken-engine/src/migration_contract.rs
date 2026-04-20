@@ -1000,6 +1000,7 @@ mod tests {
 
     fn run_full_pipeline(runner: &mut MigrationRunner, mid: &str, cutover: CutoverType) {
         // SAFETY: Test helper uses valid declaration; declare succeeds in controlled test environment.
+        // SAFETY: Test helper uses valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration(mid, cutover), "trace-1")
             .unwrap();

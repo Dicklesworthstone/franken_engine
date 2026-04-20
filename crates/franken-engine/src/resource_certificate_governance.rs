@@ -706,6 +706,8 @@ impl GovernanceEvaluator {
             let categories: BTreeSet<GovernanceVerdict> =
                 violations.iter().map(|v| v.category).collect();
             if categories.len() == 1 {
+                // SAFETY: Just checked categories.len() == 1, so iterator is guaranteed to have exactly one element.
+                // next() unwrap is safe since the collection is non-empty.
                 *categories.iter().next().unwrap()
             } else {
                 GovernanceVerdict::MultipleViolations

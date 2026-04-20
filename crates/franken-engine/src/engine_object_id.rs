@@ -516,6 +516,8 @@ mod tests {
             &test_canonical_bytes(),
         )
         .unwrap();
+        // SAFETY: Test uses same valid parameters as id1 derivation above.
+        // derive_id only fails on invalid domain or malformed inputs (both impossible here).
         let id2 = derive_id(
             ObjectDomain::PolicyObject,
             "zone-a",

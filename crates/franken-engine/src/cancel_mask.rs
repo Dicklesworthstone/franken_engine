@@ -414,6 +414,7 @@ mod tests {
             assert!(ctx.tick());
         }
 
+        // SAFETY: Test has valid mask; release_mask succeeds in controlled test environment.
         let outcome = ctx.release_mask(false).unwrap();
         assert_eq!(outcome, MaskOutcome::CleanRelease);
         assert!(!ctx.is_masked());
@@ -422,6 +423,7 @@ mod tests {
     #[test]
     fn bound_exceeded_auto_unmasks() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         ctx.create_mask(&checkpoint_justification()).unwrap();
 
         // checkpoint_write has max_ops = 32
@@ -436,12 +438,14 @@ mod tests {
     #[test]
     fn release_after_bound_exceeded_reports_exceeded() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         ctx.create_mask(&checkpoint_justification()).unwrap();
 
         for _ in 0..32 {
             ctx.tick();
         }
 
+        // SAFETY: Test has valid mask; release_mask succeeds in controlled test environment.
         let outcome = ctx.release_mask(false).unwrap();
         assert_eq!(outcome, MaskOutcome::BoundExceeded);
     }
@@ -449,6 +453,7 @@ mod tests {
     #[test]
     fn cancel_deferred_on_release() {
         let mut ctx = test_context();
+        // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
         ctx.create_mask(&checkpoint_justification()).unwrap();
         ctx.tick();
 

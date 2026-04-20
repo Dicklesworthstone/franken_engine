@@ -50,16 +50,21 @@ fn assert_required_files(out_dir: &Path) {
 #[test]
 fn adoption_gate_contract_links_closed_wave_artifacts() {
     let gate = build_asupersync_leverage_adoption_gate().unwrap();
-    assert_eq!(gate.verdict, AdoptionGateVerdict::GoTargeted);
+
+    // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
+    assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
     assert_eq!(
         gate.topology_decision,
         TopologyPromotionDecision::TargetedPromotion
     );
     assert_eq!(gate.summary.mandatory_child_count, 8);
-    assert_eq!(gate.summary.outstanding_child_count, 0);
-    assert!(gate.outstanding_risk_ids.is_empty());
-    assert!(gate.stop_go_code.contains("targeted_lifecycle_supervision"));
-    assert!(gate.next_action.contains("extension lifecycle manager"));
+
+    // Should have outstanding children when artifacts are missing
+    assert!(gate.summary.outstanding_child_count > 0);
+    assert!(!gate.outstanding_risk_ids.is_empty());
+
+    assert!(gate.stop_go_code.contains("stop"));
+    assert!(gate.next_action.contains("artifact"));
     assert!(
         gate.mandatory_child_artifacts
             .iter()
@@ -96,14 +101,16 @@ fn binary_emits_adoption_gate_bundle() {
         &fs::read(out_dir.join("asupersync_leverage_adoption_gate.json")).expect("read gate"),
     )
     .expect("parse gate");
-    assert_eq!(gate.verdict, AdoptionGateVerdict::GoTargeted);
-    assert_eq!(gate.summary.satisfied_child_count, 8);
+
+    // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
+    assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
+    assert!(gate.summary.satisfied_child_count < gate.summary.mandatory_child_count);
 
     let decision: serde_json::Value = serde_json::from_slice(
         &fs::read(out_dir.join("decision_record.json")).expect("read decision"),
     )
     .expect("parse decision");
-    assert_eq!(decision["verdict"].as_str(), Some("go_targeted"));
+    assert_eq!(decision["verdict"].as_str(), Some("stop"));
     assert_eq!(
         decision["topology_decision"].as_str(),
         Some("targeted_promotion")
@@ -120,8 +127,8 @@ fn binary_emits_adoption_gate_bundle() {
     )
     .expect("parse manifest");
     assert_eq!(manifest["seed"].as_u64(), Some(4317));
-    assert_eq!(manifest["outcome"].as_str(), Some("pass"));
-    assert_eq!(manifest["verdict"].as_str(), Some("go_targeted"));
+    assert_eq!(manifest["outcome"].as_str(), Some("fail")); // After bd-2yez8: fail when artifacts missing
+    assert_eq!(manifest["verdict"].as_str(), Some("stop"));
     assert_eq!(
         manifest["artifact_paths"]["adoption_gate"].as_str(),
         Some("asupersync_leverage_adoption_gate.json")
@@ -158,4 +165,46 @@ fn binary_emits_adoption_gate_bundle() {
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
     assert!(commands.contains("franken_asupersync_leverage_adoption_gate"));
     assert!(commands.contains("rch exec"));
+}
+
+#[test]
+fn adoption_gate_fails_closed_on_missing_child_artifacts() {
+    // Regression test for bd-2yez8: validate mandatory child artifacts before go verdict.
+    // When child artifacts are missing/invalid, gate should emit Stop verdict with outstanding risk ids.
+    use frankenengine_engine::asupersync_leverage_adoption_gate::{
+        build_asupersync_leverage_adoption_gate, AdoptionGateVerdict
+    };
+
+    // Build gate in clean environment where child artifacts don't exist
+    let gate = build_asupersync_leverage_adoption_gate().unwrap();
+
+    // Should fail closed with Stop verdict due to missing child artifacts
+    assert_eq!(gate.verdict, AdoptionGateVerdict::Stop,
+               "Gate should emit Stop verdict when child artifacts are missing");
+
+    // Should have outstanding risk IDs for missing artifacts
+    assert!(!gate.outstanding_risk_ids.is_empty(),
+            "Gate should have outstanding risk IDs for missing child artifacts");
+
+    // Should have outstanding child count > 0
+    assert!(gate.summary.outstanding_child_count > 0,
+            "Gate should report outstanding child artifacts");
+
+    // Should have fewer satisfied than total mandatory children
+    assert!(gate.summary.satisfied_child_count < gate.summary.mandatory_child_count,
+            "Gate should report some unsatisfied child artifacts");
+
+    // Should have stop-go code indicating failure
+    assert!(gate.stop_go_code.contains("stop"),
+            "Stop-go code should indicate stop verdict");
+
+    // Outstanding risk IDs should contain artifact-specific codes
+    let risk_id_contains_missing = gate.outstanding_risk_ids.iter()
+        .any(|id| id.contains("missing_or_invalid"));
+    assert!(risk_id_contains_missing,
+            "Outstanding risk IDs should contain missing/invalid artifact codes");
+
+    // Verify has_outstanding_child_artifacts correctly detects the issue
+    assert!(gate.has_outstanding_child_artifacts(),
+            "Gate should detect outstanding child artifacts");
 }

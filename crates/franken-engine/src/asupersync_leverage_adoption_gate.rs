@@ -298,24 +298,14 @@ fn mandatory_child_artifacts(
     topology: &TopologyPromotionAssessment,
 ) -> Vec<MandatoryChildArtifact> {
     vec![
-        child_artifact("bd-3nr.1.2.2", "control-plane mock guardrail", "mock_seam_guardrail_report", "mock_seam_guardrail_report.json", "Rejects new production control_plane::mocks usage before adoption."),
-        child_artifact("bd-3nr.1.3.1", "budget propagation contract", "budget_contract_report", "budget_contract_report.json", "Keeps child and cleanup budgets explicit at boundary crossings."),
-        child_artifact("bd-3nr.1.3.2", "outcome and capability narrowing contract", "outcome_capability_narrowing_report", "outcome_capability_narrowing_report.json", "Preserves four-valued outcomes and deterministic capability narrowing."),
-        child_artifact("bd-3nr.1.3.3", "operator diagnostic mapping", "control_plane_policy_diagnostics", "control_plane_policy_diagnostics.json", "Maps policy outcomes to user and operator remediation."),
-        child_artifact("bd-3nr.1.4.3", "oracle release gate promotion", "oracle_release_gate_promotion", "oracle_release_gate_promotion.json", "Promotes frankenlab/oracle release blockers into operator triage bundles."),
-        child_artifact("bd-3nr.1.5.1", "cross-repo contract matrix", "asupersync_contract_matrix", "asupersync_contract_compat_matrix.json", "Pins franken-kernel, franken-decision, franken-evidence, and frankenlab surface contracts."),
-        child_artifact("bd-3nr.1.5.2", "real-context overhead proof", "control_plane_benchmark_split_gate", "control_plane_benchmark_split_gate.json", "Proves bounded overhead without mock shortcuts."),
-        MandatoryChildArtifact {
-            bead_id: "bd-3nr.1.6".to_string(),
-            title: "extension-host topology assessment".to_string(),
-            artifact_id: "topology_promotion_assessment".to_string(),
-            artifact_path_hint: "topology_promotion_assessment.json".to_string(),
-            status: GateArtifactStatus::Satisfied,
-            stop_go_code: format!("topology_decision.{}", topology.decision.as_str()),
-            user_impact: "Avoids a broad topology migration while preserving the targeted lifecycle-manager improvement path.".to_string(),
-            operator_impact: "Names the only current promotion seam and records direct-manager seams that should remain unchanged.".to_string(),
-            next_action: "Use this decision as the topology input to the adoption gate.".to_string(),
-        },
+        validate_child_artifact("bd-3nr.1.2.2", "control-plane mock guardrail", "mock_seam_guardrail_report", "mock_seam_guardrail_report.json", "Rejects new production control_plane::mocks usage before adoption."),
+        validate_child_artifact("bd-3nr.1.3.1", "budget propagation contract", "budget_contract_report", "budget_contract_report.json", "Keeps child and cleanup budgets explicit at boundary crossings."),
+        validate_child_artifact("bd-3nr.1.3.2", "outcome and capability narrowing contract", "outcome_capability_narrowing_report", "outcome_capability_narrowing_report.json", "Preserves four-valued outcomes and deterministic capability narrowing."),
+        validate_child_artifact("bd-3nr.1.3.3", "operator diagnostic mapping", "control_plane_policy_diagnostics", "control_plane_policy_diagnostics.json", "Maps policy outcomes to user and operator remediation."),
+        validate_child_artifact("bd-3nr.1.4.3", "oracle release gate promotion", "oracle_release_gate_promotion", "oracle_release_gate_promotion.json", "Promotes frankenlab/oracle release blockers into operator triage bundles."),
+        validate_child_artifact("bd-3nr.1.5.1", "cross-repo contract matrix", "asupersync_contract_matrix", "asupersync_contract_compat_matrix.json", "Pins franken-kernel, franken-decision, franken-evidence, and frankenlab surface contracts."),
+        validate_child_artifact("bd-3nr.1.5.2", "real-context overhead proof", "control_plane_benchmark_split_gate", "control_plane_benchmark_split_gate.json", "Proves bounded overhead without mock shortcuts."),
+        validate_topology_artifact(topology),
     ]
 }
 
@@ -337,6 +327,84 @@ fn child_artifact(
         operator_impact: format!("{artifact_id} is linked in the final adoption record."),
         next_action: "Keep artifact linked in run_manifest.json and decision_record.json."
             .to_string(),
+    }
+}
+
+/// Validates a child artifact by checking if the artifact file exists and contains valid JSON.
+/// Regression fix for bd-2yez8: fail closed on missing/invalid artifacts instead of hardcoding Satisfied.
+fn validate_child_artifact(
+    bead_id: &str,
+    title: &str,
+    artifact_id: &str,
+    artifact_path_hint: &str,
+    impact: &str,
+) -> MandatoryChildArtifact {
+    use std::env;
+    use std::fs;
+    use std::path::Path;
+
+    // Check for artifact in typical locations: artifacts/asupersync_leverage_adoption_gate/{timestamp}/
+    let status = if let Ok(current_dir) = env::current_dir() {
+        let artifact_root = current_dir.join("artifacts").join("asupersync_leverage_adoption_gate");
+        let manifest_paths = [
+            // Direct path in current directory
+            current_dir.join(artifact_path_hint),
+            // Path in artifacts directory
+            artifact_root.join(artifact_path_hint),
+        ];
+
+        // Check if any of the expected paths exist and contain valid JSON
+        let found_valid = manifest_paths.iter().any(|path| {
+            Path::new(path).exists() &&
+            fs::read_to_string(path)
+                .map(|content| serde_json::from_str::<serde_json::Value>(&content).is_ok())
+                .unwrap_or(false)
+        });
+
+        if found_valid {
+            GateArtifactStatus::Satisfied
+        } else {
+            GateArtifactStatus::Outstanding
+        }
+    } else {
+        // Fail closed if we can't determine current directory
+        GateArtifactStatus::Outstanding
+    };
+
+    let stop_go_code = match status {
+        GateArtifactStatus::Satisfied => format!("{artifact_id}.satisfied"),
+        GateArtifactStatus::Outstanding => format!("{artifact_id}.missing_or_invalid"),
+    };
+
+    MandatoryChildArtifact {
+        bead_id: bead_id.to_string(),
+        title: title.to_string(),
+        artifact_id: artifact_id.to_string(),
+        artifact_path_hint: artifact_path_hint.to_string(),
+        status,
+        stop_go_code,
+        user_impact: impact.to_string(),
+        operator_impact: format!("{artifact_id} is linked in the final adoption record."),
+        next_action: match status {
+            GateArtifactStatus::Satisfied => "Keep artifact linked in run_manifest.json and decision_record.json.".to_string(),
+            GateArtifactStatus::Outstanding => format!("Generate {artifact_path_hint} before re-running adoption gate."),
+        },
+    }
+}
+
+/// Validates the topology artifact specifically.
+/// The topology artifact is provided as input so it should always be satisfied.
+fn validate_topology_artifact(topology: &TopologyPromotionAssessment) -> MandatoryChildArtifact {
+    MandatoryChildArtifact {
+        bead_id: "bd-3nr.1.6".to_string(),
+        title: "extension-host topology assessment".to_string(),
+        artifact_id: "topology_promotion_assessment".to_string(),
+        artifact_path_hint: "topology_promotion_assessment.json".to_string(),
+        status: GateArtifactStatus::Satisfied, // Always satisfied since provided as input
+        stop_go_code: format!("topology_decision.{}", topology.decision.as_str()),
+        user_impact: "Avoids a broad topology migration while preserving the targeted lifecycle-manager improvement path.".to_string(),
+        operator_impact: "Names the only current promotion seam and records direct-manager seams that should remain unchanged.".to_string(),
+        next_action: "Use this decision as the topology input to the adoption gate.".to_string(),
     }
 }
 
@@ -395,14 +463,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gate_is_go_targeted_and_fail_closed_over_children() {
+    fn gate_fails_closed_over_missing_children() {
+        // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
         let gate = build_asupersync_leverage_adoption_gate().unwrap();
-        assert_eq!(gate.verdict, AdoptionGateVerdict::GoTargeted);
-        assert!(gate.is_go());
-        assert!(!gate.has_outstanding_child_artifacts());
+        assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
+        assert!(gate.is_stop());
+        assert!(gate.has_outstanding_child_artifacts());
         assert_eq!(gate.summary.mandatory_child_count, 8);
-        assert_eq!(gate.summary.satisfied_child_count, 8);
-        assert_eq!(gate.summary.outstanding_child_count, 0);
+        assert!(gate.summary.satisfied_child_count < gate.summary.mandatory_child_count);
+        assert!(gate.summary.outstanding_child_count > 0);
+        assert!(!gate.outstanding_risk_ids.is_empty());
         assert_eq!(
             gate.topology_decision,
             TopologyPromotionDecision::TargetedPromotion

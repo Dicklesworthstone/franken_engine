@@ -895,6 +895,7 @@ mod tests {
                 assert!(denial.transitive);
                 assert_eq!(denial.transitive_root, Some(key_id));
             }
+            // SAFETY: Test validates revocation enforcement produces expected transitive denial with root
             _ => panic!("expected transitive denial"),
         }
     }

@@ -1501,14 +1501,17 @@ mod tests {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
         let sk = test_signing_key();
         let vk = test_verification_key_from(&sk);
+        // SAFETY: Test setup with valid organization and verification key should succeed
         let pub_id = reg.register_publisher("Org", vk).unwrap();
         assert!(reg.is_publisher_active(&pub_id));
 
         reg.advance_tick(DeterministicTimestamp(10));
+        // SAFETY: Test revocation of active publisher with valid reason should succeed
         reg.revoke_publisher(pub_id.clone(), "compromised key")
             .unwrap();
         assert!(!reg.is_publisher_active(&pub_id));
 
+        // SAFETY: Test retrieval of revoked publisher should succeed as publisher still exists
         let p = reg.get_publisher(&pub_id).unwrap();
         assert!(p.revoked);
         assert_eq!(p.revoked_at, Some(DeterministicTimestamp(10)));
@@ -1543,6 +1546,7 @@ mod tests {
         let (mut reg, _pub_id, _, _) = setup_registry_with_publisher();
         let sk2 = second_signing_key();
         let vk2 = test_verification_key_from(&sk2);
+        // SAFETY: Test setup with valid second organization and verification key should succeed
         let pub_id2 = reg.register_publisher("OtherOrg", vk2).unwrap();
         let result = reg.claim_scope(pub_id2, "testorg");
         assert!(matches!(result, Err(RegistryError::ScopeNotOwned { .. })));
@@ -1564,6 +1568,7 @@ mod tests {
     #[test]
     fn claim_scope_revoked_publisher_fails() {
         let (mut reg, pub_id, _, _) = setup_registry_with_publisher();
+        // SAFETY: Test revocation of active publisher with valid reason should succeed
         reg.revoke_publisher(pub_id.clone(), "test").unwrap();
         let result = reg.claim_scope(pub_id, "newscope");
         assert!(matches!(

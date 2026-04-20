@@ -1276,6 +1276,7 @@ mod tests {
             0,
         );
         assert!(receipt.is_some());
+        // SAFETY: Array arr-1 was just registered above, so get_array will succeed
         let lane = engine.get_array("arr-1").unwrap();
         assert_eq!(lane.element_kind, ElementKind::PackedDouble);
     }

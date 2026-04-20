@@ -396,7 +396,11 @@ mod tests {
             FastPathFallbackReason::Uninitialized,
             FastPathFallbackReason::WriterPressure,
         ] {
+            // SAFETY: FastPathFallbackReason derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&reason).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid FastPathFallbackReason,
+            // so from_str back to FastPathFallbackReason cannot fail (valid format + matching schema).
             let back: FastPathFallbackReason = serde_json::from_str(&json).unwrap();
             assert_eq!(reason, back);
         }
@@ -413,7 +417,11 @@ mod tests {
             writer_pressure_observations: 0,
             fallback_reason: None,
         };
+        // SAFETY: FastPathReadResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FastPathReadResult,
+        // so from_str back to FastPathReadResult cannot fail (valid format + matching schema).
         let back: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }
@@ -630,6 +638,8 @@ mod tests {
             }));
         }
 
+        // SAFETY: Thread handles are from test-spawned threads that should complete without panic.
+        // This test controls the thread lifetime and only joins after worker completion.
         let total_fast: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
         // With no concurrent writer, all reads should be fast-path.
         assert_eq!(total_fast, 200);
@@ -873,6 +883,8 @@ mod tests {
             }));
         }
 
+        // SAFETY: Thread handles are from test-spawned threads that should complete without panic.
+        // This test controls the thread lifetime and only joins after worker completion.
         let successes: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         // Exactly one thread should succeed.
         assert_eq!(successes.iter().filter(|&&s| s).count(), 1);

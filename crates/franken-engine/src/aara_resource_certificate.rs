@@ -964,7 +964,9 @@ mod tests {
     #[test]
     fn dimension_serde_roundtrip() {
         for dim in ResourceDimension::ALL {
+            // SAFETY: ResourceDimension derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(dim).unwrap();
+            // SAFETY: JSON was just produced by valid ResourceDimension serialization
             let back: ResourceDimension = serde_json::from_str(&json).unwrap();
             assert_eq!(*dim, back);
         }
@@ -1016,6 +1018,7 @@ mod tests {
         assert!(summary.is_complete);
         assert_eq!(summary.total_effect_count(), 4 * MILLION);
         assert_eq!(
+            // SAFETY: Test just created summary with EffectKind::Allocation entries, key must exist
             *summary.kind_totals.get(&EffectKind::Allocation).unwrap(),
             3 * MILLION
         );
@@ -1076,7 +1079,9 @@ mod tests {
             vec![test_effect_entry(EffectKind::Hostcall, "p1", MILLION)],
             vec![],
         );
+        // SAFETY: EffectSummary derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&summary).unwrap();
+        // SAFETY: JSON was just produced by valid EffectSummary serialization
         let back: EffectSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(summary, back);
     }
@@ -1127,7 +1132,9 @@ mod tests {
             AbstentionReason::ProxyTrap,
             AbstentionReason::BudgetExhausted,
         ] {
+            // SAFETY: AbstentionReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&reason).unwrap();
+            // SAFETY: JSON was just produced by valid AbstentionReason serialization
             let back: AbstentionReason = serde_json::from_str(&json).unwrap();
             assert_eq!(reason, back);
         }
@@ -1161,7 +1168,9 @@ mod tests {
             AssumptionKind::BoundedStackDepth,
             AssumptionKind::BoundedInputSize,
         ] {
+            // SAFETY: AssumptionKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just produced by valid AssumptionKind serialization
             let back: AssumptionKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, back);
         }
@@ -1239,7 +1248,9 @@ mod tests {
             3 * MILLION,
             vec![("start", 3 * MILLION), ("end", MILLION)],
         );
+        // SAFETY: SymbolicPotential derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&pot).unwrap();
+        // SAFETY: JSON was just produced by valid SymbolicPotential serialization
         let back: SymbolicPotential = serde_json::from_str(&json).unwrap();
         assert_eq!(pot, back);
     }
@@ -1276,6 +1287,7 @@ mod tests {
     fn bound_compose_same_dimension() {
         let b1 = test_bound(ResourceDimension::HeapMemory, 5 * MILLION, 950_000);
         let b2 = test_bound(ResourceDimension::HeapMemory, 3 * MILLION, MILLION);
+        // SAFETY: Test composes bounds with same dimension, should succeed
         let composed = b1.compose(&b2).unwrap();
         assert_eq!(composed.upper_bound_millionths, 8 * MILLION);
         assert_eq!(composed.confidence_millionths, 950_000);
@@ -1291,7 +1303,9 @@ mod tests {
     #[test]
     fn bound_serde_roundtrip() {
         let bound = test_bound(ResourceDimension::HostcallCount, 100 * MILLION, 980_000);
+        // SAFETY: ResourceBound derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bound).unwrap();
+        // SAFETY: JSON was just produced by valid ResourceBound serialization
         let back: ResourceBound = serde_json::from_str(&json).unwrap();
         assert_eq!(bound, back);
     }
@@ -1317,7 +1331,9 @@ mod tests {
             CertificateVerdict::Abstained,
             CertificateVerdict::Violated,
         ] {
+            // SAFETY: CertificateVerdict derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&v).unwrap();
+            // SAFETY: JSON was just produced by valid CertificateVerdict serialization
             let back: CertificateVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(v, back);
         }

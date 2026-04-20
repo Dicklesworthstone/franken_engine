@@ -18313,7 +18313,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let value = self.read_reg(args.start + 1)?;
+                let value = self.read_reg(args.start)?;
                 let input_str = match value {
                     Value::Str(s) => s,
                     Value::Int(n) => n.to_string(),
@@ -18323,8 +18323,8 @@ impl InterpreterCore {
                     _ => return Ok(Value::Float(Float64::new(f64::NAN))),
                 };
 
-                let radix = if args.count >= 3 {
-                    Self::coerce_clamped_radix_or_default(self.read_reg(args.start + 2)?, 10)
+                let radix = if args.count >= 2 {
+                    Self::coerce_clamped_radix_or_default(self.read_reg(args.start + 1)?, 10)
                 } else {
                     10
                 };
@@ -18377,7 +18377,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let value = self.read_reg(args.start + 1)?;
+                let value = self.read_reg(args.start)?;
                 let input_str = match value {
                     Value::Str(s) => s,
                     Value::Int(n) => return Ok(Value::Int(n)),
@@ -18444,7 +18444,7 @@ impl InterpreterCore {
                     return Ok(Value::Bool(true)); // isNaN() with no args returns true
                 }
 
-                let value = self.read_reg(args.start + 1)?;
+                let value = self.read_reg(args.start)?;
                 let num = match value {
                     Value::Int(_) => return Ok(Value::Bool(false)), // Integers are never NaN
                     Value::Float(f) => f.inner(),
@@ -18463,7 +18463,7 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false)); // isFinite() with no args returns false
                 }
 
-                let value = self.read_reg(args.start + 1)?;
+                let value = self.read_reg(args.start)?;
                 let num = match value {
                     Value::Int(_) => return Ok(Value::Bool(true)), // Integers are always finite
                     Value::Float(f) => f.inner(),
@@ -24673,5 +24673,175 @@ mod tests {
         } else {
             panic!("Array concat should return an object");
         }
+    }
+
+    // Regression tests for bd-11a8p: Global builtin argument indexing
+    #[test]
+    fn global_builtin_isnan_correct_argument() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test IsNaN with number argument
+        core.registers[0] = Value::Float(Float64::new(f64::NAN));
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:IsNaN".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should correctly read register 0 and return true for NaN
+        assert_eq!(core.registers[10], Value::Bool(true));
+
+        // Test with non-NaN value
+        core.registers[0] = Value::Int(42);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:IsNaN".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return false for non-NaN
+        assert_eq!(core.registers[10], Value::Bool(false));
+    }
+
+    #[test]
+    fn global_builtin_isfinite_correct_argument() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test IsFinite with finite number
+        core.registers[0] = Value::Int(42);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:IsFinite".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should correctly read register 0 and return true for finite number
+        assert_eq!(core.registers[10], Value::Bool(true));
+
+        // Test with infinity
+        core.registers[0] = Value::Float(Float64::new(f64::INFINITY));
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:IsFinite".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return false for infinity
+        assert_eq!(core.registers[10], Value::Bool(false));
+    }
+
+    #[test]
+    fn global_builtin_parseint_correct_arguments() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test ParseInt with string argument (single argument)
+        core.registers[0] = Value::Str("123".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseInt".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should correctly parse "123" as 123
+        if let Value::Float(f) = core.registers[10] {
+            assert_eq!(f.inner() as i64, 123);
+        } else {
+            panic!("ParseInt should return a float");
+        }
+
+        // Test ParseInt with radix argument
+        core.registers[0] = Value::Str("101".to_string());
+        core.registers[1] = Value::Int(2); // binary radix
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseInt".to_string(),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should correctly parse "101" in base 2 as 5
+        if let Value::Float(f) = core.registers[10] {
+            assert_eq!(f.inner() as i64, 5);
+        } else {
+            panic!("ParseInt should return a float");
+        }
+    }
+
+    #[test]
+    fn global_builtin_parsefloat_correct_argument() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test ParseFloat with string argument
+        core.registers[0] = Value::Str("3.14".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should correctly parse "3.14" as 3.14
+        if let Value::Float(f) = core.registers[10] {
+            assert!((f.inner() - 3.14).abs() < f64::EPSILON);
+        } else {
+            panic!("ParseFloat should return a float");
+        }
+
+        // Test with integer
+        core.registers[0] = Value::Int(42);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return the integer as-is
+        assert_eq!(core.registers[10], Value::Int(42));
     }
 }

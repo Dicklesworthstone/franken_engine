@@ -1787,15 +1787,19 @@ mod tests {
     #[test]
     fn stress_allocate_release_cycles_enrichment() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
             .unwrap();
         // 500 cycles of allocate-then-release
         for _ in 0..500 {
+            // SAFETY: Each cycle allocates exactly the registered 100-byte IrArena budget.
             reg.allocate(AllocationDomain::IrArena, 100).unwrap();
+            // SAFETY: The preceding allocation makes releasing 100 bytes from IrArena valid.
             reg.release(AllocationDomain::IrArena, 100).unwrap();
         }
         assert_eq!(
             reg.get(&AllocationDomain::IrArena)
+                // SAFETY: IrArena was registered before the allocation-release loop.
                 .unwrap()
                 .budget
                 .used_bytes,

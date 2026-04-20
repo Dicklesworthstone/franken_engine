@@ -1,0 +1,123 @@
+{
+  "registry_version": "1.0",
+  "last_updated": "2026-04-20",
+  "description": "Registry of FrankenEngine technical reports and scientific contributions",
+  "reports": [
+    {
+      "id": "FKTR-2026-001",
+      "title": "[PLACEHOLDER] Runtime Security Isolation in WebAssembly Extensions",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-TBD",
+      "type": "Research",
+      "status": "Planned",
+      "artifact_bundle": "artifacts/technical_reports/FKTR-2026-001/",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Novel capability-based isolation model for WebAssembly",
+        "Performance evaluation against existing sandboxing approaches",
+        "Formal security model with proofs"
+      ],
+      "dependencies": ["bd-25b7", "bd-f7n"],
+      "reproducible": false,
+      "validation_status": "not_started"
+    },
+    {
+      "id": "FKTR-2026-002",
+      "title": "[PLACEHOLDER] Deterministic Replay for WebAssembly Security Analysis",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-TBD",
+      "type": "Methodology",
+      "status": "Planned",
+      "artifact_bundle": "artifacts/technical_reports/FKTR-2026-002/",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Deterministic replay framework for security analysis",
+        "Benchmark suite for replay consistency validation",
+        "Case studies on real-world extension vulnerabilities"
+      ],
+      "dependencies": ["bd-3gsv", "bd-1ze"],
+      "reproducible": false,
+      "validation_status": "not_started"
+    }
+  ],
+  "external_replications": [
+    {
+      "original_report_id": "FKTR-2026-001",
+      "replication_team": "TBD",
+      "replication_date": null,
+      "replication_status": "not_started",
+      "results_match": null,
+      "notes": "Pending completion of original research"
+    }
+  ],
+  "open_tools": [
+    {
+      "name": "franken-bench",
+      "description": "WebAssembly security benchmarking suite",
+      "version": "0.1.0-alpha",
+      "release_date": null,
+      "adoption_status": "development",
+      "external_users": [],
+      "artifact_bundle": "tools/franken-bench/",
+      "dependencies": ["bd-19l0", "bd-25b7"]
+    },
+    {
+      "name": "franken-verify",
+      "description": "Third-party verification toolkit for security claims",
+      "version": "0.1.0-alpha",
+      "release_date": null,
+      "adoption_status": "development",
+      "external_users": [],
+      "artifact_bundle": "tools/franken-verify/",
+      "dependencies": ["bd-3ab3", "bd-3gsv"]
+    }
+  ],
+  "thresholds": {
+    "minimum_publishable_reports": 4,
+    "minimum_external_replications": 2,
+    "minimum_adopted_tools": 1
+  },
+  "current_status": {
+    "publishable_reports": 0,
+    "externally_replicated_claims": 0,
+    "adopted_tools": 0,
+    "section_16_complete": false
+  },
+  "validation_criteria": {
+    "report_completeness": [
+      "Follows TECHNICAL_REPORT_TEMPLATE.md structure",
+      "Includes complete artifact bundle",
+      "Passes reproducibility validation",
+      "Has external peer review"
+    ],
+    "replication_criteria": [
+      "Independent team reproduction",
+      "Results within statistical tolerance",
+      "Documented methodology comparison",
+      "Public replication report"
+    ],
+    "tool_adoption_criteria": [
+      "Public release with documentation",
+      "External installation and usage",
+      "Community contribution or feedback",
+      "Maintained compatibility"
+    ]
+  },
+  "artifact_bundle_structure": {
+    "required_files": [
+      "README.md",
+      "reproduce.sh",
+      "requirements.txt",
+      "manifest.json",
+      "checksums.sha256"
+    ],
+    "required_directories": [
+      "src/",
+      "data/",
+      "outputs/",
+      "docs/"
+    ]
+  }
+}

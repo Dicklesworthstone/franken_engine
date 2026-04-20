@@ -1349,7 +1349,9 @@ mod tests {
             parity_ok: Some(true),
             merge_witness_hash: Some(ContentHash::compute(b"witness")),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&rr).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: RunRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(rr, back);
     }

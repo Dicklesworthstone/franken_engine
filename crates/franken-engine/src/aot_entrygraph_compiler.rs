@@ -1294,6 +1294,7 @@ mod tests {
         let graph = make_graph("g1", EntryKind::AppEntry, vec![m]);
         let mut cfg = default_config();
         cfg.min_module_count = 5;
+        // SAFETY: Test with single module below threshold should return BelowThreshold verdict
         let report = compile_entrygraph(&graph, &cfg, epoch()).unwrap();
         assert_eq!(report.verdict, CompileVerdict::BelowThreshold);
         assert_eq!(report.compiled_count, 0);
@@ -1307,6 +1308,7 @@ mod tests {
             make_module("dep2.js", 200, false),
         ];
         let graph = make_graph("g1", EntryKind::PackageMain, modules);
+        // SAFETY: Test with valid modules and default config should compile with provenance
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
         for r in &report.module_results {
             assert_eq!(r.provenance.len(), 6); // all 6 provenance kinds
@@ -1324,6 +1326,7 @@ mod tests {
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         let mut cfg = default_config();
         cfg.require_provenance = false;
+        // SAFETY: Test with valid graph and config with provenance disabled should succeed
         let report = compile_entrygraph(&graph, &cfg, epoch()).unwrap();
         for r in &report.module_results {
             assert!(r.provenance.is_empty());
@@ -1339,7 +1342,9 @@ mod tests {
         ];
         let g1 = make_graph("g1", EntryKind::AppEntry, modules.clone());
         let g2 = make_graph("g1", EntryKind::AppEntry, modules);
+        // SAFETY: Test with identical graphs should produce deterministic artifact hashes
         let r1 = compile_entrygraph(&g1, &default_config(), epoch()).unwrap();
+        // SAFETY: Test with identical graphs should produce deterministic artifact hashes
         let r2 = compile_entrygraph(&g2, &default_config(), epoch()).unwrap();
         assert_eq!(
             r1.module_results[0].artifact_hash,
@@ -1357,7 +1362,9 @@ mod tests {
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         let mut cfg2 = default_config();
         cfg2.policy_revision = 99;
+        // SAFETY: Test with valid graph and default config should compile successfully
         let r1 = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
+        // SAFETY: Test with valid graph and modified config should compile successfully
         let r2 = compile_entrygraph(&graph, &cfg2, epoch()).unwrap();
         assert_ne!(
             r1.module_results[0].artifact_hash,
@@ -1369,6 +1376,7 @@ mod tests {
 
     #[test]
     fn test_compile_batch_empty() {
+        // SAFETY: Compiling empty batch should succeed with zero results
         let report = compile_batch(&[], &default_config(), epoch()).unwrap();
         assert_eq!(report.total_graphs, 0);
         assert_eq!(report.usable_graphs, 0);
@@ -1394,6 +1402,7 @@ mod tests {
                 make_module("s3.js", 50, false),
             ],
         );
+        // SAFETY: Test batch compilation with two valid graphs should succeed
         let report = compile_batch(&[g1, g2], &default_config(), epoch()).unwrap();
         assert_eq!(report.total_graphs, 2);
         assert_eq!(report.usable_graphs, 2);

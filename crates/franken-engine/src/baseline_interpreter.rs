@@ -1821,6 +1821,23 @@ impl InterpreterCore {
         &self.console_output
     }
 
+    fn push_console_output(&mut self, level: ConsoleLevel, message: String) {
+        let max_entries = self.config.max_console_entries;
+        if max_entries == 0 {
+            return;
+        }
+
+        if self.console_output.len() >= max_entries {
+            self.console_output.remove(0);
+        }
+
+        self.console_output.push(ConsoleEntry {
+            level,
+            message,
+            instruction_index: self.instructions_executed,
+        });
+    }
+
     fn take_execution_result(
         &mut self,
         value: Value,
@@ -6624,334 +6641,6 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn abstract_eq_values(a: &Value, b: &Value) -> bool {
-        match (a, b) {
-            (Value::Undefined, Value::Undefined)
-            | (Value::Null, Value::Null)
-            | (Value::Bool(_), Value::Bool(_))
-            | (Value::Int(_), Value::Int(_))
-            | (Value::Str(_), Value::Str(_))
-            | (Value::Object(_), Value::Object(_))
-            | (Value::Function(_), Value::Function(_))
-            | (Value::Closure(_), Value::Closure(_))
-            | (Value::Iterator(_), Value::Iterator(_))
-            | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
-            | (Value::Generator(_), Value::Generator(_))
-            | (Value::Promise(_), Value::Promise(_))
-            | (Value::BuiltinFunction(_), Value::BuiltinFunction(_)) => a == b,
-            // Float == Float: NaN !== NaN, but -0 == +0
-            (Value::Float(fa), Value::Float(fb)) => {
-                let va = fa.inner();
-                let vb = fb.inner();
-                if va.is_nan() || vb.is_nan() {
-                    false
-                } else {
-                    va == vb
-                }
-            }
-            // Int == Float or Float == Int: numeric comparison
-            (Value::Int(n), Value::Float(f)) | (Value::Float(f), Value::Int(n)) => {
-                let fv = f.inner();
-                if fv.is_nan() { false } else { *n as f64 == fv }
-            }
-            (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
-            // ES2020 §7.2.14: null/undefined are only == to each other, never
-            // to numbers, strings, or booleans via numeric coercion.
-            (Value::Null, _) | (_, Value::Null) => false,
-            (Value::Undefined, _) | (_, Value::Undefined) => false,
-            _ => match (Self::coerce_to_float(a), Self::coerce_to_float(b)) {
-                (Some(lhs), Some(rhs)) => {
-                    if lhs.is_nan() || rhs.is_nan() {
-                        false
-                    } else {
-                        lhs == rhs
-                    }
-                }
-                _ => false,
-            },
-        }
-    }
-
-    /// Dispatch number-related hostcalls: isNaN, isFinite, Number.isNaN, Number.isFinite.
-    ///
-    /// Hostcall capabilities:
-    /// - `number:isNaN` — global isNaN() function (coerces to number first)
-    /// - `number:isFinite` — global isFinite() function (coerces to number first)
-    /// - `number:Number.isNaN` — Number.isNaN() (strict, no coercion)
-    /// - `number:Number.isFinite` — Number.isFinite() (strict, no coercion)
-    fn dispatch_number_hostcall(
-        &self,
-        cap: &str,
-        args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let arg0 = if args.count > 0 {
-            self.read_reg(args.start)?
-        } else {
-            Value::Undefined
-        };
-
-        match cap {
-            "number:isNaN" => {
-                // Global isNaN: coerces argument to number, then checks NaN
-                // isNaN(undefined) = true, isNaN("hello") = true
-                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
-                Ok(Value::Bool(number.is_nan()))
-            }
-            "number:isFinite" => {
-                // Global isFinite: coerces argument to number, then checks finite
-                // isFinite(undefined) = false, isFinite("123") = true
-                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
-                Ok(Value::Bool(number.is_finite()))
-            }
-            "number:Number.isNaN" => {
-                // Number.isNaN: strict check, no coercion
-                // Number.isNaN(undefined) = false, Number.isNaN(NaN) = true
-                match arg0 {
-                    Value::Float(f) => Ok(Value::Bool(f.inner().is_nan())),
-                    _ => Ok(Value::Bool(false)),
-                }
-            }
-            "number:Number.isFinite" => {
-                // Number.isFinite: strict check, no coercion
-                // Number.isFinite(undefined) = false, Number.isFinite(42) = true
-                match arg0 {
-                    Value::Int(_) => Ok(Value::Bool(true)), // All integers are finite
-                    Value::Float(f) => Ok(Value::Bool(f.inner().is_finite())),
-                    _ => Ok(Value::Bool(false)),
-                }
-            }
-            "number:Number.isInteger" => {
-                // Number.isInteger: strict check for integer value
-                match arg0 {
-                    Value::Int(_) => Ok(Value::Bool(true)),
-                    Value::Float(f) => {
-                        let v = f.inner();
-                        Ok(Value::Bool(v.is_finite() && v.fract() == 0.0))
-                    }
-                    _ => Ok(Value::Bool(false)),
-                }
-            }
-            "number:Number.isSafeInteger" => {
-                // Number.isSafeInteger: integer in safe range
-                match arg0 {
-                    Value::Int(n) => {
-                        // Safe integer range: -(2^53 - 1) to (2^53 - 1)
-                        const MAX_SAFE: i64 = (1i64 << 53) - 1;
-                        const MIN_SAFE: i64 = -MAX_SAFE;
-                        Ok(Value::Bool((MIN_SAFE..=MAX_SAFE).contains(&n)))
-                    }
-                    Value::Float(f) => {
-                        let v = f.inner();
-                        if !v.is_finite() || v.fract() != 0.0 {
-                            return Ok(Value::Bool(false));
-                        }
-                        const MAX_SAFE: f64 = ((1i64 << 53) - 1) as f64;
-                        Ok(Value::Bool((-MAX_SAFE..=MAX_SAFE).contains(&v)))
-                    }
-                    _ => Ok(Value::Bool(false)),
-                }
-            }
-            _ => {
-                // Unknown number hostcall
-                Ok(Value::Undefined)
-            }
-        }
-    }
-
-    /// Dispatch console hostcalls: console.log, console.error, console.warn, console.info.
-    ///
-    /// Hostcall capabilities:
-    /// - `console:log` — console.log(...args)
-    /// - `console:error` — console.error(...args)
-    /// - `console:warn` — console.warn(...args)
-    ///
-    /// Console output is captured in `self.console_output` for deterministic replay.
-    fn dispatch_console_hostcall(
-        &mut self,
-        cap: &str,
-        args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        let level = match cap {
-            "console:log" => ConsoleLevel::Log,
-            "console:error" => ConsoleLevel::Error,
-            "console:warn" => ConsoleLevel::Warn,
-            "console:info" => ConsoleLevel::Info,
-            _ => return Ok(Value::Undefined), // Unknown console method
-        };
-
-        // Collect arguments as strings
-        let mut parts = Vec::new();
-        for i in 0..args.count {
-            let reg = args
-                .start
-                .checked_add(i)
-                .ok_or(InterpreterError::RegisterOutOfBounds {
-                    register: args.start,
-                    max: self.config.max_registers,
-                })?;
-            let val = self.read_reg(reg)?;
-            parts.push(self.value_to_string(&val));
-        }
-
-        let message = parts.join(" ");
-
-        // Bounded console output to prevent DoS via console spam
-        if self.console_output.len() >= self.config.max_console_entries {
-            // Ring buffer: drop oldest entry when limit reached
-            self.console_output.remove(0);
-        }
-
-        self.console_output.push(ConsoleEntry {
-            level,
-            message,
-            instruction_index: self.instructions_executed,
-        });
-
-        self.emit_witness(
-            WitnessEventKind::HostcallDispatched,
-            Some(&format!(
-                "console:{}",
-                match level {
-                    ConsoleLevel::Log => "log",
-                    ConsoleLevel::Error => "error",
-                    ConsoleLevel::Warn => "warn",
-                    ConsoleLevel::Info => "info",
-                }
-            )),
-        );
-
-        Ok(Value::Undefined)
-    }
-
-    fn dispatch_timer_hostcall(
-        &mut self,
-        cap: &str,
-        args: RegRange,
-    ) -> Result<Value, InterpreterError> {
-        match cap {
-            "timer:setTimeout" => {
-                // args[0] = handler (function/closure), args[1] = delay_ms
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let handler_reg = args.start;
-                let delay_reg =
-                    args.start
-                        .checked_add(1)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-
-                let handler_val = self.read_reg(handler_reg)?;
-                let delay_val = self.read_reg(delay_reg)?;
-
-                // Extract numeric delay
-                let delay_ms = match delay_val {
-                    Value::Int(i) => i.max(0) as u64,
-                    Value::Float(f) => f.0.max(0.0) as u64,
-                    _ => 0,
-                };
-
-                // Store active timer
-                let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                let handler_id = match handler_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
-                };
-
-                self.active_timers.insert(
-                    timer_id,
-                    ActiveTimer {
-                        handler: handler_id,
-                        delay_ms,
-                        repeating: false,
-                    },
-                );
-
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("timer:setTimeout:{}", timer_id)),
-                );
-
-                Ok(Value::Int(timer_id as i64))
-            }
-            "timer:setInterval" => {
-                // Similar to setTimeout but repeating
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let handler_reg = args.start;
-                let delay_reg =
-                    args.start
-                        .checked_add(1)
-                        .ok_or(InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        })?;
-
-                let handler_val = self.read_reg(handler_reg)?;
-                let delay_val = self.read_reg(delay_reg)?;
-
-                let delay_ms = match delay_val {
-                    Value::Int(i) => i.max(0) as u64,
-                    Value::Float(f) => f.0.max(0.0) as u64,
-                    _ => 0,
-                };
-
-                let timer_id = self.next_timer_id;
-                self.next_timer_id = self.next_timer_id.wrapping_add(1);
-
-                let handler_id = match handler_val {
-                    Value::Closure(id) => Some(id),
-                    _ => None,
-                };
-
-                self.active_timers.insert(
-                    timer_id,
-                    ActiveTimer {
-                        handler: handler_id,
-                        delay_ms,
-                        repeating: true,
-                    },
-                );
-
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("timer:setInterval:{}", timer_id)),
-                );
-
-                Ok(Value::Int(timer_id as i64))
-            }
-            "timer:clearTimeout" | "timer:clearInterval" => {
-                // args[0] = timer_id to clear
-                if args.count < 1 {
-                    return Ok(Value::Undefined);
-                }
-
-                let timer_id_val = self.read_reg(args.start)?;
-                let timer_id = match timer_id_val {
-                    Value::Int(i) => i as u32,
-                    _ => return Ok(Value::Undefined),
-                };
-
-                self.active_timers.remove(&timer_id);
-
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("{}:{}", cap, timer_id)),
-                );
-
-                Ok(Value::Undefined)
-            }
-            _ => Ok(Value::Undefined), // Unknown timer method
-        }
-    }
-
     fn array_prototype_reduce(
         &mut self,
         args: RegRange,
@@ -7032,6 +6721,15 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
         Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    fn canonical_array_index_property(key: &str, length: usize) -> Option<usize> {
+        let index = key.parse::<u32>().ok()?;
+        if index == u32::MAX || index.to_string() != key {
+            return None;
+        }
+        let index = usize::try_from(index).ok()?;
+        (index < length).then_some(index)
     }
 
     fn invoke_simple_reduce_callback(
@@ -7364,6 +7062,324 @@ impl InterpreterCore {
             Ok(Value::Int(value as i64))
         } else {
             Ok(Value::Float(Float64::new(value)))
+        }
+    }
+
+    fn abstract_eq_values(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Undefined, Value::Undefined)
+            | (Value::Null, Value::Null)
+            | (Value::Bool(_), Value::Bool(_))
+            | (Value::Int(_), Value::Int(_))
+            | (Value::Str(_), Value::Str(_))
+            | (Value::Object(_), Value::Object(_))
+            | (Value::Function(_), Value::Function(_))
+            | (Value::Closure(_), Value::Closure(_))
+            | (Value::Iterator(_), Value::Iterator(_))
+            | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
+            | (Value::Generator(_), Value::Generator(_))
+            | (Value::Promise(_), Value::Promise(_))
+            | (Value::BuiltinFunction(_), Value::BuiltinFunction(_)) => a == b,
+            // Float == Float: NaN !== NaN, but -0 == +0
+            (Value::Float(fa), Value::Float(fb)) => {
+                let va = fa.inner();
+                let vb = fb.inner();
+                if va.is_nan() || vb.is_nan() {
+                    false
+                } else {
+                    va == vb
+                }
+            }
+            // Int == Float or Float == Int: numeric comparison
+            (Value::Int(n), Value::Float(f)) | (Value::Float(f), Value::Int(n)) => {
+                let fv = f.inner();
+                if fv.is_nan() { false } else { *n as f64 == fv }
+            }
+            (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
+            // ES2020 §7.2.14: null/undefined are only == to each other, never
+            // to numbers, strings, or booleans via numeric coercion.
+            (Value::Null, _) | (_, Value::Null) => false,
+            (Value::Undefined, _) | (_, Value::Undefined) => false,
+            _ => match (Self::coerce_to_float(a), Self::coerce_to_float(b)) {
+                (Some(lhs), Some(rhs)) => {
+                    if lhs.is_nan() || rhs.is_nan() {
+                        false
+                    } else {
+                        lhs == rhs
+                    }
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Dispatch number-related hostcalls: isNaN, isFinite, Number.isNaN, Number.isFinite.
+    ///
+    /// Hostcall capabilities:
+    /// - `number:isNaN` — global isNaN() function (coerces to number first)
+    /// - `number:isFinite` — global isFinite() function (coerces to number first)
+    /// - `number:Number.isNaN` — Number.isNaN() (strict, no coercion)
+    /// - `number:Number.isFinite` — Number.isFinite() (strict, no coercion)
+    fn dispatch_number_hostcall(
+        &self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let arg0 = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+
+        match cap {
+            "number:isNaN" => {
+                // Global isNaN: coerces argument to number, then checks NaN
+                // isNaN(undefined) = true, isNaN("hello") = true
+                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
+                Ok(Value::Bool(number.is_nan()))
+            }
+            "number:isFinite" => {
+                // Global isFinite: coerces argument to number, then checks finite
+                // isFinite(undefined) = false, isFinite("123") = true
+                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
+                Ok(Value::Bool(number.is_finite()))
+            }
+            "number:Number.isNaN" => {
+                // Number.isNaN: strict check, no coercion
+                // Number.isNaN(undefined) = false, Number.isNaN(NaN) = true
+                match arg0 {
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_nan())),
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isFinite" => {
+                // Number.isFinite: strict check, no coercion
+                // Number.isFinite(undefined) = false, Number.isFinite(42) = true
+                match arg0 {
+                    Value::Int(_) => Ok(Value::Bool(true)), // All integers are finite
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_finite())),
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isInteger" => {
+                // Number.isInteger: strict check for integer value
+                match arg0 {
+                    Value::Int(_) => Ok(Value::Bool(true)),
+                    Value::Float(f) => {
+                        let v = f.inner();
+                        Ok(Value::Bool(v.is_finite() && v.fract() == 0.0))
+                    }
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isSafeInteger" => {
+                // Number.isSafeInteger: integer in safe range
+                match arg0 {
+                    Value::Int(n) => {
+                        // Safe integer range: -(2^53 - 1) to (2^53 - 1)
+                        const MAX_SAFE: i64 = (1i64 << 53) - 1;
+                        const MIN_SAFE: i64 = -MAX_SAFE;
+                        Ok(Value::Bool((MIN_SAFE..=MAX_SAFE).contains(&n)))
+                    }
+                    Value::Float(f) => {
+                        let v = f.inner();
+                        if !v.is_finite() || v.fract() != 0.0 {
+                            return Ok(Value::Bool(false));
+                        }
+                        const MAX_SAFE: f64 = ((1i64 << 53) - 1) as f64;
+                        Ok(Value::Bool((-MAX_SAFE..=MAX_SAFE).contains(&v)))
+                    }
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            _ => {
+                // Unknown number hostcall
+                Ok(Value::Undefined)
+            }
+        }
+    }
+
+    /// Dispatch console hostcalls: console.log, console.error, console.warn, console.info.
+    ///
+    /// Hostcall capabilities:
+    /// - `console:log` — console.log(...args)
+    /// - `console:error` — console.error(...args)
+    /// - `console:warn` — console.warn(...args)
+    ///
+    /// Console output is captured in `self.console_output` for deterministic replay.
+    fn dispatch_console_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let level = match cap {
+            "console:log" => ConsoleLevel::Log,
+            "console:error" => ConsoleLevel::Error,
+            "console:warn" => ConsoleLevel::Warn,
+            "console:info" => ConsoleLevel::Info,
+            _ => return Ok(Value::Undefined), // Unknown console method
+        };
+
+        // Collect arguments as strings
+        let mut parts = Vec::new();
+        for i in 0..args.count {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+            let val = self.read_reg(reg)?;
+            parts.push(self.value_to_string(&val));
+        }
+
+        let message = parts.join(" ");
+
+        self.push_console_output(level, message);
+
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched,
+            Some(&format!(
+                "console:{}",
+                match level {
+                    ConsoleLevel::Log => "log",
+                    ConsoleLevel::Error => "error",
+                    ConsoleLevel::Warn => "warn",
+                    ConsoleLevel::Info => "info",
+                }
+            )),
+        );
+
+        Ok(Value::Undefined)
+    }
+
+    fn dispatch_timer_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        match cap {
+            "timer:setTimeout" => {
+                // args[0] = handler (function/closure), args[1] = delay_ms
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let handler_reg = args.start;
+                let delay_reg =
+                    args.start
+                        .checked_add(1)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+
+                let handler_val = self.read_reg(handler_reg)?;
+                let delay_val = self.read_reg(delay_reg)?;
+
+                // Extract numeric delay
+                let delay_ms = match delay_val {
+                    Value::Int(i) => i.max(0) as u64,
+                    Value::Float(f) => f.0.max(0.0) as u64,
+                    _ => 0,
+                };
+
+                // Store active timer
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+                let handler_id = match handler_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: false,
+                    },
+                );
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("timer:setTimeout:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
+            }
+            "timer:setInterval" => {
+                // Similar to setTimeout but repeating
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let handler_reg = args.start;
+                let delay_reg =
+                    args.start
+                        .checked_add(1)
+                        .ok_or(InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        })?;
+
+                let handler_val = self.read_reg(handler_reg)?;
+                let delay_val = self.read_reg(delay_reg)?;
+
+                let delay_ms = match delay_val {
+                    Value::Int(i) => i.max(0) as u64,
+                    Value::Float(f) => f.0.max(0.0) as u64,
+                    _ => 0,
+                };
+
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+                let handler_id = match handler_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: true,
+                    },
+                );
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("timer:setInterval:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
+            }
+            "timer:clearTimeout" | "timer:clearInterval" => {
+                // args[0] = timer_id to clear
+                if args.count < 1 {
+                    return Ok(Value::Undefined);
+                }
+
+                let timer_id_val = self.read_reg(args.start)?;
+                let timer_id = match timer_id_val {
+                    Value::Int(i) => i as u32,
+                    _ => return Ok(Value::Undefined),
+                };
+
+                self.active_timers.remove(&timer_id);
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("{}:{}", cap, timer_id)),
+                );
+
+                Ok(Value::Undefined)
+            }
+            _ => Ok(Value::Undefined), // Unknown timer method
         }
     }
 
@@ -8538,7 +8554,7 @@ impl InterpreterCore {
                             let val = if input.is_nan() || input.is_infinite() {
                                 input
                             } else if input == -0.5 {
-                                -0.0  // Special case: -0.5 rounds to -0
+                                -0.0 // Special case: -0.5 rounds to -0
                             } else {
                                 (input + 0.5).floor()
                             };
@@ -8820,7 +8836,7 @@ impl InterpreterCore {
                     None => Ok(Value::Float(Float64::new(f64::NAN))),
                 }
             }
-            // Removed duplicate parseFloat - implementation at line 14438 (builtin:ParseFloat) has better JS compliance with scientific notation support and SAFETY comments
+            // Removed duplicate parseFloat implementation; canonicalized in `builtin:parseFloat` below
             "builtin:NumberIsNaN" => {
                 // Number.isNaN implementation - more strict than global isNaN
                 if args.count == 0 {
@@ -8860,18 +8876,7 @@ impl InterpreterCore {
                 // Join with spaces (standard console.log behavior)
                 let output = output_parts.join(" ");
 
-                // Bounded console output to prevent DoS via console spam
-                if self.console_output.len() >= self.config.max_console_entries {
-                    // Ring buffer: drop oldest entry when limit reached
-                    self.console_output.remove(0);
-                }
-
-                // Capture console output for deterministic replay
-                self.console_output.push(ConsoleEntry {
-                    level: ConsoleLevel::Log,
-                    message: output,
-                    instruction_index: self.instructions_executed,
-                });
+                self.push_console_output(ConsoleLevel::Log, output);
 
                 Ok(Value::Undefined)
             }
@@ -8889,18 +8894,7 @@ impl InterpreterCore {
                 // Join with spaces
                 let output = output_parts.join(" ");
 
-                // Bounded console output to prevent DoS via console spam
-                if self.console_output.len() >= self.config.max_console_entries {
-                    // Ring buffer: drop oldest entry when limit reached
-                    self.console_output.remove(0);
-                }
-
-                // Capture console error output for deterministic replay
-                self.console_output.push(ConsoleEntry {
-                    level: ConsoleLevel::Error,
-                    message: output,
-                    instruction_index: self.instructions_executed,
-                });
+                self.push_console_output(ConsoleLevel::Error, output);
 
                 Ok(Value::Undefined)
             }
@@ -8918,18 +8912,7 @@ impl InterpreterCore {
                 // Join with spaces
                 let output = output_parts.join(" ");
 
-                // Bounded console output to prevent DoS via console spam
-                if self.console_output.len() >= self.config.max_console_entries {
-                    // Ring buffer: drop oldest entry when limit reached
-                    self.console_output.remove(0);
-                }
-
-                // Capture console warning output for deterministic replay
-                self.console_output.push(ConsoleEntry {
-                    level: ConsoleLevel::Warn,
-                    message: output,
-                    instruction_index: self.instructions_executed,
-                });
+                self.push_console_output(ConsoleLevel::Warn, output);
 
                 Ok(Value::Undefined)
             }
@@ -9083,17 +9066,15 @@ impl InterpreterCore {
                     // Collect indexed properties
                     let mut indexed_props: BTreeMap<usize, Value> = BTreeMap::new();
                     for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_props.insert(index, value.clone());
-                            }
+                        if let Some(index) = Self::canonical_array_index_property(key, length) {
+                            indexed_props.insert(index, value.clone());
                         }
                     }
 
                     // Remove old indexed properties
-                    array_obj
-                        .properties
-                        .retain(|k, _| k.parse::<usize>().is_err());
+                    array_obj.properties.retain(|key, _| {
+                        Self::canonical_array_index_property(key, length).is_none()
+                    });
 
                     // Add back in reverse order
                     for (old_index, value) in indexed_props {
@@ -9218,24 +9199,31 @@ impl InterpreterCore {
                 };
 
                 // Get optional length parameter
+                let max_utf16_len = this_str.encode_utf16().count();
                 let end_pos = if args.count > 2 {
                     let len_val = self.read_reg(args.start + 2)?;
                     match len_val {
-                        Value::Int(i) => (i.max(0) as usize).min(this_str.len()),
-                        Value::Float(f) => (f.inner().max(0.0) as usize).min(this_str.len()),
-                        _ => this_str.len(),
+                        Value::Int(i) => (i.max(0) as usize).min(max_utf16_len),
+                        Value::Float(f) => (f.inner().max(0.0) as usize).min(max_utf16_len),
+                        _ => max_utf16_len,
                     }
                 } else {
-                    this_str.len()
+                    max_utf16_len
                 };
 
                 // Check if string ends with search string at the given end position
-                let result = if end_pos == 0 {
-                    search_str.is_empty()
+                let check_str = if search_str.is_empty() {
+                    this_str.clone()
+                } else if end_pos == 0 {
+                    String::new()
                 } else {
-                    let check_str = &this_str[..end_pos];
-                    check_str.ends_with(&search_str)
+                    String::from_utf16(&this_str.encode_utf16().take(end_pos).collect::<Vec<_>>())
+                        .map_err(|_| InterpreterError::TypeError {
+                        expected: "valid UTF-16 boundary for endsWith".to_string(),
+                        got: "invalid UTF-16 unit slice for String.prototype.endsWith".to_string(),
+                    })?
                 };
+                let result = check_str.ends_with(&search_str);
 
                 Ok(Value::Bool(result))
             }
@@ -10381,23 +10369,19 @@ impl InterpreterCore {
                 Ok(Value::Object(set_id))
             }
             "builtin:WeakMap" => {
-                // WeakMap([iterable]) constructor implementation (simplified)
-                let weakmap_id = ObjectId(self.next_object_id());
-                let mut weakmap_obj = Object::new();
+                let weakmap_id = self.alloc_object_with_prototype(None)?;
+                let entries_id = self.alloc_object_with_prototype(None)?;
 
-                // Mark as WeakMap type
-                weakmap_obj
-                    .properties
-                    .insert("__type".to_string(), Value::Str("WeakMap".to_string()));
-                weakmap_obj.properties.insert(
+                self.set_object_property(
+                    weakmap_id,
+                    "__type".to_string(),
+                    Value::Str("WeakMap".to_string()),
+                )?;
+                self.set_object_property(
+                    weakmap_id,
                     "__entries".to_string(),
-                    Value::Object(ObjectId(self.next_object_id())),
-                );
-
-                // Create internal entries storage (simplified - using regular object)
-                let _entries_id = self.next_object_id() - 1;
-                let entries_obj = Object::new();
-                self.heap.push(entries_obj);
+                    Value::Object(entries_id),
+                )?;
 
                 // Note: In a full implementation, WeakMap would use weak references
                 // TODO: If iterable argument provided, populate weakmap with entries
@@ -10405,7 +10389,6 @@ impl InterpreterCore {
                     // Simplified: ignore iterable for now
                 }
 
-                self.heap.push(weakmap_obj);
                 Ok(Value::Object(weakmap_id))
             }
             "builtin:WeakSet" => {
@@ -11611,7 +11594,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeFlatMap - implementation at line ~13119 is more complete
-
             "builtin:MathHypot" => {
                 // Math.hypot(...values) implementation - Euclidean distance
                 if args.count == 0 {
@@ -11652,7 +11634,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeCopyWithin - implementation at line ~13993 has better ES2015 compliance
-
             "builtin:ArrayPrototypeFill" => {
                 // Array.prototype.fill(value, start, end) implementation
                 let this_val = self.read_reg(args.start)?;
@@ -11821,7 +11802,6 @@ impl InterpreterCore {
             // Removed duplicate ArrayPrototypeAt - implementation at line ~13242 is more concise
 
             // Removed duplicate StringPrototypeAt - implementation at line ~13959 is more complete
-
             "builtin:ObjectGetOwnPropertyDescriptor" => {
                 // Object.getOwnPropertyDescriptor(obj, prop) implementation
                 if args.count < 2 {
@@ -11884,7 +11864,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate MathClz32 - implementation at line ~12775 has better type conversion
-
             "builtin:ArrayPrototypeEntries" => {
                 // Array.prototype.entries() implementation - returns iterator for [index, value] pairs
                 let this_val = self.read_reg(args.start)?;
@@ -12199,7 +12178,6 @@ impl InterpreterCore {
             // StringPrototypePadEnd: Removed duplicate dispatch arm (use first occurrence instead)
 
             // Removed duplicate ObjectPrototypeHasOwnProperty - implementation at line 9134 (builtin:ObjectHasOwnProperty) is identical
-
             "builtin:ArrayPrototypeFind" => {
                 // Array.prototype.find(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
                 self.validate_array_callback_args(args, "Array.prototype.find")?;
@@ -12216,7 +12194,6 @@ impl InterpreterCore {
             // StringPrototypeStartsWith: Removed duplicate dispatch arm (use first occurrence instead)
 
             // StringPrototypeEndsWith: Removed duplicate dispatch arm (use first occurrence instead)
-
             "builtin:NumberIsInteger" => {
                 // Number.isInteger(value) implementation - determines if value is finite integer
                 if args.count == 0 {
@@ -12236,78 +12213,9 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_integer))
             }
 
-            "builtin:NumberParseFloat" => {
-                // Number.parseFloat(string) implementation - parse string as floating point
-                if args.count == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let string_val = match self.read_reg(args.start)? {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Float(f64::NAN.into())),
-                };
-
-                // Trim leading whitespace and try to parse
-                let trimmed = string_val.trim_start();
-
-                // Handle special cases
-                if trimmed.is_empty() || trimmed == "NaN" {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-                if trimmed == "Infinity" || trimmed == "+Infinity" {
-                    return Ok(Value::Float(f64::INFINITY.into()));
-                }
-                if trimmed == "-Infinity" {
-                    return Ok(Value::Float(f64::NEG_INFINITY.into()));
-                }
-
-                // Try to parse as float, stopping at first non-numeric character
-                let mut end_idx = 0;
-                let mut has_dot = false;
-                let mut has_e = false;
-
-                for (i, c) in trimmed.chars().enumerate() {
-                    if i == 0 && (c == '+' || c == '-') {
-                        end_idx = i + 1;
-                    } else if c.is_ascii_digit() {
-                        end_idx = i + 1;
-                    } else if c == '.' && !has_dot && !has_e {
-                        has_dot = true;
-                        end_idx = i + 1;
-                    } else if (c == 'e' || c == 'E') && !has_e && i > 0 {
-                        has_e = true;
-                        end_idx = i + 1;
-                    } else if has_e
-                        && (c == '+' || c == '-')
-                        && trimmed
-                            .chars()
-                            .nth(i - 1)
-                            .map_or(false, |prev| prev == 'e' || prev == 'E')
-                    {
-                        end_idx = i + 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if end_idx == 0 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let parse_str = &trimmed[..end_idx];
-                match parse_str.parse::<f64>() {
-                    Ok(num) => Ok(Value::Float(num.into())),
-                    Err(_) => Ok(Value::Float(f64::NAN.into())),
-                }
-            }
+            "builtin:NumberParseFloat" => self.parse_float_with_scientific_notation(args),
 
             // StringPrototypeRepeat: Removed duplicate dispatch arm (use first occurrence instead)
-
             "builtin:NumberParseInt" => {
                 // Number.parseInt(string, radix) implementation
                 if args.count == 0 {
@@ -12407,8 +12315,6 @@ impl InterpreterCore {
             // Removed duplicate NumberIsNaNMethod - implementation at line 8404 (builtin:NumberIsNaN) is identical
 
             // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
-
-
             "builtin:MathAtan" => {
                 // Math.atan(x) implementation
                 if args.count == 0 {
@@ -12430,7 +12336,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeFill - implementation at line ~11593 has better JS semantics
-
             "builtin:ObjectPrototypePropertyIsEnumerable" => {
                 // Object.prototype.propertyIsEnumerable(prop) implementation
                 if args.count < 2 {
@@ -12491,9 +12396,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate MathAtan2 - implementation at line ~10995 has correct argument handling
-
-
-
             "builtin:MathLog10" => {
                 // Math.log10(x) implementation
                 if args.count == 0 {
@@ -12514,10 +12416,7 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(num.log10())))
             }
 
-
             // Removed duplicate ObjectPrototypeValueOf - implementation at line ~11410 is identical
-
-
             "builtin:MathLog2" => {
                 // Math.log2(x) implementation
                 if args.count == 0 {
@@ -12539,7 +12438,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeReduceRight - implementation at line ~11114 is identical
-
             "builtin:ObjectPrototypeToString" => {
                 // Object.prototype.toString() implementation
                 let this_val = self.read_reg(args.start)?;
@@ -12572,7 +12470,6 @@ impl InterpreterCore {
             // Removed duplicate MathAcos - implementation at line ~11059 is identical
 
             // Removed duplicate ArrayPrototypeLastIndexOf - implementation at line ~10742 is identical
-
             "builtin:RegExpPrototypeTest" => {
                 // RegExp.prototype.test(string) implementation (simplified)
                 let this_val = self.read_reg(args.start)?;
@@ -12614,7 +12511,6 @@ impl InterpreterCore {
             // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 is more complete
 
             // Removed duplicate StringPrototypeNormalize - implementation at line ~12187 is identical
-
             "builtin:MathCbrt" => {
                 // Math.cbrt(x) implementation (cube root)
                 if args.count == 0 {
@@ -12638,7 +12534,6 @@ impl InterpreterCore {
             // Removed duplicate ArrayPrototypeFlat - implementation at line ~9886 is more complete
 
             // Removed duplicate PromiseResolve - implementation at line ~9255 is identical
-
             "builtin:StringPrototypeReplaceAll" => {
                 // String.prototype.replaceAll(searchValue, replaceValue) implementation
                 if args.count < 3 {
@@ -12767,7 +12662,6 @@ impl InterpreterCore {
             }
 
             // ObjectDefineProperty: Removed duplicate dispatch arm (use first occurrence instead)
-
             "builtin:StringPrototypeAt" => {
                 // String.prototype.at(index) implementation (ES2022)
                 let this_val = self.read_reg(args.start)?;
@@ -12870,7 +12764,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ObjectGetPrototypeOf - implementation at line ~10941 uses correct prototype field
-
             "builtin:StringPrototypeToWellFormed" => {
                 // String.prototype.toWellFormed() implementation (ES2024)
                 let this_val = self.read_reg(args.start)?;
@@ -13159,7 +13052,6 @@ impl InterpreterCore {
             // Removed duplicate ObjectSetPrototypeOf - implementation at line ~11927 uses correct prototype field
 
             // StringPrototypeToLowerCase: Removed duplicate dispatch arm (use first occurrence at line 8124)
-
             "builtin:MathAtanh" => {
                 // Math.atanh(x) implementation (inverse hyperbolic tangent)
                 if args.count == 0 {
@@ -13245,11 +13137,9 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-
             // StringPrototypeToUpperCase: Removed duplicate dispatch arm (use first occurrence at line 8136)
 
             // Removed duplicate MathHypot - implementation at line ~11456 is more complete
-
             "builtin:ArrayPrototypeToSorted" => {
                 // Array.prototype.toSorted([compareFunction]) implementation (ES2023)
                 let this_val = self.read_reg(args.start)?;
@@ -13346,7 +13236,6 @@ impl InterpreterCore {
             // StringPrototypeTrimStart: Removed duplicate dispatch arm (use first occurrence instead)
 
             // Removed duplicate MathImul - implementation at line ~11636 has correct argument handling
-
             "builtin:ArrayPrototypeToSpliced" => {
                 // Array.prototype.toSpliced(start, deleteCount, ...items) implementation (ES2023)
                 if args.count < 2 {
@@ -13505,7 +13394,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate MathSign - implementation at line ~10088 is identical
-
             "builtin:ArrayPrototypeGroup" => {
                 // Array.prototype.group(callback) implementation (simplified)
                 if args.count < 2 {
@@ -13648,7 +13536,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate MathTrunc - implementation at line ~9554 is identical
-
             "builtin:ArrayPrototypeGroupToMap" => {
                 // Array.prototype.groupToMap(callback) implementation (simplified)
                 if args.count < 2 {
@@ -13757,7 +13644,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate StringPrototypeSubstr - implementation at line ~11150 is identical
-
             "builtin:NumberPrototypeToFixed" => {
                 // Number.prototype.toFixed(digits) implementation
                 let this_val = self.read_reg(args.start)?;
@@ -13987,7 +13873,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeValues - implementation at line ~11973 uses proper iterator semantics
-
             "builtin:ObjectIsSealed" => {
                 // Object.isSealed(obj) implementation (simplified)
                 if args.count < 2 {
@@ -14080,37 +13965,28 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeKeys - implementation at line ~11907 uses proper iterator semantics
-
             "builtin:WeakMapPrototypeHas" => {
-                // WeakMap.prototype.has(key) implementation (simplified)
-                if args.count < 2 {
+                let this_val = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let entries_id = self.weakmap_entries_id(this_val)?;
+                let key = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+                let Some(key_str) = Self::weakmap_object_key(key) else {
                     return Ok(Value::Bool(false));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let weakmap_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects can't be WeakMaps
                 };
 
-                let key = self.read_reg(args.start + 1)?;
-
-                // Simplified implementation: check if key exists in WeakMap-like object
-                // In a real implementation, this would use weak references
-                if let Some(weakmap_obj) = self.heap.get(weakmap_id.0 as usize) {
-                    // Use a simple string representation of the key for lookup
-                    let key_str = match key {
-                        Value::Object(obj_id) => format!("obj_{}", obj_id.0),
-                        Value::Str(s) => format!("str_{}", s),
-                        Value::Int(n) => format!("int_{}", n),
-                        Value::Float(f) => format!("float_{}", f.inner()),
-                        _ => return Ok(Value::Bool(false)), // WeakMap only accepts object keys
-                    };
-
-                    Ok(Value::Bool(weakmap_obj.properties.contains_key(&key_str)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
+                Ok(Value::Bool(
+                    self.heap
+                        .get(entries_id.0 as usize)
+                        .map(|entries_obj| entries_obj.properties.contains_key(&key_str))
+                        .unwrap_or(false),
+                ))
             }
 
             "builtin:StringPrototypeBlink" => {
@@ -14159,40 +14035,27 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeEntries - implementation at line ~11841 uses proper iterator semantics
-
             "builtin:WeakMapPrototypeGet" => {
-                // WeakMap.prototype.get(key) implementation (simplified)
-                if args.count < 2 {
+                let this_val = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let entries_id = self.weakmap_entries_id(this_val)?;
+                let key = if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                };
+                let Some(key_str) = Self::weakmap_object_key(key) else {
                     return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let weakmap_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be WeakMaps
                 };
 
-                let key = self.read_reg(args.start + 1)?;
-
-                // Simplified implementation: get value from WeakMap-like object
-                if let Some(weakmap_obj) = self.heap.get(weakmap_id.0 as usize) {
-                    // Use a simple string representation of the key for lookup
-                    let key_str = match key {
-                        Value::Object(obj_id) => format!("obj_{}", obj_id.0),
-                        Value::Str(s) => format!("str_{}", s),
-                        Value::Int(n) => format!("int_{}", n),
-                        Value::Float(f) => format!("float_{}", f.inner()),
-                        _ => return Ok(Value::Undefined), // WeakMap only accepts object keys
-                    };
-
-                    Ok(weakmap_obj
-                        .properties
-                        .get(&key_str)
-                        .cloned()
-                        .unwrap_or(Value::Undefined))
-                } else {
-                    Ok(Value::Undefined)
-                }
+                Ok(self
+                    .heap
+                    .get(entries_id.0 as usize)
+                    .and_then(|entries_obj| entries_obj.properties.get(&key_str).cloned())
+                    .unwrap_or(Value::Undefined))
             }
 
             // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
@@ -14205,7 +14068,6 @@ impl InterpreterCore {
 
             // StringPrototypeTrim: Removed duplicate dispatch arm (use first occurrence instead)
 
-
             // NumberIsInteger: Removed duplicate dispatch arm (use first occurrence instead)
 
             // StringPrototypeEndsWith: Removed duplicate dispatch arm (use first occurrence instead)
@@ -14213,7 +14075,6 @@ impl InterpreterCore {
             // Removed duplicate NumberIsNaN - implementation at line ~8618 has correct argument handling
 
             // Removed duplicate NumberIsFinite - implementation at line ~8630 has correct argument handling
-
             "builtin:StringPrototypeCharAt" => {
                 // String.prototype.charAt() implementation - returns character at index
                 let this_val = self.read_reg(args.start)?;
@@ -14247,7 +14108,6 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
-
             "builtin:ArrayPrototypeEvery" => {
                 // Array.prototype.every() implementation
                 // FAIL-CLOSED: Array.every requires callback invocation which is not yet supported
@@ -14265,10 +14125,7 @@ impl InterpreterCore {
                 })
             }
 
-
             // Removed duplicate NumberPrototypeToString - implementation at line ~11219 is identical
-
-
             "builtin:StringPrototypeSubstring" => {
                 // String.prototype.substring() implementation - returns substring between indices
                 let this_val = self.read_reg(args.start)?;
@@ -14321,16 +14178,7 @@ impl InterpreterCore {
 
             // Removed duplicate ArrayPrototypeReduce - implementation at line ~9273 properly fails-closed
 
-
             // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 has correct argument handling
-
-
-
-
-
-
-
-
             "builtin:StringPrototypeSplit" => {
                 // String.prototype.split() implementation - splits string into array
                 let this_val = self.read_reg(args.start)?;
@@ -14434,7 +14282,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate DateNow - implementation at line ~8728 is identical
-
             "builtin:ArrayPrototypeConcat" => {
                 // Array.prototype.concat() implementation - concatenates arrays
                 let this_val = self.read_reg(args.start)?;
@@ -14534,14 +14381,12 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-
             // Removed duplicate JSONStringify - implementation at line 8242 has better JS compliance and correct argument handling
             // Removed duplicate JSONParse - implementation at line 8286 has better JS compliance and correct argument handling
 
             // builtin:ArrayPrototypeFind - Duplicate removed, consolidated to line 12438
 
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
-
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
@@ -14686,105 +14531,14 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
 
+            // Removed duplicate parseFloat - keep single canonical implementation on `builtin:parseFloat` and alias.
+            "builtin:parseFloat" => self.parse_float_with_scientific_notation(args),
             // Removed duplicate ParseInt - implementation at line 8385 (builtin:parseInt) is identical
-
-            "builtin:ParseFloat" => {
-                // parseFloat() implementation - parses string to float
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start)?;
-                let input_str = match value {
-                    Value::Str(s) => s,
-                    Value::Int(n) => return Ok(Value::Int(n)),
-                    Value::Float(f) => return Ok(Value::Float(f)),
-                    Value::Bool(true) => "1".to_string(),
-                    Value::Bool(false) => "0".to_string(),
-                    _ => return Ok(Value::Float(Float64::new(f64::NAN))),
-                };
-
-                let trimmed = input_str.trim();
-                if trimmed.is_empty() {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                // Handle Infinity and -Infinity literals first
-                if trimmed.starts_with("Infinity") {
-                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
-                }
-                if trimmed.starts_with("-Infinity") {
-                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
-                }
-                if trimmed.starts_with("+Infinity") {
-                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
-                }
-
-                // Parse number with scientific notation support
-                let mut result_str = String::new();
-                let mut has_dot = false;
-                let mut has_exponent = false;
-                let mut chars = trimmed.chars().peekable();
-
-                // Handle sign
-                if let Some(&first_char) = chars.peek() {
-                    if first_char == '+' || first_char == '-' {
-                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                        result_str.push(chars.next().unwrap());
-                    }
-                }
-
-                // Parse main number part with exponent support
-                while let Some(&c) = chars.peek() {
-                    if c.is_ascii_digit() {
-                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                        result_str.push(chars.next().unwrap());
-                    } else if c == '.' && !has_dot && !has_exponent {
-                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                        result_str.push(chars.next().unwrap());
-                        has_dot = true;
-                    } else if (c == 'e' || c == 'E') && !has_exponent {
-                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                        result_str.push(chars.next().unwrap());
-                        has_exponent = true;
-
-                        // Handle exponent sign
-                        if let Some(&next_char) = chars.peek() {
-                            if next_char == '+' || next_char == '-' {
-                                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                                result_str.push(chars.next().unwrap());
-                            }
-                        }
-                    } else {
-                        break; // Stop at first invalid character
-                    }
-                }
-
-                // Validate result string is not empty or just signs
-                if result_str.is_empty() || result_str == "+" || result_str == "-" {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                if let Ok(parsed) = result_str.parse::<f64>() {
-                    // Return Int if it's a finite whole number within i64 range
-                    if parsed.is_finite()
-                        && parsed.fract() == 0.0
-                        && parsed >= i64::MIN as f64
-                        && parsed <= i64::MAX as f64
-                    {
-                        Ok(Value::Int(parsed as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(parsed)))
-                    }
-                } else {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                }
-            }
+            "builtin:ParseFloat" => self.parse_float_with_scientific_notation(args),
 
             // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
             // Removed duplicate IsFinite - implementation at line 8354 has better JS compliance and explicit type conversion rules
-
             "builtin:ConsoleInfo" => {
                 // console.info implementation - prints info arguments to console
                 let mut output_parts = Vec::new();
@@ -14799,18 +14553,7 @@ impl InterpreterCore {
                 // Join with spaces (standard console behavior)
                 let output = output_parts.join(" ");
 
-                // Bounded console output to prevent DoS via console spam
-                if self.console_output.len() >= self.config.max_console_entries {
-                    // Ring buffer: drop oldest entry when limit reached
-                    self.console_output.remove(0);
-                }
-
-                // Capture console output for deterministic replay
-                self.console_output.push(ConsoleEntry {
-                    level: ConsoleLevel::Info,
-                    message: output,
-                    instruction_index: self.instructions_executed,
-                });
+                self.push_console_output(ConsoleLevel::Info, output);
 
                 Ok(Value::Undefined)
             }
@@ -14849,15 +14592,21 @@ impl InterpreterCore {
         // Create deterministic seed from execution state using stable hash
         // (SHA-256 is deterministic across builds, unlike DefaultHasher)
         let mut digest = Sha256::new();
-        digest.update(&(self.call_stack.len() as u64).to_le_bytes());
-        digest.update(&(self.heap.len() as u64).to_le_bytes());
-        digest.update(&self.instructions_executed.to_le_bytes());
-        digest.update(&(self.ip as u64).to_le_bytes());
+        digest.update((self.call_stack.len() as u64).to_le_bytes());
+        digest.update((self.heap.len() as u64).to_le_bytes());
+        digest.update(self.instructions_executed.to_le_bytes());
+        digest.update((self.ip as u64).to_le_bytes());
 
         let hash_result = digest.finalize();
         let seed = u64::from_le_bytes([
-            hash_result[0], hash_result[1], hash_result[2], hash_result[3],
-            hash_result[4], hash_result[5], hash_result[6], hash_result[7],
+            hash_result[0],
+            hash_result[1],
+            hash_result[2],
+            hash_result[3],
+            hash_result[4],
+            hash_result[5],
+            hash_result[6],
+            hash_result[7],
         ]);
         let mut rng = Xorshift64::new(seed);
 
@@ -14948,6 +14697,147 @@ impl InterpreterCore {
         }
 
         if found { Some(sign * result) } else { None }
+    }
+
+    fn parse_float_with_scientific_notation(
+        &self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let input = if args.count == 0 {
+            Value::Undefined
+        } else {
+            self.read_reg(args.start)?
+        };
+
+        let input_str = match &input {
+            Value::Int(n) => return Ok(Value::Int(*n)),
+            Value::Float(f) => return Ok(Value::Float(*f)),
+            Value::Bool(true) => "1".to_string(),
+            Value::Bool(false) => "0".to_string(),
+            other => Self::value_to_primitive_string(other),
+        };
+
+        let trimmed = input_str.trim();
+        if trimmed.is_empty() {
+            return Ok(Value::Float(Float64::new(f64::NAN)));
+        }
+
+        // Handle Infinity and -Infinity literals first
+        if trimmed.starts_with("Infinity") {
+            return Ok(Value::Float(Float64::new(f64::INFINITY)));
+        }
+        if trimmed.starts_with("-Infinity") {
+            return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
+        }
+        if trimmed.starts_with("+Infinity") {
+            return Ok(Value::Float(Float64::new(f64::INFINITY)));
+        }
+
+        // Parse number with scientific notation support
+        let mut result_str = String::new();
+        let mut has_dot = false;
+        let mut has_exponent = false;
+        let mut chars = trimmed.chars().peekable();
+        let mut prev_char = '\0';
+
+        // Handle sign
+        if let Some(&first_char) = chars.peek() {
+            if first_char == '+' || first_char == '-' {
+                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
+                result_str.push(chars.next().unwrap());
+                prev_char = first_char;
+            }
+        }
+
+        // Parse main number part with exponent support
+        while let Some(&c) = chars.peek() {
+            if c.is_ascii_digit() {
+                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
+                result_str.push(chars.next().unwrap());
+            } else if c == '.' && !has_dot && !has_exponent {
+                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
+                result_str.push(chars.next().unwrap());
+                has_dot = true;
+            } else if (c == 'e' || c == 'E') && !has_exponent {
+                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
+                result_str.push(chars.next().unwrap());
+                has_exponent = true;
+            } else if has_exponent
+                && (c == '+' || c == '-')
+                && (prev_char == 'e' || prev_char == 'E')
+            {
+                // SAFETY: peek() just confirmed a character exists, so next() cannot return None
+                result_str.push(chars.next().unwrap());
+            } else {
+                break;
+            }
+
+            prev_char = c;
+        }
+
+        // Validate result string is not empty or just signs
+        if result_str.is_empty() || result_str == "+" || result_str == "-" {
+            return Ok(Value::Float(Float64::new(f64::NAN)));
+        }
+
+        if let Ok(parsed) = result_str.parse::<f64>() {
+            // Return Int if it's a finite whole number within i64 range
+            if parsed.is_finite()
+                && parsed.fract() == 0.0
+                && parsed >= i64::MIN as f64
+                && parsed <= i64::MAX as f64
+            {
+                Ok(Value::Int(parsed as i64))
+            } else {
+                Ok(Value::Float(Float64::new(parsed)))
+            }
+        } else {
+            Ok(Value::Float(Float64::new(f64::NAN)))
+        }
+    }
+
+    fn weakmap_object_key(key: Value) -> Option<String> {
+        match key {
+            Value::Object(object_id) => Some(format!("o:{}", object_id.0)),
+            _ => None,
+        }
+    }
+
+    fn weakmap_entries_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
+        let weakmap_id = match receiver {
+            Value::Object(object_id) => object_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "WeakMap".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+
+        let weakmap_obj = self
+            .heap
+            .get(weakmap_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
+
+        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap")
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "WeakMap".to_string(),
+                got: "object".to_string(),
+            });
+        }
+
+        match weakmap_obj.properties.get("__entries") {
+            Some(Value::Object(entries_id)) => Ok(*entries_id),
+            Some(other) => Err(InterpreterError::TypeError {
+                expected: "WeakMap entries".to_string(),
+                got: other.type_name().to_string(),
+            }),
+            None => Err(InterpreterError::TypeError {
+                expected: "WeakMap entries".to_string(),
+                got: "missing".to_string(),
+            }),
+        }
     }
 
     /// Unified Number.prototype.toString implementation - spec-consistent radix handling.
@@ -16395,7 +16285,10 @@ fn should_encode_uri(c: char) -> bool {
         return false;
     }
     // Allow common URI reserved characters that should not be encoded
-    !matches!(c, ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#')
+    !matches!(
+        c,
+        ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#'
+    )
 }
 
 /// Percent-encode a string for URI contexts using proper UTF-8 encoding.
@@ -16430,8 +16323,8 @@ fn percent_decode_utf8(encoded: &str) -> Result<String, &'static str> {
             let hex2 = chars.next().ok_or("Incomplete percent sequence")?;
 
             let hex_str = format!("{}{}", hex1, hex2);
-            let byte_val = u8::from_str_radix(&hex_str, 16)
-                .map_err(|_| "Invalid hex in percent sequence")?;
+            let byte_val =
+                u8::from_str_radix(&hex_str, 16).map_err(|_| "Invalid hex in percent sequence")?;
             bytes.push(byte_val);
         } else {
             // Non-percent character - convert to UTF-8 bytes
@@ -16668,6 +16561,119 @@ mod tests {
         }
     }
 
+    fn construct_weakmap_for_test(core: &mut InterpreterCore) -> ObjectId {
+        let result = core
+            .call_builtin_by_id(172, RegRange { start: 0, count: 0 })
+            .expect("WeakMap constructor should allocate receiver and entries");
+        let Value::Object(weakmap_id) = result else {
+            panic!("WeakMap constructor should return object, got {result:?}");
+        };
+
+        let weakmap_obj = &core.heap[weakmap_id.0 as usize];
+        assert_eq!(
+            weakmap_obj.properties.get("__type"),
+            Some(&Value::Str("WeakMap".to_string()))
+        );
+        weakmap_id
+    }
+
+    fn weakmap_entries_for_test(core: &InterpreterCore, weakmap_id: ObjectId) -> ObjectId {
+        match core.heap[weakmap_id.0 as usize].properties.get("__entries") {
+            Some(Value::Object(entries_id)) => *entries_id,
+            other => panic!("WeakMap should hold entries object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn weakmap_get_has_use_constructor_entries_storage() {
+        let mut core = quickjs_test_core();
+        let weakmap_id = construct_weakmap_for_test(&mut core);
+        let entries_id = weakmap_entries_for_test(&core, weakmap_id);
+        assert_ne!(weakmap_id, entries_id);
+
+        let key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("object key allocation should succeed");
+        core.set_object_property(entries_id, format!("o:{}", key_id.0), Value::Int(41))
+            .expect("test setup should write WeakMap entries storage");
+
+        core.registers[0] = Value::Object(weakmap_id);
+        core.registers[1] = Value::Object(key_id);
+        assert_eq!(
+            core.call_builtin_by_id(324, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.has should execute"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.call_builtin_by_id(328, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.get should execute"),
+            Value::Int(41)
+        );
+
+        let missing_key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("missing object key allocation should succeed");
+        core.registers[1] = Value::Object(missing_key_id);
+        assert_eq!(
+            core.call_builtin_by_id(324, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.has should execute for missing key"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.call_builtin_by_id(328, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.get should execute for missing key"),
+            Value::Undefined
+        );
+    }
+
+    #[test]
+    fn weakmap_get_has_reject_plain_object_receivers() {
+        let mut core = quickjs_test_core();
+        let receiver_id = core
+            .alloc_object_with_prototype(None)
+            .expect("plain receiver allocation should succeed");
+        let key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("object key allocation should succeed");
+        core.set_object_property(receiver_id, format!("o:{}", key_id.0), Value::Int(9))
+            .expect("test setup should write fake direct receiver key");
+
+        for builtin_id in [324, 328] {
+            core.registers[0] = Value::Object(receiver_id);
+            core.registers[1] = Value::Object(key_id);
+            let err = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect_err("WeakMap prototype method should reject non-WeakMap receiver");
+            assert!(matches!(
+                err,
+                InterpreterError::TypeError { expected, got }
+                    if expected == "WeakMap" && got == "object"
+            ));
+        }
+    }
+
+    #[test]
+    fn weakmap_get_has_ignore_primitive_keys_even_when_entries_match() {
+        let mut core = quickjs_test_core();
+        let weakmap_id = construct_weakmap_for_test(&mut core);
+        let entries_id = weakmap_entries_for_test(&core, weakmap_id);
+        core.set_object_property(entries_id, "s:primitive".to_string(), Value::Int(7))
+            .expect("test setup should write non-object-key entry");
+
+        core.registers[0] = Value::Object(weakmap_id);
+        core.registers[1] = Value::Str("primitive".to_string());
+        assert_eq!(
+            core.call_builtin_by_id(324, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.has should execute for primitive key"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.call_builtin_by_id(328, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.get should execute for primitive key"),
+            Value::Undefined
+        );
+    }
+
     fn assert_string_split_result(result: Value, expected: Vec<&str>, core: &mut InterpreterCore) {
         let Value::Object(array_id) = result else {
             // SAFETY: Test helper validates string split returns array object type
@@ -16724,6 +16730,7 @@ mod tests {
         let mut core = quickjs_test_core();
         core.registers[0] = Value::Str("a🙂b".to_string());
 
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -16733,29 +16740,7 @@ mod tests {
         assert_string_split_result(result, vec!["a🙂b"], &mut core);
 
         core.registers[1] = Value::Undefined;
-        let result = core
-            .call_builtin(
-                "builtin:StringPrototypeSplit",
-                RegRange { start: 0, count: 2 },
-            )
-            .unwrap();
-        assert_string_split_result(result, vec!["a🙂b"], &mut core);
-    }
-
-    #[test]
-    fn string_split_omitted_and_undefined_separator_handle_non_ascii() {
-        let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("a🙂b".to_string());
-
-        let result = core
-            .call_builtin(
-                "builtin:StringPrototypeSplit",
-                RegRange { start: 0, count: 1 },
-            )
-            .unwrap();
-        assert_string_split_result(result, vec!["a🙂b"], &mut core);
-
-        core.registers[1] = Value::Undefined;
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -16770,6 +16755,7 @@ mod tests {
         let mut core = quickjs_test_core();
         core.registers[0] = Value::Str("a,b".to_string());
 
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -16779,6 +16765,7 @@ mod tests {
         assert_string_split_result(result, vec!["a,b"], &mut core);
 
         core.registers[1] = Value::Undefined;
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -16794,6 +16781,7 @@ mod tests {
         core.registers[0] = Value::Str("ab".to_string());
         core.registers[1] = Value::Str("".to_string());
 
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -16809,6 +16797,7 @@ mod tests {
         core.registers[0] = Value::Str("a,b,c".to_string());
         core.registers[1] = Value::Str(",".to_string());
 
+        // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
             .call_builtin(
                 "builtin:StringPrototypeSplit",
@@ -17061,6 +17050,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
+        // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
             .execute(&test_module_with_functions(
                 vec![
@@ -17103,11 +17093,13 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook);
 
+        // SAFETY: Test-only unwrap expecting object allocation to succeed with valid parameters
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.registers[1] = Value::Object(oid);
         core.registers[2] = Value::Str("key".to_string());
         core.registers[3] = Value::Int(7);
 
+        // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
             .execute(&test_module(vec![
                 Ir3Instruction::SetProperty {
@@ -17741,6 +17733,64 @@ mod tests {
 
         assert_eq!(no_initial, initial_zero);
         assert_eq!(initial_zero, Value::Int(12));
+    }
+
+    #[test]
+    fn array_reverse_preserves_sparse_holes_and_noncanonical_numeric_properties() {
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[
+                (0, Value::Str("first".to_string())),
+                (2, Value::Str("third".to_string())),
+            ],
+        );
+        core.set_object_property(
+            array_id,
+            "01".to_string(),
+            Value::Str("leading-zero".to_string()),
+        )
+        .unwrap();
+        core.set_object_property(
+            array_id,
+            "3".to_string(),
+            Value::Str("past-length".to_string()),
+        )
+        .unwrap();
+        core.set_object_property(
+            array_id,
+            "4294967295".to_string(),
+            Value::Str("uint32-max".to_string()),
+        )
+        .unwrap();
+        core.registers[0] = Value::Object(array_id);
+
+        let result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeReverse",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result, Value::Object(array_id));
+        let properties = &core.heap[array_id.0 as usize].properties;
+        assert_eq!(properties.get("0"), Some(&Value::Str("third".to_string())));
+        assert_eq!(properties.get("1"), None);
+        assert_eq!(properties.get("2"), Some(&Value::Str("first".to_string())));
+        assert_eq!(
+            properties.get("01"),
+            Some(&Value::Str("leading-zero".to_string()))
+        );
+        assert_eq!(
+            properties.get("3"),
+            Some(&Value::Str("past-length".to_string()))
+        );
+        assert_eq!(
+            properties.get("4294967295"),
+            Some(&Value::Str("uint32-max".to_string()))
+        );
     }
 
     #[test]
@@ -22206,6 +22256,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_float_builtin_dispatch_deduplication_regression() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        let float_builtin_ids = [83u32, 232u32, 378u32];
+        let inputs = [
+            Value::Str("1e3".to_string()),
+            Value::Str("Infinityxyz".to_string()),
+            Value::Str(" 2.5e2 ".to_string()),
+            Value::Int(7),
+            Value::Float(Float64::new(3.5)),
+        ];
+
+        for input in inputs {
+            core.registers[0] = input;
+            let first_cap = core
+                .map_function_index_to_builtin_capability(float_builtin_ids[0])
+                .expect("first parseFloat builtin id should be mapped");
+            let first = core
+                .dispatch_builtin_hostcall(&first_cap, RegRange { start: 0, count: 1 }, None)
+                .expect("first parseFloat builtin id should execute");
+
+            for builtin_id in &float_builtin_ids[1..] {
+                let cap = core
+                    .map_function_index_to_builtin_capability(*builtin_id)
+                    .expect("all parseFloat builtin ids should be mapped");
+                let next = core
+                    .dispatch_builtin_hostcall(&cap, RegRange { start: 0, count: 1 }, None)
+                    .expect("all parseFloat builtin ids should execute");
+                assert_eq!(
+                    first, next,
+                    "Builtin IDs {{83, 232, 378}} should be deduplicated"
+                );
+            }
+        }
+
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(83),
+            Some("builtin:parseFloat".to_string())
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(232),
+            Some("builtin:NumberParseFloat".to_string())
+        );
+        assert_eq!(
+            core.map_function_index_to_builtin_capability(378),
+            Some("builtin:ParseFloat".to_string())
+        );
+    }
+
+    #[test]
     fn math_random_deterministic_replay() {
         // Regression test: same execution state should produce same random sequence
         // This ensures DefaultHasher replacement with SHA-256 maintains determinism
@@ -22223,7 +22323,10 @@ mod tests {
         let result2 = core2.math_random_impl().unwrap();
 
         // Should produce identical results (deterministic)
-        assert_eq!(result1, result2, "Math.random should be deterministic with same execution state");
+        assert_eq!(
+            result1, result2,
+            "Math.random should be deterministic with same execution state"
+        );
 
         // Verify it's actually a valid random number in [0, 1)
         if let Value::Float(f) = result1 {
@@ -22249,7 +22352,10 @@ mod tests {
         let result2 = core2.math_random_impl().unwrap();
 
         // Should produce different results
-        assert_ne!(result1, result2, "Different execution states should produce different random values");
+        assert_ne!(
+            result1, result2,
+            "Different execution states should produce different random values"
+        );
     }
 
     #[test]
@@ -22257,7 +22363,8 @@ mod tests {
         // Test basic charCodeAt functionality with ASCII characters
         let mut core = BaselineInterpreter::new();
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hello".to_string())).unwrap();
+        core.set_register(0, Value::Str("Hello".to_string()))
+            .unwrap();
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(0)).unwrap(); // index 0
 
@@ -22269,7 +22376,8 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // "Hello"[0] = 'H' = 72
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
@@ -22297,11 +22405,16 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
         let result1 = core.read_register(2).unwrap();
-        assert_eq!(result1, Value::Int(0xD83D), "First UTF-16 code unit should be high surrogate 0xD83D");
+        assert_eq!(
+            result1,
+            Value::Int(0xD83D),
+            "First UTF-16 code unit should be high surrogate 0xD83D"
+        );
 
         // Get second surrogate (low surrogate)
         // SAFETY: Register 1 remains valid and is overwritten with the second index.
@@ -22314,11 +22427,16 @@ mod tests {
                 dest: 3,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 3 before halt.
         let result2 = core.read_register(3).unwrap();
-        assert_eq!(result2, Value::Int(0xDE00), "Second UTF-16 code unit should be low surrogate 0xDE00");
+        assert_eq!(
+            result2,
+            Value::Int(0xDE00),
+            "Second UTF-16 code unit should be low surrogate 0xDE00"
+        );
     }
 
     #[test]
@@ -22338,12 +22456,16 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
         let result = core.read_register(2).unwrap();
         if let Value::Float(f) = result {
-            assert!(f.inner().is_nan(), "Out-of-bounds charCodeAt should return NaN");
+            assert!(
+                f.inner().is_nan(),
+                "Out-of-bounds charCodeAt should return NaN"
+            );
         } else {
             panic!("Expected Float NaN, got {:?}", result);
         }
@@ -22353,7 +22475,8 @@ mod tests {
     fn string_prototype_char_code_at_negative_index() {
         // Test charCodeAt with negative index (should treat as 0)
         let mut core = BaselineInterpreter::new();
-        core.set_register(0, Value::Str("Test".to_string())).unwrap();
+        core.set_register(0, Value::Str("Test".to_string()))
+            .unwrap();
         core.set_register(1, Value::Int(-1)).unwrap(); // negative index
 
         core.execute_module(test_module(vec![
@@ -22363,11 +22486,16 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // Should return first character 'T' = 84
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Int(84), "Negative index should be treated as 0");
+        assert_eq!(
+            result,
+            Value::Int(84),
+            "Negative index should be treated as 0"
+        );
     }
 
     #[test]
@@ -22378,12 +22506,13 @@ mod tests {
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
-                id: 184, // StringPrototypeCharCodeAt
+                id: 184,                               // StringPrototypeCharCodeAt
                 args: RegRange { start: 0, count: 1 }, // no index argument
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // Should return first character 'A' = 65
         let result = core.read_register(1).unwrap();
@@ -22407,12 +22536,17 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // "123"[1] = '2' = 50
         // SAFETY: The builtin writes destination register 2 before the halt instruction.
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Int(50), "charCodeAt on number should coerce to string");
+        assert_eq!(
+            result,
+            Value::Int(50),
+            "charCodeAt on number should coerce to string"
+        );
     }
 
     #[test]
@@ -22420,7 +22554,8 @@ mod tests {
         // Test basic charAt functionality with ASCII characters
         let mut core = BaselineInterpreter::new();
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hello".to_string())).unwrap();
+        core.set_register(0, Value::Str("Hello".to_string()))
+            .unwrap();
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(1)).unwrap(); // index 1
 
@@ -22432,12 +22567,17 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // "Hello"[1] = 'e'
         // SAFETY: StringPrototypeCharAt writes destination register 2 before halt.
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Str("e".to_string()), "charAt(1) should return 'e'");
+        assert_eq!(
+            result,
+            Value::Str("e".to_string()),
+            "charAt(1) should return 'e'"
+        );
     }
 
     #[test]
@@ -22457,14 +22597,18 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result1 = core.read_register(2).unwrap();
         if let Value::Str(s) = result1 {
             // Should be the high surrogate character represented as a string
             assert_eq!(s.len(), 3, "High surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of high surrogate
             let utf16_units: Vec<u16> = s.encode_utf16().collect();
-            assert_eq!(utf16_units[0], 0xD83D, "First character should be high surrogate 0xD83D");
+            assert_eq!(
+                utf16_units[0], 0xD83D,
+                "First character should be high surrogate 0xD83D"
+            );
         } else {
             panic!("Expected Str, got {:?}", result1);
         }
@@ -22478,14 +22622,18 @@ mod tests {
                 dest: 3,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result2 = core.read_register(3).unwrap();
         if let Value::Str(s) = result2 {
             // Should be the low surrogate character represented as a string
             assert_eq!(s.len(), 3, "Low surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of low surrogate
             let utf16_units: Vec<u16> = s.encode_utf16().collect();
-            assert_eq!(utf16_units[0], 0xDE00, "Second character should be low surrogate 0xDE00");
+            assert_eq!(
+                utf16_units[0], 0xDE00,
+                "Second character should be low surrogate 0xDE00"
+            );
         } else {
             panic!("Expected Str, got {:?}", result2);
         }
@@ -22508,11 +22656,16 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // SAFETY: the executed module writes its result to register 2.
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Str("".to_string()), "Out-of-bounds charAt should return empty string");
+        assert_eq!(
+            result,
+            Value::Str("".to_string()),
+            "Out-of-bounds charAt should return empty string"
+        );
     }
 
     #[test]
@@ -22520,7 +22673,8 @@ mod tests {
         // Test charAt with negative index (should treat as 0)
         let mut core = BaselineInterpreter::new();
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(0, Value::Str("Test".to_string())).unwrap();
+        core.set_register(0, Value::Str("Test".to_string()))
+            .unwrap();
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(1, Value::Int(-1)).unwrap(); // negative index
 
@@ -22532,12 +22686,17 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // Should return first character 'T'
         // SAFETY: the executed module writes its result to register 2.
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Str("T".to_string()), "Negative index should be treated as 0");
+        assert_eq!(
+            result,
+            Value::Str("T".to_string()),
+            "Negative index should be treated as 0"
+        );
     }
 
     #[test]
@@ -22550,17 +22709,22 @@ mod tests {
         // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
-                id: 30, // StringPrototypeCharAt
+                id: 30,                                // StringPrototypeCharAt
                 args: RegRange { start: 0, count: 1 }, // no index argument
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // Should return first character 'A'
         // SAFETY: the executed module writes its result to register 1.
         let result = core.read_register(1).unwrap();
-        assert_eq!(result, Value::Str("A".to_string()), "No index should default to 0");
+        assert_eq!(
+            result,
+            Value::Str("A".to_string()),
+            "No index should default to 0"
+        );
     }
 
     #[test]
@@ -22577,11 +22741,16 @@ mod tests {
                 dest: 2,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         // "456"[2] = '6'
         let result = core.read_register(2).unwrap();
-        assert_eq!(result, Value::Str("6".to_string()), "charAt on number should coerce to string");
+        assert_eq!(
+            result,
+            Value::Str("6".to_string()),
+            "charAt on number should coerce to string"
+        );
     }
 
     #[test]
@@ -22591,7 +22760,8 @@ mod tests {
         let mut core = BaselineInterpreter::new();
 
         // Test -0.5 → -0 (not -1)
-        core.set_register(0, Value::Float(Float64::new(-0.5))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(-0.5)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22599,20 +22769,26 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
         match result {
             Value::Float(f) => {
                 let val = f.inner();
-                assert!(val == -0.0 || val == 0.0, "Math.round(-0.5) should be -0, got {}", val);
+                assert!(
+                    val == -0.0 || val == 0.0,
+                    "Math.round(-0.5) should be -0, got {}",
+                    val
+                );
             }
-            Value::Int(0) => {}, // Also acceptable
+            Value::Int(0) => {} // Also acceptable
             _ => panic!("Math.round(-0.5) should be -0, got {:?}", result),
         }
 
         // Test -1.5 → -1 (not -2)
-        core.set_register(0, Value::Float(Float64::new(-1.5))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(-1.5)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22620,10 +22796,16 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
-        assert_eq!(result, Value::Int(-1), "Math.round(-1.5) should be -1, got {:?}", result);
+        assert_eq!(
+            result,
+            Value::Int(-1),
+            "Math.round(-1.5) should be -1, got {:?}",
+            result
+        );
     }
 
     #[test]
@@ -22631,7 +22813,8 @@ mod tests {
         let mut core = BaselineInterpreter::new();
 
         // Test -0.1 → -0
-        core.set_register(0, Value::Float(Float64::new(-0.1))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(-0.1)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22639,20 +22822,26 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
         match result {
             Value::Float(f) => {
                 let val = f.inner();
-                assert!(val == -0.0 || val == 0.0, "Math.round(-0.1) should be -0, got {}", val);
+                assert!(
+                    val == -0.0 || val == 0.0,
+                    "Math.round(-0.1) should be -0, got {}",
+                    val
+                );
             }
-            Value::Int(0) => {}, // Also acceptable
+            Value::Int(0) => {} // Also acceptable
             _ => panic!("Math.round(-0.1) should be -0, got {:?}", result),
         }
 
         // Test +0.5 → 1
-        core.set_register(0, Value::Float(Float64::new(0.5))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(0.5)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22660,13 +22849,20 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
-        assert_eq!(result, Value::Int(1), "Math.round(0.5) should be 1, got {:?}", result);
+        assert_eq!(
+            result,
+            Value::Int(1),
+            "Math.round(0.5) should be 1, got {:?}",
+            result
+        );
 
         // Test NaN → NaN
-        core.set_register(0, Value::Float(Float64::new(f64::NAN))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(f64::NAN)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22674,7 +22870,8 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
         match result {
@@ -22683,7 +22880,8 @@ mod tests {
         }
 
         // Test +Infinity → +Infinity
-        core.set_register(0, Value::Float(Float64::new(f64::INFINITY))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(f64::INFINITY)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22691,16 +22889,25 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
         match result {
-            Value::Float(f) => assert_eq!(f.inner(), f64::INFINITY, "Math.round(+Infinity) should be +Infinity"),
-            _ => panic!("Math.round(+Infinity) should be +Infinity, got {:?}", result),
+            Value::Float(f) => assert_eq!(
+                f.inner(),
+                f64::INFINITY,
+                "Math.round(+Infinity) should be +Infinity"
+            ),
+            _ => panic!(
+                "Math.round(+Infinity) should be +Infinity, got {:?}",
+                result
+            ),
         }
 
         // Test -Infinity → -Infinity
-        core.set_register(0, Value::Float(Float64::new(f64::NEG_INFINITY))).unwrap();
+        core.set_register(0, Value::Float(Float64::new(f64::NEG_INFINITY)))
+            .unwrap();
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 53, // MathRound
@@ -22708,12 +22915,20 @@ mod tests {
                 dest: 1,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         let result = core.read_register(1).unwrap();
         match result {
-            Value::Float(f) => assert_eq!(f.inner(), f64::NEG_INFINITY, "Math.round(-Infinity) should be -Infinity"),
-            _ => panic!("Math.round(-Infinity) should be -Infinity, got {:?}", result),
+            Value::Float(f) => assert_eq!(
+                f.inner(),
+                f64::NEG_INFINITY,
+                "Math.round(-Infinity) should be -Infinity"
+            ),
+            _ => panic!(
+                "Math.round(-Infinity) should be -Infinity, got {:?}",
+                result
+            ),
         }
     }
 
@@ -22782,7 +22997,8 @@ mod tests {
                 dst: 10,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         assert_eq!(core.console_output.len(), 1);
         assert_eq!(core.console_output[0].level, ConsoleLevel::Log);
@@ -22800,7 +23016,8 @@ mod tests {
                 dst: 10,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         assert_eq!(core.console_output.len(), 1);
         assert_eq!(core.console_output[0].level, ConsoleLevel::Error);
@@ -22817,7 +23034,8 @@ mod tests {
                 dst: 10,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         assert_eq!(core.console_output.len(), 1);
         assert_eq!(core.console_output[0].level, ConsoleLevel::Warn);
@@ -22834,15 +23052,59 @@ mod tests {
                 dst: 10,
             },
             Ir3Instruction::Halt,
-        ])).unwrap();
+        ]))
+        .unwrap();
 
         assert_eq!(core.console_output.len(), 1);
         assert_eq!(core.console_output[0].level, ConsoleLevel::Info);
         assert_eq!(core.console_output[0].message, "Info message");
 
         // Verify ConsoleInfo no longer silently drops output as mentioned in audit
-        assert!(!core.console_output[0].message.is_empty(),
-               "ConsoleInfo should capture output, not silently drop it");
+        assert!(
+            !core.console_output[0].message.is_empty(),
+            "ConsoleInfo should capture output, not silently drop it"
+        );
+    }
+
+    #[test]
+    fn console_output_zero_limit_drops_every_level_without_panicking() {
+        let mut config = test_quickjs_config();
+        config.max_console_entries = 0;
+        let mut core = InterpreterCore::new(config, "test-trace");
+
+        for builtin_id in [100, 101, 102, 384] {
+            core.registers[0] = Value::Str(format!("message-{builtin_id}"));
+            let builtin = core
+                .map_function_index_to_builtin_capability(builtin_id)
+                .expect("console builtin id should be mapped");
+            let result = core
+                .dispatch_builtin_hostcall(&builtin, RegRange { start: 0, count: 1 }, None)
+                .expect("console builtin should return normally with zero output cap");
+
+            assert_eq!(result, Value::Undefined);
+            assert!(
+                core.console_output.is_empty(),
+                "console builtin id {builtin_id} must not retain output at zero cap"
+            );
+        }
+
+        for cap in [
+            "console:log",
+            "console:error",
+            "console:warn",
+            "console:info",
+        ] {
+            core.registers[0] = Value::Str(cap.to_string());
+            let result = core
+                .dispatch_console_hostcall(cap, RegRange { start: 0, count: 1 })
+                .expect("console hostcall should return normally with zero output cap");
+
+            assert_eq!(result, Value::Undefined);
+            assert!(
+                core.console_output.is_empty(),
+                "console hostcall {cap} must not retain output at zero cap"
+            );
+        }
     }
 
     #[test]
@@ -22889,7 +23151,10 @@ mod tests {
         ]));
 
         // Verify the call succeeded (should not panic or error)
-        assert!(result.is_ok(), "StringPrototypeSplit builtin should work after deduplication");
+        assert!(
+            result.is_ok(),
+            "StringPrototypeSplit builtin should work after deduplication"
+        );
     }
 
     #[test]
@@ -22950,12 +23215,18 @@ mod tests {
         ]));
 
         // Verify the call succeeded
-        assert!(result.is_ok(), "ArrayPrototypeReverse should work after deduplication");
+        assert!(
+            result.is_ok(),
+            "ArrayPrototypeReverse should work after deduplication"
+        );
 
         // Verify the array was modified (elements should be reversed)
         let obj = core.heap.get(array_id.0 as usize).unwrap();
         if let Some(Value::Str(first)) = obj.properties.get("0") {
-            assert_eq!(first, "third", "Array should be reversed after calling reverse()");
+            assert_eq!(
+                first, "third",
+                "Array should be reversed after calling reverse()"
+            );
         }
     }
 
@@ -22976,7 +23247,10 @@ mod tests {
         ]));
 
         // Verify the call succeeded
-        assert!(result.is_ok(), "ObjectPrototypeToString should work after deduplication");
+        assert!(
+            result.is_ok(),
+            "ObjectPrototypeToString should work after deduplication"
+        );
     }
 
     #[test]
@@ -22987,7 +23261,7 @@ mod tests {
 
         // Test StringPrototypeTrim builtin ID still works
         assert_eq!(
-            interpreter.builtin_name_from_id(37),  // From original mapping
+            interpreter.builtin_name_from_id(37), // From original mapping
             Some("builtin:StringPrototypeTrim".to_string())
         );
         assert_eq!(
@@ -23007,7 +23281,7 @@ mod tests {
 
         // Test StringPrototypeEndsWith builtin IDs still work
         assert_eq!(
-            interpreter.builtin_name_from_id(40),  // From original mapping
+            interpreter.builtin_name_from_id(40), // From original mapping
             Some("builtin:StringPrototypeEndsWith".to_string())
         );
         assert_eq!(
@@ -23035,7 +23309,10 @@ mod tests {
             },
             Ir3Instruction::Halt,
         ]));
-        assert!(trim_result.is_ok(), "StringPrototypeTrim should work after deduplication");
+        assert!(
+            trim_result.is_ok(),
+            "StringPrototypeTrim should work after deduplication"
+        );
 
         // Test NumberIsInteger functionality
         core.registers[0] = Value::Int(42);
@@ -23047,7 +23324,10 @@ mod tests {
             },
             Ir3Instruction::Halt,
         ]));
-        assert!(integer_result.is_ok(), "NumberIsInteger should work after deduplication");
+        assert!(
+            integer_result.is_ok(),
+            "NumberIsInteger should work after deduplication"
+        );
 
         // Test StringPrototypeEndsWith functionality
         core.registers[0] = Value::Str("hello world".to_string());
@@ -23060,7 +23340,10 @@ mod tests {
             },
             Ir3Instruction::Halt,
         ]));
-        assert!(endswith_result.is_ok(), "StringPrototypeEndsWith should work after deduplication");
+        assert!(
+            endswith_result.is_ok(),
+            "StringPrototypeEndsWith should work after deduplication"
+        );
     }
 
     #[test]
@@ -23140,6 +23423,44 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypeEndsWith ID should execute");
             assert_eq!(result, Value::Bool(true));
+        }
+    }
+
+    #[test]
+    fn string_prototype_ends_with_utf16_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        let cases: [(&str, &str, Option<i64>, bool); 6] = [
+            ("😀", "", Some(1), true),
+            ("😀", "", Some(2), true),
+            ("😀", "", Some(0), true),
+            ("A😀B", "B", Some(10), true),
+            ("A😀B", "😀", Some(3), true),
+            ("A😀B", "engine", None, false),
+        ];
+
+        for builtin_id in [40_u32, 230_u32, 336_u32] {
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeEndsWith".to_string())
+            );
+
+            for (this_str, search_str, length, expected) in cases {
+                interpreter.registers[0] = Value::Str(this_str.to_string());
+                interpreter.registers[1] = Value::Str(search_str.to_string());
+
+                let args = if let Some(length) = length {
+                    interpreter.registers[2] = Value::Int(length);
+                    RegRange { start: 0, count: 3 }
+                } else {
+                    RegRange { start: 0, count: 2 }
+                };
+
+                let result = interpreter
+                    .call_builtin_by_id(builtin_id, args)
+                    .expect("StringPrototypeEndsWith ID should execute");
+                assert_eq!(result, Value::Bool(*expected));
+            }
         }
     }
 
@@ -23274,9 +23595,18 @@ mod tests {
                 .heap
                 .get(array_id.0 as usize)
                 .expect("filled test array should remain allocated");
-            assert_eq!(array.properties.get("0"), Some(&Value::Str("a".to_string())));
-            assert_eq!(array.properties.get("1"), Some(&Value::Str("x".to_string())));
-            assert_eq!(array.properties.get("2"), Some(&Value::Str("x".to_string())));
+            assert_eq!(
+                array.properties.get("0"),
+                Some(&Value::Str("a".to_string()))
+            );
+            assert_eq!(
+                array.properties.get("1"),
+                Some(&Value::Str("x".to_string()))
+            );
+            assert_eq!(
+                array.properties.get("2"),
+                Some(&Value::Str("x".to_string()))
+            );
         }
     }
 }

@@ -10630,17 +10630,26 @@ fn test_array_prototype_some_fail_closed_validation() {
     assert!(result.is_err(), "Array.some without callback should error");
 
     let result = interpreter.evaluate_expression("[1, 2, 3].some(null)");
-    assert!(result.is_err(), "Array.some with null callback should error");
+    assert!(
+        result.is_err(),
+        "Array.some with null callback should error"
+    );
 
     let result = interpreter.evaluate_expression("[1, 2, 3].some(42)");
-    assert!(result.is_err(), "Array.some with non-function callback should error");
+    assert!(
+        result.is_err(),
+        "Array.some with non-function callback should error"
+    );
 
     // Error message should mention callback dispatch requirement
     let error_result = interpreter.evaluate_expression("[1].some()");
     if let Err(err) = error_result {
         let err_str = format!("{:?}", err);
-        assert!(err_str.contains("callback") || err_str.contains("function"),
-               "Error should mention callback requirement: {}", err_str);
+        assert!(
+            err_str.contains("callback") || err_str.contains("function"),
+            "Error should mention callback requirement: {}",
+            err_str
+        );
     }
 }
 
@@ -10650,25 +10659,54 @@ fn test_string_char_at_utf16_indexing() {
     let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
 
     // Basic ASCII characters
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(0)").unwrap(), Value::Str("A".to_string()));
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(1)").unwrap(), Value::Str("B".to_string()));
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(2)").unwrap(), Value::Str("C".to_string()));
+    assert_eq!(
+        interpreter.evaluate_expression("'ABC'.charAt(0)").unwrap(),
+        Value::Str("A".to_string())
+    );
+    assert_eq!(
+        interpreter.evaluate_expression("'ABC'.charAt(1)").unwrap(),
+        Value::Str("B".to_string())
+    );
+    assert_eq!(
+        interpreter.evaluate_expression("'ABC'.charAt(2)").unwrap(),
+        Value::Str("C".to_string())
+    );
 
     // Out of bounds returns empty string
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(3)").unwrap(), Value::Str("".to_string()));
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(-1)").unwrap(), Value::Str("A".to_string())); // -1 normalizes to 0
+    assert_eq!(
+        interpreter.evaluate_expression("'ABC'.charAt(3)").unwrap(),
+        Value::Str("".to_string())
+    );
+    assert_eq!(
+        interpreter.evaluate_expression("'ABC'.charAt(-1)").unwrap(),
+        Value::Str("A".to_string())
+    ); // -1 normalizes to 0
 
     // UTF-16 surrogate pair handling (emoji should return individual surrogates)
     // Note: This test assumes the implementation correctly handles surrogates
     let result = interpreter.evaluate_expression("'😀'.charAt(0)");
     if let Ok(Value::Str(s)) = result {
         // Should return first surrogate of emoji, not the whole emoji
-        assert_eq!(s.len(), 1, "charAt(0) on emoji should return single surrogate character");
+        assert_eq!(
+            s.len(),
+            1,
+            "charAt(0) on emoji should return single surrogate character"
+        );
     }
 
     // Type coercion for index
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt('1')").unwrap(), Value::Str("B".to_string()));
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(1.7)").unwrap(), Value::Str("B".to_string())); // 1.7 truncates to 1
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charAt('1')")
+            .unwrap(),
+        Value::Str("B".to_string())
+    );
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charAt(1.7)")
+            .unwrap(),
+        Value::Str("B".to_string())
+    ); // 1.7 truncates to 1
 }
 
 #[test]
@@ -10677,36 +10715,76 @@ fn test_string_char_code_at_utf16_indexing() {
     let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
 
     // Basic ASCII characters
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(0)").unwrap(), Value::Int(65)); // 'A'
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(1)").unwrap(), Value::Int(66)); // 'B'
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(2)").unwrap(), Value::Int(67)); // 'C'
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt(0)")
+            .unwrap(),
+        Value::Int(65)
+    ); // 'A'
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt(1)")
+            .unwrap(),
+        Value::Int(66)
+    ); // 'B'
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt(2)")
+            .unwrap(),
+        Value::Int(67)
+    ); // 'C'
 
     // Out of bounds returns NaN
-    let result = interpreter.evaluate_expression("'ABC'.charCodeAt(3)").unwrap();
+    let result = interpreter
+        .evaluate_expression("'ABC'.charCodeAt(3)")
+        .unwrap();
     match result {
         Value::Float(f) => assert!(f.inner().is_nan(), "Out of bounds should return NaN"),
         _ => panic!("charCodeAt out of bounds should return NaN Float"),
     }
 
     // Negative index normalization
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(-1)").unwrap(), Value::Int(65)); // -1 normalizes to 0
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt(-1)")
+            .unwrap(),
+        Value::Int(65)
+    ); // -1 normalizes to 0
 
     // UTF-16 surrogate pair handling
     let result = interpreter.evaluate_expression("'😀'.charCodeAt(0)");
     if let Ok(Value::Int(code)) = result {
         // Should return first surrogate code unit, typically 0xD83D for emoji
-        assert!(code >= 0xD800 && code <= 0xDBFF, "First emoji code unit should be high surrogate: 0x{:X}", code);
+        assert!(
+            code >= 0xD800 && code <= 0xDBFF,
+            "First emoji code unit should be high surrogate: 0x{:X}",
+            code
+        );
     }
 
     let result = interpreter.evaluate_expression("'😀'.charCodeAt(1)");
     if let Ok(Value::Int(code)) = result {
         // Should return second surrogate code unit, typically 0xDE00 for grinning face
-        assert!(code >= 0xDC00 && code <= 0xDFFF, "Second emoji code unit should be low surrogate: 0x{:X}", code);
+        assert!(
+            code >= 0xDC00 && code <= 0xDFFF,
+            "Second emoji code unit should be low surrogate: 0x{:X}",
+            code
+        );
     }
 
     // Type coercion for index
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt('1')").unwrap(), Value::Int(66));
-    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(1.7)").unwrap(), Value::Int(66)); // 1.7 truncates to 1
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt('1')")
+            .unwrap(),
+        Value::Int(66)
+    );
+    assert_eq!(
+        interpreter
+            .evaluate_expression("'ABC'.charCodeAt(1.7)")
+            .unwrap(),
+        Value::Int(66)
+    ); // 1.7 truncates to 1
 }
 
 #[test]
@@ -10730,9 +10808,12 @@ fn test_math_random_deterministic_replay() {
     // Should be identical due to deterministic SHA-256 seeding
     match (random1a, random2a) {
         (Value::Float(f1), Value::Float(f2)) => {
-            assert!((f1.inner() - f2.inner()).abs() < f64::EPSILON,
-                   "Identical execution state should produce identical random values: {} vs {}",
-                   f1.inner(), f2.inner());
+            assert!(
+                (f1.inner() - f2.inner()).abs() < f64::EPSILON,
+                "Identical execution state should produce identical random values: {} vs {}",
+                f1.inner(),
+                f2.inner()
+            );
         }
         _ => panic!("Math.random should return Float values"),
     }
@@ -10743,9 +10824,12 @@ fn test_math_random_deterministic_replay() {
 
     match (random1b, random2b) {
         (Value::Float(f1), Value::Float(f2)) => {
-            assert!((f1.inner() - f2.inner()).abs() < f64::EPSILON,
-                   "Second random call should also be deterministic: {} vs {}",
-                   f1.inner(), f2.inner());
+            assert!(
+                (f1.inner() - f2.inner()).abs() < f64::EPSILON,
+                "Second random call should also be deterministic: {} vs {}",
+                f1.inner(),
+                f2.inner()
+            );
         }
         _ => panic!("Math.random should return Float values"),
     }
@@ -10758,9 +10842,12 @@ fn test_math_random_deterministic_replay() {
 
     match (random1c, random2c) {
         (Value::Float(f1), Value::Float(f2)) => {
-            assert!((f1.inner() - f2.inner()).abs() > f64::EPSILON,
-                   "Different execution states should produce different random values: {} vs {}",
-                   f1.inner(), f2.inner());
+            assert!(
+                (f1.inner() - f2.inner()).abs() > f64::EPSILON,
+                "Different execution states should produce different random values: {} vs {}",
+                f1.inner(),
+                f2.inner()
+            );
         }
         _ => panic!("Math.random should return Float values"),
     }
@@ -10793,14 +10880,18 @@ fn test_array_prototype_some_current_simplified_behavior() {
 
     // Array with only falsy values returns false
     assert_eq!(
-        interpreter.evaluate_expression("[false, 0, '', null, undefined].some()").unwrap(),
+        interpreter
+            .evaluate_expression("[false, 0, '', null, undefined].some()")
+            .unwrap(),
         Value::Bool(false),
         "Array with only falsy values should return false"
     );
 
     // Array with mixed truthy/falsy returns true (finds first truthy)
     assert_eq!(
-        interpreter.evaluate_expression("[0, false, 1].some()").unwrap(),
+        interpreter
+            .evaluate_expression("[0, false, 1].some()")
+            .unwrap(),
         Value::Bool(true),
         "Array with some truthy values should return true"
     );
@@ -10821,13 +10912,21 @@ fn test_array_prototype_some_sparse_arrays() {
     // Sparse array with truthy element
     let result = interpreter.evaluate_expression("var a = [,,1,,]; a.some()");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Bool(true), "Sparse array with truthy element should return true");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(true),
+            "Sparse array with truthy element should return true"
+        );
     }
 
     // All-sparse array (only holes)
     let result = interpreter.evaluate_expression("var b = [,,,]; b.some()");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Bool(false), "All-sparse array should return false");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(false),
+            "All-sparse array should return false"
+        );
     }
 }
 
@@ -10863,7 +10962,9 @@ fn test_array_prototype_some_edge_cases() {
     );
 
     assert_eq!(
-        interpreter.evaluate_expression("[Infinity].some()").unwrap(),
+        interpreter
+            .evaluate_expression("[Infinity].some()")
+            .unwrap(),
         Value::Bool(true),
         "Infinity should be truthy"
     );
@@ -10899,10 +11000,13 @@ fn test_array_prototype_some_duplicate_removal_verification() {
          results.push([1, 2].some()); \
          results.push([0, false].some()); \
          results.push([].some()); \
-         results"
+         results",
     );
 
-    assert!(complex_result.is_ok(), "Complex some() calls should not cause internal conflicts");
+    assert!(
+        complex_result.is_ok(),
+        "Complex some() calls should not cause internal conflicts"
+    );
 }
 
 #[test]
@@ -10913,19 +11017,31 @@ fn test_array_prototype_some_non_array_thisarg() {
     // Number as 'this'
     let result = interpreter.evaluate_expression("Array.prototype.some.call(42)");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Bool(false), "Number this should return false");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(false),
+            "Number this should return false"
+        );
     }
 
     // String as 'this'
     let result = interpreter.evaluate_expression("Array.prototype.some.call('hello')");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Bool(false), "String this should return false");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(false),
+            "String this should return false"
+        );
     }
 
     // Null as 'this'
     let result = interpreter.evaluate_expression("Array.prototype.some.call(null)");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Bool(false), "Null this should return false");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(false),
+            "Null this should return false"
+        );
     }
 }
 
@@ -10940,7 +11056,11 @@ fn test_array_prototype_some_callback_parameter_ignored() {
     if result.is_ok() {
         // Current simplified implementation returns true because array has truthy values
         // regardless of the callback logic
-        assert_eq!(result.unwrap(), Value::Bool(true), "Current implementation ignores callback");
+        assert_eq!(
+            result.unwrap(),
+            Value::Bool(true),
+            "Current implementation ignores callback"
+        );
     }
 
     // This documents that callbacks are currently not executed
@@ -10961,34 +11081,48 @@ fn test_math_round_negative_half_semantics_integration() {
     match result {
         Value::Float(f) => {
             let val = f.inner();
-            assert!(val == -0.0 || val == 0.0,
-                   "Math.round(-0.5) should be -0, got {}", val);
+            assert!(
+                val == -0.0 || val == 0.0,
+                "Math.round(-0.5) should be -0, got {}",
+                val
+            );
         }
-        Value::Int(0) => {}, // Also acceptable
+        Value::Int(0) => {} // Also acceptable
         _ => panic!("Math.round(-0.5) should be -0 or 0, got {:?}", result),
     }
 
     // Test -1.5 → -1 (not -2)
     let result = interpreter.evaluate_expression("Math.round(-1.5)").unwrap();
-    assert_eq!(result, Value::Int(-1),
-               "Math.round(-1.5) should be -1, got {:?}", result);
+    assert_eq!(
+        result,
+        Value::Int(-1),
+        "Math.round(-1.5) should be -1, got {:?}",
+        result
+    );
 
     // Test -0.1 → -0
     let result = interpreter.evaluate_expression("Math.round(-0.1)").unwrap();
     match result {
         Value::Float(f) => {
             let val = f.inner();
-            assert!(val == -0.0 || val == 0.0,
-                   "Math.round(-0.1) should be -0, got {}", val);
+            assert!(
+                val == -0.0 || val == 0.0,
+                "Math.round(-0.1) should be -0, got {}",
+                val
+            );
         }
-        Value::Int(0) => {}, // Also acceptable
-        _ => panic!("Math.round(-0.1) should be -0 or 0, got {:?}", result);
+        Value::Int(0) => {} // Also acceptable
+        _ => panic!("Math.round(-0.1) should be -0 or 0, got {:?}", result),
     }
 
     // Test +0.5 → 1
     let result = interpreter.evaluate_expression("Math.round(0.5)").unwrap();
-    assert_eq!(result, Value::Int(1),
-               "Math.round(0.5) should be 1, got {:?}", result);
+    assert_eq!(
+        result,
+        Value::Int(1),
+        "Math.round(0.5) should be 1, got {:?}",
+        result
+    );
 
     // Test edge cases: NaN, Infinity
     let result = interpreter.evaluate_expression("Math.round(NaN)").unwrap();
@@ -10998,27 +11132,48 @@ fn test_math_round_negative_half_semantics_integration() {
         panic!("Math.round(NaN) should be NaN, got {:?}", result);
     }
 
-    let result = interpreter.evaluate_expression("Math.round(Infinity)").unwrap();
+    let result = interpreter
+        .evaluate_expression("Math.round(Infinity)")
+        .unwrap();
     if let Value::Float(f) = result {
-        assert_eq!(f.inner(), f64::INFINITY, "Math.round(Infinity) should be Infinity");
+        assert_eq!(
+            f.inner(),
+            f64::INFINITY,
+            "Math.round(Infinity) should be Infinity"
+        );
     } else {
         panic!("Math.round(Infinity) should be Infinity, got {:?}", result);
     }
 
-    let result = interpreter.evaluate_expression("Math.round(-Infinity)").unwrap();
+    let result = interpreter
+        .evaluate_expression("Math.round(-Infinity)")
+        .unwrap();
     if let Value::Float(f) = result {
-        assert_eq!(f.inner(), f64::NEG_INFINITY, "Math.round(-Infinity) should be -Infinity");
+        assert_eq!(
+            f.inner(),
+            f64::NEG_INFINITY,
+            "Math.round(-Infinity) should be -Infinity"
+        );
     } else {
-        panic!("Math.round(-Infinity) should be -Infinity, got {:?}", result);
+        panic!(
+            "Math.round(-Infinity) should be -Infinity, got {:?}",
+            result
+        );
     }
 
     // Test in complex expression context to verify pipeline integration
-    let result = interpreter.evaluate_expression("Math.round(-2.5) + Math.round(-1.5)").unwrap();
-    assert_eq!(result, Value::Int(-3),
-               "Math.round(-2.5) + Math.round(-1.5) should be -2 + -1 = -3, got {:?}", result);
+    let result = interpreter
+        .evaluate_expression("Math.round(-2.5) + Math.round(-1.5)")
+        .unwrap();
+    assert_eq!(
+        result,
+        Value::Int(-3),
+        "Math.round(-2.5) + Math.round(-1.5) should be -2 + -1 = -3, got {:?}",
+        result
+    );
 }
 
-#[test]  
+#[test]
 fn test_array_prototype_foreach_duplicate_removal_integration() {
     // Regression test for commit d1018316: Array.prototype.forEach duplicate removal
     // Validates that duplicate implementations were properly removed and fail-closed behavior works
@@ -11026,32 +11181,43 @@ fn test_array_prototype_foreach_duplicate_removal_integration() {
     let mut interpreter = InterpreterCore::new(config).unwrap();
 
     // Test 1: forEach with callback - should fail closed due to missing callback dispatch
-    let result = interpreter.evaluate_expression("[1, 2, 3].forEach(function(x) { return x * 2; })");
-    
+    let result =
+        interpreter.evaluate_expression("[1, 2, 3].forEach(function(x) { return x * 2; })");
+
     // Current implementation should either:
     // 1. Return undefined (forEach always returns undefined)
     // 2. Error due to fail-closed callback validation
     if let Ok(value) = result {
-        assert_eq!(value, Value::Undefined, 
-                  "forEach should return undefined when implemented");
+        assert_eq!(
+            value,
+            Value::Undefined,
+            "forEach should return undefined when implemented"
+        );
     } else {
         // Error is acceptable due to fail-closed implementation
         // This documents the current state until callback dispatch is implemented
-        eprintln!("forEach failed as expected due to fail-closed implementation: {:?}", result);
+        eprintln!(
+            "forEach failed as expected due to fail-closed implementation: {:?}",
+            result
+        );
     }
 
     // Test 2: forEach without callback - should handle gracefully
     let result = interpreter.evaluate_expression("[1, 2, 3].forEach()");
     if let Ok(value) = result {
-        assert_eq!(value, Value::Undefined,
-                  "forEach without callback should return undefined");
+        assert_eq!(
+            value,
+            Value::Undefined,
+            "forEach without callback should return undefined"
+        );
     } else {
         // Error is acceptable for missing callback parameter
         eprintln!("forEach without callback failed as expected: {:?}", result);
     }
 
     // Test 3: forEach on non-array - should handle type coercion
-    let result = interpreter.evaluate_expression("Array.prototype.forEach.call('hello', function(x) {})");
+    let result =
+        interpreter.evaluate_expression("Array.prototype.forEach.call('hello', function(x) {})");
     if result.is_ok() {
         // Current implementation may handle this scenario
         assert!(true, "forEach on string handled without crash");
@@ -11064,7 +11230,7 @@ fn test_array_prototype_foreach_duplicate_removal_integration() {
     // Multiple calls should have consistent behavior (not different due to different code paths)
     let result1 = interpreter.evaluate_expression("[1].forEach(function() {})");
     let result2 = interpreter.evaluate_expression("[2].forEach(function() {})");
-    
+
     // Both should have same result type (either both succeed or both fail consistently)
     match (result1.is_ok(), result2.is_ok()) {
         (true, true) => {
@@ -11076,7 +11242,9 @@ fn test_array_prototype_foreach_duplicate_removal_integration() {
             eprintln!("Both forEach calls failed consistently - good for fail-closed behavior");
         }
         (true, false) | (false, true) => {
-            panic!("Inconsistent forEach behavior suggests duplicate implementations still present");
+            panic!(
+                "Inconsistent forEach behavior suggests duplicate implementations still present"
+            );
         }
     }
 }
@@ -11099,7 +11267,10 @@ fn test_console_log_integration_regression() {
             eprintln!("Console.log failed gracefully - acceptable for fail-closed implementation");
         }
         Ok(other) => {
-            panic!("Console.log should return undefined or fail, got: {:?}", other);
+            panic!(
+                "Console.log should return undefined or fail, got: {:?}",
+                other
+            );
         }
     }
 }

@@ -1151,7 +1151,9 @@ mod tests {
     #[test]
     fn replay_drop_kind_serde() {
         for k in ReplayDropKind::ALL {
+            // SAFETY: ReplayDropKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).unwrap();
+            // SAFETY: JSON was just produced by valid ReplayDropKind serialization
             let back: ReplayDropKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*k, back);
         }
@@ -1197,7 +1199,9 @@ mod tests {
     #[test]
     fn conformance_vector_serde() {
         let v = partial_conformance();
+        // SAFETY: ConformanceVector derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&v).unwrap();
+        // SAFETY: JSON was just produced by valid ConformanceVector serialization
         let back: ConformanceVector = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
     }
@@ -1233,7 +1237,9 @@ mod tests {
     #[test]
     fn replay_drop_serde() {
         let r = bad_drop_record();
+        // SAFETY: ReplayDropRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by valid ReplayDropRecord serialization
         let back: ReplayDropRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -1263,7 +1269,9 @@ mod tests {
     #[test]
     fn degraded_record_serde() {
         let r = mild_degraded_record();
+        // SAFETY: DegradedModeRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by valid DegradedModeRecord serialization
         let back: DegradedModeRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -1315,7 +1323,9 @@ mod tests {
     #[test]
     fn observability_delta_serde() {
         let d = ObservabilityDelta::new(900_000, 1_000_000);
+        // SAFETY: ObservabilityDelta derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by valid ObservabilityDelta serialization
         let back: ObservabilityDelta = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }
@@ -1348,7 +1358,9 @@ mod tests {
     #[test]
     fn gate_config_serde() {
         let c = GateConfig::strict();
+        // SAFETY: GateConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by valid GateConfig serialization
         let back: GateConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }

@@ -1597,7 +1597,9 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = CertificateBundle::build("serde", test_epoch(), vec![]);
+        // SAFETY: CertificateBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just generated from CertificateBundle, deserialization guaranteed to succeed
         let back: CertificateBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle, back);
     }
@@ -1635,7 +1637,9 @@ mod tests {
     #[test]
     fn effect_entry_serde_roundtrip() {
         let entry = test_effect_entry(EffectKind::Allocation, "fn:test:1", 5 * MILLION);
+        // SAFETY: EffectEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just generated from EffectEntry, deserialization guaranteed to succeed
         let back: EffectEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, back);
     }
@@ -1645,7 +1649,9 @@ mod tests {
     #[test]
     fn assumption_serde_roundtrip() {
         let a = test_assumption("no_eval", AssumptionKind::NoEval);
+        // SAFETY: CertificateAssumption derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: JSON was just generated from CertificateAssumption, deserialization guaranteed to succeed
         let back: CertificateAssumption = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
@@ -1655,7 +1661,9 @@ mod tests {
     #[test]
     fn abstention_point_serde_roundtrip() {
         let abs = test_abstention("fn:test:eval", AbstentionReason::DynamicCodeGen);
+        // SAFETY: AbstentionPoint derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&abs).unwrap();
+        // SAFETY: JSON was just generated from AbstentionPoint, deserialization guaranteed to succeed
         let back: AbstentionPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(abs, back);
     }

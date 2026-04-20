@@ -396,6 +396,7 @@ fn normalize_limit(value: usize) -> usize {
 }
 
 fn sha256_hex<T: Serialize>(value: &T) -> String {
+    // SAFETY: serde_json::to_vec only fails on writer errors, not possible with Vec<u8>
     let payload = serde_json::to_vec(value).unwrap();
     let digest = Sha256::digest(payload);
     hex::encode(digest)
@@ -785,7 +786,11 @@ mod tests {
     #[test]
     fn tier_up_policy_serde_roundtrip() {
         let policy = TierUpPolicy::default();
+        // SAFETY: TierUpPolicy derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TierUpPolicy,
+        // so from_str back to TierUpPolicy cannot fail (valid format + matching schema).
         let restored: TierUpPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
@@ -800,7 +805,11 @@ mod tests {
             cache_misses: 20,
             cache_hit_rate_millionths: 800_000,
         };
+        // SAFETY: HotPathSample derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&sample).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid HotPathSample,
+        // so from_str back to HotPathSample cannot fail (valid format + matching schema).
         let restored: HotPathSample = serde_json::from_str(&json).unwrap();
         assert_eq!(sample, restored);
     }

@@ -839,6 +839,7 @@ mod tests {
     fn coder_encode_empty_rejected() {
         let mut est = EntropyEstimator::new();
         est.observe(0);
+        // SAFETY: estimator with observed symbol has valid non-empty alphabet
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
         assert!(matches!(coder.encode(&[]), Err(EntropyError::EmptyInput)));
     }
@@ -847,6 +848,7 @@ mod tests {
     fn coder_unknown_symbol_rejected() {
         let mut est = EntropyEstimator::new();
         est.observe(0);
+        // SAFETY: estimator with observed symbol has valid non-empty alphabet
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
         assert!(matches!(
             coder.encode(&[99]),

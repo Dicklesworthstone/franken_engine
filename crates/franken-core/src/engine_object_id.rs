@@ -507,6 +507,7 @@ mod tests {
 
     #[test]
     fn derive_id_is_deterministic() {
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id1 = derive_id(
             ObjectDomain::PolicyObject,
             "zone-a",
@@ -514,6 +515,7 @@ mod tests {
             &test_canonical_bytes(),
         )
         .unwrap();
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id2 = derive_id(
             ObjectDomain::PolicyObject,
             "zone-a",
@@ -534,6 +536,7 @@ mod tests {
 
         let ids: Vec<EngineObjectId> = ObjectDomain::ALL
             .iter()
+            // SAFETY: Test derives IDs with valid domain, zone, schema, and content; derive_id succeeds in controlled test environment
             .map(|d| derive_id(*d, zone, &schema, &content).unwrap())
             .collect();
 
@@ -553,7 +556,9 @@ mod tests {
         let content = test_canonical_bytes();
         let schema = test_schema_id();
 
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id_a = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content).unwrap();
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id_b = derive_id(ObjectDomain::PolicyObject, "zone-b", &schema, &content).unwrap();
         assert_ne!(id_a, id_b);
     }
@@ -566,7 +571,9 @@ mod tests {
         let schema_v1 = SchemaId::from_definition(b"schema-v1");
         let schema_v2 = SchemaId::from_definition(b"schema-v2");
 
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id_v1 = derive_id(ObjectDomain::EvidenceRecord, "zone", &schema_v1, &content).unwrap();
+        // SAFETY: Test derives ID with valid parameters; derive_id succeeds in controlled test environment
         let id_v2 = derive_id(ObjectDomain::EvidenceRecord, "zone", &schema_v2, &content).unwrap();
         assert_ne!(id_v1, id_v2);
     }

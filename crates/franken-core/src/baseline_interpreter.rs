@@ -984,6 +984,7 @@ impl EvidenceLog {
         self.receipts.push(receipt);
         self.receipt_counter += 1;
 
+        // SAFETY: Receipt was just pushed above, so receipts is non-empty
         self.receipts.last().unwrap()
     }
 

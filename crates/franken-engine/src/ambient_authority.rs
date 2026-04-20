@@ -1018,6 +1018,7 @@ mod tests {
             reason: "test reason".to_string(),
             suggested_alternative: "use safe api".to_string(),
         };
+        // SAFETY: ForbiddenPattern derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&pattern).unwrap();
         let restored: ForbiddenPattern = serde_json::from_str(&json).unwrap();
         assert_eq!(pattern, restored);

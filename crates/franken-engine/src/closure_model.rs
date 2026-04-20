@@ -985,15 +985,18 @@ mod tests {
             .unwrap();
 
         // Simulate closure creation — capture resolves to global env.
+        // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
         let captures = chain.compute_captures(&["counter".into()]).unwrap();
         assert_eq!(captures[0].binding_id, 1);
 
         // Mutate from outer scope.
+        // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("counter", EnvValue::Number(1), Label::Public)
             .unwrap();
 
         // Re-reading sees the updated value (closures share the binding).
+        // SAFETY: Test gets mutated variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("counter").unwrap();
         assert_eq!(*val, EnvValue::Number(1));
     }
@@ -1011,9 +1014,11 @@ mod tests {
     fn function_decl_hoisted_with_value() {
         let mut chain = fresh_chain();
         let closure_ref = EnvValue::ClosureRef(ClosureHandle(0));
+        // SAFETY: Test declares valid function; declare_function succeeds in controlled test environment.
         chain
             .declare_function("foo".into(), 50, closure_ref.clone())
             .unwrap();
+        // SAFETY: Test gets declared function; get_value succeeds in controlled test environment.
         let val = chain.get_value("foo").unwrap();
         assert_eq!(*val, closure_ref);
     }

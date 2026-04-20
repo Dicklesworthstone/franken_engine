@@ -2263,6 +2263,8 @@ mod tests {
                 assert!(chain.contains(&"a".to_string()));
                 assert!(chain.contains(&"b".to_string()));
             }
+            // SAFETY: Test-only panic to catch unexpected CohortError variants
+            // in alias loop validation. Expected error is AliasLoop only.
             other => panic!("unexpected error: {other}"),
         }
     }

@@ -13071,46 +13071,7 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(num.log2())))
             }
 
-            "builtin:ArrayPrototypeReduceRight" => {
-                // Array.prototype.reduceRight(callback[, initialValue]) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                if length == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                // Simplified implementation: return first element from right
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in (0..length).rev() {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            return Ok(element.clone());
-                        }
-                    }
-                }
-
-                Ok(Value::Undefined)
-            }
+            // Removed duplicate ArrayPrototypeReduceRight - implementation at line ~11114 is identical
 
             "builtin:ObjectPrototypeToString" => {
                 // Object.prototype.toString() implementation

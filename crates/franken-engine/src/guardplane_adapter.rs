@@ -582,6 +582,14 @@ fn metadata_lookup<'a>(metadata: &'a BTreeMap<String, String>, keys: &[&str]) ->
         .find_map(|key| metadata.get(*key).map(String::as_str))
 }
 
+fn metadata_lookup_with_key<'a>(
+    metadata: &'a BTreeMap<String, String>,
+    keys: &[&'static str],
+) -> Option<(&'static str, &'a str)> {
+    keys.iter()
+        .find_map(|key| metadata.get(*key).map(|value| (*key, value.as_str())))
+}
+
 fn parse_capability_csv(raw: &str) -> BTreeSet<String> {
     raw.split(',')
         .map(str::trim)

@@ -1315,7 +1315,9 @@ mod tests {
     fn schedule_result_serde_roundtrip() {
         let mut sched = test_scheduler();
         let result = sched.schedule(Regime::Normal);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
@@ -1546,6 +1548,7 @@ mod tests {
             information_gain_millionths: 1_000_000,
             base_relevance_millionths: 1_000_000,
         };
+        // SAFETY: registering valid probe should succeed
         sched.register_probe(cal).unwrap();
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.decisions.len(), 1);
@@ -1563,7 +1566,9 @@ mod tests {
         config
             .relevance_overrides
             .insert("elevated:health_check".to_string(), 2_000_000);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: SchedulerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
         assert_eq!(restored.relevance_overrides.len(), 2);
@@ -1581,7 +1586,9 @@ mod tests {
             scheduled: false,
             skip_reason: Some("budget exhausted (remaining: 500000, cost: 3000000)".to_string()),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&dec).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(dec, restored);
     }

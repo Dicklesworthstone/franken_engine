@@ -1447,7 +1447,11 @@ mod tests {
     #[test]
     fn loss_matrix_serde_roundtrip() {
         let m = LossMatrix::balanced();
+        // SAFETY: LossMatrix derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&m).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LossMatrix,
+        // so from_str back to LossMatrix cannot fail (valid format + matching schema).
         let restored: LossMatrix = serde_json::from_str(&json).unwrap();
         assert_eq!(m, restored);
     }
@@ -1692,7 +1696,11 @@ mod tests {
     fn action_decision_serde_roundtrip() {
         let mut selector = ExpectedLossSelector::balanced();
         let decision = selector.select(&uncertain_posterior());
+        // SAFETY: ActionDecision derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ActionDecision,
+        // so from_str back to ActionDecision cannot fail (valid format + matching schema).
         let restored: ActionDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, restored);
     }

@@ -1,10 +1,16 @@
 //! Integration tests for `certified_rewrite_optimizer` module.
 //!
-//! The optimizer module is currently disabled in lib.rs because its dependent APIs
-//! have not landed. Keep this integration test out of all-target builds until the
-//! module is re-enabled against concrete production APIs.
+//! **DISABLED**: This integration test suite is temporarily disabled because the
+//! `certified_rewrite_optimizer` module has broken imports for dependent APIs that
+//! do not exist yet (TranslationValidator, ValidationResult, ValidationReceipt, etc.).
+//!
+//! **Tracking**: bd-1dfpt - Re-enable when dependent APIs land
+//! **Expiry**: Remove this cfg gate and restore integration testing once:
+//! 1. Missing dependent API types are implemented in their source modules
+//! 2. certified_rewrite_optimizer module is re-enabled in lib.rs
+//! 3. All imports resolve successfully
 
-#![cfg(any())]
+#![cfg(feature = "certified_rewrite_optimizer_integration")]
 
 //!
 //! Validates certified rewrite optimization coordination, translation validation,

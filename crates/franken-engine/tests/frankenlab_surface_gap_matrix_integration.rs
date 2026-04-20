@@ -1050,3 +1050,97 @@ fn canonical_matrix_all_assessments_have_rationale() {
         );
     }
 }
+
+#[test]
+fn regression_hash_collision_prevention_bd_3nr_1_1_2_1() {
+    // Regression test for bd-3nr.1.1.2.1: Verify that domain separation prevents
+    // hash collisions between different matrices that could produce identical hash inputs.
+    //
+    // Before the fix, these matrices would produce identical hash inputs:
+    // Matrix A: assessment with rationale "r" + cell with notes "n"
+    // Matrix B: assessment with rationale "rlab_runtimevirtual_timecoveredn" + no cells
+    //
+    // The variable-length rationale field could "swallow" the subsequent cell data,
+    // causing different observable matrices to hash to the same value.
+
+    // Matrix A: Short rationale with one cell
+    let cell_a = make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "n", // Short notes
+    );
+    let assessment_a = SurfaceAssessment::build(
+        SurfaceId::LabRuntime,
+        vec![cell_a],
+        MigrationDecision::DirectAdoption,
+        "r", // Short rationale
+    );
+    let matrix_a = GapMatrix::build(vec![assessment_a]);
+
+    // Matrix B: Long rationale that "swallows" what would be cell data, no actual cells
+    let assessment_b = SurfaceAssessment::build(
+        SurfaceId::LabRuntime,
+        vec![], // No cells
+        MigrationDecision::DirectAdoption,
+        "rlab_runtimevirtual_timecoveredn", // Rationale contains what looks like cell data
+    );
+    let matrix_b = GapMatrix::build(vec![assessment_b]);
+
+    // These matrices are observably different
+    assert_ne!(matrix_a.assessments, matrix_b.assessments);
+    assert_eq!(matrix_a.assessments[0].cells.len(), 1);
+    assert_eq!(matrix_b.assessments[0].cells.len(), 0);
+    assert_ne!(
+        matrix_a.assessments[0].rationale,
+        matrix_b.assessments[0].rationale
+    );
+
+    // With proper domain separation, their hashes must be different
+    assert_ne!(
+        matrix_a.matrix_hash, matrix_b.matrix_hash,
+        "Hash collision detected! Matrix A (rationale='r', 1 cell) and Matrix B (rationale='rlab_runtimevirtual_timecoveredn', 0 cells) have identical hashes"
+    );
+
+    // Additional collision scenario: different cell counts
+    let cell_c1 = make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "first",
+    );
+    let cell_c2 = make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::DeterministicExecution,
+        CoverageLevel::Partial,
+        "",
+    );
+    let assessment_c = SurfaceAssessment::build(
+        SurfaceId::LabRuntime,
+        vec![cell_c1, cell_c2],
+        MigrationDecision::DirectAdoption,
+        "",
+    );
+
+    let cell_d = make_cell(
+        SurfaceId::LabRuntime,
+        CapabilityId::VirtualTime,
+        CoverageLevel::Covered,
+        "firstlab_runtimedeterministic_executionpartial",
+    );
+    let assessment_d = SurfaceAssessment::build(
+        SurfaceId::LabRuntime,
+        vec![cell_d],
+        MigrationDecision::DirectAdoption,
+        "",
+    );
+
+    let matrix_c = GapMatrix::build(vec![assessment_c]);
+    let matrix_d = GapMatrix::build(vec![assessment_d]);
+
+    // These matrices should also have different hashes
+    assert_ne!(
+        matrix_c.matrix_hash, matrix_d.matrix_hash,
+        "Hash collision detected! Matrix C (2 cells) and Matrix D (1 cell with concatenated notes) have identical hashes"
+    );
+}

@@ -382,21 +382,47 @@ impl GapMatrix {
         };
 
         let mut hasher = Sha256::new();
+        // Domain tag for gap matrix hash
+        hasher.update(b"GAP_MATRIX:");
         hasher.update(GAP_MATRIX_SCHEMA_VERSION.as_bytes());
+
+        // Assessment count to prevent collection boundary confusion
+        hasher.update(b"ASSESSMENTS:");
+        hasher.update(&(assessments.len() as u64).to_be_bytes());
+
         for a in &assessments {
+            hasher.update(b"ASSESSMENT:");
             hasher.update(format!("{}", a.surface).as_bytes());
+            hasher.update(b"|DECISION:");
             hasher.update(format!("{}", a.decision).as_bytes());
+
+            // Length-prefixed rationale to prevent boundary confusion
+            hasher.update(b"|RATIONALE:");
+            hasher.update(&(a.rationale.len() as u64).to_be_bytes());
             hasher.update(a.rationale.as_bytes());
+
             let mut sorted_cells: Vec<_> = a.cells.iter().collect();
             sorted_cells.sort_by(|x, y| {
                 format!("{}", x.surface)
                     .cmp(&format!("{}", y.surface))
                     .then_with(|| format!("{}", x.capability).cmp(&format!("{}", y.capability)))
             });
+
+            // Cell count to prevent cell boundary confusion
+            hasher.update(b"|CELLS:");
+            hasher.update(&(sorted_cells.len() as u64).to_be_bytes());
+
             for c in &sorted_cells {
+                hasher.update(b"CELL:");
                 hasher.update(format!("{}", c.surface).as_bytes());
+                hasher.update(b"|CAP:");
                 hasher.update(format!("{}", c.capability).as_bytes());
+                hasher.update(b"|COV:");
                 hasher.update(format!("{}", c.coverage).as_bytes());
+
+                // Length-prefixed notes to prevent boundary confusion
+                hasher.update(b"|NOTES:");
+                hasher.update(&(c.notes.len() as u64).to_be_bytes());
                 hasher.update(c.notes.as_bytes());
             }
         }

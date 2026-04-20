@@ -1049,6 +1049,8 @@ mod tests {
             TrustZoneError::CapabilityCeilingExceeded { zone_name, .. } => {
                 assert_eq!(zone_name, "community");
             }
+            // SAFETY: Test-only panic to validate capability ceiling enforcement error type.
+            // Test expects CapabilityCeilingExceeded when capabilities exceed zone ceiling.
             other => panic!("unexpected error: {other}"),
         }
 

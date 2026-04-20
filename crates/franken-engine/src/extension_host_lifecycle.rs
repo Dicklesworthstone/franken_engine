@@ -721,6 +721,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(1000);
 
+        // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
         assert!(mgr.is_extension_running("ext-a"));
         assert_eq!(mgr.loaded_extension_count(), 1);
@@ -732,6 +733,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(1000);
 
+        // SAFETY: Test setup ensures first load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
         let err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_already_loaded");
@@ -742,7 +744,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(1000);
 
+        // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
+        // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
         let outcome = mgr.unload_extension("ext-a", &mut cx).unwrap();
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
@@ -763,7 +767,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(1000);
 
+        // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
+        // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
         mgr.unload_extension("ext-a", &mut cx).unwrap();
         let err = mgr.unload_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_running");
@@ -778,12 +784,14 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(5000);
 
+        // SAFETY: Test setup ensures load_extension succeeds with valid extension names and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.load_extension("ext-b", &mut cx).unwrap();
         mgr.load_extension("ext-c", &mut cx).unwrap();
         assert_eq!(mgr.loaded_extension_count(), 3);
 
         // Unload one; others unaffected.
+        // SAFETY: Extension ext-b was just loaded successfully, so unload_extension will succeed
         mgr.unload_extension("ext-b", &mut cx).unwrap();
         assert!(mgr.is_extension_running("ext-a"));
         assert!(!mgr.is_extension_running("ext-b"));

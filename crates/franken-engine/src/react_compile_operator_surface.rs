@@ -897,7 +897,9 @@ mod tests {
             preserve_display_names: true,
             input_hash: ContentHash::compute(b"test"),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&input).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ReactCompileInput = serde_json::from_str(&json).unwrap();
         assert_eq!(input, back);
     }
@@ -915,7 +917,9 @@ mod tests {
             runtime_mode: ReactRuntimeMode::Automatic,
             target: ReactBuildTarget::Client,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&output).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ReactCompileOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(output, back);
     }

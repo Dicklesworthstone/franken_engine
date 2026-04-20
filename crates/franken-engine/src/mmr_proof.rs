@@ -833,6 +833,8 @@ mod tests {
             let mmr = build_mmr(n);
             for i in 0..n {
                 let proof = mmr.inclusion_proof(i).unwrap();
+                // SAFETY: Test-only panic to validate MMR inclusion proof verification
+                // expects all proofs to verify successfully in consistency test
                 verify_inclusion(&leaf_hash(i), i, &proof)
                     .unwrap_or_else(|e| panic!("n={n}, i={i}: {e}"));
             }

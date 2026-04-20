@@ -815,7 +815,11 @@ mod tests {
     #[test]
     fn evidence_serde_roundtrip() {
         let inv = run_diagnostic_corpus();
+        // SAFETY: TsNormalizationEvidenceInventory derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&inv).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsNormalizationEvidenceInventory,
+        // so from_str back to TsNormalizationEvidenceInventory cannot fail (valid format + matching schema).
         let back: TsNormalizationEvidenceInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
     }
@@ -933,7 +937,11 @@ mod tests {
     #[test]
     fn ts_feature_family_serde_roundtrip_all_variants() {
         for family in TsFeatureFamily::ALL {
+            // SAFETY: TsFeatureFamily derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(family).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid TsFeatureFamily,
+            // so from_str back to TsFeatureFamily cannot fail (valid format + matching schema).
             let back: TsFeatureFamily = serde_json::from_str(&json).unwrap();
             assert_eq!(*family, back);
         }
@@ -942,7 +950,11 @@ mod tests {
     #[test]
     fn actual_outcome_serde_roundtrip() {
         for variant in [ActualOutcome::Success, ActualOutcome::Rejected] {
+            // SAFETY: ActualOutcome derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ActualOutcome,
+            // so from_str back to ActualOutcome cannot fail (valid format + matching schema).
             let back: ActualOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -951,7 +963,11 @@ mod tests {
     #[test]
     fn specimen_verdict_serde_roundtrip() {
         for variant in [SpecimenVerdict::Pass, SpecimenVerdict::Fail] {
+            // SAFETY: SpecimenVerdict derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid SpecimenVerdict,
+            // so from_str back to SpecimenVerdict cannot fail (valid format + matching schema).
             let back: SpecimenVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -998,7 +1014,11 @@ mod tests {
             verdict: Some("pass".into()),
             detail: Some("normalized successfully".into()),
         };
+        // SAFETY: TsEvidenceEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ev).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsEvidenceEvent,
+        // so from_str back to TsEvidenceEvent cannot fail (valid format + matching schema).
         let back: TsEvidenceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
     }

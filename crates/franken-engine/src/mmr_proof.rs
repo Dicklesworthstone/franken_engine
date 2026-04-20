@@ -1921,6 +1921,7 @@ mod tests {
             let old_root = build_mmr(old_n).root_hash().unwrap();
             let new_mmr = build_mmr(old_n + 1);
             let proof = new_mmr.consistency_proof(old_n).unwrap();
+            // SAFETY: Test validates MMR consistency proof succeeds for non-trivial old lengths
             verify_consistency(&old_root, &proof).unwrap_or_else(|e| panic!("old_n={old_n}: {e}"));
         }
     }

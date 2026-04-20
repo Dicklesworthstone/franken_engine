@@ -256,5 +256,12 @@ fn test_revocation_propagation_slo() {
 1. [Site Reliability Engineering: How Google Runs Production Systems](https://sre.google/books/)
 2. [The Art of SLOs](https://sre.google/resources/practices-and-processes/art-of-slos/)
 3. [Implementing Service Level Objectives](https://sre.google/workbook/implementing-slos/)
-4. [FrankenEngine Security Architecture](../security/ARCHITECTURE.md)
-5. [Policy Decision Engine Documentation](../policy/DECISION_ENGINE.md)
+4. FrankenEngine Security Architecture (internal reference moved to separate ADR artifact)
+5. [Policy Decision Engine Documentation](https://example.com/policy-decision-engine-docs)
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

@@ -997,8 +997,7 @@ fn automatic_compile_requires_declared_jsx_runtime_import() {
         .iter()
         .find(|failure| {
             failure.failure_kind == CompatibilityFailureKind::Compilation
-                && failure.minimized_repro.failing_specifier.as_deref()
-                    == Some("react/jsx-runtime")
+                && failure.minimized_repro.failing_specifier.as_deref() == Some("react/jsx-runtime")
         })
         .expect("automatic JSX mode should produce compilation triage for react/jsx-runtime");
     assert_eq!(triage.failure_kind, CompatibilityFailureKind::Compilation);

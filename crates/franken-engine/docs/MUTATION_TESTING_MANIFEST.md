@@ -79,3 +79,10 @@ hides a weak security-critical surface.
 CI must publish the mutant manifest, killed/survived/equivalent counts,
 survivor report, and reproduction command. A missing mutation report is a gate
 failure, not a skipped quality signal.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

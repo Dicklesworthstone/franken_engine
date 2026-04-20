@@ -86,3 +86,10 @@ not be promoted as independently reproducible claims.
 | Entry ID | Artifact | Source Attribution | Hash Chain | Temporal Bounds | Signature Manifest | Replay Access Rights |
 | --- | --- | --- | --- | --- | --- | --- |
 | `data-provenance-bundle-0001` | `DATA_PROVENANCE_BUNDLE.md` | FrankenEngine docs skeleton authored under `bd-2501` | Pending first signed bundle manifest | Draft window: `2026-04-20T00:00:00Z` to `2026-04-20T23:59:59Z` | Pending key registry integration | Maintainer replay via repository history; public replay after report bundle publication |
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

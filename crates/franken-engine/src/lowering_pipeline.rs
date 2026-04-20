@@ -498,7 +498,12 @@ pub fn lower_ir0_to_ir1(
     };
 
     // Preallocate bindings capacity based on AST size, bounded by lowering budget
-    let estimated_bindings = ir0.tree.body.len().saturating_mul(4).min(MAX_PREALLOC_BINDINGS); // ~4 bindings per statement
+    let estimated_bindings = ir0
+        .tree
+        .body
+        .len()
+        .saturating_mul(4)
+        .min(MAX_PREALLOC_BINDINGS); // ~4 bindings per statement
     if ir0.tree.body.len().saturating_mul(4) > MAX_PREALLOC_BINDINGS {
         return Err(LoweringPipelineError::AllocationBudgetExceeded {
             requested: ir0.tree.body.len().saturating_mul(4),
@@ -11571,10 +11576,7 @@ mod tests {
                 assert_eq!(requested, large_body_size * 8);
                 assert!(requested > limit, "requested should exceed limit");
             }
-            other => panic!(
-                "Expected AllocationBudgetExceeded error, got: {:?}",
-                other
-            ),
+            other => panic!("Expected AllocationBudgetExceeded error, got: {:?}", other),
         }
     }
 

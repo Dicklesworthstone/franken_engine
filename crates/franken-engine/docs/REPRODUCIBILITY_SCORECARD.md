@@ -36,3 +36,10 @@
 - Alert thresholds for soft failures (warn), hard thresholds for hard fails (fail build).
 - Define deterministic rerun policy for hash or environment drift.
 - Require sign-off only after all thresholds remain within bounds over repeated replay.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

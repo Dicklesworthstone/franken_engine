@@ -9,18 +9,15 @@
 #![forbid(unsafe_code)]
 
 use clap::{Arg, ArgMatches, Command};
-use serde_json;
 use std::fs;
 use std::path::Path;
 use std::process;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
-    BundleConfig, EvidenceBundle, ParityTarget, ParityVerdict,
-    export_bundle_json, export_bundle_toml, export_report_json, export_report_toml,
-    generate_report,
+    BundleConfig, EvidenceBundle, ParityTarget, ParityVerdict, export_bundle_json,
+    export_bundle_toml, export_report_json, export_report_toml, generate_report,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::security_epoch::SecurityEpoch;
 
 /// Parse command line arguments.
 fn parse_args() -> ArgMatches {
@@ -89,7 +86,8 @@ fn integrate_with_gate_manifest(
 ) -> Result<(), String> {
     // Load the gate manifest (uses same format as cc_2's benchmark gate binary)
     let content = fs::read_to_string(gate_path).map_err(|e| e.to_string())?;
-    let gate_manifest: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let gate_manifest: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
 
     // Extract baseline results and create parity verdicts
     if let Some(results) = gate_manifest.get("results").and_then(|r| r.as_array()) {
@@ -109,7 +107,9 @@ fn integrate_with_gate_manifest(
                     evidence_hash: ContentHash::compute(test_name.as_bytes()),
                 };
 
-                bundle.add_parity_verdict(parity).map_err(|e| format!("Failed to add parity verdict: {}", e))?;
+                bundle
+                    .add_parity_verdict(parity)
+                    .map_err(|e| format!("Failed to add parity verdict: {}", e))?;
             }
         }
     }

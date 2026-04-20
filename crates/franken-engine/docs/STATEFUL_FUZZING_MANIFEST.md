@@ -72,3 +72,10 @@ Every campaign exports a replay bundle at campaign end:
 
 Bundles are immutable after archiving and must remain downloadable for at least one full
 release cycle.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

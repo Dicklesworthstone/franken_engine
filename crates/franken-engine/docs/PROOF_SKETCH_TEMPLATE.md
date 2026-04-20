@@ -24,3 +24,10 @@
 - Reference the exact artifact path and expected checksum/builder reproducibility inputs.
 - Provide machine-checkable checks (e.g., theorem statements, regression test IDs, scripts).
 - Include instructions for artifact regeneration and verification steps.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

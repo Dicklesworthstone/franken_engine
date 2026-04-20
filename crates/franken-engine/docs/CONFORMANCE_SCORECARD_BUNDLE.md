@@ -158,3 +158,10 @@ The comprehensive test coverage and external validation provide confidence in th
 - **Next Review**: 2026-07-20  
 - **Owner**: FrankenEngine Research Team
 - **Reviewers**: Security Team, Language Team, QA Team
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

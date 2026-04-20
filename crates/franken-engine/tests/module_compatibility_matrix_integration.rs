@@ -5131,7 +5131,8 @@ fn test_math_sqrt_deduplication_regression() {
 
     // Count how many mnemonic mappings exist for MathSqrt
     let mut sqrt_count = 0;
-    for i in 0..1000 {  // Check reasonable range of builtin IDs
+    for i in 0..1000 {
+        // Check reasonable range of builtin IDs
         if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
             if mnemonic == "builtin:MathSqrt" {
                 sqrt_count += 1;
@@ -5139,7 +5140,11 @@ fn test_math_sqrt_deduplication_regression() {
         }
     }
 
-    assert_eq!(sqrt_count, 1, "Should have exactly one Math.sqrt dispatch arm, found: {}", sqrt_count);
+    assert_eq!(
+        sqrt_count, 1,
+        "Should have exactly one Math.sqrt dispatch arm, found: {}",
+        sqrt_count
+    );
 }
 
 #[test]
@@ -5152,7 +5157,8 @@ fn test_math_pow_deduplication_regression() {
 
     // Count how many mnemonic mappings exist for MathPow
     let mut pow_count = 0;
-    for i in 0..1000 {  // Check reasonable range of builtin IDs
+    for i in 0..1000 {
+        // Check reasonable range of builtin IDs
         if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
             if mnemonic == "builtin:MathPow" {
                 pow_count += 1;
@@ -5160,13 +5166,17 @@ fn test_math_pow_deduplication_regression() {
         }
     }
 
-    assert_eq!(pow_count, 1, "Should have exactly one Math.pow dispatch arm, found: {}", pow_count);
+    assert_eq!(
+        pow_count, 1,
+        "Should have exactly one Math.pow dispatch arm, found: {}",
+        pow_count
+    );
 }
 
 #[test]
 fn test_math_sqrt_argument_handling() {
     // Regression test for bd-af8b7: Math.sqrt should use correct register offset (args.start, not args.start+1)
-    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value, Float64};
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Float64, Value};
 
     let mut interpreter = BaselineInterpreter::new();
 
@@ -5176,7 +5186,9 @@ fn test_math_sqrt_argument_handling() {
     assert_eq!(result, Value::Int(2), "sqrt(4) should return 2");
 
     // Test Math.sqrt(9.0) should return 3 (as Int due to whole number optimization)
-    interpreter.write_reg(0, Value::Float(Float64::new(9.0))).unwrap();
+    interpreter
+        .write_reg(0, Value::Float(Float64::new(9.0)))
+        .unwrap();
     let result = interpreter.call_builtin("builtin:MathSqrt", 0, 1).unwrap();
     assert_eq!(result, Value::Int(3), "sqrt(9.0) should return 3");
 
@@ -5184,7 +5196,7 @@ fn test_math_sqrt_argument_handling() {
     interpreter.write_reg(0, Value::Int(-1)).unwrap();
     let result = interpreter.call_builtin("builtin:MathSqrt", 0, 1).unwrap();
     match result {
-        Value::Float(f) if f.inner().is_nan() => {}, // Expected
+        Value::Float(f) if f.inner().is_nan() => {} // Expected
         other => panic!("sqrt(-1) should return NaN, got: {:?}", other),
     }
 }
@@ -5192,7 +5204,7 @@ fn test_math_sqrt_argument_handling() {
 #[test]
 fn test_math_pow_argument_handling() {
     // Regression test for bd-af8b7: Math.pow should use correct register offset and return Int when appropriate
-    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value, Float64};
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Float64, Value};
 
     let mut interpreter = BaselineInterpreter::new();
 
@@ -5203,27 +5215,37 @@ fn test_math_pow_argument_handling() {
     assert_eq!(result, Value::Int(8), "pow(2, 3) should return 8");
 
     // Test Math.pow(2.0, 3.0) should return 8 (as Int due to whole number optimization)
-    interpreter.write_reg(0, Value::Float(Float64::new(2.0))).unwrap();
-    interpreter.write_reg(1, Value::Float(Float64::new(3.0))).unwrap();
+    interpreter
+        .write_reg(0, Value::Float(Float64::new(2.0)))
+        .unwrap();
+    interpreter
+        .write_reg(1, Value::Float(Float64::new(3.0)))
+        .unwrap();
     let result = interpreter.call_builtin("builtin:MathPow", 0, 2).unwrap();
     assert_eq!(result, Value::Int(8), "pow(2.0, 3.0) should return 8");
 
     // Test Math.pow(2, 0.5) should return float ~1.414
     interpreter.write_reg(0, Value::Int(2)).unwrap();
-    interpreter.write_reg(1, Value::Float(Float64::new(0.5))).unwrap();
+    interpreter
+        .write_reg(1, Value::Float(Float64::new(0.5)))
+        .unwrap();
     let result = interpreter.call_builtin("builtin:MathPow", 0, 2).unwrap();
     match result {
         Value::Float(f) => {
             let val = f.inner();
-            assert!((val - 1.4142135623730951).abs() < 1e-10, "pow(2, 0.5) should be ~1.414, got: {}", val);
-        },
+            assert!(
+                (val - 1.4142135623730951).abs() < 1e-10,
+                "pow(2, 0.5) should be ~1.414, got: {}",
+                val
+            );
+        }
         other => panic!("pow(2, 0.5) should return Float, got: {:?}", other),
     }
 
     // Test Math.pow() with no arguments should return NaN
     let result = interpreter.call_builtin("builtin:MathPow", 0, 0).unwrap();
     match result {
-        Value::Float(f) if f.inner().is_nan() => {}, // Expected
+        Value::Float(f) if f.inner().is_nan() => {} // Expected
         other => panic!("pow() with no args should return NaN, got: {:?}", other),
     }
 }

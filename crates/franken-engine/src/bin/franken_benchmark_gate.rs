@@ -195,7 +195,7 @@ fn main() {
         });
 
     // Validate threshold range
-    if threshold < 0.0 || threshold > 1.0 {
+    if !(0.0..=1.0).contains(&threshold) {
         eprintln!(
             "Error: Threshold must be between 0.0 and 1.0, got {}",
             threshold

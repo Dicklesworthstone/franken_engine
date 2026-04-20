@@ -410,5 +410,12 @@ CREATE TABLE regression_history (
 1. [Differential Testing: A New Approach to Change Detection](https://dl.acm.org/doi/10.1145/3106237.3106295)
 2. [JavaScript Conformance Testing](https://test262.ecma-international.org/)
 3. [Fuzzing: Art, Science, and Engineering](https://arxiv.org/abs/1812.00140)
-4. [FrankenEngine Compatibility Matrix](./COMPATIBILITY_MATRIX.md)
-5. [Performance Regression Detection](./PERFORMANCE_BASELINES.md)
+4. FrankenEngine Compatibility Matrix (bundle renamed/archived; see registry entry)
+5. Performance Regression Baselines (bundle renamed/archived; see registry entry)
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

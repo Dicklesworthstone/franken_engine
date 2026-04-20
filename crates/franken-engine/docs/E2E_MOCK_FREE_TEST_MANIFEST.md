@@ -24,3 +24,10 @@
 - Assert on real telemetry signals such as spans, counters, and error classifications.
 - Verify fallback and retry behavior via observable service outputs rather than mocked responses.
 - Fail tests on missing or degraded observability signals where production behavior depends on them.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

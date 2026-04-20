@@ -251,7 +251,7 @@ fn print_help() {
 
 fn load_curated_corpus(
     manifest_path: &Path,
-    equivalence_artifacts_path: Option<&PathBuf>,
+    equivalence_artifacts_path: Option<&Path>,
 ) -> Result<WorkloadCorpus, Box<dyn std::error::Error>> {
     let manifest_content = fs::read_to_string(manifest_path)?;
     let manifest: serde_json::Value = serde_json::from_str(&manifest_content)?;
@@ -264,7 +264,12 @@ fn load_curated_corpus(
 
     for specimen_data in specimens {
         let specimen = parse_specimen_from_manifest(specimen_data)?;
-        corpus.add_specimen(specimen)?;
+        corpus.add_specimen(specimen).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid workload specimen: {error:?}"),
+            )
+        })?;
     }
 
     // Load equivalence artifacts if provided
@@ -278,10 +283,7 @@ fn load_curated_corpus(
 fn parse_specimen_from_manifest(
     data: &serde_json::Value,
 ) -> Result<WorkloadSpecimen, Box<dyn std::error::Error>> {
-    let id = data["id"]
-        .as_str()
-        .ok_or("Missing 'id' field")?
-        .to_string();
+    let id = data["id"].as_str().ok_or("Missing 'id' field")?.to_string();
     let name = data["name"]
         .as_str()
         .ok_or("Missing 'name' field")?
@@ -346,7 +348,7 @@ fn parse_specimen_from_manifest(
         }
     }
 
-    let approximate_lines = data["approximate_lines"].as_u64().unwrap_or(0) as usize;
+    let approximate_lines = data["approximate_lines"].as_u64().unwrap_or(0);
     let requires_native_addons = data["requires_native_addons"].as_bool().unwrap_or(false);
     let exercises_async = data["exercises_async"].as_bool().unwrap_or(false);
 
@@ -413,16 +415,15 @@ fn load_equivalence_artifacts(
                 .to_string();
 
             let baseline: BaselineRuntime = serde_json::from_value(equiv_data["baseline"].clone())?;
-            let divergence_class: DivergenceClass = serde_json::from_value(equiv_data["divergence_class"].clone())?;
+            let divergence_class: DivergenceClass =
+                serde_json::from_value(equiv_data["divergence_class"].clone())?;
 
             let divergence_description = equiv_data["divergence_description"]
                 .as_str()
                 .unwrap_or("")
                 .to_string();
 
-            let output_hash_matches = equiv_data["output_hash_matches"]
-                .as_bool()
-                .unwrap_or(false);
+            let output_hash_matches = equiv_data["output_hash_matches"].as_bool().unwrap_or(false);
 
             let franken_hash_str = equiv_data["franken_output_hash"]
                 .as_str()
@@ -434,9 +435,7 @@ fn load_equivalence_artifacts(
                 .ok_or("Missing 'baseline_output_hash' in equivalence data")?;
             let baseline_output_hash = parse_content_hash(baseline_hash_str)?;
 
-            let evidence_path = equiv_data["evidence_path"]
-                .as_str()
-                .map(|s| s.to_string());
+            let evidence_path = equiv_data["evidence_path"].as_str().map(|s| s.to_string());
 
             let equivalence_result = EquivalenceResult {
                 specimen_id,
@@ -584,7 +583,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Set up artifact paths
             let gate_report_path = out_dir.join("gate_report.json");
-            let corpus_manifest_path = out_dir.join("corpus_manifest.json");
+            let output_corpus_manifest_path = out_dir.join("corpus_manifest.json");
             let run_manifest_path = out_dir.join("run_manifest.json");
             let events_path = out_dir.join("events.jsonl");
             let commands_path = out_dir.join("commands.txt");
@@ -605,7 +604,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Build or load corpus
             let corpus = if let Some(ref manifest_path) = corpus_manifest_path {
-                load_curated_corpus(manifest_path, equivalence_artifacts_path.as_ref())?
+                load_curated_corpus(manifest_path, equivalence_artifacts_path.as_deref())?
             } else if publication_mode {
                 return Err(
                     "Publication mode requires --corpus-manifest and --equivalence-artifacts"
@@ -659,7 +658,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "family_coverage": corpus.family_coverage
             });
             fs::write(
-                &corpus_manifest_path,
+                &output_corpus_manifest_path,
                 serde_json::to_string_pretty(&corpus_manifest)?,
             )?;
 
@@ -702,7 +701,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 replay_cmd.push_str(&format!(" --corpus-manifest {}", manifest_path.display()));
             }
             if let Some(ref artifacts_path) = equivalence_artifacts_path {
-                replay_cmd.push_str(&format!(" --equivalence-artifacts {}", artifacts_path.display()));
+                replay_cmd.push_str(&format!(
+                    " --equivalence-artifacts {}",
+                    artifacts_path.display()
+                ));
             }
             if publication_mode {
                 replay_cmd.push_str(" --publication-mode");
@@ -731,7 +733,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
                 out_dir: out_dir.display().to_string(),
                 gate_report: gate_report_path.display().to_string(),
-                corpus_manifest: corpus_manifest_path.display().to_string(),
+                corpus_manifest: output_corpus_manifest_path.display().to_string(),
                 run_manifest: run_manifest_path.display().to_string(),
                 events_jsonl: events_path.display().to_string(),
                 commands_txt: commands_path.display().to_string(),

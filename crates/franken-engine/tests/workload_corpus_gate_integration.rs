@@ -315,9 +315,11 @@ fn gate_fail_insufficient_families() {
     let report = gate.evaluate(&corpus);
     assert!(!report.verdict.permits_publication());
     if let GateVerdict::Fail { reasons } = &report.verdict {
-        assert!(reasons
-            .iter()
-            .any(|r| { matches!(r, RejectionReason::InsufficientFamilyCoverage { .. }) }));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| { matches!(r, RejectionReason::InsufficientFamilyCoverage { .. }) })
+        );
     }
 }
 
@@ -560,9 +562,11 @@ fn config_without_baselines_skips_baseline_check() {
     let report = gate.evaluate(&corpus);
     // Should not fail due to missing baseline (but may fail for other reasons)
     if let GateVerdict::Fail { reasons } = &report.verdict {
-        assert!(!reasons
-            .iter()
-            .any(|r| matches!(r, RejectionReason::MissingBaselineResults { .. })));
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, RejectionReason::MissingBaselineResults { .. }))
+        );
     }
 }
 

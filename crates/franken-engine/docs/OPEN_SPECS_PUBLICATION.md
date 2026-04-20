@@ -45,3 +45,10 @@ Every extension hook must declare:
 This specification is distributed under the repository license: MIT License
 with the OpenAI/Anthropic rider. Redistribution of the specification must retain
 the license text and rider from the repository `LICENSE` file.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

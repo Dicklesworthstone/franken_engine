@@ -78,3 +78,10 @@ and prove it is deterministic.
 Promotion threshold: all `MUST` clauses are tested, no unknown divergences
 remain, and aggregate `MUST` pass rate is at least 0.95. Anything below that
 threshold is documented as partial compatibility, not conformance.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

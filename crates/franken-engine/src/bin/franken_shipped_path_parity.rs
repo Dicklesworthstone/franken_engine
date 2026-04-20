@@ -94,6 +94,7 @@ enum MismatchKind {
     UnexpectedOutcome,
     ExitCode,
     FailureClass,
+    ErrorDetail,
     ParseGoal,
     SourceIngestion,
     Hashes,
@@ -112,6 +113,7 @@ impl MismatchKind {
             Self::UnexpectedOutcome => "unexpected_outcome",
             Self::ExitCode => "exit_code",
             Self::FailureClass => "failure_class",
+            Self::ErrorDetail => "error_detail",
             Self::ParseGoal => "parse_goal",
             Self::SourceIngestion => "source_ingestion",
             Self::Hashes => "hashes",
@@ -1285,10 +1287,14 @@ fn compare_records(
         return (ParityVerdict::Mismatch, Some(MismatchKind::ExitCode));
     }
     if !library.success && !cli.success {
-        if library.failure_class == cli.failure_class {
-            return (ParityVerdict::Match, None);
+        if library.failure_class != cli.failure_class {
+            return (ParityVerdict::Mismatch, Some(MismatchKind::FailureClass));
         }
-        return (ParityVerdict::Mismatch, Some(MismatchKind::FailureClass));
+        // Same failure class - check error detail drift for deterministic classification
+        if library.error_detail != cli.error_detail {
+            return (ParityVerdict::Mismatch, Some(MismatchKind::ErrorDetail));
+        }
+        return (ParityVerdict::Match, None);
     }
     if library.success != cli.success {
         return (ParityVerdict::Mismatch, Some(MismatchKind::ExitCode));
@@ -2454,5 +2460,88 @@ mod tests {
                 && mismatch.detail.contains("compile-js-unexpected")
                 && mismatch.detail.contains("unexpected_outcome")
         }));
+    }
+
+    // Test cases for bd-1lsy.9.6.2.1: shared failure details comparison fix
+
+    #[test]
+    fn shared_failure_class_and_error_detail_produces_match() {
+        let library = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Parse,
+            "Parse error at line 5: unexpected token",
+            None,
+        );
+        let cli = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Parse,
+            "Parse error at line 5: unexpected token",
+            None,
+        );
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Failure,
+            &library,
+            &cli,
+        );
+        assert_eq!(comparison, (ParityVerdict::Match, None));
+    }
+
+    #[test]
+    fn shared_failure_class_different_error_detail_produces_error_detail_mismatch() {
+        let library = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Parse,
+            "Parse error at line 5: unexpected token",
+            None,
+        );
+        let cli = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Parse,
+            "Parse error at line 5: syntax error",
+            None,
+        );
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Failure,
+            &library,
+            &cli,
+        );
+        assert_eq!(
+            comparison,
+            (ParityVerdict::Mismatch, Some(MismatchKind::ErrorDetail))
+        );
+    }
+
+    #[test]
+    fn different_failure_class_produces_failure_class_mismatch() {
+        let library = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Parse,
+            "Parse error at line 5",
+            None,
+        );
+        let cli = InvocationRecord::failure(
+            "test_entry",
+            1,
+            FailureClass::Runtime,
+            "Runtime error: undefined variable",
+            None,
+        );
+        let comparison = compare_records(
+            ParityCommandFamily::Compile,
+            ExpectedOutcome::Failure,
+            &library,
+            &cli,
+        );
+        assert_eq!(
+            comparison,
+            (ParityVerdict::Mismatch, Some(MismatchKind::FailureClass))
+        );
     }
 }

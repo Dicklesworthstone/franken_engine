@@ -98,3 +98,10 @@ Minimum coverage expectations:
 Metamorphic test results are publishable only when the artifact bundle includes
 the original input, transformed input, relation name, invariant result, seed,
 structured events, and replay command.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

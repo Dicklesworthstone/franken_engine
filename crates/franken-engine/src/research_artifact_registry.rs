@@ -223,6 +223,153 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the audit closure matrix entry.
+    pub fn with_audit_closure_matrix_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "audit-closure-matrix-0001".to_string(),
+            title: "Audit Closure Matrix".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text:
+                "Checklist artifact for closure checks, evidence completeness, and missing-item triage."
+                    .to_string(),
+            bundle_path: "docs/AUDIT_CLOSURE_MATRIX.md".to_string(),
+            artifact_type: "audit_artifact".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the compatibility advisory report entry.
+    pub fn with_compatibility_advisory_report_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "compatibility-advisory-report-0001".to_string(),
+            title: "Compatibility Advisory Report".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Reliability Team".to_string()],
+            abstract_text:
+                "Compatibility advisory summary covering impacted components, risks, and remediation windows."
+                    .to_string(),
+            bundle_path: "docs/COMPATIBILITY_ADVISORY_REPORT.md".to_string(),
+            artifact_type: "compatibility_advisory".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the conformance scorecard bundle entry.
+    pub fn with_conformance_scorecard_bundle_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "conformance-scorecard-bundle-0001".to_string(),
+            title: "Conformance Scorecard Bundle".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text:
+                "Bundle summarizing conformance coverage, pass rates, and residual compatibility gaps."
+                    .to_string(),
+            bundle_path: "docs/CONFORMANCE_SCORECARD_BUNDLE.md".to_string(),
+            artifact_type: "conformance_scorecard".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the containment SLO verification entry.
+    pub fn with_containment_slo_verification_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "containment-slo-verification-0001".to_string(),
+            title: "Containment SLO Verification".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Security Team".to_string()],
+            abstract_text:
+                "Operational guide and evidence bundle for containment safety SLO verification."
+                    .to_string(),
+            bundle_path: "docs/CONTAINMENT_SLO_VERIFICATION.md".to_string(),
+            artifact_type: "security_slo_verification".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the differential testing manifest entry.
+    pub fn with_differential_testing_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "differential-testing-manifest-0001".to_string(),
+            title: "Differential Testing Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text:
+                "Manifest for differential test governance, discrepancy handling, and replayability criteria."
+                    .to_string(),
+            bundle_path: "docs/DIFFERENTIAL_TESTING_MANIFEST.md".to_string(),
+            artifact_type: "differential_testing".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the property-based testing manifest entry.
+    pub fn with_property_based_testing_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "property-based-testing-manifest-0001".to_string(),
+            title: "Property-Based Testing Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Testing Team".to_string()],
+            abstract_text:
+                "Manifest defining property catalogs, seed governance, counterexample workflows, and replay logs."
+                    .to_string(),
+            bundle_path: "docs/PROPERTY_BASED_TESTING_MANIFEST.md".to_string(),
+            artifact_type: "property_based_testing".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the technical report template entry.
+    pub fn with_technical_report_template_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "technical-report-template-0001".to_string(),
+            title: "Technical Report Template".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text:
+                "Template guiding claim articulation, reproducibility notes, and artifact reproducibility requirements."
+                    .to_string(),
+            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
+            artifact_type: "report_template".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -236,7 +383,9 @@ impl ResearchArtifactRegistry {
 
     /// List all registered artifacts
     pub fn list_artifacts(&self) -> Vec<&ArtifactMetadata> {
-        self.artifacts.values().collect()
+        let mut artifacts: Vec<&ArtifactMetadata> = self.artifacts.values().collect();
+        artifacts.sort_by_key(|artifact| artifact.artifact_id.as_str());
+        artifacts
     }
 
     /// Get artifacts by type
@@ -560,6 +709,82 @@ mod tests {
     }
 
     #[test]
+    fn test_audit_closure_matrix_entry() {
+        let registry = ResearchArtifactRegistry::with_audit_closure_matrix_entry();
+
+        let artifact = registry
+            .get_artifact("audit-closure-matrix-0001")
+            .expect("expected audit closure matrix artifact");
+        assert_eq!(artifact.artifact_type, "audit_artifact");
+        assert_eq!(artifact.title, "Audit Closure Matrix");
+        assert!(artifact.bundle_path.ends_with("AUDIT_CLOSURE_MATRIX.md"));
+    }
+
+    #[test]
+    fn test_compatibility_advisory_report_entry() {
+        let registry = ResearchArtifactRegistry::with_compatibility_advisory_report_entry();
+
+        let artifact = registry
+            .get_artifact("compatibility-advisory-report-0001")
+            .expect("expected compatibility advisory report artifact");
+        assert_eq!(artifact.artifact_type, "compatibility_advisory");
+        assert_eq!(artifact.title, "Compatibility Advisory Report");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("COMPATIBILITY_ADVISORY_REPORT.md")
+        );
+    }
+
+    #[test]
+    fn test_conformance_scorecard_bundle_entry() {
+        let registry = ResearchArtifactRegistry::with_conformance_scorecard_bundle_entry();
+
+        let artifact = registry
+            .get_artifact("conformance-scorecard-bundle-0001")
+            .expect("expected conformance scorecard bundle artifact");
+        assert_eq!(artifact.artifact_type, "conformance_scorecard");
+        assert_eq!(artifact.title, "Conformance Scorecard Bundle");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("CONFORMANCE_SCORECARD_BUNDLE.md")
+        );
+    }
+
+    #[test]
+    fn test_containment_slo_verification_entry() {
+        let registry = ResearchArtifactRegistry::with_containment_slo_verification_entry();
+
+        let artifact = registry
+            .get_artifact("containment-slo-verification-0001")
+            .expect("expected containment SLO verification artifact");
+        assert_eq!(artifact.artifact_type, "security_slo_verification");
+        assert_eq!(artifact.title, "Containment SLO Verification");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("CONTAINMENT_SLO_VERIFICATION.md")
+        );
+    }
+
+    #[test]
+    fn test_differential_testing_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_differential_testing_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("differential-testing-manifest-0001")
+            .expect("expected differential testing manifest artifact");
+        assert_eq!(artifact.artifact_type, "differential_testing");
+        assert_eq!(artifact.title, "Differential Testing Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("DIFFERENTIAL_TESTING_MANIFEST.md")
+        );
+    }
+
+    #[test]
     fn test_e2e_mock_free_test_manifest_entry() {
         let registry = ResearchArtifactRegistry::with_e2e_mock_free_test_manifest_entry();
 
@@ -572,6 +797,22 @@ mod tests {
             artifact
                 .bundle_path
                 .ends_with("E2E_MOCK_FREE_TEST_MANIFEST.md")
+        );
+    }
+
+    #[test]
+    fn test_property_based_testing_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_property_based_testing_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("property-based-testing-manifest-0001")
+            .expect("expected property-based testing manifest artifact");
+        assert_eq!(artifact.artifact_type, "property_based_testing");
+        assert_eq!(artifact.title, "Property-Based Testing Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("PROPERTY_BASED_TESTING_MANIFEST.md")
         );
     }
 
@@ -616,7 +857,11 @@ mod tests {
             .expect("expected mutation testing manifest artifact");
         assert_eq!(artifact.artifact_type, "mutation_testing");
         assert_eq!(artifact.title, "Mutation Testing Manifest");
-        assert!(artifact.bundle_path.ends_with("MUTATION_TESTING_MANIFEST.md"));
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("MUTATION_TESTING_MANIFEST.md")
+        );
     }
 
     #[test]
@@ -652,6 +897,64 @@ mod tests {
 
         let manifests = registry.get_artifacts_by_type("metamorphic_testing");
         assert_eq!(manifests.len(), 1);
+    }
+
+    #[test]
+    fn test_technical_report_template_entry() {
+        let registry = ResearchArtifactRegistry::with_technical_report_template_entry();
+
+        let artifact = registry
+            .get_artifact("technical-report-template-0001")
+            .expect("expected technical report template artifact");
+        assert_eq!(artifact.artifact_type, "report_template");
+        assert_eq!(artifact.title, "Technical Report Template");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("TECHNICAL_REPORT_TEMPLATE.md")
+        );
+    }
+
+    #[test]
+    fn test_list_artifacts_order_deterministic() {
+        let mut registry = ResearchArtifactRegistry::new();
+        registry.register_artifact(ArtifactMetadata {
+            artifact_id: "zeta-test-0001".to_string(),
+            title: "Zeta Test Artifact".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
+            bundle_path: "docs/DETERMINISM.md".to_string(),
+            artifact_type: "check".to_string(),
+        });
+        registry.register_artifact(ArtifactMetadata {
+            artifact_id: "alpha-test-0001".to_string(),
+            title: "Alpha Test Artifact".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
+            bundle_path: "docs/DETERMINISM.md".to_string(),
+            artifact_type: "check".to_string(),
+        });
+        registry.register_artifact(ArtifactMetadata {
+            artifact_id: "beta-test-0001".to_string(),
+            title: "Beta Test Artifact".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
+            bundle_path: "docs/DETERMINISM.md".to_string(),
+            artifact_type: "check".to_string(),
+        });
+
+        let artifacts = registry.list_artifacts();
+        let ids: Vec<_> = artifacts
+            .iter()
+            .map(|artifact| artifact.artifact_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["alpha-test-0001", "beta-test-0001", "zeta-test-0001"]
+        );
     }
 
     #[test]

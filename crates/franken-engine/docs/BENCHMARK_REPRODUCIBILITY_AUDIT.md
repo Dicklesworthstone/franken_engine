@@ -24,3 +24,10 @@
 - Track every audit pass with status, approver, timestamp, and verification artifacts.
 - Preserve hash chains linking logs, result manifests, and artifact attachments.
 - Emit a final reproducibility verdict with scope, limitations, and required follow-ups.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

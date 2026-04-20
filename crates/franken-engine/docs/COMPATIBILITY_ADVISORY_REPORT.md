@@ -55,3 +55,10 @@ For each advisory, operators should run the focused validation command listed in
 the advisory record using an isolated target directory and `CARGO_INCREMENTAL=0`.
 The command output should be attached to the relevant bead or artifact bundle
 before any public compatibility claim is made.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

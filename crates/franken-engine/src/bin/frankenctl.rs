@@ -28,9 +28,6 @@ use frankenengine_engine::lowering_pipeline::{
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
-use frankenengine_engine::parser_oracle::{
-    OracleGateMode, OraclePartition, ParserOracleConfig, run_parser_oracle,
-};
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
     PreflightResult as ReactPreflightResult, SupportBundle as ReactSupportBundle,
@@ -56,10 +53,6 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     parse_decision_type, parse_evidence_severity, run_preflight_doctor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::test262_release_gate::{
-    Test262EvidenceCollector, Test262GateRunner, Test262HighWaterMark, Test262ObservedResult,
-    Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverSet, next_high_water_mark,
-};
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
@@ -67,14 +60,6 @@ use frankenengine_engine::third_party_verifier::{
 };
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
-};
-use frankenengine_engine::zero_placeholder_gate::{
-    GateReport, GateVerdict, PlaceholderEntry, PlaceholderKind, PlaceholderSeverity, ScanResult,
-    Subsystem, Waiver, WaiverStatus, evaluate_gate, summarize_report, validate_waiver,
-};
-use frankenengine_engine::zero_placeholder_scan::{
-    ZeroPlaceholderFinding, ZeroPlaceholderInventory, ZeroPlaceholderSeverity,
-    ZeroPlaceholderStatus, ZeroPlaceholderSubsystem, zero_placeholder_scan_inventory,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};

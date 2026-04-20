@@ -172,39 +172,56 @@ fn adoption_gate_fails_closed_on_missing_child_artifacts() {
     // Regression test for bd-2yez8: validate mandatory child artifacts before go verdict.
     // When child artifacts are missing/invalid, gate should emit Stop verdict with outstanding risk ids.
     use frankenengine_engine::asupersync_leverage_adoption_gate::{
-        build_asupersync_leverage_adoption_gate, AdoptionGateVerdict
+        AdoptionGateVerdict, build_asupersync_leverage_adoption_gate,
     };
 
     // Build gate in clean environment where child artifacts don't exist
     let gate = build_asupersync_leverage_adoption_gate().unwrap();
 
     // Should fail closed with Stop verdict due to missing child artifacts
-    assert_eq!(gate.verdict, AdoptionGateVerdict::Stop,
-               "Gate should emit Stop verdict when child artifacts are missing");
+    assert_eq!(
+        gate.verdict,
+        AdoptionGateVerdict::Stop,
+        "Gate should emit Stop verdict when child artifacts are missing"
+    );
 
     // Should have outstanding risk IDs for missing artifacts
-    assert!(!gate.outstanding_risk_ids.is_empty(),
-            "Gate should have outstanding risk IDs for missing child artifacts");
+    assert!(
+        !gate.outstanding_risk_ids.is_empty(),
+        "Gate should have outstanding risk IDs for missing child artifacts"
+    );
 
     // Should have outstanding child count > 0
-    assert!(gate.summary.outstanding_child_count > 0,
-            "Gate should report outstanding child artifacts");
+    assert!(
+        gate.summary.outstanding_child_count > 0,
+        "Gate should report outstanding child artifacts"
+    );
 
     // Should have fewer satisfied than total mandatory children
-    assert!(gate.summary.satisfied_child_count < gate.summary.mandatory_child_count,
-            "Gate should report some unsatisfied child artifacts");
+    assert!(
+        gate.summary.satisfied_child_count < gate.summary.mandatory_child_count,
+        "Gate should report some unsatisfied child artifacts"
+    );
 
     // Should have stop-go code indicating failure
-    assert!(gate.stop_go_code.contains("stop"),
-            "Stop-go code should indicate stop verdict");
+    assert!(
+        gate.stop_go_code.contains("stop"),
+        "Stop-go code should indicate stop verdict"
+    );
 
     // Outstanding risk IDs should contain artifact-specific codes
-    let risk_id_contains_missing = gate.outstanding_risk_ids.iter()
+    let risk_id_contains_missing = gate
+        .outstanding_risk_ids
+        .iter()
         .any(|id| id.contains("missing_or_invalid"));
-    assert!(risk_id_contains_missing,
-            "Outstanding risk IDs should contain missing/invalid artifact codes");
+    assert!(
+        risk_id_contains_missing,
+        "Outstanding risk IDs should contain missing/invalid artifact codes"
+    );
 
     // Verify has_outstanding_child_artifacts correctly detects the issue
-    assert!(gate.has_outstanding_child_artifacts(),
-            "Gate should detect outstanding child artifacts");
+    assert!(
+        gate.has_outstanding_child_artifacts(),
+        "Gate should detect outstanding child artifacts"
+    );
 }

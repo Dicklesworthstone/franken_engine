@@ -298,13 +298,55 @@ fn mandatory_child_artifacts(
     topology: &TopologyPromotionAssessment,
 ) -> Vec<MandatoryChildArtifact> {
     vec![
-        validate_child_artifact("bd-3nr.1.2.2", "control-plane mock guardrail", "mock_seam_guardrail_report", "mock_seam_guardrail_report.json", "Rejects new production control_plane::mocks usage before adoption."),
-        validate_child_artifact("bd-3nr.1.3.1", "budget propagation contract", "budget_contract_report", "budget_contract_report.json", "Keeps child and cleanup budgets explicit at boundary crossings."),
-        validate_child_artifact("bd-3nr.1.3.2", "outcome and capability narrowing contract", "outcome_capability_narrowing_report", "outcome_capability_narrowing_report.json", "Preserves four-valued outcomes and deterministic capability narrowing."),
-        validate_child_artifact("bd-3nr.1.3.3", "operator diagnostic mapping", "control_plane_policy_diagnostics", "control_plane_policy_diagnostics.json", "Maps policy outcomes to user and operator remediation."),
-        validate_child_artifact("bd-3nr.1.4.3", "oracle release gate promotion", "oracle_release_gate_promotion", "oracle_release_gate_promotion.json", "Promotes frankenlab/oracle release blockers into operator triage bundles."),
-        validate_child_artifact("bd-3nr.1.5.1", "cross-repo contract matrix", "asupersync_contract_matrix", "asupersync_contract_compat_matrix.json", "Pins franken-kernel, franken-decision, franken-evidence, and frankenlab surface contracts."),
-        validate_child_artifact("bd-3nr.1.5.2", "real-context overhead proof", "control_plane_benchmark_split_gate", "control_plane_benchmark_split_gate.json", "Proves bounded overhead without mock shortcuts."),
+        validate_child_artifact(
+            "bd-3nr.1.2.2",
+            "control-plane mock guardrail",
+            "mock_seam_guardrail_report",
+            "mock_seam_guardrail_report.json",
+            "Rejects new production control_plane::mocks usage before adoption.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.3.1",
+            "budget propagation contract",
+            "budget_contract_report",
+            "budget_contract_report.json",
+            "Keeps child and cleanup budgets explicit at boundary crossings.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.3.2",
+            "outcome and capability narrowing contract",
+            "outcome_capability_narrowing_report",
+            "outcome_capability_narrowing_report.json",
+            "Preserves four-valued outcomes and deterministic capability narrowing.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.3.3",
+            "operator diagnostic mapping",
+            "control_plane_policy_diagnostics",
+            "control_plane_policy_diagnostics.json",
+            "Maps policy outcomes to user and operator remediation.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.4.3",
+            "oracle release gate promotion",
+            "oracle_release_gate_promotion",
+            "oracle_release_gate_promotion.json",
+            "Promotes frankenlab/oracle release blockers into operator triage bundles.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.5.1",
+            "cross-repo contract matrix",
+            "asupersync_contract_matrix",
+            "asupersync_contract_compat_matrix.json",
+            "Pins franken-kernel, franken-decision, franken-evidence, and frankenlab surface contracts.",
+        ),
+        validate_child_artifact(
+            "bd-3nr.1.5.2",
+            "real-context overhead proof",
+            "control_plane_benchmark_split_gate",
+            "control_plane_benchmark_split_gate.json",
+            "Proves bounded overhead without mock shortcuts.",
+        ),
         validate_topology_artifact(topology),
     ]
 }
@@ -324,7 +366,9 @@ fn validate_child_artifact(
 
     // Check for artifact in typical locations: artifacts/asupersync_leverage_adoption_gate/{timestamp}/
     let status = if let Ok(current_dir) = env::current_dir() {
-        let artifact_root = current_dir.join("artifacts").join("asupersync_leverage_adoption_gate");
+        let artifact_root = current_dir
+            .join("artifacts")
+            .join("asupersync_leverage_adoption_gate");
         let manifest_paths = [
             // Direct path in current directory
             current_dir.join(artifact_path_hint),
@@ -334,10 +378,10 @@ fn validate_child_artifact(
 
         // Check if any of the expected paths exist and contain valid JSON
         let found_valid = manifest_paths.iter().any(|path| {
-            Path::new(path).exists() &&
-            fs::read_to_string(path)
-                .map(|content| serde_json::from_str::<serde_json::Value>(&content).is_ok())
-                .unwrap_or(false)
+            Path::new(path).exists()
+                && fs::read_to_string(path)
+                    .map(|content| serde_json::from_str::<serde_json::Value>(&content).is_ok())
+                    .unwrap_or(false)
         });
 
         if found_valid {
@@ -365,8 +409,12 @@ fn validate_child_artifact(
         user_impact: impact.to_string(),
         operator_impact: format!("{artifact_id} is linked in the final adoption record."),
         next_action: match status {
-            GateArtifactStatus::Satisfied => "Keep artifact linked in run_manifest.json and decision_record.json.".to_string(),
-            GateArtifactStatus::Outstanding => format!("Generate {artifact_path_hint} before re-running adoption gate."),
+            GateArtifactStatus::Satisfied => {
+                "Keep artifact linked in run_manifest.json and decision_record.json.".to_string()
+            }
+            GateArtifactStatus::Outstanding => {
+                format!("Generate {artifact_path_hint} before re-running adoption gate.")
+            }
         },
     }
 }

@@ -8135,11 +8135,7 @@ impl InterpreterCore {
                         "0".to_string(),
                         Value::Str(string_val.clone()),
                     )?;
-                    self.set_object_property(
-                        array_id,
-                        "length".to_string(),
-                        Value::Int(1),
-                    )?;
+                    self.set_object_property(array_id, "length".to_string(), Value::Int(1))?;
                     return Ok(Value::Object(array_id));
                 }
 
@@ -12969,7 +12965,6 @@ impl InterpreterCore {
                 }
             }
 
-
             "builtin:ArrayPrototypeFilter" => {
                 // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
                 if args.count < 2 {
@@ -17118,11 +17113,7 @@ impl InterpreterCore {
                         "0".to_string(),
                         Value::Str(str_text),
                     )?;
-                    self.set_object_property(
-                        result_array_id,
-                        "length".to_string(),
-                        Value::Int(1),
-                    )?;
+                    self.set_object_property(result_array_id, "length".to_string(), Value::Int(1))?;
                 } else {
                     let separator_val = self.read_reg(args.start + 1)?;
                     match separator_val {
@@ -17221,7 +17212,6 @@ impl InterpreterCore {
                     got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args and thisArg handling".to_string(),
                 })
             }
-
 
             "builtin:MathRandom" => {
                 // Math.random implementation - deterministic with proper [0,1) range
@@ -17768,7 +17758,8 @@ impl InterpreterCore {
 
                 if let Ok(parsed) = result_str.parse::<f64>() {
                     // Return Int if it's a finite whole number within i64 range
-                    if parsed.is_finite() && parsed.fract() == 0.0
+                    if parsed.is_finite()
+                        && parsed.fract() == 0.0
                         && parsed >= i64::MIN as f64
                         && parsed <= i64::MAX as f64
                     {
@@ -17867,7 +17858,6 @@ impl InterpreterCore {
                 Ok(Value::Str(str_text.to_uppercase()))
             }
 
-
             _ => {
                 // Unknown builtin method - return undefined
                 Ok(Value::Undefined)
@@ -17915,10 +17905,7 @@ impl InterpreterCore {
     }
 
     /// Parse integers with shared parseInt sign and radix handling.
-    fn parse_int_with_sign_and_radix(
-        input: &Value,
-        radix_arg: Option<&Value>,
-    ) -> Option<i64> {
+    fn parse_int_with_sign_and_radix(input: &Value, radix_arg: Option<&Value>) -> Option<i64> {
         let input = Self::value_to_primitive_string(input);
         let trimmed = input.trim_start();
         if trimmed.is_empty() {
@@ -17975,14 +17962,12 @@ impl InterpreterCore {
             }
 
             found = true;
-            result = result.saturating_mul(actual_radix as i64).saturating_add(digit);
+            result = result
+                .saturating_mul(actual_radix as i64)
+                .saturating_add(digit);
         }
 
-        if found {
-            Some(sign * result)
-        } else {
-            None
-        }
+        if found { Some(sign * result) } else { None }
     }
 
     /// Unified Number.prototype.toString implementation - spec-consistent radix handling.
@@ -19510,13 +19495,7 @@ mod tests {
             };
 
             let result = interpreter
-                .call_builtin_by_id(
-                    builtin_id,
-                    RegRange {
-                        start: 0,
-                        count,
-                    },
-                )
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count })
                 .expect("parseInt builtin should run with unified sign/radix helper");
 
             match expected {
@@ -19577,11 +19556,7 @@ mod tests {
         }
     }
 
-    fn assert_string_split_result(
-        result: Value,
-        expected: Vec<&str>,
-        core: &mut InterpreterCore,
-    ) {
+    fn assert_string_split_result(result: Value, expected: Vec<&str>, core: &mut InterpreterCore) {
         let Value::Object(array_id) = result else {
             panic!("split should return array object, got {result:?}");
         };
@@ -19598,9 +19573,7 @@ mod tests {
         assert_eq!(length, expected.len());
         for (index, expected_part) in expected.iter().enumerate() {
             assert_eq!(
-                array_obj
-                    .properties
-                    .get(&index.to_string()),
+                array_obj.properties.get(&index.to_string()),
                 Some(&Value::Str((*expected_part).to_string()))
             );
         }
@@ -19612,13 +19585,19 @@ mod tests {
         core.registers[0] = Value::Str("hello".to_string());
 
         let result = core
-            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 1 })
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 1 },
+            )
             .unwrap();
         assert_string_split_result(result, vec!["hello"], &mut core);
 
         core.registers[1] = Value::Undefined;
         let result = core
-            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 2 },
+            )
             .unwrap();
         assert_string_split_result(result, vec!["hello"], &mut core);
     }
@@ -19630,7 +19609,10 @@ mod tests {
         core.registers[1] = Value::Str("".to_string());
 
         let result = core
-            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 2 },
+            )
             .unwrap();
         assert_string_split_result(result, vec!["a", "b"], &mut core);
     }
@@ -19642,7 +19624,10 @@ mod tests {
         core.registers[1] = Value::Str(",".to_string());
 
         let result = core
-            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 2 },
+            )
             .unwrap();
         assert_string_split_result(result, vec!["a", "b", "c"], &mut core);
     }
@@ -24514,8 +24499,10 @@ mod tests {
         let mut core = BaselineInterpreter::new();
         let obj_id = core.alloc_object_with_prototype(None).unwrap();
         core.set_register(0, Value::Object(obj_id)).unwrap();
-        core.set_register(1, Value::Str("object".to_string())).unwrap();
-        core.set_register(2, Value::Str("replacement".to_string())).unwrap();
+        core.set_register(1, Value::Str("object".to_string()))
+            .unwrap();
+        core.set_register(2, Value::Str("replacement".to_string()))
+            .unwrap();
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -24535,7 +24522,8 @@ mod tests {
     fn string_prototype_replace_no_search_arg() {
         // Test that no search argument returns original string
         let mut core = BaselineInterpreter::new();
-        core.set_register(0, Value::Str("hello world".to_string())).unwrap();
+        core.set_register(0, Value::Str("hello world".to_string()))
+            .unwrap();
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -24557,9 +24545,12 @@ mod tests {
         let mut core = BaselineInterpreter::new();
 
         // Using Value::Iterator as an example of non-primitive type
-        core.set_register(0, Value::Iterator(IteratorValue::new())).unwrap();
-        core.set_register(1, Value::Str("object".to_string())).unwrap();
-        core.set_register(2, Value::Str("replaced".to_string())).unwrap();
+        core.set_register(0, Value::Iterator(IteratorValue::new()))
+            .unwrap();
+        core.set_register(1, Value::Str("object".to_string()))
+            .unwrap();
+        core.set_register(2, Value::Str("replaced".to_string()))
+            .unwrap();
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -24580,9 +24571,12 @@ mod tests {
         // Test that builtin functions are coerced to "[object Object]"
         let mut core = BaselineInterpreter::new();
         let builtin_fn = BuiltinFunction::new(42, "TestFunction".to_string());
-        core.set_register(0, Value::BuiltinFunction(builtin_fn)).unwrap();
-        core.set_register(1, Value::Str("object".to_string())).unwrap();
-        core.set_register(2, Value::Str("function".to_string())).unwrap();
+        core.set_register(0, Value::BuiltinFunction(builtin_fn))
+            .unwrap();
+        core.set_register(1, Value::Str("object".to_string()))
+            .unwrap();
+        core.set_register(2, Value::Str("function".to_string()))
+            .unwrap();
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {

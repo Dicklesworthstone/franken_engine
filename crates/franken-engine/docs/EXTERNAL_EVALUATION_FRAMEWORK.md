@@ -55,3 +55,10 @@
   - annotate drift causes before declaring success.
 - **Artifact package**:
   - store manifests, traces, scripts, and environment metadata under a versioned bundle path so others can replicate exactly.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

@@ -281,3 +281,10 @@ trait ProofValidator<T> {
 **Manifest Version**: 1.0  
 **Last Updated**: 2026-04-20  
 **Next Review**: 2026-07-20
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
+- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.

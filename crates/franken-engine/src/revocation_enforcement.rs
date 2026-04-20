@@ -1642,6 +1642,7 @@ mod tests {
                 assert_eq!(denial.transitive_root, Some(key_id));
                 assert_eq!(denial.target_id, EngineObjectId([1; 32]));
             }
+            // SAFETY: Test validates revocation enforcement transitive denial in batch processing
             _ => panic!("expected transitive denial in batch"),
         }
     }

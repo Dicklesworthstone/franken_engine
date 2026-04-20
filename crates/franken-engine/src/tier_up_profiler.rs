@@ -822,7 +822,9 @@ mod tests {
         let report = make_report(100, events);
         let policy = TierUpPolicy::default();
         let decision = evaluate_tier_up_eligibility(&report, &policy);
+        // SAFETY: TierUpDecision derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just generated from TierUpDecision, deserialization guaranteed to succeed
         let restored: TierUpDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, restored);
     }
@@ -871,7 +873,9 @@ mod tests {
     #[test]
     fn policy_default_serde_roundtrip() {
         let policy = TierUpPolicy::default();
+        // SAFETY: TierUpPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just generated from TierUpPolicy, deserialization guaranteed to succeed
         let back: TierUpPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, back);
     }
@@ -980,6 +984,7 @@ mod tests {
         let report = make_report(1, Vec::new());
         let decision = evaluate_tier_up_eligibility(&report, &TierUpPolicy::default());
         assert!(!decision.eligible);
+        // SAFETY: tier_up_completed event is always emitted by evaluate_tier_up_eligibility
         let completed = decision
             .events
             .iter()
@@ -1090,6 +1095,7 @@ mod tests {
         let report = make_report(100, events);
         let decision = evaluate_tier_up_eligibility(&report, &policy);
         assert!(decision.eligible);
+        // SAFETY: tier_up_completed event is always emitted by evaluate_tier_up_eligibility
         let completed = decision
             .events
             .iter()
@@ -1128,7 +1134,9 @@ mod tests {
         ];
         let report = make_report(100, events);
         let decision = evaluate_tier_up_eligibility(&report, &policy);
+        // SAFETY: TierUpDecision derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&decision).unwrap();
+        // SAFETY: JSON was just generated from TierUpDecision, deserialization guaranteed to succeed
         let back: TierUpDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, back);
     }
@@ -1142,7 +1150,9 @@ mod tests {
             cache_hit_rate_millionths: 500_000,
             reason: "test".to_string(),
         };
+        // SAFETY: TierUpRejection derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&rejection).unwrap();
+        // SAFETY: JSON was just generated from TierUpRejection, deserialization guaranteed to succeed
         let back: TierUpRejection = serde_json::from_str(&json).unwrap();
         assert_eq!(rejection, back);
     }
@@ -1156,7 +1166,9 @@ mod tests {
             cache_hit_rate_millionths: 800_000,
             rationale: "hot".to_string(),
         };
+        // SAFETY: TierUpCandidate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&candidate).unwrap();
+        // SAFETY: JSON was just generated from TierUpCandidate, deserialization guaranteed to succeed
         let back: TierUpCandidate = serde_json::from_str(&json).unwrap();
         assert_eq!(candidate, back);
     }
@@ -1187,7 +1199,9 @@ mod tests {
             outcome: "o".to_string(),
             reason: "r".to_string(),
         };
+        // SAFETY: TierUpDecisionEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just generated from TierUpDecisionEvent, deserialization guaranteed to succeed
         let back: TierUpDecisionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }

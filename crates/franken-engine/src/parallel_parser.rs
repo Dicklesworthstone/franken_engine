@@ -2396,6 +2396,7 @@ mod tests {
         let plan = compute_chunk_plan(input, 2);
         // No deterministic split points => single deterministic chunk.
         assert_eq!(plan.chunks.len(), 1);
+        // SAFETY: Just verified plan.chunks.len() == 1 above, so last() is guaranteed to be Some
         assert_eq!(plan.chunks.last().unwrap().1, 10);
     }
 
@@ -2682,7 +2683,9 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let o1 = parse(&input).unwrap();
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let o2 = parse(&input).unwrap();
         assert_eq!(o1.output_hash, o2.output_hash);
         assert_eq!(o1.token_count, o2.token_count);
@@ -2692,6 +2695,7 @@ mod tests {
     fn parallel_parse_serial_fallback_small_input() {
         let config = default_config(); // default 4096 threshold
         let input = make_input("x + y", &config);
+        // SAFETY: Simple valid JavaScript expression should parse successfully
         let output = parse(&input).unwrap();
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(output.chunk_plan.is_none());
@@ -2705,6 +2709,7 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let output = parse(&input).unwrap();
 
         // Also parse serially.
@@ -2742,6 +2747,7 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let output = parse(&input).unwrap();
         assert!(output.token_count > 0);
     }
@@ -2862,7 +2868,9 @@ mod tests {
             boundary_repairs: 1,
             total_tokens: 42,
         };
+        // SAFETY: MergeWitness derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&witness).unwrap();
+        // SAFETY: JSON was just produced by valid MergeWitness serialization
         let back: MergeWitness = serde_json::from_str(&json).unwrap();
         assert_eq!(witness, back);
     }
@@ -2875,7 +2883,9 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let o1 = parse(&input).unwrap();
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let o2 = parse(&input).unwrap();
 
         if let (Some(w1), Some(w2)) = (&o1.merge_witness, &o2.merge_witness) {
@@ -2894,7 +2904,9 @@ mod tests {
             parallel_count: 100,
             serial_count: 100,
         };
+        // SAFETY: ParityResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid ParityResult serialization
         let back: ParityResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }
@@ -2909,6 +2921,7 @@ mod tests {
             source.push_str(&format!("var x{} = {};\n", i, i));
         }
         let input = make_input(&source, &config);
+        // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
         let output = parse(&input).unwrap();
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&output).unwrap();

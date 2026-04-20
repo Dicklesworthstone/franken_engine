@@ -2296,7 +2296,9 @@ mod tests {
             outcome: "fail".to_string(),
             error_code: Some("CONTAINMENT_SLA".to_string()),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: VerifierEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }

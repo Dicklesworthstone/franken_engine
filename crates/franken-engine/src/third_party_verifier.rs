@@ -1646,6 +1646,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "scenario_set_non_empty")
+            // SAFETY: Test-only unwrap expecting scenario_set_non_empty check to be present in verification report
             .unwrap();
         assert!(!failed.passed);
     }

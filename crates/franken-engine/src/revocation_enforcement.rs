@@ -555,6 +555,7 @@ mod tests {
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
             0x1D, 0x1E, 0x1F, 0x20,
         ])
+        // SAFETY: Fixed 32-byte array is valid signing key format for test helper
         .unwrap()
     }
 
@@ -564,6 +565,7 @@ mod tests {
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
+        // SAFETY: Fixed 32-byte array is valid signing key format for test helper
         .unwrap()
     }
 
@@ -575,6 +577,7 @@ mod tests {
     /// `SigningKey` seed (which accepts any 32 bytes) always yields a valid VK.
     fn test_vk(byte: u8) -> VerificationKey {
         SigningKey::from_bytes([byte; 32])
+            // SAFETY: 32-byte array is valid signing key format for test helper
             .unwrap()
             .verification_key()
     }
@@ -593,6 +596,7 @@ mod tests {
             &revocation_schema_id(),
             target_bytes.as_slice(),
         )
+        // SAFETY: Test helper uses valid domain, zone, schema, and bytes for ID derivation
         .unwrap();
 
         let mut rev = Revocation {
@@ -607,6 +611,7 @@ mod tests {
         };
 
         let preimage = rev.preimage_bytes();
+        // SAFETY: Test helper uses valid signing key and preimage for signature creation
         let sig = sign_preimage(&sk, &preimage).unwrap();
         rev.signature = sig;
         rev
@@ -624,6 +629,7 @@ mod tests {
     ) {
         let rev = make_revocation(target_type, RevocationReason::Compromised, target_bytes);
         let sk = test_signing_key();
+        // SAFETY: Test helper uses valid revocation and signing key for chain append
         enforcer.chain_mut().append(rev, &sk, "t-revoke").unwrap();
     }
 

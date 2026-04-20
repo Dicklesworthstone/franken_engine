@@ -51,7 +51,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Core Team".to_string()],
             abstract_text: "External evaluation framework for adversarial testing, reproducibility, and red-team reporting."
                 .to_string(),
-            bundle_path: "docs/EXTERNAL_EVALUATION_FRAMEWORK.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/EXTERNAL_EVALUATION_FRAMEWORK.md".to_string(),
             artifact_type: "evaluation_framework".to_string(),
         };
 
@@ -72,7 +72,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Reproducibility scorecard documenting deterministic replay and verification thresholds."
                     .to_string(),
-            bundle_path: "docs/REPRODUCIBILITY_SCORECARD.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/REPRODUCIBILITY_SCORECARD.md".to_string(),
             artifact_type: "reproducibility_scorecard".to_string(),
         };
 
@@ -93,7 +93,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Public protocol specification outline for trust, replay, and policy primitives."
                     .to_string(),
-            bundle_path: "docs/OPEN_SPECS_PUBLICATION.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/OPEN_SPECS_PUBLICATION.md".to_string(),
             artifact_type: "open_specification".to_string(),
         };
 
@@ -113,7 +113,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Core Team".to_string()],
             abstract_text: "Template and checklist for documenting protocol claims and mechanized proof artifacts."
                 .to_string(),
-            bundle_path: "docs/PROOF_SKETCH_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/PROOF_SKETCH_TEMPLATE.md".to_string(),
             artifact_type: "proof_template".to_string(),
         };
 
@@ -133,7 +133,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Security Team".to_string()],
             abstract_text: "Policy template for intake, severity triage, coordinated disclosure, credit, and licensing."
                 .to_string(),
-            bundle_path: "docs/VULNERABILITY_DISCLOSURE_POLICY.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/VULNERABILITY_DISCLOSURE_POLICY.md".to_string(),
             artifact_type: "security_policy".to_string(),
         };
 
@@ -153,7 +153,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Testing Team".to_string()],
             abstract_text: "Comprehensive fuzzing strategy manifest defining target priorities, coverage instrumentation, corpus sources, crash triage workflow, and MTBC baselines for security testing."
                 .to_string(),
-            bundle_path: "docs/FUZZING_HARNESS_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/FUZZING_HARNESS_MANIFEST.md".to_string(),
             artifact_type: "testing_strategy".to_string(),
         };
 
@@ -174,7 +174,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Audit framework for benchmark environment pinning, workload manifests, budgets, and peer replication logs."
                     .to_string(),
-            bundle_path: "docs/BENCHMARK_REPRODUCIBILITY_AUDIT.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/BENCHMARK_REPRODUCIBILITY_AUDIT.md".to_string(),
             artifact_type: "benchmark_audit".to_string(),
         };
 
@@ -194,7 +194,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Provenance skeleton for source attribution, hash chains, temporal bounds, signatures, and replay rights."
                 .to_string(),
-            bundle_path: "docs/DATA_PROVENANCE_BUNDLE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/DATA_PROVENANCE_BUNDLE.md".to_string(),
             artifact_type: "provenance_bundle".to_string(),
         };
 
@@ -214,7 +214,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Quality Team".to_string()],
             abstract_text: "Mock-free integration test manifest covering transactional isolation, service-level fixtures, rollback guarantees, structured logging, and observability-driven assertions."
                 .to_string(),
-            bundle_path: "docs/E2E_MOCK_FREE_TEST_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/E2E_MOCK_FREE_TEST_MANIFEST.md".to_string(),
             artifact_type: "e2e_testing_framework".to_string(),
         };
 
@@ -235,7 +235,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Checklist artifact for closure checks, evidence completeness, and missing-item triage."
                     .to_string(),
-            bundle_path: "docs/AUDIT_CLOSURE_MATRIX.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/AUDIT_CLOSURE_MATRIX.md".to_string(),
             artifact_type: "audit_artifact".to_string(),
         };
 
@@ -256,7 +256,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Compatibility advisory summary covering impacted components, risks, and remediation windows."
                     .to_string(),
-            bundle_path: "docs/COMPATIBILITY_ADVISORY_REPORT.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/COMPATIBILITY_ADVISORY_REPORT.md".to_string(),
             artifact_type: "compatibility_advisory".to_string(),
         };
 
@@ -277,7 +277,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Bundle summarizing conformance coverage, pass rates, and residual compatibility gaps."
                     .to_string(),
-            bundle_path: "docs/CONFORMANCE_SCORECARD_BUNDLE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/CONFORMANCE_SCORECARD_BUNDLE.md".to_string(),
             artifact_type: "conformance_scorecard".to_string(),
         };
 
@@ -298,7 +298,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Operational guide and evidence bundle for containment safety SLO verification."
                     .to_string(),
-            bundle_path: "docs/CONTAINMENT_SLO_VERIFICATION.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/CONTAINMENT_SLO_VERIFICATION.md".to_string(),
             artifact_type: "security_slo_verification".to_string(),
         };
 
@@ -319,7 +319,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Manifest for differential test governance, discrepancy handling, and replayability criteria."
                     .to_string(),
-            bundle_path: "docs/DIFFERENTIAL_TESTING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/DIFFERENTIAL_TESTING_MANIFEST.md".to_string(),
             artifact_type: "differential_testing".to_string(),
         };
 
@@ -340,7 +340,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Manifest defining property catalogs, seed governance, counterexample workflows, and replay logs."
                     .to_string(),
-            bundle_path: "docs/PROPERTY_BASED_TESTING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/PROPERTY_BASED_TESTING_MANIFEST.md".to_string(),
             artifact_type: "property_based_testing".to_string(),
         };
 
@@ -361,7 +361,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Template guiding claim articulation, reproducibility notes, and artifact reproducibility requirements."
                     .to_string(),
-            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "report_template".to_string(),
         };
 
@@ -382,7 +382,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Template for reusable research artifact metadata, bundle layout, and replication notes."
                     .to_string(),
-            bundle_path: "docs/RESEARCH_ARTIFACT_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/RESEARCH_ARTIFACT_TEMPLATE.md".to_string(),
             artifact_type: "artifact_template".to_string(),
         };
 
@@ -403,7 +403,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Audit report reconciling Section 16 research artifact coverage and registry completeness."
                     .to_string(),
-            bundle_path: "docs/BD2501_AUDIT_REPORT.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/BD2501_AUDIT_REPORT.md".to_string(),
             artifact_type: "audit_report".to_string(),
         };
 
@@ -424,7 +424,7 @@ impl ResearchArtifactRegistry {
             abstract_text:
                 "Review audit for baseline interpreter builtin deduplication, builtin ID routing, and String ownership risk."
                     .to_string(),
-            bundle_path: "docs/BASELINE_DEDUP_REVIEW_AUDIT.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/BASELINE_DEDUP_REVIEW_AUDIT.md".to_string(),
             artifact_type: "review_audit".to_string(),
         };
 
@@ -469,7 +469,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Quality Team".to_string()],
             abstract_text: "Comprehensive golden artifact testing strategy defining golden format standards, scrubbing rules, approval workflows, regression cadence, and cross-platform stability requirements."
                 .to_string(),
-            bundle_path: "docs/GOLDEN_ARTIFACT_TEST_BUNDLE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/GOLDEN_ARTIFACT_TEST_BUNDLE.md".to_string(),
             artifact_type: "testing_framework".to_string(),
         };
 
@@ -489,7 +489,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Quality Team".to_string()],
             abstract_text: "Conformance harness manifest defining target specs, cross-implementation matrices, golden input sets, diff modes, and compliance scorecards."
                 .to_string(),
-            bundle_path: "docs/CONFORMANCE_HARNESS_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/CONFORMANCE_HARNESS_MANIFEST.md".to_string(),
             artifact_type: "conformance_harness".to_string(),
         };
 
@@ -509,7 +509,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Quality Team".to_string()],
             abstract_text: "Mutation testing manifest defining operator catalogs, survivor analysis, equivalent-mutant filtering, score baselines, and CI gate thresholds."
                 .to_string(),
-            bundle_path: "docs/MUTATION_TESTING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/MUTATION_TESTING_MANIFEST.md".to_string(),
             artifact_type: "mutation_testing".to_string(),
         };
 
@@ -529,7 +529,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Verification Team".to_string()],
             abstract_text: "Formal verification strategy manifest integrating Lean theorem prover with Rust runtime validators, featuring proof obligations catalog, counterexample harvesting, and CI integration."
                 .to_string(),
-            bundle_path: "docs/LEAN_PROOF_FEEDBACK_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/LEAN_PROOF_FEEDBACK_MANIFEST.md".to_string(),
             artifact_type: "verification_framework".to_string(),
         };
 
@@ -549,7 +549,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Testing Team".to_string()],
             abstract_text: "Stateful fuzzing manifest defining transition models, transition coverage obligations, invariant monitors, crash taxonomy, and replay bundle contents."
                 .to_string(),
-            bundle_path: "docs/STATEFUL_FUZZING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/STATEFUL_FUZZING_MANIFEST.md".to_string(),
             artifact_type: "stateful_fuzzing".to_string(),
         };
 
@@ -569,7 +569,7 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Testing Team".to_string()],
             abstract_text: "Oracle-free metamorphic testing manifest covering relation catalogs, deterministic input transformations, output invariants, seed schedules, and property coverage."
                 .to_string(),
-            bundle_path: "docs/METAMORPHIC_TESTING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/METAMORPHIC_TESTING_MANIFEST.md".to_string(),
             artifact_type: "metamorphic_testing".to_string(),
         };
 
@@ -589,8 +589,28 @@ impl ResearchArtifactRegistry {
             authors: vec!["FrankenEngine Resilience Team".to_string()],
             abstract_text: "Systematic fault injection and resilience coverage manifest defining fault modes catalog, injection points, steady-state metrics, blast radius analysis, and automated rollback procedures."
                 .to_string(),
-            bundle_path: "docs/CHAOS_ENGINEERING_MANIFEST.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/CHAOS_ENGINEERING_MANIFEST.md".to_string(),
             artifact_type: "chaos_engineering".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the commit conventions checklist entry.
+    pub fn with_commit_conventions_checklist_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "commit-conventions-checklist-0001".to_string(),
+            title: "Commit Conventions Checklist".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Runtime Review Team".to_string()],
+            abstract_text: "Standardized commit message conventions checklist for baseline interpreter work, documenting required format patterns, scope guidelines, and bead ID inclusion requirements for traceability."
+                .to_string(),
+            bundle_path: "crates/franken-engine/docs/COMMIT_CONVENTIONS_CHECKLIST.md".to_string(),
+            artifact_type: "commit_conventions".to_string(),
         };
 
         registry.register_artifact(artifact);
@@ -1015,7 +1035,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
         registry.register_artifact(ArtifactMetadata {
@@ -1024,7 +1044,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
         registry.register_artifact(ArtifactMetadata {
@@ -1033,7 +1053,7 @@ mod tests {
             publication_date: "2026-04-20".to_string(),
             authors: vec!["FrankenEngine Research Team".to_string()],
             abstract_text: "Regression guard for deterministic ordering checks.".to_string(),
-            bundle_path: "docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
+            bundle_path: "crates/franken-engine/docs/TECHNICAL_REPORT_TEMPLATE.md".to_string(),
             artifact_type: "check".to_string(),
         });
 
@@ -1045,6 +1065,22 @@ mod tests {
         assert_eq!(
             ids,
             vec!["alpha-test-0001", "beta-test-0001", "zeta-test-0001"]
+        );
+    }
+
+    #[test]
+    fn test_commit_conventions_checklist_entry() {
+        let registry = ResearchArtifactRegistry::with_commit_conventions_checklist_entry();
+
+        let artifact = registry
+            .get_artifact("commit-conventions-checklist-0001")
+            .expect("expected commit conventions checklist artifact");
+        assert_eq!(artifact.artifact_type, "commit_conventions");
+        assert_eq!(artifact.title, "Commit Conventions Checklist");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("COMMIT_CONVENTIONS_CHECKLIST.md")
         );
     }
 

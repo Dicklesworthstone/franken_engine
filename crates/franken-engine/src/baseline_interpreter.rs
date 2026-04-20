@@ -13452,45 +13452,6 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeLocaleCompare" => {
-                // String.prototype.localeCompare(that) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Int(0));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let this_str = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let that_val = self.read_reg(args.start + 1)?;
-                let that_str = match that_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified locale comparison (just string comparison)
-                let result = if this_str < that_str {
-                    -1
-                } else if this_str > that_str {
-                    1
-                } else {
-                    0
-                };
-
-                Ok(Value::Int(result))
-            }
 
             "builtin:MathLog10" => {
                 // Math.log10(x) implementation
@@ -16622,30 +16583,6 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:MathAbs" => {
-                // Math.abs() implementation - returns absolute value
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                match value {
-                    Value::Int(n) => {
-                        if n == i64::MIN {
-                            // Special case: abs of MIN would overflow i64
-                            Ok(Value::Float(Float64::new(-(i64::MIN as f64))))
-                        } else {
-                            Ok(Value::Int(n.abs()))
-                        }
-                    }
-                    Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
-                    _ => {
-                        // Coerce to number first
-                        let num = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
-                        Ok(Value::Float(Float64::new(num.abs())))
-                    }
-                }
-            }
 
             "builtin:ObjectGetOwnPropertyNames" => {
                 // Object.getOwnPropertyNames() implementation - returns array of property names
@@ -16686,121 +16623,8 @@ impl InterpreterCore {
                 Ok(Value::Object(names_array_id))
             }
 
-            "builtin:MathMax" => {
-                // Math.max() implementation - returns largest of given numbers
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
-                }
 
-                let mut max = f64::NEG_INFINITY;
-                for i in 1..=args.count {
-                    let value = self.read_reg(args.start + i)?;
-                    let num = match value {
-                        Value::Int(n) => n as f64,
-                        Value::Float(f) => f.inner(),
-                        _ => {
-                            let coerced = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
-                            if coerced.is_nan() {
-                                return Ok(Value::Float(Float64::new(f64::NAN)));
-                            }
-                            coerced
-                        }
-                    };
 
-                    if num > max {
-                        max = num;
-                    }
-                }
-
-                // Return Int if result is whole number in i64 range
-                if max.fract() == 0.0
-                    && !max.is_infinite()
-                    && max >= i64::MIN as f64
-                    && max <= i64::MAX as f64
-                {
-                    Ok(Value::Int(max as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(max)))
-                }
-            }
-
-            "builtin:MathMin" => {
-                // Math.min() implementation - returns smallest of given numbers
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
-                }
-
-                let mut min = f64::INFINITY;
-                for i in 1..=args.count {
-                    let value = self.read_reg(args.start + i)?;
-                    let num = match value {
-                        Value::Int(n) => n as f64,
-                        Value::Float(f) => f.inner(),
-                        _ => {
-                            let coerced = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
-                            if coerced.is_nan() {
-                                return Ok(Value::Float(Float64::new(f64::NAN)));
-                            }
-                            coerced
-                        }
-                    };
-
-                    if num < min {
-                        min = num;
-                    }
-                }
-
-                // Return Int if result is whole number in i64 range
-                if min.fract() == 0.0
-                    && !min.is_infinite()
-                    && min >= i64::MIN as f64
-                    && min <= i64::MAX as f64
-                {
-                    Ok(Value::Int(min as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(min)))
-                }
-            }
-
-            "builtin:StringPrototypeLocaleCompare" => {
-                // String.prototype.localeCompare() implementation - simplified string comparison
-                let this_val = self.read_reg(args.start)?;
-                let str1 = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Int(0)); // No comparison string provided
-                }
-
-                let other_val = self.read_reg(args.start + 1)?;
-                let str2 = match other_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified lexicographic comparison (ignoring locale specifics)
-                let result = match str1.cmp(&str2) {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
-                };
-
-                Ok(Value::Int(result))
-            }
 
             "builtin:ArrayPrototypeFilter" => {
                 // Array.prototype.filter() implementation - simplified version

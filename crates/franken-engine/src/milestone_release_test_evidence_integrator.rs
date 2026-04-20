@@ -935,6 +935,7 @@ mod tests {
                 .items
                 .iter()
                 .find(|item| item.item_id == id)
+                // SAFETY: Test-only panic to validate release checklist contains expected bound items
                 .unwrap_or_else(|| panic!("missing checklist item {id}"));
             assert_eq!(item.status, ChecklistItemStatus::Pass);
             assert!(!item.artifact_refs.is_empty());

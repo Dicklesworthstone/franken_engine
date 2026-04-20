@@ -1999,7 +1999,9 @@ mod tests {
     #[test]
     fn parse_goal_round_trips_through_serde() {
         for goal in [ParseGoal::Script, ParseGoal::Module] {
+            // SAFETY: ParseGoal derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&goal).unwrap();
+            // SAFETY: JSON was just produced by valid ParseGoal serialization
             let decoded: ParseGoal = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, goal);
         }
@@ -2085,7 +2087,9 @@ mod tests {
     #[test]
     fn source_span_round_trips_through_serde() {
         let span = SourceSpan::new(7, 99, 3, 8, 10, 1);
+        // SAFETY: SourceSpan derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&span).unwrap();
+        // SAFETY: JSON was just produced by valid SourceSpan serialization
         let decoded: SourceSpan = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, span);
     }
@@ -2241,7 +2245,9 @@ mod tests {
             ],
             span: make_span(),
         };
+        // SAFETY: SyntaxTree derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&tree).unwrap();
+        // SAFETY: JSON was just produced by valid SyntaxTree serialization
         let decoded: SyntaxTree = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, tree);
     }
@@ -2630,7 +2636,9 @@ mod tests {
             Expression::Raw("a + b".to_string()),
         ];
         for expr in expressions {
+            // SAFETY: Expression derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&expr).unwrap();
+            // SAFETY: JSON was just produced by valid Expression serialization
             let decoded: Expression = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, expr);
         }
@@ -2739,7 +2747,9 @@ mod tests {
             source: "side-effect-module".to_string(),
             span: make_span(),
         });
+        // SAFETY: Statement derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&stmt).unwrap();
+        // SAFETY: JSON was just produced by valid Statement serialization
         let restored: Statement = serde_json::from_str(&json).unwrap();
         assert_eq!(stmt, restored);
     }

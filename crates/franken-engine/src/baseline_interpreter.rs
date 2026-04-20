@@ -12579,37 +12579,7 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
-            "builtin:MathAtan2" => {
-                // Math.atan2(y, x) implementation
-                if args.count < 3 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let y_val = self.read_reg(args.start + 1)?;
-                let x_val = self.read_reg(args.start + 2)?;
-
-                let y = match y_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let x = match x_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                Ok(Value::Float(Float64::new(y.atan2(x))))
-            }
+            // Removed duplicate MathAtan2 - implementation at line ~10995 has correct argument handling
 
 
 

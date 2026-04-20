@@ -1473,7 +1473,11 @@ mod tests {
             override_justification: None,
         };
         let receipt = evaluate_gate(&input, 500);
+        // SAFETY: GateEvaluationReceipt derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateEvaluationReceipt,
+        // so from_str back to GateEvaluationReceipt cannot fail (valid format + matching schema).
         let back: GateEvaluationReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, back);
     }
@@ -1484,7 +1488,11 @@ mod tests {
         let gate =
             GateDefinition::for_program(FrontierProgram::OperatorCopilot, test_gate_id("serde-op"));
         registry.register_gate(gate);
+        // SAFETY: GateRegistry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&registry).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateRegistry,
+        // so from_str back to GateRegistry cannot fail (valid format + matching schema).
         let back: GateRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(registry, back);
     }
@@ -1637,7 +1645,11 @@ mod tests {
             ArtifactCategory::IndependentReproduction,
         ];
         for cat in &categories {
+            // SAFETY: ArtifactCategory derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(cat).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ArtifactCategory,
+            // so from_str back to ArtifactCategory cannot fail (valid format + matching schema).
             let back: ArtifactCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(*cat, back);
         }
@@ -1650,7 +1662,11 @@ mod tests {
             PromotionDecision::Hold,
             PromotionDecision::Reject,
         ] {
+            // SAFETY: PromotionDecision derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&decision).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid PromotionDecision,
+            // so from_str back to PromotionDecision cannot fail (valid format + matching schema).
             let back: PromotionDecision = serde_json::from_str(&json).unwrap();
             assert_eq!(decision, back);
         }
@@ -1683,7 +1699,11 @@ mod tests {
             },
         ];
         for v in &variants {
+            // SAFETY: VerificationResult derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid VerificationResult,
+            // so from_str back to VerificationResult cannot fail (valid format + matching schema).
             let back: VerificationResult = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -1724,7 +1744,11 @@ mod tests {
         );
         registry.register_gate(gate);
         let summary = registry.readiness();
+        // SAFETY: ReadinessSummary derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&summary).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ReadinessSummary,
+        // so from_str back to ReadinessSummary cannot fail (valid format + matching schema).
         let back: ReadinessSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(summary, back);
     }
@@ -1782,6 +1806,8 @@ mod tests {
     #[test]
     fn enrichment_json_fields_demo_artifact() {
         let art = test_artifact(ArtifactCategory::PropertyProof, "json-da");
+        // SAFETY: DemoArtifact derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&art).unwrap();
         assert!(json.contains("artifact_id"));
         assert!(json.contains("category"));
@@ -1805,6 +1831,8 @@ mod tests {
             override_justification: None,
         };
         let receipt = evaluate_gate(&input, 42_000);
+        // SAFETY: GateEvaluationReceipt derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&receipt).unwrap();
         assert!(json.contains("gate_id"));
         assert!(json.contains("program"));
@@ -1819,6 +1847,8 @@ mod tests {
     fn enrichment_json_fields_readiness_summary() {
         let registry = GateRegistry::new();
         let summary = registry.readiness();
+        // SAFETY: ReadinessSummary derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("total_gates"));
         assert!(json.contains("gates_passed"));
@@ -1850,7 +1880,11 @@ mod tests {
                 signature: "test-sig".to_string(),
             }),
         };
+        // SAFETY: GateEvaluationInput derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&input).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateEvaluationInput,
+        // so from_str back to GateEvaluationInput cannot fail (valid format + matching schema).
         let back: GateEvaluationInput = serde_json::from_str(&json).unwrap();
         assert_eq!(input, back);
     }

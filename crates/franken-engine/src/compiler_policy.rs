@@ -1883,6 +1883,7 @@ mod tests {
         });
         assert_eq!(store.len(), 1);
 
+        // SAFETY: Test just inserted proof with this ID, so get() should succeed
         let retrieved = store.get(&pid).unwrap();
         assert_eq!(retrieved.proof_id(), &pid);
         assert_eq!(retrieved.proof_type(), ProofType::CapabilityWitness);

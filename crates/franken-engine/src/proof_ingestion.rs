@@ -1029,6 +1029,8 @@ impl ProofIngestionEngine {
 
     /// Get hypotheses for a specific proof.
     pub fn hypotheses_for_proof(&self, proof_id: &EngineObjectId) -> Vec<&OptimizerHypothesis> {
+        // SAFETY: Called only with proof IDs that have been previously ingested and stored
+        // in proof_to_hypotheses map via ingest_proof method
         self.proof_to_hypotheses
             .get(proof_id)
             .map(|ids| {

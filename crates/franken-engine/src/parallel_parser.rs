@@ -2906,7 +2906,9 @@ mod tests {
         }
         let input = make_input(&source, &config);
         let output = parse(&input).unwrap();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&output).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ParseOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(output, back);
     }

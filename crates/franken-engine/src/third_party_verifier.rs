@@ -2041,6 +2041,7 @@ mod tests {
     fn render_attestation_summary_format() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let attestation = generate_attestation(&input).unwrap();
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("claim_type=containment"));

@@ -1292,7 +1292,9 @@ mod tests {
     #[test]
     fn test_instance_status_serde_roundtrip() {
         for status in SubstrateInstanceStatus::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(status).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: SubstrateInstanceStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*status, back);
         }
@@ -1325,7 +1327,9 @@ mod tests {
     #[test]
     fn test_override_reason_serde_roundtrip() {
         for reason in OverrideReason::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(reason).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: OverrideReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, back);
         }

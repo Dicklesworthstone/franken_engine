@@ -1050,6 +1050,7 @@ mod tests {
 
     #[test]
     fn exp3_initialization() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let state = Exp3State::new(3, 100_000).unwrap();
         assert_eq!(state.num_arms, 3);
         assert_eq!(state.rounds, 0);
@@ -1070,6 +1071,7 @@ mod tests {
 
     #[test]
     fn exp3_uniform_initial_probabilities() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let state = Exp3State::new(3, 100_000).unwrap();
         let probs = state.arm_probabilities();
         assert_eq!(probs.len(), 3);
@@ -1080,10 +1082,13 @@ mod tests {
 
     #[test]
     fn exp3_update_shifts_probabilities() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let mut state = Exp3State::new(2, 100_000).unwrap();
         // Reward arm 0 heavily.
         for _ in 0..10 {
+            // SAFETY: Test-only unwrap with valid arm index and reward
             state.update(0, 900_000).unwrap();
+            // SAFETY: Test-only unwrap with valid arm index and reward
             state.update(1, 100_000).unwrap();
         }
         let probs = state.arm_probabilities();
@@ -1092,6 +1097,7 @@ mod tests {
 
     #[test]
     fn exp3_probabilities_invariant_to_constant_logit_shift() {
+        // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let mut a = Exp3State::new(3, 200_000).unwrap();
         a.log_weights_millionths = vec![100_000, -300_000, 700_000];
         let pa = a.arm_probabilities();

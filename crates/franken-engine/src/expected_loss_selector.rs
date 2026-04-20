@@ -1709,7 +1709,11 @@ mod tests {
     fn selector_serde_roundtrip() {
         let mut selector = ExpectedLossSelector::balanced();
         selector.select(&uncertain_posterior());
+        // SAFETY: ExpectedLossSelector derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&selector).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ExpectedLossSelector,
+        // so from_str back to ExpectedLossSelector cannot fail (valid format + matching schema).
         let restored: ExpectedLossSelector = serde_json::from_str(&json).unwrap();
         assert_eq!(selector.decisions_made(), restored.decisions_made());
     }
@@ -1718,7 +1722,11 @@ mod tests {
     fn explanation_serde_roundtrip() {
         let mut selector = ExpectedLossSelector::balanced();
         let decision = selector.select(&uncertain_posterior());
+        // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&decision.explanation).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
+        // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
         let restored: DecisionExplanation = serde_json::from_str(&json).unwrap();
         assert_eq!(decision.explanation, restored);
     }

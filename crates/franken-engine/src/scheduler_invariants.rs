@@ -428,6 +428,7 @@ impl RegressionFixture {
 
     pub fn derive_id(&self) -> EngineObjectId {
         let canonical = format!("fixture-{}", self.fixture_id);
+        // SAFETY: derive_id cannot fail with valid object domain, zone, schema, and data
         derive_id(
             ObjectDomain::EvidenceRecord,
             "invariants",
@@ -542,6 +543,7 @@ impl CompositionCheck {
     pub fn derive_id(&self) -> EngineObjectId {
         let ids: Vec<_> = self.controllers.iter().map(|c| c.0.as_str()).collect();
         let canonical = format!("composition-{}", ids.join("-"));
+        // SAFETY: derive_id cannot fail with valid object domain, zone, schema, and data
         derive_id(
             ObjectDomain::EvidenceRecord,
             "invariants",
@@ -641,6 +643,7 @@ impl InvariantRegistry {
             self.results.len(),
             self.fixtures.len()
         );
+        // SAFETY: derive_id cannot fail with valid object domain, zone, schema, and data
         derive_id(
             ObjectDomain::EvidenceRecord,
             "invariants",
@@ -1342,7 +1345,9 @@ mod tests {
     #[test]
     fn transition_label_serde_roundtrip() {
         let t = TransitionLabel::new("go");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&t).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: TransitionLabel = serde_json::from_str(&json).unwrap();
         assert_eq!(t, back);
     }
@@ -1372,6 +1377,7 @@ mod tests {
         });
         assert!(reg.get_result("P1").is_some());
         assert_eq!(
+            // SAFETY: Test-only unwrap, verified above that get_result("P1") returns Some
             reg.get_result("P1").unwrap().status,
             VerificationStatus::Verified
         );
@@ -1464,7 +1470,9 @@ mod tests {
             to: StateId::new("s1"),
             guard: None,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&t).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: Transition = serde_json::from_str(&json).unwrap();
         assert_eq!(t, back);
         assert!(back.guard.is_none());
@@ -1478,7 +1486,9 @@ mod tests {
             to: StateId::new("s1"),
             guard: Some("x > 0".to_string()),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&t).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: Transition = serde_json::from_str(&json).unwrap();
         assert_eq!(t, back);
         assert_eq!(back.guard, Some("x > 0".to_string()));

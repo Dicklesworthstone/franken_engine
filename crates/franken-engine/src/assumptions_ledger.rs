@@ -721,6 +721,7 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         // Value above threshold → violation
         let actions = ledger.observe("risk", 600_000, 1, 0);

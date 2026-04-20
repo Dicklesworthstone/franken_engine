@@ -693,6 +693,7 @@ mod tests {
             make_candidate("a", CandidateKind::Program, 800_000),
             make_candidate("b", CandidateKind::Program, 200_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.seq, 1);
         assert_eq!(result.candidates_evaluated, 2);

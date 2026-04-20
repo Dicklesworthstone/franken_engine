@@ -1301,6 +1301,7 @@ mod tests {
     #[test]
     fn add_duplicate_provenance_fails() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
@@ -1318,6 +1319,7 @@ mod tests {
     #[test]
     fn add_run_success_with_provenance() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
@@ -1329,6 +1331,7 @@ mod tests {
     #[test]
     fn seal_and_no_further_adds() {
         let mut bundle = populated_bundle();
+        // SAFETY: populated_bundle creates a valid bundle that should seal successfully
         bundle.seal().unwrap();
         assert_eq!(bundle.status, BundleStatus::Sealed);
         let result = bundle.add_provenance(test_prov("w2", WorkloadCategory::Application));
@@ -1340,6 +1343,7 @@ mod tests {
         let mut bundle = populated_bundle();
         let result = bundle.publish();
         assert!(matches!(result, Err(BundleError::InvalidTransition { .. })));
+        // SAFETY: populated_bundle creates a valid bundle that should seal successfully
         bundle.seal().unwrap();
         assert!(bundle.publish().is_ok());
         assert_eq!(bundle.status, BundleStatus::Published);
@@ -1348,6 +1352,7 @@ mod tests {
     #[test]
     fn reject_requires_sealed() {
         let mut bundle = populated_bundle();
+        // SAFETY: populated_bundle creates a valid bundle that should seal successfully
         bundle.seal().unwrap();
         assert!(bundle.reject().is_ok());
         assert_eq!(bundle.status, BundleStatus::Rejected);
@@ -1358,12 +1363,15 @@ mod tests {
     #[test]
     fn effective_runs_excludes_warmup() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
         let mut warmup = test_run("r0", "w1", 2000, 0);
         warmup.is_warmup = true;
+        // SAFETY: Test helper with valid run data should succeed
         bundle.add_run(warmup).unwrap();
+        // SAFETY: Test helper with valid run data should succeed
         bundle.add_run(test_run("r1", "w1", 1000, 1)).unwrap();
         assert_eq!(bundle.effective_runs().len(), 1);
         assert_eq!(bundle.runs.len(), 2);
@@ -1481,9 +1489,11 @@ mod tests {
     #[test]
     fn evaluate_fail_insufficient_runs() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(5));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
+        // SAFETY: Test helper with valid run data should succeed
         bundle.add_run(test_run("r1", "w1", 100, 0)).unwrap();
         let config = default_config();
         let verdict = evaluate_bundle(&bundle, &config);
@@ -1539,6 +1549,7 @@ mod tests {
             difference_details: vec!["diff 1".to_string()],
             evidence_hash: ContentHash::compute(b"bad"),
         };
+        // SAFETY: Test helper with valid parity verdict data should succeed
         bundle.add_parity_verdict(bad_parity).unwrap();
         let config = default_config();
         let verdict = evaluate_bundle(&bundle, &config);
@@ -1548,6 +1559,7 @@ mod tests {
     #[test]
     fn evaluate_fail_environment_drift() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(5));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
@@ -1565,6 +1577,7 @@ mod tests {
                     BTreeMap::new(),
                 );
             }
+            // SAFETY: Test helper with valid run data should succeed
             bundle.add_run(run).unwrap();
         }
         let config = default_config();
@@ -1636,7 +1649,9 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = populated_bundle();
+        // SAFETY: EvidenceBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just generated from EvidenceBundle, deserialization guaranteed to succeed
         let back: EvidenceBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle.bundle_id, back.bundle_id);
         assert_eq!(bundle.runs.len(), back.runs.len());
@@ -1645,7 +1660,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = default_config();
+        // SAFETY: BundleConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just generated from BundleConfig, deserialization guaranteed to succeed
         let back: BundleConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }
@@ -1655,7 +1672,9 @@ mod tests {
         let bundle = populated_bundle();
         let config = default_config();
         let report = generate_report(&bundle, &config);
+        // SAFETY: BundleReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: JSON was just generated from BundleReport, deserialization guaranteed to succeed
         let back: BundleReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report.bundle_id, back.bundle_id);
     }
@@ -1667,7 +1686,9 @@ mod tests {
             total_runs: 15,
             categories: BTreeSet::new(),
         };
+        // SAFETY: BundleVerdict derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&verdict).unwrap();
+        // SAFETY: JSON was just generated from BundleVerdict, deserialization guaranteed to succeed
         let back: BundleVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(verdict, back);
     }
@@ -1678,6 +1699,7 @@ mod tests {
     fn bundle_hash_changes_on_add() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
         let h1 = bundle.bundle_hash;
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
@@ -1687,10 +1709,12 @@ mod tests {
     #[test]
     fn bundle_hash_changes_on_run() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(1));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
         let h1 = bundle.bundle_hash;
+        // SAFETY: Test helper with valid run data should succeed
         bundle.add_run(test_run("r1", "w1", 100, 0)).unwrap();
         assert_ne!(h1, bundle.bundle_hash);
     }
@@ -1739,16 +1763,20 @@ mod tests {
     #[test]
     fn multi_workload_bundle() {
         let mut bundle = EvidenceBundle::new("b1".to_string(), epoch(5));
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
             .unwrap();
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w2", WorkloadCategory::Application))
             .unwrap();
         for i in 0..6 {
+            // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r1-{i}"), "w1", 100, i as u32))
                 .unwrap();
+            // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r2-{i}"), "w2", 200, i as u32))
                 .unwrap();

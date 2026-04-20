@@ -1595,6 +1595,7 @@ mod tests {
                     JsxChild::Element(el) => {
                         assert_eq!(el.name.to_string_repr(), "div");
                     }
+                    // SAFETY: Test validates fragment child is element for "<><div>inner</div></>"
                     _ => panic!("expected element child"),
                 }
             }

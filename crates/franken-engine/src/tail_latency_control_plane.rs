@@ -1397,6 +1397,7 @@ mod tests {
 
     #[test]
     fn end_to_end_bounds_sum_stage_budgets_and_observations() {
+        // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 7).unwrap();
         assert_eq!(report.end_to_end_bounds.stage_count, 7);
         assert!(report.end_to_end_bounds.budget_p99_ns > 0);
@@ -1406,6 +1407,7 @@ mod tests {
 
     #[test]
     fn queue_model_calibration_is_explicit_per_stage() {
+        // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 9).unwrap();
         assert_eq!(report.stage_calibrations.len(), 7);
         assert!(
@@ -1518,6 +1520,7 @@ mod tests {
     #[test]
     fn stress_profile_from_str_roundtrip() {
         for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
+            // SAFETY: Test-only unwrap parsing known valid profile string
             let parsed: StressProfile = profile.as_str().parse().unwrap();
             assert_eq!(parsed, profile);
         }
@@ -1525,6 +1528,7 @@ mod tests {
 
     #[test]
     fn stress_profile_from_str_accepts_underscore_variant() {
+        // SAFETY: Test-only unwrap parsing known valid profile string
         let parsed: StressProfile = "synthetic_contention".parse().unwrap();
         assert_eq!(parsed, StressProfile::SyntheticContention);
     }

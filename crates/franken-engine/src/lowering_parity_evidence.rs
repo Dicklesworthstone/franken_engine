@@ -411,6 +411,8 @@ mod tests {
     use super::*;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
+        // SAFETY: SystemTime::now() is guaranteed to be after UNIX_EPOCH on modern systems.
+        // duration_since only fails if the system clock is set before 1970-01-01 (impossible in practice).
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

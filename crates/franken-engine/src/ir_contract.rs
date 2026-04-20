@@ -3199,7 +3199,11 @@ mod tests {
     #[test]
     fn schema_version_serde_roundtrip() {
         let version = IrSchemaVersion::CURRENT;
+        // SAFETY: IrSchemaVersion derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&version).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid IrSchemaVersion,
+        // so from_str back to IrSchemaVersion cannot fail (valid format + matching schema).
         let restored: IrSchemaVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(version, restored);
     }
@@ -3239,7 +3243,11 @@ mod tests {
             IrLevel::Ir3,
             IrLevel::Ir4,
         ] {
+            // SAFETY: IrLevel derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&level).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid IrLevel,
+            // so from_str back to IrLevel cannot fail (valid format + matching schema).
             let restored: IrLevel = serde_json::from_str(&json).unwrap();
             assert_eq!(level, restored);
         }
@@ -3289,7 +3297,11 @@ mod tests {
     fn ir0_serde_roundtrip() {
         let tree = make_syntax_tree();
         let ir0 = Ir0Module::from_syntax_tree(tree, "test.js");
+        // SAFETY: Ir0Module derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ir0).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Ir0Module,
+        // so from_str back to Ir0Module cannot fail (valid format + matching schema).
         let restored: Ir0Module = serde_json::from_str(&json).unwrap();
         assert_eq!(ir0, restored);
     }

@@ -1790,7 +1790,9 @@ mod tests {
     #[test]
     fn canonical_catalog_serde_roundtrip() {
         let catalog = canonical_failure_code_catalog();
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&catalog).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: VersionDriftFailureCatalog = serde_json::from_str(&json).unwrap();
         assert_eq!(back.failure_codes.len(), catalog.failure_codes.len());
     }

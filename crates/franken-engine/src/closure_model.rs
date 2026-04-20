@@ -754,13 +754,17 @@ mod tests {
         let mut chain = fresh_chain();
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
         chain.declare_var("x".into(), 1).unwrap();
         // Var should be in the global scope, not the block.
         let global_handle = EnvironmentHandle(0);
+        // SAFETY: Test uses valid global handle; get_env succeeds in controlled test environment.
         let global_env = chain.get_env(global_handle).unwrap();
         assert!(global_env.get_binding("x").is_some());
         // Block should not have it.
+        // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
         let block_handle = chain.current_handle().unwrap();
+        // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
         let block_env = chain.get_env(block_handle).unwrap();
         assert!(block_env.get_binding("x").is_none());
     }
@@ -772,10 +776,13 @@ mod tests {
         let fn_handle = chain.push_scope(fn_id, ScopeKind::Function);
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
         chain.declare_var("y".into(), 2).unwrap();
         // Var should land in function scope, not global.
+        // SAFETY: Test uses valid function handle; get_env succeeds in controlled test environment.
         let fn_env = chain.get_env(fn_handle).unwrap();
         assert!(fn_env.get_binding("y").is_some());
+        // SAFETY: Test uses valid global handle; get_env succeeds in controlled test environment.
         let global_env = chain.get_env(EnvironmentHandle(0)).unwrap();
         assert!(global_env.get_binding("y").is_none());
     }
@@ -783,8 +790,11 @@ mod tests {
     #[test]
     fn var_redeclaration_is_noop() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
         chain.declare_var("x".into(), 1).unwrap();
+        // SAFETY: Test redeclares same variable; declare_var succeeds in controlled test environment.
         chain.declare_var("x".into(), 2).unwrap(); // no error
+        // SAFETY: Test gets declared variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Undefined);
     }
@@ -794,6 +804,7 @@ mod tests {
     #[test]
     fn let_starts_in_tdz() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("a".into(), 10).unwrap();
         let result = chain.get_value("a");
         assert!(matches!(result, Err(ScopeError::TemporalDeadZone { .. })));

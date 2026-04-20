@@ -764,6 +764,7 @@ mod tests {
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root3 = build_mmr(3).root_hash().unwrap();
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root4 = build_mmr(4).root_hash().unwrap();
         assert_ne!(root3, root4);
     }
@@ -964,8 +965,13 @@ mod tests {
     #[test]
     fn proof_serialization_round_trip() {
         let mmr = build_mmr(8);
+        // SAFETY: MMR with 8 elements has valid leaf at index 3, inclusion_proof should succeed
         let proof = mmr.inclusion_proof(3).unwrap();
+        // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&proof).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid MmrProof,
+        // so from_str back to MmrProof cannot fail (valid format + matching schema).
         let restored: MmrProof = serde_json::from_str(&json).unwrap();
         assert_eq!(proof, restored);
     }

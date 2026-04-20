@@ -2133,6 +2133,7 @@ mod tests {
     fn attestation_unsigned_serde() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let attestation = generate_attestation(&input).unwrap();
         let json = serde_json::to_string(&attestation).unwrap();
         let back: VerificationAttestation = serde_json::from_str(&json).unwrap();

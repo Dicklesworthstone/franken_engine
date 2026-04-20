@@ -1550,6 +1550,7 @@ mod tests {
             "zone-a",
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
+        // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(std::slice::from_ref(&sk))
         .unwrap();
 

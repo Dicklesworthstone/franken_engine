@@ -6586,6 +6586,39 @@ impl InterpreterCore {
         }
     }
 
+    /// Validates Array method callback arguments for fail-closed implementations
+    /// Returns Ok(()) if validation passes, otherwise returns appropriate TypeError
+    fn validate_array_callback_args(
+        &self,
+        args: &ArgSlice,
+        method_name: &str,
+    ) -> Result<(), InterpreterError> {
+        if args.count < 2 {
+            return Err(InterpreterError::TypeError {
+                expected: "callback function".to_string(),
+                got: "missing callback argument".to_string(),
+            });
+        }
+
+        let this_val = self.read_reg(args.start)?;
+        if !matches!(this_val, Value::Object(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "object".to_string(),
+                got: format!("{:?}", this_val),
+            });
+        }
+
+        let callback = self.read_reg(args.start + 1)?;
+        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: format!("{:?}", callback),
+            });
+        }
+
+        Ok(())
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -8999,28 +9032,7 @@ impl InterpreterCore {
             }
             "builtin:ArrayPrototypeForEach" => {
                 // Array.prototype.forEach(callback[, thisArg]) implementation - fail-closed until proper callback invocation
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "callback function".to_string(),
-                        got: "missing callback argument".to_string(),
-                    });
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                if !matches!(this_val, Value::Object(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "object".to_string(),
-                        got: format!("{:?}", this_val),
-                    });
-                }
-
-                let callback = self.read_reg(args.start + 1)?;
-                if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "function".to_string(),
-                        got: format!("{:?}", callback),
-                    });
-                }
+                self.validate_array_callback_args(args, "Array.prototype.forEach")?;
 
                 // Fail-closed until proper callback dispatch is implemented
                 // Programs like [1, 2].forEach(x => console.log(x)) should error rather than
@@ -16243,28 +16255,7 @@ impl InterpreterCore {
                 // Previous implementations silently returned incorrect results (element truthiness checking)
                 // or always returned true instead of calling the provided predicate callback
 
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "predicate function".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                if !matches!(this_val, Value::Object(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "object".to_string(),
-                        got: format!("{:?}", this_val),
-                    });
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "function".to_string(),
-                        got: format!("{:?}", callback_val),
-                    });
-                }
+                self.validate_array_callback_args(args, "Array.prototype.every")?;
 
                 // Fail-closed until proper callback dispatch is implemented
                 // Programs like [0].every(() => true) or [1].every(() => false) should error rather than
@@ -16532,28 +16523,7 @@ impl InterpreterCore {
                 // Previous implementations silently returned incorrect results (identity mapping)
                 // or applied hardcoded transformations instead of calling the provided callback
 
-                if args.count < 2 {
-                    return Err(InterpreterError::TypeError {
-                        expected: "callback function".to_string(),
-                        got: "missing argument".to_string(),
-                    });
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                if !matches!(this_val, Value::Object(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "object".to_string(),
-                        got: format!("{:?}", this_val),
-                    });
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "function".to_string(),
-                        got: format!("{:?}", callback_val),
-                    });
-                }
+                self.validate_array_callback_args(args, "Array.prototype.map")?;
 
                 // Fail-closed until proper callback dispatch is implemented
                 // Programs like [1,2].map(x => x * 2) should error rather than silently return [1,2]

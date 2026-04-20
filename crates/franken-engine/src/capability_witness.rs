@@ -3504,6 +3504,8 @@ mod tests {
         for (i, b) in key.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
         }
+        // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
+        // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         SigningKey::from_bytes(key).unwrap()
     }
 

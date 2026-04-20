@@ -55,6 +55,7 @@ Override with environment variables:
 - `PARSER_ORACLE_TAXONOMY_VERSION` = expected drift taxonomy version
 - `PARSER_ORACLE_REMEDIATION_MAP_VERSION` = remediation mapping version string
 - `RUSTUP_TOOLCHAIN`, `CARGO_TARGET_DIR` as usual
+- `RUSTFLAGS` must include `-C linker=cc` (set automatically by the runner with default override)
 
 All heavy cargo operations in the gate script route through `rch` when available.
 
@@ -137,11 +138,24 @@ Covered artifacts are:
 - `metamorphic_evidence.jsonl`
 - `drift_digest.md`
 
-If any covered artifact is absent, the gate emits
-`parser_oracle_missing_artifact_receipt.json` instead of a placeholder file and
-records the corresponding `reason_id`, `reason_code`, `stage`,
-`consumer_action`, and `missing_artifacts` metadata in `events.jsonl`,
-`proof_note.md`, `manifest.json`, and `repro.lock`.
+If any covered artifact is absent, or if a covered artifact is an anonymous
+placeholder such as `{}`, a trimmed `{"status":"not_run"}` relation report, or
+a zero-byte event/evidence/digest file, the gate emits
+`parser_oracle_missing_artifact_receipt.json` instead of accepting the
+placeholder. The receipt records the corresponding `reason_id`, `reason_code`,
+`stage`, `consumer_action`, `placeholder_rejected`, `artifact_status`, and
+`missing_artifacts` metadata in `events.jsonl`, `proof_note.md`, `manifest.json`,
+and `repro.lock`.
+
+Consumers must obey the receipt action:
+
+- `record_and_continue`: keep running, but surface the receipt reason.
+- `surface_degraded`: keep running with a visibly `degraded` manifest outcome.
+- `fail_closed`: reject the run, emit a failing manifest, and return nonzero.
+
+Replay and operator probes also reject legacy placeholder artifacts, and when an
+artifact is missing they print the receipt `consumer_action` so operators can see
+whether the lane recorded, downgraded, or failed closed.
 
 ## Replay
 

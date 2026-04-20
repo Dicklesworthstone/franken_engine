@@ -18,6 +18,28 @@ run_dir_is_complete() {
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
 
+validate_writer_report() {
+  local candidate="$1"
+  local report_path="${candidate}/parser_oracle_missing_artifact_writer_report.json"
+
+  if ! jq -e '.outcome == "pass" and .all_scenarios_passed == true' "${report_path}" >/dev/null; then
+    echo "parser oracle missing-artifact writer replay rejected failed writer report: ${report_path}" >&2
+    return 1
+  fi
+
+  if ! jq -e '
+    .scenarios[]
+    | select(.scenario_name == "rejected_anonymous_backfills_fail_closed")
+    | select(.rejected_anonymous_backfills_detected == true)
+    | select(.receipt.consumer_action == "fail_closed")
+  ' "${report_path}" >/dev/null; then
+    echo "parser oracle missing-artifact writer replay did not find fail-closed rejected-backfill evidence in ${report_path}" >&2
+    return 1
+  fi
+
+  echo "[parser-oracle-missing-artifact-writer] rejected anonymous backfills replayed as fail_closed"
+}
+
 cd "${root_dir}"
 if [[ -z "${explicit_run_dir}" ]]; then
   ./scripts/run_parser_oracle_missing_artifact_writer.sh "${mode}" || main_exit=$?
@@ -50,6 +72,8 @@ if [[ -z "${latest_run_dir}" ]]; then
   fi
   exit "${main_exit:-1}"
 fi
+
+validate_writer_report "${latest_run_dir}"
 
 echo "[parser-oracle-missing-artifact-writer] latest run dir: ${latest_run_dir}"
 echo "[parser-oracle-missing-artifact-writer] run manifest:"

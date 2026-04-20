@@ -18,6 +18,32 @@ if [[ "$iterations" -lt 2 ]]; then
   exit 2
 fi
 
+relation_report_is_rejected_placeholder() {
+  local report_path="$1"
+
+  [[ -f "$report_path" ]] || return 1
+  if [[ ! -s "$report_path" ]]; then
+    return 0
+  fi
+  jq -e '
+    type == "object" and
+    ((.status // "") | tostring | gsub("^\\s+|\\s+$"; "")) == "not_run" and
+    length == 1
+  ' "$report_path" >/dev/null 2>&1
+}
+
+receipt_consumer_action_for_manifest() {
+  local manifest_path="$1"
+  local receipt_path
+
+  receipt_path="$(jq -r '.artifacts.missing_artifact_receipt // empty' "$manifest_path")"
+  if [[ -n "$receipt_path" && -f "$receipt_path" ]]; then
+    jq -r '.consumer_action // "unknown"' "$receipt_path"
+  else
+    printf '%s\n' "none"
+  fi
+}
+
 reference_sha=""
 for run_index in $(seq 1 "$iterations"); do
   run_root="${probe_root}/run_${run_index}"
@@ -42,7 +68,11 @@ for run_index in $(seq 1 "$iterations"); do
 
   relation_report_path="$(jq -r '.artifacts.relation_report' "$manifest_path")"
   if [[ ! -f "$relation_report_path" ]]; then
-    echo "relation report missing for run ${run_index}: ${relation_report_path}" >&2
+    echo "relation report missing for run ${run_index}: ${relation_report_path}; consumer_action=$(receipt_consumer_action_for_manifest "$manifest_path")" >&2
+    exit 1
+  fi
+  if relation_report_is_rejected_placeholder "$relation_report_path"; then
+    echo "rejected parser oracle placeholder relation_report for run ${run_index}: ${relation_report_path}; consumer_action=$(receipt_consumer_action_for_manifest "$manifest_path")" >&2
     exit 1
   fi
 

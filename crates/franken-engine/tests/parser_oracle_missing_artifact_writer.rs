@@ -20,6 +20,10 @@ fn gate_script_replaces_placeholder_backfills_with_receipt_writer() {
     assert!(script.contains("write_missing_artifact_receipt"));
     assert!(script.contains("emit_missing_artifact_receipt"));
     assert!(script.contains("select_missing_artifact_reason_id"));
+    assert!(script.contains("is_rejected_anonymous_backfill"));
+    assert!(script.contains("enforce_missing_artifact_consumer_action"));
+    assert!(script.contains("artifact_status"));
+    assert!(script.contains("placeholder_rejected"));
     assert!(!script.contains("echo \"{}\" >\"$baseline_path\""));
     assert!(
         !script.contains("echo \"{\\\"status\\\":\\\"not_run\\\"}\" >\"$relation_report_path\"")
@@ -38,6 +42,8 @@ fn gate_doc_mentions_receipt_contract_and_artifact_behavior() {
     assert!(doc.contains("parser_oracle_missing_artifact_receipt.json"));
     assert!(doc.contains("docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md"));
     assert!(doc.contains("The gate no longer backfills them with `{}`"));
+    assert!(doc.contains("fail_closed"));
+    assert!(doc.contains("artifact_status"));
 }
 
 #[test]
@@ -58,7 +64,10 @@ fn writer_validation_script_covers_required_scenarios_and_rch_commands() {
         "skipped_by_gate_condition_override",
         "failed_before_artifact_creation",
         "missing_unexpected_absence",
+        "rejected_anonymous_backfills_fail_closed",
         "all_artifacts_present",
+        "operator_probe=",
+        "relation_report_is_rejected_placeholder",
     ] {
         assert!(
             script.contains(scenario),
@@ -93,10 +102,30 @@ fn writer_replay_wrapper_requires_complete_bundle() {
         "commands.txt",
         "parser_oracle_missing_artifact_writer_report.json",
         "step_logs/step_000.log",
+        "all_scenarios_passed",
+        "rejected_anonymous_backfills_fail_closed",
     ] {
         assert!(
             script.contains(required),
             "writer replay wrapper missing completeness requirement: {required}"
+        );
+    }
+}
+
+#[test]
+fn operator_flake_probe_rejects_placeholder_relation_reports() {
+    let script = read_repo_file("scripts/e2e/parser_oracle_flake_probe.sh");
+
+    for required in [
+        "relation_report_is_rejected_placeholder",
+        "receipt_consumer_action_for_manifest",
+        "rejected parser oracle placeholder relation_report",
+        "gsub",
+        "missing_artifact_receipt",
+    ] {
+        assert!(
+            script.contains(required),
+            "flake probe missing placeholder-consumer guard: {required}"
         );
     }
 }

@@ -13,6 +13,12 @@ artifact_root="${PARSER_ORACLE_MISSING_ARTIFACT_WRITER_ARTIFACT_ROOT:-artifacts/
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_parser_oracle_missing_artifact_writer_${target_namespace}}"
+writer_rustflags="${RUSTFLAGS-}"
+if [[ -n "${writer_rustflags}" ]] && [[ "${writer_rustflags}" != *"-C linker=cc"* ]]; then
+  writer_rustflags="${writer_rustflags} -C linker=cc"
+else
+  writer_rustflags="-C linker=cc"
+fi
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 trace_ids_path="${run_dir}/trace_ids.json"
@@ -28,6 +34,7 @@ contract_doc="docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md"
 contract_json="docs/parser_oracle_missing_artifact_contract_v1.json"
 contract_validation_script="scripts/run_parser_oracle_missing_artifact_contract.sh"
 replay_wrapper="scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh"
+operator_probe="scripts/e2e/parser_oracle_flake_probe.sh"
 
 trace_id="trace-parser-oracle-missing-artifact-writer-${timestamp}"
 decision_id="decision-parser-oracle-missing-artifact-writer-${timestamp}"
@@ -61,6 +68,7 @@ run_rch() {
     rch exec -- env \
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
+    "RUSTFLAGS=${writer_rustflags}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
     "CARGO_INCREMENTAL=${cargo_incremental}" \
     "$@"
@@ -159,7 +167,8 @@ validate_source_inputs() {
     "${contract_doc}" \
     "${contract_json}" \
     "${contract_validation_script}" \
-    "${replay_wrapper}"; do
+    "${replay_wrapper}" \
+    "${operator_probe}"; do
     if [[ ! -f "${input}" ]]; then
       validation_errors+=("missing required input: ${input}")
     fi
@@ -179,6 +188,18 @@ validate_source_inputs() {
     if ! rg -q 'select_missing_artifact_reason_id' "${gate_script}"; then
       validation_errors+=("gate script must expose select_missing_artifact_reason_id")
     fi
+    if ! rg -q 'enforce_missing_artifact_consumer_action' "${gate_script}"; then
+      validation_errors+=("gate script must enforce missing-artifact consumer actions")
+    fi
+    if ! rg -q 'is_rejected_anonymous_backfill' "${gate_script}"; then
+      validation_errors+=("gate script must reject anonymous placeholder backfills")
+    fi
+    if ! rg -q 'artifact_status: \$artifact_status' "${gate_script}"; then
+      validation_errors+=("gate receipt must label missing artifacts with artifact_status")
+    fi
+    if ! rg -q 'placeholder_rejected' "${gate_script}"; then
+      validation_errors+=("gate receipt must preserve placeholder_rejected evidence")
+    fi
     if rg -q 'echo "\{\}" >"\$baseline_path"' "${gate_script}"; then
       validation_errors+=("gate script must not emit baseline.json placeholder backfills")
     fi
@@ -196,6 +217,24 @@ validate_source_inputs() {
     fi
   fi
 
+  if [[ -f "${replay_wrapper}" ]]; then
+    if ! rg -q 'rejected_anonymous_backfills_fail_closed' "${replay_wrapper}"; then
+      validation_errors+=("replay wrapper must require rejected-backfill fail-closed evidence")
+    fi
+    if ! rg -q 'all_scenarios_passed' "${replay_wrapper}"; then
+      validation_errors+=("replay wrapper must reject failed writer reports")
+    fi
+  fi
+
+  if [[ -f "${operator_probe}" ]]; then
+    if ! rg -q 'relation_report_is_rejected_placeholder' "${operator_probe}"; then
+      validation_errors+=("operator probe must reject placeholder relation reports")
+    fi
+    if ! rg -q 'receipt_consumer_action_for_manifest' "${operator_probe}"; then
+      validation_errors+=("operator probe must surface missing-artifact consumer action")
+    fi
+  fi
+
   {
     printf '%s\n' "gate_script=${gate_script}"
     printf '%s\n' "gate_doc=${gate_doc}"
@@ -203,6 +242,7 @@ validate_source_inputs() {
     printf '%s\n' "contract_json=${contract_json}"
     printf '%s\n' "contract_validation_script=${contract_validation_script}"
     printf '%s\n' "replay_wrapper=${replay_wrapper}"
+    printf '%s\n' "operator_probe=${operator_probe}"
     if (( ${#validation_errors[@]} == 0 )); then
       printf '%s\n' "preflight=pass"
     else
@@ -260,6 +300,13 @@ mkdir -p "${run_dir}" "${command_logs_dir}" "${failures_dir}"
 case "${SCENARIO_FIXTURE_STATE}" in
   relation_only)
     printf '{}\n' >"${relation_report_path}"
+    ;;
+  legacy_placeholders)
+    printf '{}\n' >"${baseline_path}"
+    printf '{"status":"  not_run  "}\n' >"${relation_report_path}"
+    : >"${relation_events_path}"
+    : >"${evidence_path}"
+    : >"${drift_digest_path}"
     ;;
   all_artifacts)
     printf '{"baseline":"real"}\n' >"${baseline_path}"
@@ -414,6 +461,78 @@ record_scenario_result() {
   scenario_results_json="$(jq -c --argjson result "${result_json}" '. + [$result]' <<<"${scenario_results_json}")"
 }
 
+record_rejected_backfill_scenario_result() {
+  local scenario_name="$1"
+  local scenario_dir="$2"
+  local expected_rejected_csv="$3"
+
+  local receipt_path="${scenario_dir}/parser_oracle_missing_artifact_receipt.json"
+  local scenario_log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  local -a errors=()
+  local receipt_present=false
+  local receipt_json="null"
+  local expected_rejected_json actual_rejected_json result_json rejected_detected
+
+  step_logs+=("${scenario_log_path}")
+  step_log_index=$((step_log_index + 1))
+
+  if [[ -f "${receipt_path}" ]]; then
+    receipt_present=true
+    receipt_json="$(jq -c '.' "${receipt_path}")"
+  else
+    errors+=("expected fail-closed receipt for rejected anonymous backfills")
+  fi
+
+  expected_rejected_json="$(
+    printf '%s\n' "${expected_rejected_csv}" | tr ',' '\n' | jq -R . | jq -c -s 'map(select(length > 0))'
+  )"
+  actual_rejected_json="[]"
+  if [[ "${receipt_present}" == true ]]; then
+    if [[ "$(jq -r '.reason_id' "${receipt_path}")" != "missing_unexpected_absence" ]]; then
+      errors+=("reason_id mismatch for rejected anonymous backfills")
+    fi
+    if [[ "$(jq -r '.stage' "${receipt_path}")" != "post_run_validation" ]]; then
+      errors+=("stage mismatch for rejected anonymous backfills")
+    fi
+    if [[ "$(jq -r '.consumer_action' "${receipt_path}")" != "fail_closed" ]]; then
+      errors+=("consumer_action mismatch for rejected anonymous backfills")
+    fi
+    if [[ "$(jq -r '.placeholder_rejected' "${receipt_path}")" != "true" ]]; then
+      errors+=("placeholder_rejected must be true")
+    fi
+    actual_rejected_json="$(jq -c '[.missing_artifacts[] | select(.artifact_status == "rejected_placeholder") | .artifact_path]' "${receipt_path}")"
+    if [[ "${actual_rejected_json}" != "${expected_rejected_json}" ]]; then
+      errors+=("rejected placeholder artifact list mismatch")
+    fi
+  fi
+
+  if [[ "${actual_rejected_json}" == "${expected_rejected_json}" && "${expected_rejected_json}" != "[]" ]]; then
+    rejected_detected=true
+  else
+    rejected_detected=false
+  fi
+
+  result_json="$(
+    jq -n       --arg scenario_name "${scenario_name}"       --arg scenario_dir "${scenario_dir}"       --argjson receipt_present "${receipt_present}"       --arg expected_reason_id "missing_unexpected_absence"       --arg expected_stage "post_run_validation"       --arg expected_consumer_action "fail_closed"       --argjson expected_rejected_placeholders "${expected_rejected_json}"       --argjson actual_rejected_placeholders "${actual_rejected_json}"       --argjson rejected_anonymous_backfills_detected "${rejected_detected}"       --argjson receipt "${receipt_json}"       --argjson errors "$(json_array_from_args "${errors[@]}")"       --argjson status "$([[ ${#errors[@]} -eq 0 ]] && echo '"pass"' || echo '"fail"')"       '{
+        scenario_name: $scenario_name,
+        scenario_dir: $scenario_dir,
+        receipt_present: $receipt_present,
+        expected_reason_id: $expected_reason_id,
+        expected_stage: $expected_stage,
+        expected_consumer_action: $expected_consumer_action,
+        expected_rejected_placeholders: $expected_rejected_placeholders,
+        actual_rejected_placeholders: $actual_rejected_placeholders,
+        rejected_anonymous_backfills_detected: $rejected_anonymous_backfills_detected,
+        receipt: $receipt,
+        errors: $errors,
+        status: $status
+      }'
+  )"
+
+  printf '%s\n' "${result_json}" >"${scenario_log_path}"
+  scenario_results_json="$(jq -c --argjson result "${result_json}" '. + [$result]' <<<"${scenario_results_json}")"
+}
+
 run_local_scenarios() {
   local scenario_dir
 
@@ -456,6 +575,12 @@ run_local_scenarios() {
     "post_run_validation" \
     "fail_closed" \
     "baseline.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
+
+  scenario_dir="$(run_receipt_scenario "rejected_anonymous_backfills_fail_closed" "ci" "0" "legacy_placeholders")"
+  record_rejected_backfill_scenario_result \
+    "rejected_anonymous_backfills_fail_closed" \
+    "${scenario_dir}" \
+    "baseline.json,relation_report.json,relation_events.jsonl,metamorphic_evidence.jsonl,drift_digest.md"
 
   scenario_dir="$(run_receipt_scenario "all_artifacts_present" "ci" "0" "all_artifacts")"
   record_scenario_result \

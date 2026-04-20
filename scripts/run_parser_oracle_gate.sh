@@ -23,6 +23,12 @@ if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
 else
   target_dir="/tmp/rch_target_franken_engine_parser_oracle_gate_${timestamp}"
 fi
+parser_oracle_rustflags="${RUSTFLAGS-}"
+if [[ -n "${parser_oracle_rustflags}" ]] && [[ "${parser_oracle_rustflags}" != *"-C linker=cc"* ]]; then
+  parser_oracle_rustflags="${parser_oracle_rustflags} -C linker=cc"
+else
+  parser_oracle_rustflags="-C linker=cc"
+fi
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/manifest.json"
 events_path="${run_dir}/events.jsonl"
@@ -71,7 +77,7 @@ ensure_required_tools() {
 
 run_rch() {
   timeout "${rch_timeout_seconds}" \
-    rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
+    rch exec -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "RUSTFLAGS=${parser_oracle_rustflags}" "$@"
 }
 
 rch_strip_ansi() {
@@ -219,6 +225,47 @@ artifact_role_for_path() {
   esac
 }
 
+artifact_file_for_path() {
+  case "$1" in
+    baseline.json) echo "$baseline_path" ;;
+    relation_report.json) echo "$relation_report_path" ;;
+    relation_events.jsonl) echo "$relation_events_path" ;;
+    metamorphic_evidence.jsonl) echo "$evidence_path" ;;
+    drift_digest.md) echo "$drift_digest_path" ;;
+    parser_oracle_missing_artifact_receipt.json) echo "$missing_artifact_receipt_path" ;;
+    *)
+      echo "unknown_artifact_file_for_parser_oracle_missing_artifact: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+is_rejected_anonymous_backfill() {
+  local artifact_path="$1"
+  local artifact_name="$2"
+
+  [[ -f "$artifact_path" ]] || return 1
+
+  case "$artifact_name" in
+    baseline.json)
+      jq -e 'type == "object" and length == 0' "$artifact_path" >/dev/null 2>&1
+      ;;
+    relation_report.json)
+      jq -e '
+        type == "object" and
+        ((.status // "") | tostring | gsub("^\\s+|\\s+$"; "")) == "not_run" and
+        length == 1
+      ' "$artifact_path" >/dev/null 2>&1
+      ;;
+    relation_events.jsonl | metamorphic_evidence.jsonl | drift_digest.md)
+      [[ ! -s "$artifact_path" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 missing_artifact_reason_field() {
   local reason_id="$1"
   local field="$2"
@@ -260,13 +307,22 @@ emit_missing_artifact_receipt() {
 
   while [[ "$#" -gt 0 ]]; do
     local artifact_path="$1"
-    local artifact_role
+    local artifact_role artifact_file artifact_status
     artifact_role="$(artifact_role_for_path "$artifact_path")"
+    artifact_file="$(artifact_file_for_path "$artifact_path")"
+    if [[ ! -f "$artifact_file" ]]; then
+      artifact_status="missing"
+    elif is_rejected_anonymous_backfill "$artifact_file" "$artifact_path"; then
+      artifact_status="rejected_placeholder"
+    else
+      artifact_status="present"
+    fi
     missing_artifacts_json="$(
       jq -c \
         --arg artifact_path "$artifact_path" \
         --arg artifact_role "$artifact_role" \
-        '. + [{artifact_path: $artifact_path, artifact_role: $artifact_role}]' \
+        --arg artifact_status "$artifact_status" \
+        '. + [{artifact_path: $artifact_path, artifact_role: $artifact_role, artifact_status: $artifact_status}]' \
         <<<"$missing_artifacts_json"
     )"
     shift
@@ -338,11 +394,21 @@ write_missing_artifact_receipt() {
   local reason_id
   local missing_paths=()
 
-  [[ -f "$baseline_path" ]] || missing_paths+=("baseline.json")
-  [[ -f "$relation_report_path" ]] || missing_paths+=("relation_report.json")
-  [[ -f "$relation_events_path" ]] || missing_paths+=("relation_events.jsonl")
-  [[ -f "$evidence_path" ]] || missing_paths+=("metamorphic_evidence.jsonl")
-  [[ -f "$drift_digest_path" ]] || missing_paths+=("drift_digest.md")
+  if [[ ! -f "$baseline_path" ]] || is_rejected_anonymous_backfill "$baseline_path" "baseline.json"; then
+    missing_paths+=("baseline.json")
+  fi
+  if [[ ! -f "$relation_report_path" ]] || is_rejected_anonymous_backfill "$relation_report_path" "relation_report.json"; then
+    missing_paths+=("relation_report.json")
+  fi
+  if [[ ! -f "$relation_events_path" ]] || is_rejected_anonymous_backfill "$relation_events_path" "relation_events.jsonl"; then
+    missing_paths+=("relation_events.jsonl")
+  fi
+  if [[ ! -f "$evidence_path" ]] || is_rejected_anonymous_backfill "$evidence_path" "metamorphic_evidence.jsonl"; then
+    missing_paths+=("metamorphic_evidence.jsonl")
+  fi
+  if [[ ! -f "$drift_digest_path" ]] || is_rejected_anonymous_backfill "$drift_digest_path" "drift_digest.md"; then
+    missing_paths+=("drift_digest.md")
+  fi
 
   if [[ "${#missing_paths[@]}" -eq 0 ]]; then
     rm -f "$missing_artifact_receipt_path"
@@ -580,7 +646,7 @@ write_supporting_artifacts() {
   local outputs_json checksum_path checksum_value
   outputs_json='[]'
 
-  if [[ -f "$relation_report_path" ]]; then
+  if [[ -f "$relation_report_path" && ! -f "$missing_artifact_receipt_path" ]]; then
     equivalent="$(jq -r '.summary.equivalent_count // 0' "$relation_report_path")"
     minor="$(jq -r '.summary.minor_drift_count // 0' "$relation_report_path")"
     critical="$(jq -r '.summary.critical_drift_count // 0' "$relation_report_path")"
@@ -719,22 +785,36 @@ EOF_NOTE
 
 write_manifest() {
   local exit_code="${1:-0}"
-  local outcome error_code_json git_commit dirty_worktree idx comma
+  local outcome error_code_json git_commit dirty_worktree idx comma receipt_consumer_action
 
   if [[ "$manifest_written" == true ]]; then
     return
   fi
   manifest_written=true
 
-  if [[ "$exit_code" -eq 0 ]]; then
-    outcome="pass"
-    error_code_json="null"
-  else
-    outcome="fail"
-    error_code_json='"FE-PARSER-ORACLE-0001"'
+  write_missing_artifact_receipt "$exit_code"
+  receipt_consumer_action=""
+  if [[ -f "$missing_artifact_receipt_path" ]]; then
+    receipt_consumer_action="$(jq -r '.consumer_action // "unknown"' "$missing_artifact_receipt_path")"
   fi
 
-  write_missing_artifact_receipt "$exit_code"
+  if [[ "$exit_code" -ne 0 ]]; then
+    outcome="fail"
+    error_code_json='"FE-PARSER-ORACLE-0001"'
+  elif [[ "$receipt_consumer_action" == "fail_closed" ]]; then
+    outcome="fail"
+    error_code_json='"FE-PARSER-ORACLE-0001"'
+  elif [[ "$receipt_consumer_action" == "surface_degraded" ]]; then
+    outcome="degraded"
+    error_code_json="null"
+  elif [[ -n "$receipt_consumer_action" && "$receipt_consumer_action" != "record_and_continue" ]]; then
+    outcome="fail"
+    error_code_json='"FE-PARSER-ORACLE-0001"'
+  else
+    outcome="pass"
+    error_code_json="null"
+  fi
+
   write_supporting_artifacts
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
@@ -750,6 +830,8 @@ write_manifest() {
     jq -c \
       --arg taxonomy_version "$taxonomy_version" \
       --arg replay_command "./scripts/run_parser_oracle_gate.sh ${mode}" \
+      --arg outcome "$outcome" \
+      --argjson error_code "${error_code_json}" \
       '{
         schema_version: "franken-engine.parser-log-event.v1",
         taxonomy_version: $taxonomy_version,
@@ -764,9 +846,10 @@ write_manifest() {
         stage,
         reason_code,
         consumer_action,
+        placeholder_rejected,
         missing_artifacts,
-        outcome: "degraded",
-        error_code: null
+        outcome: $outcome,
+        error_code: $error_code
       }' \
       "$missing_artifact_receipt_path" >"$events_path"
   fi
@@ -850,6 +933,35 @@ write_manifest() {
   } >"$manifest_path"
 
   echo "parser oracle gate manifest: $manifest_path"
+}
+
+enforce_missing_artifact_consumer_action() {
+  local consumer_action reason_id reason_code
+
+  [[ -f "$missing_artifact_receipt_path" ]] || return 0
+
+  consumer_action="$(jq -r '.consumer_action // "unknown"' "$missing_artifact_receipt_path")"
+  reason_id="$(jq -r '.reason_id // "unknown"' "$missing_artifact_receipt_path")"
+  reason_code="$(jq -r '.reason_code // "unknown"' "$missing_artifact_receipt_path")"
+
+  case "$consumer_action" in
+    record_and_continue)
+      echo "parser oracle recorded missing-artifact receipt: reason_id=${reason_id} reason_code=${reason_code}"
+      ;;
+    surface_degraded)
+      echo "parser oracle visibly downgraded missing-artifact receipt: reason_id=${reason_id} reason_code=${reason_code}"
+      ;;
+    fail_closed)
+      echo "parser oracle rejected missing-artifact receipt: reason_id=${reason_id} reason_code=${reason_code}" >&2
+      failed_command="missing_artifact_receipt consumer_action=fail_closed reason_id=${reason_id}"
+      return 1
+      ;;
+    *)
+      echo "parser oracle unknown missing-artifact consumer_action=${consumer_action} reason_id=${reason_id}" >&2
+      failed_command="missing_artifact_receipt consumer_action=${consumer_action} reason_id=${reason_id}"
+      return 1
+      ;;
+  esac
 }
 
 handle_signal() {
@@ -954,6 +1066,12 @@ main() {
 
   run_mode || main_exit=$?
   write_manifest "$main_exit"
+
+  if ! enforce_missing_artifact_consumer_action; then
+    main_exit=3
+    manifest_written=false
+    write_manifest "$main_exit"
+  fi
 
   if ! "${root_dir}/scripts/validate_parser_log_schema.sh" --events "$events_path"; then
     failed_command="${failed_command:-validate_parser_log_schema.sh --events ${events_path}}"

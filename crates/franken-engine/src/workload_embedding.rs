@@ -1726,7 +1726,9 @@ mod tests {
     #[test]
     fn distance_metric_serde() {
         let m = DistanceMetric::Cosine;
+        // SAFETY: DistanceMetric derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&m).unwrap();
+        // SAFETY: JSON was just produced by valid DistanceMetric serialization
         let back: DistanceMetric = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
     }
@@ -1902,7 +1904,9 @@ mod tests {
         );
         let cfg = NeighborhoodCertificateConfig::default();
         let cert = issue_neighborhood_certificate(&emb, &emb, &cfg, test_epoch());
+        // SAFETY: NeighborhoodCertificate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cert).unwrap();
+        // SAFETY: JSON was just produced by valid NeighborhoodCertificate serialization
         let back: NeighborhoodCertificate = serde_json::from_str(&json).unwrap();
         assert_eq!(cert, back);
     }
@@ -2109,7 +2113,9 @@ mod tests {
         );
         let cfg = NeighborhoodCertificateConfig::default();
         let assessment = assess_transfer_safety(&emb, &emb, &cfg, test_epoch());
+        // SAFETY: TransferSafetyAssessment derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&assessment).unwrap();
+        // SAFETY: JSON was just produced by valid TransferSafetyAssessment serialization
         let back: TransferSafetyAssessment = serde_json::from_str(&json).unwrap();
         assert_eq!(assessment, back);
     }
@@ -2154,7 +2160,9 @@ mod tests {
     fn evidence_corpus_specimen_serde() {
         let (specimens, _) = run_embedding_corpus(test_epoch());
         for s in &specimens {
+            // SAFETY: EmbeddingSpecimen derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by valid EmbeddingSpecimen serialization
             let back: EmbeddingSpecimen = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }

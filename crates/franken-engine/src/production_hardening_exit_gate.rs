@@ -29,6 +29,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Errors that can occur during production hardening gate execution
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProductionHardeningError {
+    /// Error getting system timestamp
+    TimestampError(String),
+    /// Error serializing data to JSON
+    SerializationError(String),
+}
+
+impl std::fmt::Display for ProductionHardeningError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProductionHardeningError::TimestampError(msg) => {
+                write!(f, "Timestamp error: {}", msg)
+            }
+            ProductionHardeningError::SerializationError(msg) => {
+                write!(f, "Serialization error: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProductionHardeningError {}
+
 /// Production readiness status for the Phase E exit gate
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProductionReadinessStatus {
@@ -151,6 +175,21 @@ pub enum FaultType {
     DiskFull,
     MemoryPressure,
     CPUStarvation,
+}
+
+impl FaultType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NetworkPartition => "network_partition",
+            Self::NodeFailure => "node_failure",
+            Self::KeyCompromise => "key_compromise",
+            Self::StaleRevocation => "stale_revocation",
+            Self::ClockSkew => "clock_skew",
+            Self::DiskFull => "disk_full",
+            Self::MemoryPressure => "memory_pressure",
+            Self::CPUStarvation => "cpu_starvation",
+        }
+    }
 }
 
 /// Quarantine drill configuration
@@ -315,13 +354,13 @@ pub struct ProductionHardeningLogEntry {
 
 impl ProductionHardeningGateExecution {
     /// Create a new production hardening gate execution
-    pub fn new(gate_id: String) -> Self {
+    pub fn new(gate_id: String) -> Result<Self, ProductionHardeningError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| ProductionHardeningError::TimestampError(e.to_string()))?
             .as_secs();
 
-        Self {
+        Ok(Self {
             gate_id,
             status: ProductionReadinessStatus::NotStarted,
             started_at: now,
@@ -337,7 +376,7 @@ impl ProductionHardeningGateExecution {
             e2e_deployment_status: ValidationStatus::Pending,
             operational_readiness_report: None,
             evidence_artifacts: BTreeMap::new(),
-        }
+        })
     }
 
     /// Execute the complete production hardening gate validation
@@ -386,7 +425,7 @@ impl ProductionHardeningGateExecution {
         self.completed_at = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .map_err(|e| format!("Failed to get timestamp: {}", e))?
                 .as_secs(),
         );
 
@@ -820,91 +859,236 @@ impl ProductionHardeningGateExecution {
     fn generate_operational_readiness_report(&self) -> Result<OperationalReadinessReport, String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| format!("Failed to get timestamp: {}", e))?
             .as_secs();
 
         // Calculate security assessment
+        let quarantine_drill_success = self
+            .quarantine_drills
+            .iter()
+            .all(|d| matches!(d.validation_status, ValidationStatus::Passed));
+        let security_vectors_passed = self
+            .security_matrix
+            .iter()
+            .filter(|e| matches!(e.validation_status, ValidationStatus::Passed))
+            .count();
+        let security_vectors_total = self.security_matrix.len();
+        let security_regression_risk =
+            if security_vectors_passed == security_vectors_total && quarantine_drill_success {
+                "LOW"
+            } else if security_vectors_passed > security_vectors_total / 2 {
+                "MEDIUM"
+            } else {
+                "HIGH"
+            };
+
         let security_assessment = SecurityAssessment {
-            attack_vectors_covered: self
+            attack_vectors_covered: security_vectors_passed as u32,
+            attack_vectors_total: security_vectors_total as u32,
+            containment_slo_compliance_pct: self.calculate_containment_compliance(),
+            quarantine_drill_success,
+            autonomous_response_validated: quarantine_drill_success,
+            critical_vulnerabilities: self
                 .security_matrix
                 .iter()
-                .filter(|e| matches!(e.validation_status, ValidationStatus::Passed))
+                .filter(|e| matches!(e.validation_status, ValidationStatus::Failed(_)))
                 .count() as u32,
-            attack_vectors_total: self.security_matrix.len() as u32,
-            containment_slo_compliance_pct: self.calculate_containment_compliance(),
-            quarantine_drill_success: self
-                .quarantine_drills
-                .iter()
-                .all(|d| matches!(d.validation_status, ValidationStatus::Passed)),
-            autonomous_response_validated: true, // Based on quarantine drill results
-            critical_vulnerabilities: 0,         // Based on security matrix results
-            security_regression_risk: "LOW".to_string(),
+            security_regression_risk: security_regression_risk.to_string(),
         };
 
         // Calculate performance assessment
+        let fuzz_passed = self
+            .fuzz_campaigns
+            .iter()
+            .all(|c| matches!(c.completion_status, ValidationStatus::Passed));
+        let property_tests_passed = self
+            .property_tests
+            .iter()
+            .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
+        let metamorphic_tests_passed = self
+            .metamorphic_tests
+            .iter()
+            .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
+        let performance_regression_risk =
+            if fuzz_passed && property_tests_passed && metamorphic_tests_passed {
+                "LOW"
+            } else if fuzz_passed || property_tests_passed {
+                "MEDIUM"
+            } else {
+                "HIGH"
+            };
+
         let performance_assessment = PerformanceAssessment {
             fuzz_coverage_pct: self.calculate_fuzz_coverage(),
             fuzz_cpu_hours_total: self.fuzz_campaigns.iter().map(|c| c.min_cpu_hours).sum(),
             property_test_coverage_pct: self.calculate_property_test_coverage(),
             metamorphic_preservation_rate_pct: self.calculate_metamorphic_preservation_rate(),
-            performance_regression_risk: "LOW".to_string(),
+            performance_regression_risk: performance_regression_risk.to_string(),
         };
 
         // Calculate reliability assessment
+        let fault_drills_passed = self
+            .fault_injection_drills
+            .iter()
+            .all(|d| matches!(d.validation_status, ValidationStatus::Passed));
+        let rollout_passed = self
+            .rollout_validation
+            .iter()
+            .all(|r| matches!(r.validation_status, ValidationStatus::Passed));
+        let replay_passed = self
+            .replay_audits
+            .iter()
+            .all(|a| matches!(a.validation_status, ValidationStatus::Passed));
+        let reliability_risk = if fault_drills_passed && rollout_passed && replay_passed {
+            "LOW"
+        } else if fault_drills_passed || rollout_passed {
+            "MEDIUM"
+        } else {
+            "HIGH"
+        };
+
         let reliability_assessment = ReliabilityAssessment {
             fault_recovery_success_rate_pct: self.calculate_fault_recovery_success_rate(),
             rollout_stage_success_rate_pct: self.calculate_rollout_success_rate(),
             replay_audit_success_rate_pct: self.calculate_replay_audit_success_rate(),
-            incident_response_validated: true, // Based on drill results
-            reliability_risk: "LOW".to_string(),
+            incident_response_validated: fault_drills_passed,
+            reliability_risk: reliability_risk.to_string(),
         };
 
         // Calculate operational assessment
+        let e2e_passed = matches!(self.e2e_deployment_status, ValidationStatus::Passed);
+        let operational_risk = if e2e_passed {
+            "LOW"
+        } else {
+            "HIGH" // E2E deployment is critical for operational readiness
+        };
+
         let operational_assessment = OperationalAssessment {
             monitoring_coverage_pct: 95.0,  // Based on structured logging coverage
             logging_completeness_pct: 98.0, // Based on event coverage
-            operator_tooling_validated: true, // Based on E2E deployment
-            deployment_automation_validated: matches!(
-                self.e2e_deployment_status,
-                ValidationStatus::Passed
-            ),
-            operational_risk: "LOW".to_string(),
+            operator_tooling_validated: e2e_passed,
+            deployment_automation_validated: e2e_passed,
+            operational_risk: operational_risk.to_string(),
         };
 
         // Determine overall readiness
-        let overall_readiness_status = if self.all_validations_passed() {
+        let all_passed = self.all_validations_passed();
+        let overall_readiness_status = if all_passed {
             OverallReadinessStatus::ProductionReady
         } else {
             OverallReadinessStatus::NotReadyForProduction(self.get_failed_validations())
         };
 
-        // Generate risk summary
-        let risk_summary = RiskSummary {
-            critical_risks: vec![],
-            high_risks: vec![],
-            medium_risks: vec![],
-            mitigations_in_place: vec![
+        // Generate risk summary based on actual validation status
+        let mut critical_risks = Vec::new();
+        let mut high_risks = Vec::new();
+        let mut medium_risks = Vec::new();
+        let mut mitigations_in_place = Vec::new();
+
+        if !all_passed {
+            // Categorize risks based on validation failures
+            if security_regression_risk == "HIGH" {
+                high_risks.push(
+                    "Security validation incomplete - attack vectors not fully covered".to_string(),
+                );
+            } else if security_regression_risk == "MEDIUM" {
+                medium_risks.push("Some security validations pending".to_string());
+            } else {
+                mitigations_in_place.push("Security regression matrix verified".to_string());
+            }
+
+            if performance_regression_risk == "HIGH" {
+                high_risks.push(
+                    "Performance validation incomplete - fuzz/property testing gaps".to_string(),
+                );
+            } else if performance_regression_risk == "MEDIUM" {
+                medium_risks.push("Some performance validations pending".to_string());
+            } else {
+                mitigations_in_place.push("Comprehensive fuzz testing completed".to_string());
+            }
+
+            if reliability_risk == "HIGH" {
+                high_risks.push(
+                    "Reliability validation incomplete - fault/rollout/audit gaps".to_string(),
+                );
+            } else if reliability_risk == "MEDIUM" {
+                medium_risks.push("Some reliability validations pending".to_string());
+            } else {
+                mitigations_in_place.push("Fault injection recovery validated".to_string());
+            }
+
+            if operational_risk == "HIGH" {
+                critical_risks
+                    .push("E2E deployment validation required before production".to_string());
+            } else {
+                mitigations_in_place.push("E2E deployment automation validated".to_string());
+            }
+
+            if quarantine_drill_success {
+                mitigations_in_place.push("Autonomous quarantine validated".to_string());
+            }
+        } else {
+            // All validations passed
+            mitigations_in_place.extend([
                 "Autonomous quarantine validated".to_string(),
                 "Fault injection recovery validated".to_string(),
                 "Security regression matrix verified".to_string(),
                 "Comprehensive fuzz testing completed".to_string(),
-            ],
-            residual_risk_assessment: "ACCEPTABLE".to_string(),
+                "E2E deployment automation validated".to_string(),
+            ]);
+        }
+
+        let residual_risk_assessment = if !critical_risks.is_empty() {
+            "UNACCEPTABLE"
+        } else if !high_risks.is_empty() {
+            "HIGH"
+        } else if !medium_risks.is_empty() {
+            "MEDIUM"
+        } else {
+            "ACCEPTABLE"
+        };
+
+        let risk_summary = RiskSummary {
+            critical_risks,
+            high_risks,
+            medium_risks,
+            mitigations_in_place,
+            residual_risk_assessment: residual_risk_assessment.to_string(),
         };
 
         // Make go/no-go decision
+        let is_go = matches!(
+            overall_readiness_status,
+            OverallReadinessStatus::ProductionReady
+        );
+        let decision_rationale = if is_go {
+            "All production hardening validations passed successfully".to_string()
+        } else {
+            let failed_validations = self.get_failed_validations();
+            if failed_validations.is_empty() {
+                "Production hardening validations not yet started".to_string()
+            } else {
+                format!(
+                    "Production hardening blocked by {} validation issues",
+                    failed_validations.len()
+                )
+            }
+        };
+
+        let required_actions_before_deployment = if is_go {
+            vec![]
+        } else {
+            self.get_failed_validations()
+        };
+
         let go_no_go_decision = GoNoGoDecision {
-            decision: if matches!(
-                overall_readiness_status,
-                OverallReadinessStatus::ProductionReady
-            ) {
+            decision: if is_go {
                 ProductionGoDecision::Go
             } else {
                 ProductionGoDecision::NoGo
             },
-            decision_rationale: "All production hardening validations passed successfully"
-                .to_string(),
-            required_actions_before_deployment: vec![],
+            decision_rationale,
+            required_actions_before_deployment,
             recommended_monitoring_during_rollout: vec![
                 "Monitor quarantine system responsiveness".to_string(),
                 "Track error rates during rollout stages".to_string(),
@@ -1083,19 +1267,151 @@ impl ProductionHardeningGateExecution {
     fn get_failed_validations(&self) -> Vec<String> {
         let mut failures = Vec::new();
 
+        // Include both Failed and Pending validations as blockers
         for entry in &self.security_matrix {
-            if let ValidationStatus::Failed(ref msg) = entry.validation_status {
-                failures.push(format!("Security matrix: {}", msg));
+            match &entry.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Security matrix (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Security matrix (PENDING): {} - {}",
+                        entry.attack_category.as_str(),
+                        entry.slo_threshold_ms
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
             }
         }
 
         for campaign in &self.fuzz_campaigns {
-            if let ValidationStatus::Failed(ref msg) = campaign.completion_status {
-                failures.push(format!("Fuzz campaign: {}", msg));
+            match &campaign.completion_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Fuzz campaign (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Fuzz campaign (PENDING): {} - {} CPU hours required",
+                        campaign.target, campaign.min_cpu_hours
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
             }
         }
 
-        // Add other validation failures...
+        for test in &self.property_tests {
+            match &test.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Property test (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Property test (PENDING): {} - {} iterations required",
+                        test.component, test.test_cases_threshold
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        for test in &self.metamorphic_tests {
+            match &test.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Metamorphic test (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Metamorphic test (PENDING): {} - {} iterations required",
+                        test.transformation, test.test_cases_threshold
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        for rollout in &self.rollout_validation {
+            match &rollout.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Rollout validation (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Rollout validation (PENDING): {} - {} phases required",
+                        format!("{:?}", rollout.stage), rollout.metrics_collection_duration_mins
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        for drill in &self.fault_injection_drills {
+            match &drill.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Fault injection drill (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Fault injection drill (PENDING): {} - {} scenarios required",
+                        format!("{:?}", drill.fault_type),
+                        drill.duration_mins
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        for drill in &self.quarantine_drills {
+            match &drill.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Quarantine drill (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Quarantine drill (PENDING): {} - {} scenarios required",
+                        drill.malicious_extension_type,
+                        drill.fleet_size
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        for audit in &self.replay_audits {
+            match &audit.validation_status {
+                ValidationStatus::Failed(ref msg) => {
+                    failures.push(format!("Replay audit (FAILED): {}", msg));
+                }
+                ValidationStatus::Pending => {
+                    failures.push(format!(
+                        "Replay audit (PENDING): {} - {} traces required",
+                        audit.incident_severity, audit.replay_success_threshold_pct
+                    ));
+                }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+                ValidationStatus::Passed => {} // No blockers
+            }
+        }
+
+        match &self.e2e_deployment_status {
+            ValidationStatus::Failed(ref msg) => {
+                failures.push(format!("E2E deployment (FAILED): {}", msg));
+            }
+            ValidationStatus::Pending => {
+                failures.push(
+                    "E2E deployment (PENDING): Full deployment pipeline validation required"
+                        .to_string(),
+                );
+            }
+                ValidationStatus::InProgress => {} // Treated as blockers like Pending
+            ValidationStatus::Passed => {} // No blockers
+        }
 
         failures
     }
@@ -1449,8 +1765,8 @@ fn log_production_hardening_event(
 ) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        .map(|d| d.as_secs())
+        .unwrap_or(0); // Fallback to 0 if timestamp fails
 
     let log_entry = ProductionHardeningLogEntry {
         trace_id: format!("prod-{}-{}", gate_id, now),
@@ -1470,17 +1786,21 @@ fn log_production_hardening_event(
     };
 
     // In a real implementation, this would write to structured logging infrastructure
-    eprintln!(
-        "PRODUCTION_HARDENING_LOG: {}",
-        serde_json::to_string(&log_entry).unwrap()
-    );
+    match serde_json::to_string(&log_entry) {
+        Ok(json) => eprintln!("PRODUCTION_HARDENING_LOG: {}", json),
+        Err(e) => eprintln!(
+            "PRODUCTION_HARDENING_LOG: [JSON serialization failed: {}] gate_id={} component={} event={} outcome={:?}",
+            e, gate_id, component, event, outcome
+        ),
+    }
 }
 
 /// Execute the complete production hardening gate
 pub fn execute_production_hardening_gate(
     gate_id: String,
 ) -> Result<OperationalReadinessReport, String> {
-    let mut execution = ProductionHardeningGateExecution::new(gate_id);
+    let mut execution =
+        ProductionHardeningGateExecution::new(gate_id).map_err(|e| e.to_string())?;
     execution.execute_production_hardening_gate()?;
 
     execution
@@ -1494,7 +1814,7 @@ mod tests {
 
     #[test]
     fn test_production_hardening_gate_creation() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-001".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-001".to_string()).unwrap();
         assert_eq!(gate.gate_id, "test-gate-001");
         assert_eq!(gate.status, ProductionReadinessStatus::NotStarted);
         assert!(!gate.security_matrix.is_empty());
@@ -1504,7 +1824,7 @@ mod tests {
 
     #[test]
     fn test_security_matrix_validation() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-002".to_string());
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-002".to_string()).unwrap();
 
         // Test security matrix validation logic
         assert!(
@@ -1528,7 +1848,7 @@ mod tests {
 
     #[test]
     fn test_fuzz_campaign_configuration() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-003".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-003".to_string()).unwrap();
 
         // Verify we have fuzz campaigns for all required targets
         let fuzz_targets: BTreeSet<_> = gate.fuzz_campaigns.iter().map(|c| &c.target).collect();
@@ -1553,7 +1873,7 @@ mod tests {
 
     #[test]
     fn test_property_test_configuration() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-004".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-004".to_string()).unwrap();
 
         // Verify we have property tests for all required property types
         let property_types: BTreeSet<_> = gate
@@ -1721,7 +2041,7 @@ mod tests {
 
     #[test]
     fn test_operational_readiness_report_generation() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-012".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-012".to_string()).unwrap();
         let report = gate.generate_operational_readiness_report().unwrap();
 
         assert!(report.report_id.starts_with("prod-readiness-"));

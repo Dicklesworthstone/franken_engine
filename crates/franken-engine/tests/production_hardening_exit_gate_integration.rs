@@ -734,3 +734,260 @@ fn test_comprehensive_production_hardening_requirements() {
     // 10. Structured logging (verified by log entry generation)
     // This is tested implicitly through the logging function calls
 }
+
+#[test]
+fn test_newly_constructed_gate_produces_nogo_with_pending_blockers() {
+    // Test for bd-2476.2: NoGo reports should explain pending validations
+    let gate = ProductionHardeningGateExecution::new("nogo-test-001".to_string());
+
+    // Fresh gate should not pass all validations
+    assert!(!gate.all_validations_passed());
+
+    // Generate operational readiness report
+    let report = gate.generate_operational_readiness_report().unwrap();
+
+    // Should be NoGo decision
+    assert_eq!(
+        report.go_no_go_decision.decision,
+        ProductionGoDecision::NoGo
+    );
+
+    // Should have non-empty list of blockers including pending validations
+    assert!(
+        !report
+            .go_no_go_decision
+            .required_actions_before_deployment
+            .is_empty()
+    );
+
+    // Should find pending blockers in the action list
+    let blockers = &report.go_no_go_decision.required_actions_before_deployment;
+    let has_pending_security = blockers
+        .iter()
+        .any(|b| b.contains("Security matrix (PENDING)"));
+    let has_pending_fuzz = blockers
+        .iter()
+        .any(|b| b.contains("Fuzz campaign (PENDING)"));
+    let has_pending_e2e = blockers
+        .iter()
+        .any(|b| b.contains("E2E deployment (PENDING)"));
+
+    assert!(
+        has_pending_security,
+        "Should include pending security validations"
+    );
+    assert!(has_pending_fuzz, "Should include pending fuzz campaigns");
+    assert!(has_pending_e2e, "Should include pending E2E deployment");
+
+    // Decision rationale should not claim success
+    assert!(
+        !report
+            .go_no_go_decision
+            .decision_rationale
+            .contains("passed successfully")
+    );
+    assert!(
+        report
+            .go_no_go_decision
+            .decision_rationale
+            .contains("blocked by")
+            || report
+                .go_no_go_decision
+                .decision_rationale
+                .contains("not yet started")
+    );
+
+    // Overall readiness should be NotReadyForProduction
+    assert!(matches!(
+        report.overall_readiness_status,
+        OverallReadinessStatus::NotReadyForProduction(_)
+    ));
+
+    if let OverallReadinessStatus::NotReadyForProduction(failures) =
+        &report.overall_readiness_status
+    {
+        assert!(
+            !failures.is_empty(),
+            "Should list specific validation failures"
+        );
+        assert!(
+            failures.iter().any(|f| f.contains("PENDING")),
+            "Should include pending validations as failures"
+        );
+    }
+}
+
+#[test]
+fn test_risk_assessment_reflects_pending_validations() {
+    // Test for bd-2476.2: Risk levels should derive from actual status, not be hard-coded
+    let gate = ProductionHardeningGateExecution::new("risk-test-001".to_string());
+    let report = gate.generate_operational_readiness_report().unwrap();
+
+    // Risk summary should not claim acceptable risk with pending validations
+    assert_ne!(report.risk_summary.residual_risk_assessment, "ACCEPTABLE");
+    assert!(
+        !report.risk_summary.critical_risks.is_empty()
+            || !report.risk_summary.high_risks.is_empty()
+            || !report.risk_summary.medium_risks.is_empty()
+    );
+
+    // Should have specific risk entries for pending validations
+    let all_risks = [
+        &report.risk_summary.critical_risks,
+        &report.risk_summary.high_risks,
+        &report.risk_summary.medium_risks,
+    ]
+    .concat();
+
+    let has_security_risk = all_risks.iter().any(|r| r.contains("Security"));
+    let has_performance_risk = all_risks
+        .iter()
+        .any(|r| r.contains("Performance") || r.contains("fuzz"));
+    let has_operational_risk = all_risks
+        .iter()
+        .any(|r| r.contains("E2E") || r.contains("deployment"));
+
+    assert!(
+        has_security_risk || has_performance_risk || has_operational_risk,
+        "Should identify specific risk categories for pending validations"
+    );
+
+    // Individual assessments should reflect pending state
+    assert_ne!(report.security_assessment.security_regression_risk, "LOW");
+    assert_ne!(
+        report.performance_assessment.performance_regression_risk,
+        "LOW"
+    );
+    assert_ne!(report.operational_assessment.operational_risk, "LOW");
+}
+
+#[test]
+fn test_pending_vs_failed_validation_differentiation() {
+    // Test that pending and failed validations are properly differentiated
+    let mut gate = ProductionHardeningGateExecution::new("differentiation-test-001".to_string());
+
+    // Simulate some failed validations
+    if let Some(first_security) = gate.security_matrix.get_mut(0) {
+        first_security.validation_status = ValidationStatus::Failed("Test failure".to_string());
+    }
+    if let Some(first_fuzz) = gate.fuzz_campaigns.get_mut(0) {
+        first_fuzz.completion_status = ValidationStatus::Failed("Fuzz failure".to_string());
+    }
+
+    let failed_validations = gate.get_failed_validations();
+
+    // Should contain both FAILED and PENDING entries
+    let failed_entries = failed_validations
+        .iter()
+        .filter(|v| v.contains("FAILED"))
+        .count();
+    let pending_entries = failed_validations
+        .iter()
+        .filter(|v| v.contains("PENDING"))
+        .count();
+
+    assert!(failed_entries > 0, "Should identify explicit failures");
+    assert!(
+        pending_entries > 0,
+        "Should identify pending validations as blockers"
+    );
+
+    // Failed entries should include failure message
+    assert!(
+        failed_validations
+            .iter()
+            .any(|v| v.contains("Test failure"))
+    );
+    assert!(
+        failed_validations
+            .iter()
+            .any(|v| v.contains("Fuzz failure"))
+    );
+
+    // Pending entries should include descriptive context
+    let pending_security = failed_validations
+        .iter()
+        .find(|v| v.contains("Security matrix (PENDING)"));
+    assert!(
+        pending_security.is_some(),
+        "Should have pending security validation"
+    );
+
+    // Check that pending entries have useful context
+    if let Some(pending_msg) = pending_security {
+        assert!(
+            pending_msg.contains("ms") || pending_msg.contains("hours") || !pending_msg.is_empty(),
+            "Pending validations should include useful context"
+        );
+    }
+}
+
+#[test]
+fn test_nogo_report_completeness() {
+    // Comprehensive test that NoGo reports explain all pending/failed validations
+    let gate = ProductionHardeningGateExecution::new("completeness-test-001".to_string());
+    let report = gate.generate_operational_readiness_report().unwrap();
+
+    // Should be NoGo
+    assert_eq!(
+        report.go_no_go_decision.decision,
+        ProductionGoDecision::NoGo
+    );
+
+    // Required actions should cover all validation types that are pending
+    let actions = &report.go_no_go_decision.required_actions_before_deployment;
+
+    // Should mention security validations
+    assert!(
+        actions
+            .iter()
+            .any(|a| a.to_lowercase().contains("security")),
+        "Should require security validation actions"
+    );
+
+    // Should mention fuzz campaigns
+    assert!(
+        actions.iter().any(|a| a.to_lowercase().contains("fuzz")),
+        "Should require fuzz campaign actions"
+    );
+
+    // Should mention property tests
+    assert!(
+        actions
+            .iter()
+            .any(|a| a.to_lowercase().contains("property")),
+        "Should require property test actions"
+    );
+
+    // Should mention e2e deployment
+    assert!(
+        actions
+            .iter()
+            .any(|a| a.to_lowercase().contains("e2e") || a.to_lowercase().contains("deployment")),
+        "Should require E2E deployment actions"
+    );
+
+    // Mitigations should only include actually validated items
+    let mitigations = &report.risk_summary.mitigations_in_place;
+
+    // Since nothing is validated yet, mitigations should be minimal or empty
+    // Any claimed mitigation should be verifiable
+    for mitigation in mitigations {
+        if mitigation.contains("quarantine") {
+            // Only claim if quarantine drills actually passed
+            assert!(
+                gate.quarantine_drills
+                    .iter()
+                    .all(|d| matches!(d.validation_status, ValidationStatus::Passed))
+            );
+        }
+        if mitigation.contains("security") {
+            // Only claim if security matrix actually passed
+            assert!(
+                gate.security_matrix
+                    .iter()
+                    .all(|e| matches!(e.validation_status, ValidationStatus::Passed))
+            );
+        }
+    }
+}

@@ -3424,7 +3424,9 @@ mod tests {
         let output = parse(&input).unwrap();
         let digest = compute_routing_digest(input.source, &config);
         let envelope = build_replay_envelope(&input, &output, &digest);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&envelope).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ReplayEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(envelope, back);
     }
@@ -3433,6 +3435,7 @@ mod tests {
     fn replay_envelope_deterministic() {
         let config = default_config();
         let input = make_input("var a = 1;", &config);
+        // SAFETY: parse cannot fail on valid test input
         let output = parse(&input).unwrap();
         let digest = compute_routing_digest(input.source, &config);
         let e1 = build_replay_envelope(&input, &output, &digest);
@@ -3511,7 +3514,9 @@ mod tests {
     fn rollback_serde_roundtrip() {
         let mut rc = RollbackControl::default();
         rc.record_failure("trace-1");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&rc).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: RollbackControl = serde_json::from_str(&json).unwrap();
         assert_eq!(rc, back);
     }

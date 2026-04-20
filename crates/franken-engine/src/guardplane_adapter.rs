@@ -784,6 +784,7 @@ mod tests {
 
         let _ = adapter.pre_import(&test_hook_context(1), "node:fs");
         let records = adapter.decision_records();
+        // SAFETY: pre_import above records exactly one guardplane decision for this adapter.
         let last = records.last().expect("decision should be recorded");
         assert_ne!(last.threshold_action, ThresholdContainmentAction::Allow);
     }

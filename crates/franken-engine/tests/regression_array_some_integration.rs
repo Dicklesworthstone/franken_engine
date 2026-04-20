@@ -5,7 +5,7 @@
 //! Regression tests for commit de0c19063bebe04dfaa65c5a1c37d60b1b39d88e
 //! Verifies duplicate some implementations are removed and fail-closed behavior works
 
-use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterConfig, ObjectId};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, ObjectId};
 use frankenengine_engine::ir3::{Ir3Instruction, Module, RegRange};
 use frankenengine_engine::object::Object;
 use frankenengine_engine::value::Value;
@@ -44,7 +44,10 @@ fn array_some_duplicate_removal_integration() {
     ]));
 
     // Should succeed (not crash from duplicate implementations)
-    assert!(result.is_ok(), "Array.some should execute without duplicate implementation conflicts");
+    assert!(
+        result.is_ok(),
+        "Array.some should execute without duplicate implementation conflicts"
+    );
 }
 
 #[test]
@@ -73,8 +76,15 @@ fn array_some_fail_closed_no_callback() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.some should handle missing callback gracefully");
-    assert_eq!(core.registers[10], Value::Bool(false), "Array.some without callback should default to false");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle missing callback gracefully"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Bool(false),
+        "Array.some without callback should default to false"
+    );
 }
 
 #[test]
@@ -94,8 +104,15 @@ fn array_some_fail_closed_non_object() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.some should handle non-object 'this' gracefully");
-    assert_eq!(core.registers[10], Value::Bool(false), "Array.some with non-object 'this' should default to false");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle non-object 'this' gracefully"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Bool(false),
+        "Array.some with non-object 'this' should default to false"
+    );
 }
 
 #[test]
@@ -124,7 +141,10 @@ fn array_some_fail_closed_invalid_callback() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.some should handle invalid callback gracefully");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle invalid callback gracefully"
+    );
     // Behavior may vary - could return false or handle as no-op
 }
 
@@ -152,8 +172,15 @@ fn array_some_empty_array_handling() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.some should handle empty array correctly");
-    assert_eq!(core.registers[10], Value::Bool(false), "Array.some should return false for empty array");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle empty array correctly"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Bool(false),
+        "Array.some should return false for empty array"
+    );
 }
 
 #[test]
@@ -184,7 +211,10 @@ fn array_some_sparse_array_handling() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.some should handle sparse arrays correctly");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle sparse arrays correctly"
+    );
     // Result depends on implementation details of callback handling
 }
 
@@ -216,7 +246,10 @@ fn array_some_callback_error_handling() {
     ]));
 
     // Should not crash due to callback dispatch errors
-    assert!(result.is_ok(), "Array.some should handle callback dispatch errors gracefully");
+    assert!(
+        result.is_ok(),
+        "Array.some should handle callback dispatch errors gracefully"
+    );
 }
 
 #[test]
@@ -225,11 +258,13 @@ fn array_some_builtin_id_consistency() {
     let core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
 
     // Check if some builtin is properly mapped (exact ID may vary)
-    let builtin_check = (0..400).any(|id| {
-        core.builtin_name_from_id(id) == Some("builtin:ArrayPrototypeSome".to_string())
-    });
+    let builtin_check = (0..400)
+        .any(|id| core.builtin_name_from_id(id) == Some("builtin:ArrayPrototypeSome".to_string()));
 
-    assert!(builtin_check, "ArrayPrototypeSome builtin should be mapped to at least one ID");
+    assert!(
+        builtin_check,
+        "ArrayPrototypeSome builtin should be mapped to at least one ID"
+    );
 }
 
 #[test]
@@ -261,7 +296,7 @@ fn array_some_proper_boolean_return() {
 
     // Result should be a boolean
     match core.registers[10] {
-        Value::Bool(_) => {}, // Expected
+        Value::Bool(_) => {} // Expected
         other => panic!("Array.some should return boolean, got {:?}", other),
     }
 }

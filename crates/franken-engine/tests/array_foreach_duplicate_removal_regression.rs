@@ -65,8 +65,8 @@ fn test_array_foreach_no_duplicate_implementations() {
         result1 === result2;
     "#;
 
-    let result = run_script_sync(&mut interpreter, script)
-        .expect("Script should execute without errors");
+    let result =
+        run_script_sync(&mut interpreter, script).expect("Script should execute without errors");
 
     // Both calls should have identical behavior
     assert_eq!(result, Value::Bool(true));
@@ -86,8 +86,8 @@ fn test_array_foreach_non_object_this_behavior() {
         [result1, result2, result3];
     "#;
 
-    let result = run_script_sync(&mut interpreter, script)
-        .expect("Script should execute without errors");
+    let result =
+        run_script_sync(&mut interpreter, script).expect("Script should execute without errors");
 
     // All should return undefined (fail-closed behavior for non-objects)
     if let Value::Object(array_id) = result {
@@ -127,8 +127,11 @@ fn test_array_foreach_callback_validation_consistency() {
 
         // All invalid callbacks should result in undefined return (fail-closed)
         if let Value::Str(type_str) = result {
-            assert_eq!(type_str, "undefined",
-                "forEach with {} callback should return undefined", name);
+            assert_eq!(
+                type_str, "undefined",
+                "forEach with {} callback should return undefined",
+                name
+            );
         }
     }
 }
@@ -151,9 +154,11 @@ fn test_array_foreach_duplicate_removal_memory_consistency() {
         results.every(r => r === undefined);
     "#;
 
-    let result = run_script_sync(&mut interpreter, script)
-        .expect("Stress test should not crash");
+    let result = run_script_sync(&mut interpreter, script).expect("Stress test should not crash");
 
-    assert_eq!(result, Value::Bool(true),
-        "All forEach calls should have identical behavior after duplicate removal");
+    assert_eq!(
+        result,
+        Value::Bool(true),
+        "All forEach calls should have identical behavior after duplicate removal"
+    );
 }

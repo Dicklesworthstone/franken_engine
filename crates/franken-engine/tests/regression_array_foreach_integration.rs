@@ -5,7 +5,7 @@
 //! Regression tests for commit d1018316307c8bf001b49dbc29e07b632c86f163
 //! Verifies duplicate forEach implementations are removed and fail-closed behavior works
 
-use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterConfig, ObjectId};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, ObjectId};
 use frankenengine_engine::ir3::{Ir3Instruction, Module, RegRange};
 use frankenengine_engine::object::Object;
 use frankenengine_engine::value::Value;
@@ -44,10 +44,17 @@ fn array_foreach_duplicate_removal_integration() {
     ]));
 
     // Should succeed (not crash from duplicate implementations)
-    assert!(result.is_ok(), "Array.forEach should execute without duplicate implementation conflicts");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should execute without duplicate implementation conflicts"
+    );
 
     // forEach should return undefined
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach should return undefined");
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach should return undefined"
+    );
 }
 
 #[test]
@@ -76,8 +83,15 @@ fn array_foreach_fail_closed_callback_validation() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.forEach should handle missing callback gracefully");
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach without callback should return undefined");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should handle missing callback gracefully"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach without callback should return undefined"
+    );
 }
 
 #[test]
@@ -106,8 +120,15 @@ fn array_foreach_fail_closed_invalid_callback() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.forEach should handle invalid callback gracefully");
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach with invalid callback should return undefined");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should handle invalid callback gracefully"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach with invalid callback should return undefined"
+    );
 }
 
 #[test]
@@ -127,8 +148,15 @@ fn array_foreach_fail_closed_non_object() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.forEach should handle non-object 'this' gracefully");
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach with non-object 'this' should return undefined");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should handle non-object 'this' gracefully"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach with non-object 'this' should return undefined"
+    );
 }
 
 #[test]
@@ -155,8 +183,15 @@ fn array_foreach_empty_array_handling() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.forEach should handle empty array correctly");
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach should return undefined for empty array");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should handle empty array correctly"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach should return undefined for empty array"
+    );
 }
 
 #[test]
@@ -187,8 +222,15 @@ fn array_foreach_sparse_array_handling() {
         Ir3Instruction::Halt,
     ]));
 
-    assert!(result.is_ok(), "Array.forEach should handle sparse arrays correctly");
-    assert_eq!(core.registers[10], Value::Undefined, "Array.forEach should return undefined for sparse array");
+    assert!(
+        result.is_ok(),
+        "Array.forEach should handle sparse arrays correctly"
+    );
+    assert_eq!(
+        core.registers[10],
+        Value::Undefined,
+        "Array.forEach should return undefined for sparse array"
+    );
 }
 
 #[test]
@@ -199,6 +241,9 @@ fn array_foreach_builtin_id_consistency() {
     // Test that the builtin is properly registered
     let builtin_name = core.builtin_name_from_id(334); // Common forEach ID
     if let Some(name) = builtin_name {
-        assert_eq!(name, "builtin:ArrayPrototypeForEach", "forEach builtin should be properly mapped");
+        assert_eq!(
+            name, "builtin:ArrayPrototypeForEach",
+            "forEach builtin should be properly mapped"
+        );
     }
 }

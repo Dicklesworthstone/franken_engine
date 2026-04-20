@@ -41,8 +41,7 @@ fn test_array_some_consistent_behavior() {
         let result2 = arr.some();
         result1 === result2;
     "#;
-    let result = run_script_sync(&mut interpreter, script)
-        .expect("Script should execute");
+    let result = run_script_sync(&mut interpreter, script).expect("Script should execute");
     assert_eq!(result, Value::Bool(true));
 }
 
@@ -54,8 +53,7 @@ fn test_array_some_non_object_this() {
         let result2 = Array.prototype.some.call(undefined);
         [result1, result2];
     "#;
-    run_script_sync(&mut interpreter, script)
-        .expect("Should not crash on non-object this");
+    run_script_sync(&mut interpreter, script).expect("Should not crash on non-object this");
 }
 
 #[test]
@@ -72,8 +70,7 @@ fn test_array_some_callback_validation_types() {
             "#,
             value
         );
-        let result = run_script_sync(&mut interpreter, &script)
-            .expect("Should not crash");
+        let result = run_script_sync(&mut interpreter, &script).expect("Should not crash");
         if let Value::Str(type_str) = result {
             assert_eq!(type_str, "boolean");
         }
@@ -92,7 +89,7 @@ fn test_array_some_duplicate_removal_memory() {
         }
         results.every(r => r === false);
     "#;
-    let result = run_script_sync(&mut interpreter, script)
-        .expect("Memory stress test should not crash");
+    let result =
+        run_script_sync(&mut interpreter, script).expect("Memory stress test should not crash");
     assert_eq!(result, Value::Bool(true));
 }

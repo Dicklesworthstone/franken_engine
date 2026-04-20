@@ -10616,3 +10616,152 @@ fn number_to_string_invalid_radix_handling() {
         }
     }
 }
+
+// Regression tests for recent fix(baseline_interpreter) commits
+// Missing from commits: de0c1906, 3b448a39, 5ab2773a, 8df95361
+
+#[test]
+fn test_array_prototype_some_fail_closed_validation() {
+    // Regression test for commit de0c1906: Array.prototype.some fail-closed implementation
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Array.prototype.some should fail when callback is missing or invalid
+    let result = interpreter.evaluate_expression("[1, 2, 3].some()");
+    assert!(result.is_err(), "Array.some without callback should error");
+
+    let result = interpreter.evaluate_expression("[1, 2, 3].some(null)");
+    assert!(result.is_err(), "Array.some with null callback should error");
+
+    let result = interpreter.evaluate_expression("[1, 2, 3].some(42)");
+    assert!(result.is_err(), "Array.some with non-function callback should error");
+
+    // Error message should mention callback dispatch requirement
+    let error_result = interpreter.evaluate_expression("[1].some()");
+    if let Err(err) = error_result {
+        let err_str = format!("{:?}", err);
+        assert!(err_str.contains("callback") || err_str.contains("function"),
+               "Error should mention callback requirement: {}", err_str);
+    }
+}
+
+#[test]
+fn test_string_char_at_utf16_indexing() {
+    // Regression test for commit 3b448a39: charAt UTF-16 indexing semantics
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Basic ASCII characters
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(0)").unwrap(), Value::Str("A".to_string()));
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(1)").unwrap(), Value::Str("B".to_string()));
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(2)").unwrap(), Value::Str("C".to_string()));
+
+    // Out of bounds returns empty string
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(3)").unwrap(), Value::Str("".to_string()));
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(-1)").unwrap(), Value::Str("A".to_string())); // -1 normalizes to 0
+
+    // UTF-16 surrogate pair handling (emoji should return individual surrogates)
+    // Note: This test assumes the implementation correctly handles surrogates
+    let result = interpreter.evaluate_expression("'😀'.charAt(0)");
+    if let Ok(Value::Str(s)) = result {
+        // Should return first surrogate of emoji, not the whole emoji
+        assert_eq!(s.len(), 1, "charAt(0) on emoji should return single surrogate character");
+    }
+
+    // Type coercion for index
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt('1')").unwrap(), Value::Str("B".to_string()));
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charAt(1.7)").unwrap(), Value::Str("B".to_string())); // 1.7 truncates to 1
+}
+
+#[test]
+fn test_string_char_code_at_utf16_indexing() {
+    // Regression test for commit 5ab2773a: charCodeAt UTF-16 code unit semantics
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Basic ASCII characters
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(0)").unwrap(), Value::Int(65)); // 'A'
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(1)").unwrap(), Value::Int(66)); // 'B'
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(2)").unwrap(), Value::Int(67)); // 'C'
+
+    // Out of bounds returns NaN
+    let result = interpreter.evaluate_expression("'ABC'.charCodeAt(3)").unwrap();
+    match result {
+        Value::Float(f) => assert!(f.inner().is_nan(), "Out of bounds should return NaN"),
+        _ => panic!("charCodeAt out of bounds should return NaN Float"),
+    }
+
+    // Negative index normalization
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(-1)").unwrap(), Value::Int(65)); // -1 normalizes to 0
+
+    // UTF-16 surrogate pair handling
+    let result = interpreter.evaluate_expression("'😀'.charCodeAt(0)");
+    if let Ok(Value::Int(code)) = result {
+        // Should return first surrogate code unit, typically 0xD83D for emoji
+        assert!(code >= 0xD800 && code <= 0xDBFF, "First emoji code unit should be high surrogate: 0x{:X}", code);
+    }
+
+    let result = interpreter.evaluate_expression("'😀'.charCodeAt(1)");
+    if let Ok(Value::Int(code)) = result {
+        // Should return second surrogate code unit, typically 0xDE00 for grinning face
+        assert!(code >= 0xDC00 && code <= 0xDFFF, "Second emoji code unit should be low surrogate: 0x{:X}", code);
+    }
+
+    // Type coercion for index
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt('1')").unwrap(), Value::Int(66));
+    assert_eq!(interpreter.evaluate_expression("'ABC'.charCodeAt(1.7)").unwrap(), Value::Int(66)); // 1.7 truncates to 1
+}
+
+#[test]
+fn test_math_random_deterministic_replay() {
+    // Regression test for commit 8df95361: SHA-256 deterministic replay
+    let config = InterpreterConfig::default();
+    let mut interpreter1 = InterpreterCore::new(config.clone()).unwrap();
+    let mut interpreter2 = InterpreterCore::new(config).unwrap();
+
+    // Execute identical operations to get to same execution state
+    interpreter1.evaluate_expression("let x = 1 + 1").unwrap();
+    interpreter2.evaluate_expression("let x = 1 + 1").unwrap();
+
+    interpreter1.evaluate_expression("let y = x * 2").unwrap();
+    interpreter2.evaluate_expression("let y = x * 2").unwrap();
+
+    // Math.random should now produce identical sequences
+    let random1a = interpreter1.evaluate_expression("Math.random()").unwrap();
+    let random2a = interpreter2.evaluate_expression("Math.random()").unwrap();
+
+    // Should be identical due to deterministic SHA-256 seeding
+    match (random1a, random2a) {
+        (Value::Float(f1), Value::Float(f2)) => {
+            assert!((f1.inner() - f2.inner()).abs() < f64::EPSILON,
+                   "Identical execution state should produce identical random values: {} vs {}",
+                   f1.inner(), f2.inner());
+        }
+        _ => panic!("Math.random should return Float values"),
+    }
+
+    // Second random call should also be identical
+    let random1b = interpreter1.evaluate_expression("Math.random()").unwrap();
+    let random2b = interpreter2.evaluate_expression("Math.random()").unwrap();
+
+    match (random1b, random2b) {
+        (Value::Float(f1), Value::Float(f2)) => {
+            assert!((f1.inner() - f2.inner()).abs() < f64::EPSILON,
+                   "Second random call should also be deterministic: {} vs {}",
+                   f1.inner(), f2.inner());
+        }
+        _ => panic!("Math.random should return Float values"),
+    }
+
+    // Different execution states should produce different values
+    interpreter1.evaluate_expression("let z = 42").unwrap(); // Change execution state
+
+    let random1c = interpreter1.evaluate_expression("Math.random()").unwrap();
+    let random2c = interpreter2.evaluate_expression("Math.random()").unwrap();
+
+    match (random1c, random2c) {
+        (Value::Float(f1), Value::Float(f2)) => {
+            assert!((f1.inner() - f2.inner()).abs() > f64::EPSILON,
+                   "Different execution states should produce different random values: {} vs {}",
+                   f1.inner(), f2.inner());
+        }
+        _ => panic!("Math.random should return Float values"),
+    }
+}

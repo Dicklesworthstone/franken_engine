@@ -1580,6 +1580,7 @@ mod tests {
             JsxNode::Fragment(frag) => {
                 assert_eq!(frag.children.len(), 1);
             }
+            // SAFETY: Test validates JSX parsing produces fragment node for "<>hello</>"
             _ => panic!("expected fragment"),
         }
     }

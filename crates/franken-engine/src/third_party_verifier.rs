@@ -1534,6 +1534,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "overall_pass_flag_matches")
+            // SAFETY: Test-only unwrap expecting overall_pass_flag_matches check to be present in verification report
             .unwrap();
         assert!(!failed.passed);
     }

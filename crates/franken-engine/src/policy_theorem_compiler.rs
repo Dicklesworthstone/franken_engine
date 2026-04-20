@@ -509,7 +509,9 @@ impl PolicyTheoremCompiler {
         for node in &ir.nodes {
             for constraint in &node.constraints {
                 if let Constraint::NonInterferenceClaim { domain_a, domain_b } = constraint {
+                    // SAFETY: domain_a was registered in domain_caps during earlier pass
                     let subs_a = domain_caps.get(domain_a).cloned().unwrap();
+                    // SAFETY: domain_b was registered in domain_caps during earlier pass
                     let subs_b = domain_caps.get(domain_b).cloned().unwrap();
                     let overlap: BTreeSet<_> = subs_a.intersection(&subs_b).cloned().collect();
                     if !overlap.is_empty() {
@@ -915,6 +917,7 @@ impl SignaturePreimage for PolicyValidationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        // SAFETY: PolicyValidationRecord derives Serialize and has no non-serializable fields
         CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap())
     }
 }
@@ -1360,6 +1363,7 @@ mod tests {
     fn compile_valid_policy() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
+        // SAFETY: Test with valid policy IR should compile successfully
         let result = compiler.compile(&ir).unwrap();
         assert!(result.all_passed);
         assert!(!result.witnesses.is_empty());

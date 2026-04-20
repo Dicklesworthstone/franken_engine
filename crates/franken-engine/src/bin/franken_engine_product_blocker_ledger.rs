@@ -177,6 +177,9 @@ pub fn emit_bundle(config: &EmitConfig) -> Result<EmitReport, String> {
         .map(|entry| (entry.id.clone(), entry))
         .collect::<BTreeMap<_, _>>();
 
+    // Validate downstream handoff bead exists and is completed before proceeding
+    validate_downstream_handoff_bead(&support_contract, &bead_index)?;
+
     let mut ledger = build_seed_ledger();
     enrich_ledger(&mut ledger, &bead_index)?;
 
@@ -471,6 +474,45 @@ fn validate_support_contract(contract: &SupportSurfaceContract) -> Result<(), St
         if status.trim().is_empty() {
             return Err("support contract has blank blocked status".to_string());
         }
+    }
+
+    Ok(())
+}
+
+fn validate_downstream_handoff_bead(
+    support_contract: &SupportSurfaceContract,
+    bead_index: &BTreeMap<String, BeadSnapshotEntry>,
+) -> Result<(), String> {
+    let handoff_bead_id = &support_contract
+        .readiness_answer_contract
+        .product_ready_handoff_bead_id;
+
+    // Check if the handoff bead exists in the bead snapshot
+    let handoff_bead = bead_index.get(handoff_bead_id).ok_or_else(|| {
+        format!(
+            "downstream handoff bead '{}' not found in bead snapshot - cannot validate owner routing delegation",
+            handoff_bead_id
+        )
+    })?;
+
+    // Check if the handoff bead is completed (closed status)
+    if handoff_bead.status != "closed" {
+        return Err(format!(
+            "downstream handoff bead '{}' has status '{}' but must be 'closed' to enable owner routing delegation - found bead is not actionable",
+            handoff_bead_id, handoff_bead.status
+        ));
+    }
+
+    // Optional: Validate basic bead integrity (has title for traceability)
+    if handoff_bead
+        .title
+        .as_ref()
+        .map_or(true, |t| t.trim().is_empty())
+    {
+        return Err(format!(
+            "downstream handoff bead '{}' has empty or missing title - invalid bead state for delegation",
+            handoff_bead_id
+        ));
     }
 
     Ok(())
@@ -793,5 +835,160 @@ mod tests {
                 "blk_regex_unicode",
             ]
         );
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_missing_bead_fails() {
+        let support_contract = test_support_contract();
+        let bead_index = BTreeMap::new(); // Empty index - handoff bead missing
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("bd-1lsy.5.10.3"));
+        assert!(error_msg.contains("not found in bead snapshot"));
+        assert!(error_msg.contains("cannot validate owner routing delegation"));
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_open_bead_fails() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add handoff bead with "open" status
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "open".to_string(),
+                assignee: Some("TestAgent".to_string()),
+                title: Some("Handoff task for product ready".to_string()),
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("bd-1lsy.5.10.3"));
+        assert!(error_msg.contains("has status 'open'"));
+        assert!(error_msg.contains("must be 'closed'"));
+        assert!(error_msg.contains("not actionable"));
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_in_progress_bead_fails() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add handoff bead with "in_progress" status
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "in_progress".to_string(),
+                assignee: Some("TestAgent".to_string()),
+                title: Some("Handoff task for product ready".to_string()),
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("bd-1lsy.5.10.3"));
+        assert!(error_msg.contains("has status 'in_progress'"));
+        assert!(error_msg.contains("must be 'closed'"));
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_empty_title_fails() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add handoff bead with "closed" status but empty title
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "closed".to_string(),
+                assignee: Some("TestAgent".to_string()),
+                title: Some("".to_string()), // Empty title
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("bd-1lsy.5.10.3"));
+        assert!(error_msg.contains("empty or missing title"));
+        assert!(error_msg.contains("invalid bead state"));
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_missing_title_fails() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add handoff bead with "closed" status but no title
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "closed".to_string(),
+                assignee: Some("TestAgent".to_string()),
+                title: None, // Missing title
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("empty or missing title"));
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_closed_with_title_succeeds() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add properly completed handoff bead
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "closed".to_string(),
+                assignee: Some("TestAgent".to_string()),
+                title: Some("Handoff task for product ready - completed".to_string()),
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_downstream_handoff_bead_closed_no_assignee_succeeds() {
+        let support_contract = test_support_contract();
+        let mut bead_index = BTreeMap::new();
+
+        // Add completed handoff bead without assignee (assignee optional for closed beads)
+        bead_index.insert(
+            "bd-1lsy.5.10.3".to_string(),
+            BeadSnapshotEntry {
+                id: "bd-1lsy.5.10.3".to_string(),
+                status: "closed".to_string(),
+                assignee: None,
+                title: Some("Handoff task for product ready - completed".to_string()),
+            },
+        );
+
+        let result = validate_downstream_handoff_bead(&support_contract, &bead_index);
+
+        assert!(result.is_ok());
     }
 }

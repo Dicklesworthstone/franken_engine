@@ -8128,13 +8128,28 @@ impl InterpreterCore {
                     _ => "".to_string(),
                 };
 
+                if args.count == 1 {
+                    let array_id = self.alloc_object_with_prototype(None)?;
+                    self.set_object_property(
+                        array_id,
+                        "0".to_string(),
+                        Value::Str(string_val.clone()),
+                    )?;
+                    self.set_object_property(
+                        array_id,
+                        "length".to_string(),
+                        Value::Int(1),
+                    )?;
+                    return Ok(Value::Object(array_id));
+                }
+
                 // Get separator argument (default to undefined which means split into characters)
                 let separator = if args.count > 1 {
                     let sep_arg = self.read_reg(args.start + 1)?;
                     match sep_arg {
                         Value::Str(s) => Some(s),
                         Value::Null => Some("null".to_string()),
-                        Value::Undefined => None, // Split each character
+                        Value::Undefined => None,
                         Value::Int(n) => Some(n.to_string()),
                         Value::Float(f) => Some(f.inner().to_string()),
                         Value::Bool(b) => Some(b.to_string()),
@@ -8157,8 +8172,8 @@ impl InterpreterCore {
                         string_val.chars().map(|c| c.to_string()).collect()
                     }
                     None => {
-                        // No separator - split into characters
-                        string_val.chars().map(|c| c.to_string()).collect()
+                        // No separator / separator omitted / separator undefined
+                        vec![string_val]
                     }
                 };
 
@@ -8535,68 +8550,15 @@ impl InterpreterCore {
                 }
 
                 let string_val = self.read_reg(args.start)?;
-
-                // Convert first argument to string
-                let string_to_parse = match string_val {
-                    Value::Str(s) => s,
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => {
-                        if b {
-                            "true".to_string()
-                        } else {
-                            "false".to_string()
-                        }
-                    }
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Float(Float64::new(f64::NAN))), // Objects return NaN
-                };
-
-                // Get optional radix (base) argument
-                let radix = if args.count >= 2 {
-                    let radix_val = self.read_reg(args.start + 1)?;
-                    match radix_val {
-                        Value::Int(r) => {
-                            if r < 2 || r > 36 {
-                                return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
-                            }
-                            r as u32
-                        }
-                        Value::Float(f) => {
-                            let r = f.inner();
-                            if !r.is_finite() {
-                                10
-                            } else {
-                                let r = r as i64;
-                                if r < 2 || r > 36 {
-                                    return Ok(Value::Float(Float64::new(f64::NAN))); // Invalid radix
-                                }
-                                r as u32
-                            }
-                        }
-                        _ => 10, // Default to base 10 for non-numeric radix
-                    }
+                let radix_arg = if args.count >= 2 {
+                    Some(self.read_reg(args.start + 1)?)
                 } else {
-                    10 // Default radix is 10
+                    None
                 };
 
-                // Simple integer parsing (basic implementation)
-                let trimmed = string_to_parse.trim_start();
-                if trimmed.is_empty() {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                // Parse integer with specified radix
-                match i64::from_str_radix(
-                    &trimmed
-                        .chars()
-                        .take_while(|c| c.is_ascii_alphanumeric())
-                        .collect::<String>(),
-                    radix,
-                ) {
-                    Ok(num) => Ok(Value::Int(num)),
-                    Err(_) => Ok(Value::Float(Float64::new(f64::NAN))),
+                match Self::parse_int_with_sign_and_radix(&string_val, radix_arg.as_ref()) {
+                    Some(result) => Ok(Value::Int(result)),
+                    None => Ok(Value::Float(Float64::new(f64::NAN))),
                 }
             }
             "builtin:parseFloat" => {
@@ -9329,12 +9291,17 @@ impl InterpreterCore {
                     Value::Bool(false) => 0.0,
                     Value::Null => 0.0,
                     Value::Undefined => f64::NAN,
-                    _ => f64::NAN,
+                    _ => Self::coerce_to_float(&arg).unwrap_or(f64::NAN),
                 };
 
-                let result = if num < 0.0 { f64::NAN } else { num.ln() };
-
-                Ok(Value::Float(Float64::new(result)))
+                if num < 0.0 {
+                    Ok(Value::Float(Float64::new(f64::NAN)))
+                } else if num == 0.0 {
+                    Ok(Value::Float(Float64::new(f64::NEG_INFINITY)))
+                } else {
+                    let result = num.ln();
+                    Ok(Value::Float(Float64::new(result)))
+                }
             }
             "builtin:MathExp" => {
                 // Math.exp(x) implementation - returns e raised to the power of x
@@ -12989,77 +12956,17 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 }
 
-                let string_val = match self.read_reg(args.start)? {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Float(f64::NAN.into())),
-                };
-
-                let radix = if args.count >= 2 {
-                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
+                let string_val = self.read_reg(args.start)?;
+                let radix_arg = if args.count >= 2 {
+                    Some(self.read_reg(args.start + 1)?)
                 } else {
-                    10
+                    None
                 };
 
-                // Validate radix
-                if radix != 0 && (radix < 2 || radix > 36) {
-                    return Ok(Value::Float(f64::NAN.into()));
+                match Self::parse_int_with_sign_and_radix(&string_val, radix_arg.as_ref()) {
+                    Some(result) => Ok(Value::Int(result)),
+                    None => Ok(Value::Float(f64::NAN.into())),
                 }
-
-                // Trim leading whitespace
-                let trimmed = string_val.trim_start();
-                if trimmed.is_empty() {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                // Parse sign and determine parsing start position
-                let (sign, start_pos) = if trimmed.starts_with('-') {
-                    (-1i64, 1)
-                } else if trimmed.starts_with('+') {
-                    (1i64, 1)
-                } else {
-                    (1i64, 0)
-                };
-
-                // For radix 16, handle 0x prefix
-                let (actual_radix, parse_start) = if radix == 16 || radix == 0 {
-                    let remaining = &trimmed[start_pos..];
-                    if remaining.starts_with("0x") || remaining.starts_with("0X") {
-                        (16, start_pos + 2)
-                    } else if radix == 0 {
-                        (10, start_pos) // Default to decimal if radix is 0
-                    } else {
-                        (radix, start_pos)
-                    }
-                } else {
-                    (radix, start_pos)
-                };
-
-                // Parse integer
-                let mut result = 0i64;
-                for c in trimmed[parse_start..].chars() {
-                    let digit_val = if c.is_ascii_digit() {
-                        (c as u32 - '0' as u32) as i64
-                    } else if c.is_ascii_alphabetic() {
-                        (c.to_ascii_lowercase() as u32 - 'a' as u32 + 10) as i64
-                    } else {
-                        break; // Stop at first non-digit character
-                    };
-
-                    if digit_val >= actual_radix as i64 {
-                        break; // Stop at invalid digit for this radix
-                    }
-
-                    result = result
-                        .saturating_mul(actual_radix as i64)
-                        .saturating_add(digit_val);
-                }
-
-                Ok(Value::Int(sign * result))
             }
 
 
@@ -17205,19 +17112,16 @@ impl InterpreterCore {
                 let result_array_id = self.alloc_object_with_prototype(None)?;
 
                 if args.count < 2 {
-                    // No separator provided - split each character
-                    let chars: Vec<String> = str_text.chars().map(|c| c.to_string()).collect();
-                    for (index, char_str) in chars.iter().enumerate() {
-                        self.set_object_property(
-                            result_array_id,
-                            index.to_string(),
-                            Value::Str(char_str.clone()),
-                        )?;
-                    }
+                    // No separator provided - return array with original string
+                    self.set_object_property(
+                        result_array_id,
+                        "0".to_string(),
+                        Value::Str(str_text),
+                    )?;
                     self.set_object_property(
                         result_array_id,
                         "length".to_string(),
-                        Value::Int(chars.len() as i64),
+                        Value::Int(1),
                     )?;
                 } else {
                     let separator_val = self.read_reg(args.start + 1)?;
@@ -17778,60 +17682,15 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start)?;
-                let input_str = match value {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(true) => "1".to_string(),
-                    Value::Bool(false) => "0".to_string(),
-                    _ => return Ok(Value::Float(Float64::new(f64::NAN))),
+                let radix_arg = if args.count >= 2 {
+                    Some(self.read_reg(args.start + 1)?)
+                } else {
+                    None
                 };
 
-                let radix = if args.count >= 2 {
-                    Self::coerce_clamped_radix_or_default(self.read_reg(args.start + 1)?, 10)
-                } else {
-                    10
-                };
-
-                // Parse the string, stopping at first non-digit character
-                let trimmed = input_str.trim();
-                if trimmed.is_empty() {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                // Simple parsing for base 10
-                if radix == 10 {
-                    let mut result_str = String::new();
-                    let mut chars = trimmed.chars();
-
-                    // Handle sign
-                    if let Some(first_char) = chars.next() {
-                        if first_char == '+' || first_char == '-' {
-                            result_str.push(first_char);
-                        } else if first_char.is_ascii_digit() {
-                            result_str.push(first_char);
-                        } else {
-                            return Ok(Value::Float(Float64::new(f64::NAN)));
-                        }
-                    }
-
-                    // Parse digits
-                    for c in chars {
-                        if c.is_ascii_digit() {
-                            result_str.push(c);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if let Ok(parsed) = result_str.parse::<i64>() {
-                        Ok(Value::Int(parsed))
-                    } else {
-                        Ok(Value::Float(Float64::new(f64::NAN)))
-                    }
-                } else {
-                    // Simplified non-base-10 parsing
-                    Ok(Value::Float(Float64::new(f64::NAN)))
+                match Self::parse_int_with_sign_and_radix(&value, radix_arg.as_ref()) {
+                    Some(result) => Ok(Value::Int(result)),
+                    None => Ok(Value::Float(Float64::new(f64::NAN))),
                 }
             }
 
@@ -17856,40 +17715,60 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                // Parse float, stopping at first invalid character
+                // Handle Infinity and -Infinity literals first
+                if trimmed.starts_with("Infinity") {
+                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
+                }
+                if trimmed.starts_with("-Infinity") {
+                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
+                }
+                if trimmed.starts_with("+Infinity") {
+                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
+                }
+
+                // Parse number with scientific notation support
                 let mut result_str = String::new();
                 let mut has_dot = false;
-                let mut chars = trimmed.chars();
+                let mut has_exponent = false;
+                let mut chars = trimmed.chars().peekable();
 
                 // Handle sign
-                if let Some(first_char) = chars.next() {
+                if let Some(&first_char) = chars.peek() {
                     if first_char == '+' || first_char == '-' {
-                        result_str.push(first_char);
-                    } else if first_char.is_ascii_digit() || first_char == '.' {
-                        result_str.push(first_char);
-                        if first_char == '.' {
-                            has_dot = true;
-                        }
-                    } else {
-                        return Ok(Value::Float(Float64::new(f64::NAN)));
+                        result_str.push(chars.next().unwrap());
                     }
                 }
 
-                // Parse digits and decimal point
-                for c in chars {
+                // Parse main number part with exponent support
+                while let Some(&c) = chars.peek() {
                     if c.is_ascii_digit() {
-                        result_str.push(c);
-                    } else if c == '.' && !has_dot {
-                        result_str.push(c);
+                        result_str.push(chars.next().unwrap());
+                    } else if c == '.' && !has_dot && !has_exponent {
+                        result_str.push(chars.next().unwrap());
                         has_dot = true;
+                    } else if (c == 'e' || c == 'E') && !has_exponent {
+                        result_str.push(chars.next().unwrap());
+                        has_exponent = true;
+
+                        // Handle exponent sign
+                        if let Some(&next_char) = chars.peek() {
+                            if next_char == '+' || next_char == '-' {
+                                result_str.push(chars.next().unwrap());
+                            }
+                        }
                     } else {
-                        break;
+                        break; // Stop at first invalid character
                     }
+                }
+
+                // Validate result string is not empty or just signs
+                if result_str.is_empty() || result_str == "+" || result_str == "-" {
+                    return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
                 if let Ok(parsed) = result_str.parse::<f64>() {
-                    // Return Int if it's a whole number
-                    if parsed.fract() == 0.0
+                    // Return Int if it's a finite whole number within i64 range
+                    if parsed.is_finite() && parsed.fract() == 0.0
                         && parsed >= i64::MIN as f64
                         && parsed <= i64::MAX as f64
                     {
@@ -17988,28 +17867,6 @@ impl InterpreterCore {
                 Ok(Value::Str(str_text.to_uppercase()))
             }
 
-            "builtin:MathLog" => {
-                // Math.log() implementation - returns natural logarithm
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                if num < 0.0 {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                } else if num == 0.0 {
-                    Ok(Value::Float(Float64::new(f64::NEG_INFINITY)))
-                } else {
-                    let result = num.ln();
-                    Ok(Value::Float(Float64::new(result)))
-                }
-            }
 
             _ => {
                 // Unknown builtin method - return undefined
@@ -18057,18 +17914,74 @@ impl InterpreterCore {
         }
     }
 
-    fn coerce_clamped_radix_or_default(value: Value, default: u32) -> u32 {
-        match value {
-            Value::Int(n) => n.clamp(2, 36) as u32,
-            Value::Float(f) => {
-                let radix = f.inner();
-                if radix.is_finite() {
-                    radix.clamp(2.0, 36.0) as u32
-                } else {
-                    default
-                }
+    /// Parse integers with shared parseInt sign and radix handling.
+    fn parse_int_with_sign_and_radix(
+        input: &Value,
+        radix_arg: Option<&Value>,
+    ) -> Option<i64> {
+        let input = Self::value_to_primitive_string(input);
+        let trimmed = input.trim_start();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let radix = if let Some(radix_value) = radix_arg {
+            Self::coerce_finite_radix_or_default(radix_value.clone(), 10)
+        } else {
+            10
+        };
+
+        if radix != 0 && (radix < 2 || radix > 36) {
+            return None;
+        }
+
+        let mut sign = 1i64;
+        let mut parse_start = 0usize;
+        if trimmed.starts_with('-') {
+            sign = -1;
+            parse_start = 1;
+        } else if trimmed.starts_with('+') {
+            parse_start = 1;
+        }
+
+        let mut actual_radix = radix;
+        let remaining = &trimmed[parse_start..];
+        if radix == 16 || radix == 0 {
+            if remaining.starts_with("0x") || remaining.starts_with("0X") {
+                actual_radix = 16;
+                parse_start += 2;
+            } else if radix == 0 {
+                actual_radix = 10;
             }
-            _ => default,
+        }
+
+        if parse_start >= trimmed.len() {
+            return None;
+        }
+
+        let mut found = false;
+        let mut result = 0i64;
+        for c in trimmed[parse_start..].chars() {
+            let digit = if c.is_ascii_digit() {
+                (c as i64) - ('0' as i64)
+            } else if c.is_ascii_alphabetic() {
+                (c.to_ascii_lowercase() as i64) - ('a' as i64) + 10
+            } else {
+                break;
+            };
+
+            if digit >= actual_radix as i64 || digit < 0 {
+                break;
+            }
+
+            found = true;
+            result = result.saturating_mul(actual_radix as i64).saturating_add(digit);
+        }
+
+        if found {
+            Some(sign * result)
+        } else {
+            None
         }
     }
 
@@ -19563,7 +19476,7 @@ mod tests {
     fn parseint_nan_radix_defaults_for_global_and_number_parseint_builtin_ids() {
         let mut interpreter = quickjs_test_core();
 
-        for func_index in [82, 234] {
+        for func_index in [82, 234, 377] {
             interpreter.registers[0] = Value::Str("42".to_string());
             interpreter.registers[1] = Value::Float(Float64::new(f64::NAN));
 
@@ -19576,6 +19489,71 @@ mod tests {
                 "parseInt builtin ID {} should default NaN radix to decimal",
                 func_index
             );
+        }
+    }
+
+    #[test]
+    fn parseint_sign_and_radix_semantics_consistent_across_builtins() {
+        let mut interpreter = quickjs_test_core();
+
+        let run_case = |interpreter: &mut InterpreterCore,
+                        builtin_id: u32,
+                        input: &str,
+                        radix: Option<i64>,
+                        expected: Option<i64>| {
+            interpreter.registers[0] = Value::Str(input.to_string());
+            let count = if let Some(radix) = radix {
+                interpreter.registers[1] = Value::Int(radix);
+                2
+            } else {
+                1
+            };
+
+            let result = interpreter
+                .call_builtin_by_id(
+                    builtin_id,
+                    RegRange {
+                        start: 0,
+                        count,
+                    },
+                )
+                .expect("parseInt builtin should run with unified sign/radix helper");
+
+            match expected {
+                Some(expected) => {
+                    assert_eq!(
+                        result,
+                        Value::Int(expected),
+                        "parseInt builtin ID {builtin_id} input {input:?} failed"
+                    );
+                }
+                None => match result {
+                    Value::Float(value) => assert!(
+                        value.is_nan(),
+                        "parseInt builtin ID {builtin_id} input {input:?} should return NaN"
+                    ),
+                    other => panic!(
+                        "parseInt builtin ID {builtin_id} input {input:?} expected NaN, got {other:?}"
+                    ),
+                },
+            }
+        };
+
+        for (builtin_id, input, radix, expected) in [
+            (82u32, " -10", None, Some(-10)),
+            (234u32, "  -10", None, Some(-10)),
+            (377u32, "-10", None, Some(-10)),
+            (82u32, "ff", Some(16), Some(255)),
+            (234u32, "0x10", Some(0), Some(16)),
+            (377u32, "0X10", Some(0), Some(16)),
+            (82u32, "101", Some(2), Some(5)),
+            (377u32, "101", Some(2), Some(5)),
+            (82u32, "a", Some(10), None),
+            (234u32, "+15", None, Some(15)),
+            (377u32, "123xyz", None, Some(123)),
+            (377u32, "0", Some(37), None),
+        ] {
+            run_case(&mut interpreter, builtin_id, input, radix, expected);
         }
     }
 
@@ -19597,6 +19575,76 @@ mod tests {
                 func_index
             );
         }
+    }
+
+    fn assert_string_split_result(
+        result: Value,
+        expected: Vec<&str>,
+        core: &mut InterpreterCore,
+    ) {
+        let Value::Object(array_id) = result else {
+            panic!("split should return array object, got {result:?}");
+        };
+
+        let array_obj = &core.heap[array_id.0 as usize];
+        let length = match array_obj.properties.get("length") {
+            Some(Value::Int(length)) => *length as usize,
+            Some(other) => {
+                panic!("split length should be Int, got {other:?}");
+            }
+            None => panic!("split result missing length"),
+        };
+
+        assert_eq!(length, expected.len());
+        for (index, expected_part) in expected.iter().enumerate() {
+            assert_eq!(
+                array_obj
+                    .properties
+                    .get(&index.to_string()),
+                Some(&Value::Str((*expected_part).to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn string_split_omitted_and_undefined_separator_returns_whole_string() {
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Str("hello".to_string());
+
+        let result = core
+            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 1 })
+            .unwrap();
+        assert_string_split_result(result, vec!["hello"], &mut core);
+
+        core.registers[1] = Value::Undefined;
+        let result = core
+            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .unwrap();
+        assert_string_split_result(result, vec!["hello"], &mut core);
+    }
+
+    #[test]
+    fn string_split_empty_separator_splits_characters() {
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Str("ab".to_string());
+        core.registers[1] = Value::Str("".to_string());
+
+        let result = core
+            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .unwrap();
+        assert_string_split_result(result, vec!["a", "b"], &mut core);
+    }
+
+    #[test]
+    fn string_split_normal_separator() {
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Str("a,b,c".to_string());
+        core.registers[1] = Value::Str(",".to_string());
+
+        let result = core
+            .call_builtin("builtin:StringPrototypeSplit", RegRange { start: 0, count: 2 })
+            .unwrap();
+        assert_string_split_result(result, vec!["a", "b", "c"], &mut core);
     }
 
     #[allow(dead_code)]
@@ -24548,5 +24596,203 @@ mod tests {
 
         let result = core.read_register(3).unwrap();
         assert_eq!(result, Value::Str("[function Object]".to_string()));
+    }
+
+    // Regression tests for bd-1b3v6: parseFloat exponent and Infinity semantics
+    #[test]
+    fn parse_float_scientific_notation() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test parseFloat("1e3") should return 1000
+        core.registers[0] = Value::Str("1e3".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should parse "1e3" as 1000
+        assert_eq!(core.registers[10], Value::Int(1000));
+
+        // Test parseFloat("2.5e2") should return 250
+        core.registers[0] = Value::Str("2.5e2".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should parse "2.5e2" as 250
+        if let Value::Float(f) = core.registers[10] {
+            assert_eq!(f.inner(), 250.0);
+        } else {
+            panic!("Expected Float for 2.5e2");
+        }
+    }
+
+    #[test]
+    fn parse_float_negative_exponent() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test parseFloat("1e-3") should return 0.001
+        core.registers[0] = Value::Str("1e-3".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should parse "1e-3" as 0.001
+        if let Value::Float(f) = core.registers[10] {
+            assert!((f.inner() - 0.001).abs() < f64::EPSILON);
+        } else {
+            panic!("Expected Float for 1e-3");
+        }
+
+        // Test parseFloat("5E+2") should return 500
+        core.registers[0] = Value::Str("5E+2".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should parse "5E+2" as 500
+        assert_eq!(core.registers[10], Value::Int(500));
+    }
+
+    #[test]
+    fn parse_float_infinity_literals() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test parseFloat("Infinity")
+        core.registers[0] = Value::Str("Infinity".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return positive infinity
+        if let Value::Float(f) = core.registers[10] {
+            assert!(f.inner().is_infinite() && f.inner().is_sign_positive());
+        } else {
+            panic!("Expected Float for Infinity");
+        }
+
+        // Test parseFloat("-Infinity")
+        core.registers[0] = Value::Str("-Infinity".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return negative infinity
+        if let Value::Float(f) = core.registers[10] {
+            assert!(f.inner().is_infinite() && f.inner().is_sign_negative());
+        } else {
+            panic!("Expected Float for -Infinity");
+        }
+
+        // Test parseFloat("+Infinity")
+        core.registers[0] = Value::Str("+Infinity".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should return positive infinity
+        if let Value::Float(f) = core.registers[10] {
+            assert!(f.inner().is_infinite() && f.inner().is_sign_positive());
+        } else {
+            panic!("Expected Float for +Infinity");
+        }
+    }
+
+    #[test]
+    fn parse_float_invalid_exponent_fallback() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test parseFloat("1e") - incomplete exponent should parse as 1
+        core.registers[0] = Value::Str("1e".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should parse up to valid part and return NaN for invalid "1e"
+        if let Value::Float(f) = core.registers[10] {
+            assert!(f.inner().is_nan());
+        } else {
+            panic!("Expected NaN for invalid exponent");
+        }
+
+        // Test parseFloat("123abc") should stop at 'a' and return 123
+        core.registers[0] = Value::Str("123abc".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ParseFloat".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should stop at first invalid character and return 123
+        assert_eq!(core.registers[10], Value::Int(123));
     }
 }

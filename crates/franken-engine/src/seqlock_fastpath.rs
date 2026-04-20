@@ -362,7 +362,9 @@ mod tests {
     #[test]
     fn retry_budget_policy_serde_round_trip() {
         let policy = RetryBudgetPolicy::new(5, 3);
+        // SAFETY: Test-only unwrap for serde serialization of known valid struct
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
         let back: RetryBudgetPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, back);
     }

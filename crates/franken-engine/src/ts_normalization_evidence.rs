@@ -759,6 +759,8 @@ mod tests {
                     ev.error_message, ev.normalized_source_preview,
                 ));
             }
+            // SAFETY: Test-only panic to fail on specimen verification failures
+            // Reports detailed evidence mismatches for debugging normalization issues
             panic!("{}", msg);
         }
     }

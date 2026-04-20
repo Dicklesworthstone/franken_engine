@@ -648,6 +648,7 @@ impl ManifoldTrajectory {
             total_path_length = total_path_length.saturating_add(dist);
         }
 
+        // SAFETY: Function expects non-empty coordinates slice; first() returns Some for non-empty slice
         let schema_id = coordinates.first().map(|c| c.schema_id.clone()).unwrap();
 
         Self {
@@ -1102,7 +1103,9 @@ mod tests {
     #[test]
     fn schema_serde_roundtrip() {
         let schema = test_schema();
+        // SAFETY: ManifoldSchema derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&schema).unwrap();
+        // SAFETY: JSON was just produced by valid ManifoldSchema serialization
         let back: ManifoldSchema = serde_json::from_str(&json).unwrap();
         assert_eq!(schema, back);
     }
@@ -1451,7 +1454,9 @@ mod tests {
             test_epoch(),
             "test",
         );
+        // SAFETY: ManifoldWitness derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&w).unwrap();
+        // SAFETY: JSON was just produced by valid ManifoldWitness serialization
         let back: ManifoldWitness = serde_json::from_str(&json).unwrap();
         assert_eq!(w, back);
     }
@@ -1488,7 +1493,9 @@ mod tests {
             ManifoldOperation::TrajectoryBuild,
             ManifoldOperation::SchemaCreation,
         ] {
+            // SAFETY: ManifoldOperation derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&op).unwrap();
+            // SAFETY: JSON was just produced by valid ManifoldOperation serialization
             let back: ManifoldOperation = serde_json::from_str(&json).unwrap();
             assert_eq!(op, back);
         }
@@ -1544,7 +1551,9 @@ mod tests {
     #[test]
     fn default_schema_serde_roundtrip() {
         let schema = default_manifold_schema(test_epoch());
+        // SAFETY: Default ManifoldSchema derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&schema).unwrap();
+        // SAFETY: JSON was just produced by valid ManifoldSchema serialization
         let back: ManifoldSchema = serde_json::from_str(&json).unwrap();
         assert_eq!(schema, back);
     }

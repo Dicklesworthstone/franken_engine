@@ -641,7 +641,11 @@ mod tests {
             Subsystem::ExtensionHost,
             Subsystem::EvidencePipeline,
         ] {
+            // SAFETY: Subsystem derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Subsystem,
+            // so from_str back to Subsystem cannot fail (valid format + matching schema).
             let back: Subsystem = serde_json::from_str(&json).unwrap();
             assert_eq!(s, back);
         }
@@ -658,7 +662,11 @@ mod tests {
     #[test]
     fn player_serde_roundtrip() {
         for p in [Player::Attacker, Player::Defender] {
+            // SAFETY: Player derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&p).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid Player,
+            // so from_str back to Player cannot fail (valid format + matching schema).
             let back: Player = serde_json::from_str(&json).unwrap();
             assert_eq!(p, back);
         }
@@ -689,7 +697,11 @@ mod tests {
             LossDimension::AvailabilityCost,
             LossDimension::EvidenceIntegrityCost,
         ] {
+            // SAFETY: LossDimension derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&d).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid LossDimension,
+            // so from_str back to LossDimension cannot fail (valid format + matching schema).
             let back: LossDimension = serde_json::from_str(&json).unwrap();
             assert_eq!(d, back);
         }
@@ -771,7 +783,11 @@ mod tests {
             loss_millionths: 100_000,
         }];
         let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
+        // SAFETY: LossTensor derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&tensor).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LossTensor,
+        // so from_str back to LossTensor cannot fail (valid format + matching schema).
         let back: LossTensor = serde_json::from_str(&json).unwrap();
         assert_eq!(tensor, back);
     }
@@ -925,7 +941,11 @@ mod tests {
             })
             .build();
 
+        // SAFETY: GameModel derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&model).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GameModel,
+        // so from_str back to GameModel cannot fail (valid format + matching schema).
         let back: GameModel = serde_json::from_str(&json).unwrap();
         assert_eq!(model, back);
     }

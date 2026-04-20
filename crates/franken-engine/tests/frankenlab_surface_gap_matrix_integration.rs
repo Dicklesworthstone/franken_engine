@@ -1111,7 +1111,7 @@ fn regression_hash_collision_prevention_bd_3nr_1_1_2_1() {
     );
     let cell_c2 = make_cell(
         SurfaceId::LabRuntime,
-        CapabilityId::DeterministicExecution,
+        CapabilityId::CrossMachineDeterminism,
         CoverageLevel::Partial,
         "",
     );
@@ -1126,7 +1126,7 @@ fn regression_hash_collision_prevention_bd_3nr_1_1_2_1() {
         SurfaceId::LabRuntime,
         CapabilityId::VirtualTime,
         CoverageLevel::Covered,
-        "firstlab_runtimedeterministic_executionpartial",
+        "firstlab_runtimecross_machine_determinismpartial",
     );
     let assessment_d = SurfaceAssessment::build(
         SurfaceId::LabRuntime,

@@ -23801,71 +23801,191 @@ mod tests {
 
         #[test]
         fn value_to_js_value_conversion() {
-            let _core = test_interpreter();
+            // Test that the production value_to_js_value conversion works correctly
+            // This exercises the actual conversion helper used by the promise subsystem
 
-            // Test various value conversions
-            let int_val = Value::Int(42);
-            assert!(matches!(int_val, Value::Int(_)));
+            let test_cases = vec![
+                (Value::Undefined, crate::object_model::JsValue::Undefined),
+                (Value::Null, crate::object_model::JsValue::Null),
+                (Value::Bool(true), crate::object_model::JsValue::Bool(true)),
+                (
+                    Value::Bool(false),
+                    crate::object_model::JsValue::Bool(false),
+                ),
+                (Value::Int(42), crate::object_model::JsValue::Int(42)),
+                (Value::Int(-123), crate::object_model::JsValue::Int(-123)),
+                (
+                    Value::Str("hello".to_string()),
+                    crate::object_model::JsValue::Str("hello".to_string()),
+                ),
+                (
+                    Value::Object(ObjectId(100)),
+                    crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(100)),
+                ),
+                (
+                    Value::Function(5),
+                    crate::object_model::JsValue::Function(5),
+                ),
+            ];
 
-            let str_val = Value::Str("hello".to_string());
-            assert!(matches!(str_val, Value::Str(_)));
+            for (input, expected) in test_cases {
+                let result = BaselineInterpreter::value_to_js_value(&input);
+                assert_eq!(result, expected, "Conversion failed for {:?}", input);
+            }
 
-            let bool_val = Value::Bool(true);
-            assert!(matches!(bool_val, Value::Bool(_)));
+            // Test Float conversion (special case due to bit representation)
+            let float_val = Value::Float(Float64::new(3.14));
+            let float_result = BaselineInterpreter::value_to_js_value(&float_val);
+            if let crate::object_model::JsValue::Float(bits) = float_result {
+                assert_eq!(f64::from_bits(bits), 3.14, "Float conversion incorrect");
+            } else {
+                panic!("Expected Float JsValue");
+            }
 
-            let null_val = Value::Null;
-            assert!(matches!(null_val, Value::Null));
-
-            let undef_val = Value::Undefined;
-            assert!(matches!(undef_val, Value::Undefined));
+            // Test fallback case (complex types fall back to string conversion)
+            let promise_val = Value::Promise(7);
+            let promise_result = BaselineInterpreter::value_to_js_value(&promise_val);
+            assert!(
+                matches!(promise_result, crate::object_model::JsValue::Str(_)),
+                "Complex types should fall back to string conversion"
+            );
         }
 
         #[test]
         fn async_generator_creation() {
             let mut core = test_interpreter();
 
-            // Test that async generators can be created
-            let async_gen = AsyncGeneratorObject {
-                function_index: 0,
-                closure_index: None,
-                saved_ip: 0,
-                saved_registers: Vec::new(),
-                saved_register_base: 0,
-                phase: AsyncGeneratorPhase::SuspendedStart,
+            // Test async generator creation through the production Call instruction path
+            // Set up a minimal IR3 module with an async generator function
+            let mut module = test_ir3_module();
+
+            // Add an async generator function to the module
+            module.function_table.push(Function {
+                name: "test_async_gen".to_string(),
+                params: vec![],
+                body: vec![], // Empty body for this test
+                locals_count: 0,
+            });
+
+            // Create an AsyncGeneratorFunction value
+            let async_gen_func = Value::AsyncGeneratorFunction(0); // closure_index = 0
+            core.registers.resize(10, Value::Undefined);
+            core.registers[0] = async_gen_func; // callee
+            core.registers[1] = Value::Int(0); // func_idx (corresponds to function_table[0])
+
+            // Execute Call instruction that should create AsyncGeneratorObject
+            let call_instr = Instruction::Call {
+                dst: 5,
+                func: 1,                               // register containing func_idx
+                args: ArgBlock { start: 2, count: 0 }, // no arguments
             };
 
-            // Add to core's async generator storage
-            core.async_generators.push(async_gen);
-            assert_eq!(core.async_generators.len(), 1);
-            assert!(matches!(
-                core.async_generators[0].phase,
-                AsyncGeneratorPhase::SuspendedStart
-            ));
+            // Process the call instruction
+            match core.execute_instruction(&call_instr, &module) {
+                Ok(()) => {
+                    // Verify async generator was created
+                    assert_eq!(core.async_generators.len(), 1);
+                    let created_gen = &core.async_generators[0];
+                    assert_eq!(created_gen.function_index, 0);
+                    assert_eq!(created_gen.closure_index, Some(0));
+                    assert!(matches!(
+                        created_gen.phase,
+                        AsyncGeneratorPhase::SuspendedStart
+                    ));
+
+                    // Verify the result register contains AsyncGeneratorObject value
+                    if let Value::AsyncGeneratorObject(gen_id) = core.registers[5] {
+                        assert_eq!(gen_id, 0);
+                    } else {
+                        panic!("Expected AsyncGeneratorObject in result register");
+                    }
+                }
+                Err(e) => panic!("Call instruction failed: {:?}", e),
+            }
         }
 
         #[test]
         fn async_generator_function_call_creates_object() {
             let mut core = test_interpreter();
 
-            // Test that calling an async generator function creates an async generator object
-            let async_gen = AsyncGeneratorObject {
-                function_index: 1,
-                closure_index: None,
-                saved_ip: 0,
-                saved_registers: Vec::new(),
-                saved_register_base: 0,
-                phase: AsyncGeneratorPhase::SuspendedStart,
+            // Test multiple async generator function calls through interpreter Call path
+            let mut module = test_ir3_module();
+
+            // Add multiple async generator functions to test proper indexing
+            module.function_table.push(Function {
+                name: "async_gen_1".to_string(),
+                params: vec!["param1".to_string()],
+                body: vec![], // Empty body for this test
+                locals_count: 1,
+            });
+            module.function_table.push(Function {
+                name: "async_gen_2".to_string(),
+                params: vec!["param1".to_string(), "param2".to_string()],
+                body: vec![], // Empty body for this test
+                locals_count: 2,
+            });
+
+            core.registers.resize(15, Value::Undefined);
+
+            // First call: create async generator from function 0
+            core.registers[0] = Value::AsyncGeneratorFunction(10); // closure_index = 10
+            core.registers[1] = Value::Int(0); // func_idx = 0
+
+            let call1 = Instruction::Call {
+                dst: 5,
+                func: 1,
+                args: ArgBlock { start: 3, count: 1 },
             };
+            core.registers[3] = Value::Str("arg1".to_string()); // argument
 
-            core.async_generators.push(async_gen);
-            let gen_id = (core.async_generators.len() - 1) as u32;
+            core.execute_instruction(&call1, &module)
+                .expect("First call should succeed");
 
-            // Verify the object was created correctly
-            assert_eq!(core.async_generators[gen_id as usize].function_index, 1);
-            assert!(matches!(
-                core.async_generators[gen_id as usize].phase,
-                AsyncGeneratorPhase::SuspendedStart
-            ));
+            // Second call: create async generator from function 1
+            core.registers[7] = Value::AsyncGeneratorFunction(20); // closure_index = 20
+            core.registers[8] = Value::Int(1); // func_idx = 1
+
+            let call2 = Instruction::Call {
+                dst: 9,
+                func: 8,
+                args: ArgBlock {
+                    start: 10,
+                    count: 2,
+                },
+            };
+            core.registers[10] = Value::Str("arg1".to_string()); // argument 1
+            core.registers[11] = Value::Int(42); // argument 2
+
+            core.execute_instruction(&call2, &module)
+                .expect("Second call should succeed");
+
+            // Verify both async generators were created correctly
+            assert_eq!(core.async_generators.len(), 2);
+
+            // First async generator
+            let gen1 = &core.async_generators[0];
+            assert_eq!(gen1.function_index, 0);
+            assert_eq!(gen1.closure_index, Some(10));
+            assert!(matches!(gen1.phase, AsyncGeneratorPhase::SuspendedStart));
+
+            // Second async generator
+            let gen2 = &core.async_generators[1];
+            assert_eq!(gen2.function_index, 1);
+            assert_eq!(gen2.closure_index, Some(20));
+            assert!(matches!(gen2.phase, AsyncGeneratorPhase::SuspendedStart));
+
+            // Verify result registers contain correct AsyncGeneratorObject values
+            if let Value::AsyncGeneratorObject(id1) = core.registers[5] {
+                assert_eq!(id1, 0);
+            } else {
+                panic!("Expected first AsyncGeneratorObject");
+            }
+
+            if let Value::AsyncGeneratorObject(id2) = core.registers[9] {
+                assert_eq!(id2, 1);
+            } else {
+                panic!("Expected second AsyncGeneratorObject");
+            }
         }
 
         #[test]

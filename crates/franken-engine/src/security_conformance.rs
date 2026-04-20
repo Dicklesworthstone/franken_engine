@@ -2198,6 +2198,7 @@ label_sha256 = "{hash}"
                 assert_eq!(first_path, PathBuf::from("first/workload_label.toml"));
                 assert_eq!(second_path, PathBuf::from("second/workload_label.toml"));
             }
+            // SAFETY: Test-only panic to validate SecurityConformanceError matches expected DuplicateWorkloadId variant
             other => panic!("expected duplicate record error, got {other:?}"),
         }
     }

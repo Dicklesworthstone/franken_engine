@@ -13412,39 +13412,7 @@ impl InterpreterCore {
                 Ok(Value::Str(trimmed))
             }
 
-            "builtin:MathImul" => {
-                // Math.imul(a, b) implementation (32-bit signed integer multiplication)
-                if args.count < 3 {
-                    return Ok(Value::Int(0));
-                }
-
-                let a_val = self.read_reg(args.start + 1)?;
-                let b_val = self.read_reg(args.start + 2)?;
-
-                let a = match a_val {
-                    Value::Int(n) => n as i32,
-                    Value::Float(f) => f.inner() as i32,
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(0.0) as i32,
-                    Value::Bool(true) => 1,
-                    Value::Bool(false) => 0,
-                    Value::Null => 0,
-                    _ => 0,
-                };
-
-                let b = match b_val {
-                    Value::Int(n) => n as i32,
-                    Value::Float(f) => f.inner() as i32,
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(0.0) as i32,
-                    Value::Bool(true) => 1,
-                    Value::Bool(false) => 0,
-                    Value::Null => 0,
-                    _ => 0,
-                };
-
-                // Perform 32-bit signed multiplication with overflow wrapping
-                let result = a.wrapping_mul(b);
-                Ok(Value::Int(result as i64))
-            }
+            // Removed duplicate MathImul - implementation at line ~11636 has correct argument handling
 
             "builtin:ArrayPrototypeToSpliced" => {
                 // Array.prototype.toSpliced(start, deleteCount, ...items) implementation (ES2023)

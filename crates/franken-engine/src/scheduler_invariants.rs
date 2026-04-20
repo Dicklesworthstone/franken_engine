@@ -865,7 +865,9 @@ mod tests {
             to: StateId::new("s1"),
             guard: Some("x > 0".to_string()),
         });
+        // SAFETY: SchedulerAutomaton derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: JSON was just produced by valid SchedulerAutomaton serialization.
         let back: SchedulerAutomaton = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
@@ -977,7 +979,9 @@ mod tests {
             VerificationStatus::Inconclusive,
             VerificationStatus::Pending,
         ] {
+            // SAFETY: VerificationStatus derives Serialize and has no non-serializable fields.
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: JSON was just produced by valid VerificationStatus serialization.
             let back: VerificationStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(s, back);
         }

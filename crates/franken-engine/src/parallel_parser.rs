@@ -2281,6 +2281,7 @@ mod tests {
             ..default_config()
         };
         let input = make_input("identifier_without_any_delimiters", &config);
+        // SAFETY: Test-only unwrap expecting valid JS identifier to parse successfully
         let output = parse(&input).unwrap();
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(

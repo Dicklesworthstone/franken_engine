@@ -2710,6 +2710,7 @@ mod tests {
             ..small_config()
         };
         let serial_input = make_input(&source, &serial_config);
+        // SAFETY: Test-only unwrap expecting valid JS parsing with known source
         let serial_output = parse(&serial_input).unwrap();
 
         // Token counts should match.
@@ -2724,6 +2725,7 @@ mod tests {
         }
         let config = small_config();
         let input = make_input(&source, &config);
+        // SAFETY: Test-only unwrap expecting valid JS parsing with known source
         let output = parse(&input).unwrap();
         assert!(output.token_count > 0);
     }
@@ -2782,7 +2784,9 @@ mod tests {
                 &dispatches,
             ),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&transcript).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ScheduleTranscript = serde_json::from_str(&json).unwrap();
         assert_eq!(transcript, back);
     }
@@ -2792,6 +2796,7 @@ mod tests {
         let source = "a=1;\nb=2;\nc=3;\nd=4;\ne=5;\nf=6;\n";
         let chunk_plan = compute_chunk_plan(source.as_bytes(), 4);
         let transcript = build_schedule_transcript(&chunk_plan, 1234);
+        // SAFETY: Test-only unwrap with valid transcript and chunk plan
         let replay_order = replay_schedule_transcript(&transcript, &chunk_plan).unwrap();
         assert_eq!(replay_order, transcript.execution_order);
         assert_eq!(replay_order.len(), chunk_plan.chunks.len());

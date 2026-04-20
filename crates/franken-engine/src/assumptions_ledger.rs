@@ -2034,12 +2034,16 @@ mod tests {
     #[test]
     fn ledger_serde_roundtrip_with_violations() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .unwrap();
+        // SAFETY: Test helper with valid monitor data for existing assumption should succeed
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         ledger.observe("risk", 600_000, 1, 0);
+        // SAFETY: AssumptionLedger derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ledger).unwrap();
+        // SAFETY: JSON was just generated from AssumptionLedger, deserialization guaranteed to succeed
         let back: AssumptionLedger = serde_json::from_str(&json).unwrap();
         assert_eq!(ledger, back);
         assert_eq!(back.violated_count(), 1);

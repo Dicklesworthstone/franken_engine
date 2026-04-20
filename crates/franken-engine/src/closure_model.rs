@@ -1186,6 +1186,7 @@ mod tests {
         let inner_fn_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(inner_fn_id, ScopeKind::Function);
 
+        // SAFETY: Test computes valid captures from multiple scopes; compute_captures succeeds in controlled test environment.
         let captures = chain
             .compute_captures(&["outer".into(), "middle".into()])
             .unwrap();

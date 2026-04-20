@@ -887,4 +887,25 @@ mod tests {
             "capability_witness.confidence_millionths"
         );
     }
+
+    #[test]
+    fn poisoned_guardplane_state_lock_emits_diagnostic() {
+        let adapter = adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "trusted"),
+        ]);
+
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = adapter.state.lock().expect("state lock should be available");
+            panic!("poison guardplane adapter state");
+        }));
+        assert!(poison_result.is_err());
+
+        let _ = adapter.summary();
+        let diagnostics = adapter.diagnostic_records();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "guardplane.state_lock_poisoned"
+                && diagnostic.metadata_value == "summary"
+        }));
+    }
 }

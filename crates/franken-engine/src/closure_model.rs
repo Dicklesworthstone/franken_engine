@@ -1026,14 +1026,18 @@ mod tests {
     #[test]
     fn function_decl_overwrites_var() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
         chain.declare_var("f".into(), 1).unwrap();
+        // SAFETY: Test gets declared var; get_value succeeds in controlled test environment.
         let val = chain.get_value("f").unwrap();
         assert_eq!(*val, EnvValue::Undefined);
 
         let closure_ref = EnvValue::ClosureRef(ClosureHandle(7));
+        // SAFETY: Test declares valid function; declare_function succeeds in controlled test environment.
         chain
             .declare_function("f".into(), 2, closure_ref.clone())
             .unwrap();
+        // SAFETY: Test gets declared function; get_value succeeds in controlled test environment.
         let val = chain.get_value("f").unwrap();
         assert_eq!(*val, closure_ref);
     }
@@ -1045,14 +1049,18 @@ mod tests {
         let mut chain = fresh_chain();
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test declares valid parameter; declare_parameter succeeds in controlled test environment.
         chain
             .declare_parameter("arg".into(), 100, EnvValue::Number(5), Label::Public)
             .unwrap();
+        // SAFETY: Test gets declared parameter; get_value succeeds in controlled test environment.
         let val = chain.get_value("arg").unwrap();
         assert_eq!(*val, EnvValue::Number(5));
+        // SAFETY: Test sets valid parameter value; set_value succeeds in controlled test environment.
         chain
             .set_value("arg", EnvValue::Number(10), Label::Public)
             .unwrap();
+        // SAFETY: Test gets updated parameter; get_value succeeds in controlled test environment.
         let val = chain.get_value("arg").unwrap();
         assert_eq!(*val, EnvValue::Number(10));
     }

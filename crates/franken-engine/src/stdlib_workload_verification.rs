@@ -48,6 +48,7 @@ pub const COMPONENT: &str = "stdlib_workload_verification";
 const MILLIONTHS: u64 = 1_000_000;
 
 fn serialize_for_identity<T: Serialize>(value: &T, _context: &str) -> String {
+    // SAFETY: serde_json::to_string only fails on writer errors, not possible with String
     serde_json::to_string(value).unwrap()
 }
 
@@ -833,7 +834,9 @@ mod tests {
     #[test]
     fn test_mutation_contract_serde() {
         let c = MutationContract::Accumulator;
+        // SAFETY: MutationContract derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by valid MutationContract serialization
         let back: MutationContract = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }

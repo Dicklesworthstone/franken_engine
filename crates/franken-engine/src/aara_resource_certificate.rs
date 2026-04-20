@@ -1490,6 +1490,7 @@ mod tests {
             vec![],
             vec![],
         );
+        // SAFETY: ResourceCertificate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cert).unwrap();
         let back: ResourceCertificate = serde_json::from_str(&json).unwrap();
         assert_eq!(cert, back);

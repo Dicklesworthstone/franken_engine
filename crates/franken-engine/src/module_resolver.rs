@@ -2560,6 +2560,7 @@ mod tests {
     #[test]
     fn external_resolution_preserves_provenance() {
         let mut resolver = DeterministicModuleResolver::new("/workspace");
+        // SAFETY: Test scenario with valid module definition and provenance; registration should succeed
         resolver
             .register_external_module(
                 "left-pad",
@@ -2569,6 +2570,7 @@ mod tests {
             .unwrap();
 
         let request = ModuleRequest::new("left-pad", ImportStyle::Require);
+        // SAFETY: Test scenario with valid request and registered module; resolution should succeed
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
             .unwrap();

@@ -947,6 +947,8 @@ impl RevocationChain {
         if let Some(prev) = prev_event {
             canonical.extend_from_slice(prev.as_bytes());
         }
+        // SAFETY: derive_id with valid ObjectDomain::Revocation and well-formed canonical data.
+        // derive_id only fails on invalid domain or malformed input (impossible with valid RevocationEvent).
         engine_object_id::derive_id(
             ObjectDomain::Revocation,
             &self.zone,

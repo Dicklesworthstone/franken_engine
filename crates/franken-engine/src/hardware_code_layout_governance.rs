@@ -1463,7 +1463,11 @@ mod tests {
     #[test]
     fn test_stall_category_serde_roundtrip() {
         for c in StallCategory::ALL {
+            // SAFETY: StallCategory derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let j = serde_json::to_string(c).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid StallCategory,
+            // so from_str back to StallCategory cannot fail (valid format + matching schema).
             let back: StallCategory = serde_json::from_str(&j).unwrap();
             assert_eq!(*c, back);
         }

@@ -2416,9 +2416,12 @@ mod tests {
     fn receipt_id_increments_sequentially() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let r1 = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
             .unwrap();
+        // SAFETY: Second execute() call with different valid action for sequential ID testing.
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap();

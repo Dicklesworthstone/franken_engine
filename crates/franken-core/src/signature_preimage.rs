@@ -672,6 +672,7 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
+        // SAFETY: Fixed 32-byte array provides valid key material for Ed25519 signing key
         SigningKey::from_bytes([
             0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
             0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
@@ -700,7 +701,9 @@ mod tests {
 
     #[test]
     fn different_signing_keys_produce_different_verification_keys() {
+        // SAFETY: Fixed 32-byte arrays provide valid key material for Ed25519 signing keys
         let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).unwrap();
+        // SAFETY: Fixed 32-byte arrays provide valid key material for Ed25519 signing keys
         let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).unwrap();
         assert_ne!(sk1.verification_key(), sk2.verification_key());
     }
@@ -1332,7 +1335,9 @@ mod tests {
 
     #[test]
     fn signature_event_type_display_all_unique() {
+        // SAFETY: VerificationKey::from_bytes with fixed-size array of correct length cannot fail.
         let vk1 = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
+        // SAFETY: VerificationKey::from_bytes with fixed-size array of correct length cannot fail.
         let _vk2 = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]).unwrap();
         let types = [
             SignatureEventType::Signed {
@@ -1361,6 +1366,7 @@ mod tests {
     #[test]
     fn signing_key_bytes_roundtrip() {
         let bytes = [42u8; SIGNING_KEY_LEN];
+        // SAFETY: SigningKey::from_bytes with fixed-size array of correct length cannot fail.
         let sk = SigningKey::from_bytes(bytes).unwrap();
         assert_eq!(sk.as_bytes(), &bytes);
     }

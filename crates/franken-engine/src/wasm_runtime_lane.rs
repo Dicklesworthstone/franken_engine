@@ -1472,7 +1472,9 @@ mod tests {
             WasmSignalKind::Derived,
             WasmSignalKind::Effect,
         ] {
+            // SAFETY: WasmSignalKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just generated from WasmSignalKind, deserialization guaranteed to succeed
             let restored: WasmSignalKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, restored);
         }
@@ -1488,7 +1490,9 @@ mod tests {
             WasmSignalStatus::Evaluating,
             WasmSignalStatus::Disposed,
         ] {
+            // SAFETY: WasmSignalStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just generated from WasmSignalStatus, deserialization guaranteed to succeed
             let restored: WasmSignalStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, restored);
         }
@@ -1546,7 +1550,9 @@ mod tests {
             },
         ];
         for reason in &reasons {
+            // SAFETY: SafeModeReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(reason).unwrap();
+            // SAFETY: JSON was just generated from SafeModeReason, deserialization guaranteed to succeed
             let restored: SafeModeReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
@@ -1557,7 +1563,9 @@ mod tests {
     #[test]
     fn wasm_budget_serde_roundtrip() {
         let budget = WasmBudget::default_budget();
+        // SAFETY: WasmBudget derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&budget).unwrap();
+        // SAFETY: JSON was just generated from WasmBudget, deserialization guaranteed to succeed
         let restored: WasmBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(budget, restored);
     }

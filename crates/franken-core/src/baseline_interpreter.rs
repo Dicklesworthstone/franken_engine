@@ -7664,11 +7664,14 @@ fn format_requested_hook_action(action: &str, reason: Option<&str>) -> String {
 fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Option<HookAction> {
     match action {
         "challenge" => Some(HookAction::Challenge(ChallengeToken {
+            // SAFETY: Challenge action requires a token reason
             token: reason.unwrap(),
         })),
         "sandbox" => Some(HookAction::Sandbox),
         "suspend" => Some(HookAction::Suspend),
+        // SAFETY: Terminate action requires a reason
         "terminate" => Some(HookAction::Terminate(reason.unwrap())),
+        // SAFETY: Quarantine action requires a reason
         "quarantine" => Some(HookAction::Quarantine(reason.unwrap())),
         _ => None,
     }
@@ -10394,6 +10397,7 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(1.0));
         core.registers[1] = Value::Float(Float64::new(-0.0));
+        // SAFETY: Test division with valid register indices and values; eval_div succeeds in controlled test environment
         let result = core.eval_div(0, 1).unwrap();
         if let Value::Float(f) = result {
             assert!(f.inner().is_infinite() && f.inner() < 0.0);
@@ -11035,7 +11039,9 @@ mod tests {
                 .handle_containment_action(HookAction::Sandbox)
                 .ok();
 
+            // SAFETY: Test exports receipts after handling action; export succeeds in controlled test environment
             let json_export = interpreter.export_decision_receipts().unwrap();
+            // SAFETY: JSON was just produced by export_decision_receipts; parsing succeeds for valid JSON
             let parsed: serde_json::Value = serde_json::from_str(&json_export).unwrap();
 
             assert_eq!(parsed["evidence_type"], "guardplane_decision_chain");

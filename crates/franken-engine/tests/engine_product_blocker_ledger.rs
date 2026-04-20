@@ -409,6 +409,7 @@ fn rgc_408b_emit_bundle_enriches_owners_from_bead_snapshot() {
     fs::write(
         &support_contract_path,
         serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
             "readiness_answer_contract": {
                 "engine_ready_when_support_status_in": ["shipped"],
                 "engine_blocked_when_support_status_in": ["deferred", "unsupported", "candidate"],
@@ -416,7 +417,8 @@ fn rgc_408b_emit_bundle_enriches_owners_from_bead_snapshot() {
                 "product_ready_owner_repo": "franken_node",
                 "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
                 "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
-            }
+            },
+            "surface_rows": []
         }))
         .expect("support contract JSON should encode"),
     )
@@ -541,6 +543,7 @@ fn rgc_408b_emit_bundle_fails_closed_when_tracking_beads_are_missing() {
     fs::write(
         &support_contract_path,
         serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
             "readiness_answer_contract": {
                 "engine_ready_when_support_status_in": ["shipped"],
                 "engine_blocked_when_support_status_in": ["deferred", "unsupported", "candidate"],
@@ -548,7 +551,8 @@ fn rgc_408b_emit_bundle_fails_closed_when_tracking_beads_are_missing() {
                 "product_ready_owner_repo": "franken_node",
                 "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
                 "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
-            }
+            },
+            "surface_rows": []
         }))
         .expect("support contract JSON should encode"),
     )
@@ -613,6 +617,7 @@ fn rgc_408b_emit_bundle_fails_closed_on_bad_support_contract() {
     fs::write(
         &support_contract_path,
         serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped"],
             "readiness_answer_contract": {
                 "engine_ready_when_support_status_in": ["shipped"],
                 "engine_blocked_when_support_status_in": [],
@@ -620,7 +625,8 @@ fn rgc_408b_emit_bundle_fails_closed_on_bad_support_contract() {
                 "product_ready_owner_repo": "franken_engine",
                 "product_ready_handoff_bead_id": "",
                 "operator_rule_summary": "bad contract"
-            }
+            },
+            "surface_rows": []
         }))
         .expect("support contract JSON should encode"),
     )
@@ -685,6 +691,7 @@ fn rgc_408b_emit_bundle_fails_closed_on_contradictory_support_statuses() {
     fs::write(
         &support_contract_path,
         serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "candidate"],
             "readiness_answer_contract": {
                 "engine_ready_when_support_status_in": ["shipped", "candidate"],
                 "engine_blocked_when_support_status_in": ["deferred", "candidate"],
@@ -692,7 +699,8 @@ fn rgc_408b_emit_bundle_fails_closed_on_contradictory_support_statuses() {
                 "product_ready_owner_repo": "franken_node",
                 "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
                 "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
-            }
+            },
+            "surface_rows": []
         }))
         .expect("support contract JSON should encode"),
     )
@@ -757,6 +765,7 @@ fn rgc_408b_emit_bundle_fails_closed_on_blank_only_blocked_support_statuses() {
     fs::write(
         &support_contract_path,
         serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped"],
             "readiness_answer_contract": {
                 "engine_ready_when_support_status_in": ["shipped"],
                 "engine_blocked_when_support_status_in": ["   ", "\t\n", ""],
@@ -764,7 +773,8 @@ fn rgc_408b_emit_bundle_fails_closed_on_blank_only_blocked_support_statuses() {
                 "product_ready_owner_repo": "franken_node",
                 "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
                 "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
-            }
+            },
+            "surface_rows": []
         }))
         .expect("support contract JSON should encode"),
     )
@@ -783,6 +793,230 @@ fn rgc_408b_emit_bundle_fails_closed_on_blank_only_blocked_support_statuses() {
     let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
     assert!(
         error.contains("must expose at least one engine-blocked support status"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rgc_408b_emit_bundle_fails_closed_on_unknown_ready_statuses() {
+    let root = fresh_temp_dir("emit_fail_unknown_ready_status");
+    let artifact_dir = root.join("bundle");
+    let beads_path = root.join("beads.json");
+    let support_contract_path = root.join("support_surface_contract.json");
+
+    fs::write(
+        &beads_path,
+        serde_json::to_string_pretty(&serde_json::json!([
+            {
+                "id": "bd-1lsy.5.2",
+                "status": "in_progress",
+                "assignee": "GentleDog",
+                "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            }
+        ]))
+        .expect("bead snapshot JSON should encode"),
+    )
+    .expect("bead snapshot should write");
+
+    fs::write(
+        &support_contract_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
+            "readiness_answer_contract": {
+                "engine_ready_when_support_status_in": ["shipped", "ga_ready"],
+                "engine_blocked_when_support_status_in": ["deferred", "unsupported"],
+                "product_ready_state": "delegated_to_franken_node_handoff",
+                "product_ready_owner_repo": "franken_node",
+                "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+                "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
+            },
+            "surface_rows": []
+        }))
+        .expect("support contract JSON should encode"),
+    )
+    .expect("support contract should write");
+
+    let config = blocker_ledger_bin::EmitConfig {
+        artifact_dir,
+        beads_json: beads_path,
+        support_contract_json: support_contract_path,
+        trace_id: "trace-test".to_string(),
+        decision_id: "decision-test".to_string(),
+        policy_id: "policy-test".to_string(),
+        generated_at_utc: "2026-03-21T21:45:00Z".to_string(),
+    };
+
+    let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
+    assert!(
+        error.contains("unknown ready statuses not in allowed vocabulary: ga_ready"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rgc_408b_emit_bundle_fails_closed_on_unknown_blocked_statuses() {
+    let root = fresh_temp_dir("emit_fail_unknown_blocked_status");
+    let artifact_dir = root.join("bundle");
+    let beads_path = root.join("beads.json");
+    let support_contract_path = root.join("support_surface_contract.json");
+
+    fs::write(
+        &beads_path,
+        serde_json::to_string_pretty(&serde_json::json!([
+            {
+                "id": "bd-1lsy.5.2",
+                "status": "in_progress",
+                "assignee": "GentleDog",
+                "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            }
+        ]))
+        .expect("bead snapshot JSON should encode"),
+    )
+    .expect("bead snapshot should write");
+
+    fs::write(
+        &support_contract_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
+            "readiness_answer_contract": {
+                "engine_ready_when_support_status_in": ["shipped"],
+                "engine_blocked_when_support_status_in": ["deferred", "not_real"],
+                "product_ready_state": "delegated_to_franken_node_handoff",
+                "product_ready_owner_repo": "franken_node",
+                "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+                "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
+            },
+            "surface_rows": []
+        }))
+        .expect("support contract JSON should encode"),
+    )
+    .expect("support contract should write");
+
+    let config = blocker_ledger_bin::EmitConfig {
+        artifact_dir,
+        beads_json: beads_path,
+        support_contract_json: support_contract_path,
+        trace_id: "trace-test".to_string(),
+        decision_id: "decision-test".to_string(),
+        policy_id: "policy-test".to_string(),
+        generated_at_utc: "2026-03-21T21:45:00Z".to_string(),
+    };
+
+    let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
+    assert!(
+        error.contains("unknown blocked statuses not in allowed vocabulary: not_real"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rgc_408b_emit_bundle_fails_closed_on_blank_ready_statuses() {
+    let root = fresh_temp_dir("emit_fail_blank_ready_status");
+    let artifact_dir = root.join("bundle");
+    let beads_path = root.join("beads.json");
+    let support_contract_path = root.join("support_surface_contract.json");
+
+    fs::write(
+        &beads_path,
+        serde_json::to_string_pretty(&serde_json::json!([
+            {
+                "id": "bd-1lsy.5.2",
+                "status": "in_progress",
+                "assignee": "GentleDog",
+                "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            }
+        ]))
+        .expect("bead snapshot JSON should encode"),
+    )
+    .expect("bead snapshot should write");
+
+    fs::write(
+        &support_contract_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
+            "readiness_answer_contract": {
+                "engine_ready_when_support_status_in": ["shipped", "  "],
+                "engine_blocked_when_support_status_in": ["deferred", "unsupported"],
+                "product_ready_state": "delegated_to_franken_node_handoff",
+                "product_ready_owner_repo": "franken_node",
+                "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+                "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
+            },
+            "surface_rows": []
+        }))
+        .expect("support contract JSON should encode"),
+    )
+    .expect("support contract should write");
+
+    let config = blocker_ledger_bin::EmitConfig {
+        artifact_dir,
+        beads_json: beads_path,
+        support_contract_json: support_contract_path,
+        trace_id: "trace-test".to_string(),
+        decision_id: "decision-test".to_string(),
+        policy_id: "policy-test".to_string(),
+        generated_at_utc: "2026-03-21T21:45:00Z".to_string(),
+    };
+
+    let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
+    assert!(
+        error.contains("blank ready status"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rgc_408b_emit_bundle_fails_closed_on_blank_blocked_statuses() {
+    let root = fresh_temp_dir("emit_fail_blank_blocked_status");
+    let artifact_dir = root.join("bundle");
+    let beads_path = root.join("beads.json");
+    let support_contract_path = root.join("support_surface_contract.json");
+
+    fs::write(
+        &beads_path,
+        serde_json::to_string_pretty(&serde_json::json!([
+            {
+                "id": "bd-1lsy.5.2",
+                "status": "in_progress",
+                "assignee": "GentleDog",
+                "title": "[RGC-402] Implement CJS loader and ESM<->CJS interop behavior"
+            }
+        ]))
+        .expect("bead snapshot JSON should encode"),
+    )
+    .expect("bead snapshot should write");
+
+    fs::write(
+        &support_contract_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "allowed_support_statuses": ["shipped", "deferred", "unsupported", "candidate"],
+            "readiness_answer_contract": {
+                "engine_ready_when_support_status_in": ["shipped"],
+                "engine_blocked_when_support_status_in": ["deferred", "\t\n"],
+                "product_ready_state": "delegated_to_franken_node_handoff",
+                "product_ready_owner_repo": "franken_node",
+                "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+                "operator_rule_summary": "Engine-ready rows are shipped; product-ready remains delegated downstream."
+            },
+            "surface_rows": []
+        }))
+        .expect("support contract JSON should encode"),
+    )
+    .expect("support contract should write");
+
+    let config = blocker_ledger_bin::EmitConfig {
+        artifact_dir,
+        beads_json: beads_path,
+        support_contract_json: support_contract_path,
+        trace_id: "trace-test".to_string(),
+        decision_id: "decision-test".to_string(),
+        policy_id: "policy-test".to_string(),
+        generated_at_utc: "2026-03-21T21:45:00Z".to_string(),
+    };
+
+    let error = blocker_ledger_bin::emit_bundle(&config).expect_err("bundle must fail closed");
+    assert!(
+        error.contains("blank blocked status"),
         "unexpected error: {error}"
     );
 }

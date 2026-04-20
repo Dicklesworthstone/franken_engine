@@ -38,7 +38,18 @@ struct BeadSnapshotEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct SupportSurfaceContract {
+    allowed_support_statuses: Vec<String>,
     readiness_answer_contract: ReadinessAnswerContract,
+    surface_rows: Vec<SurfaceRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct SurfaceRow {
+    surface_id: String,
+    area: String,
+    entry_surface: String,
+    support_status: String,
+    claim_language_state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -416,6 +427,50 @@ fn validate_support_contract(contract: &SupportSurfaceContract) -> Result<(), St
             "support contract has contradictory readiness statuses: {}",
             contradictions.join(", ")
         ));
+    }
+
+    // Validate that all readiness statuses are allowed by the support surface vocabulary
+    let allowed_statuses = contract
+        .allowed_support_statuses
+        .iter()
+        .map(|status| status.trim())
+        .filter(|status| !status.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    // Check for unknown ready statuses
+    let unknown_ready_statuses = ready_statuses
+        .difference(&allowed_statuses)
+        .copied()
+        .collect::<Vec<_>>();
+    if !unknown_ready_statuses.is_empty() {
+        return Err(format!(
+            "support contract has unknown ready statuses not in allowed vocabulary: {}",
+            unknown_ready_statuses.join(", ")
+        ));
+    }
+
+    // Check for unknown blocked statuses
+    let unknown_blocked_statuses = blocked_statuses
+        .difference(&allowed_statuses)
+        .copied()
+        .collect::<Vec<_>>();
+    if !unknown_blocked_statuses.is_empty() {
+        return Err(format!(
+            "support contract has unknown blocked statuses not in allowed vocabulary: {}",
+            unknown_blocked_statuses.join(", ")
+        ));
+    }
+
+    // Validate that all readiness statuses are non-blank
+    for status in &readiness.engine_ready_when_support_status_in {
+        if status.trim().is_empty() {
+            return Err("support contract has blank ready status".to_string());
+        }
+    }
+    for status in &readiness.engine_blocked_when_support_status_in {
+        if status.trim().is_empty() {
+            return Err("support contract has blank blocked status".to_string());
+        }
     }
 
     Ok(())

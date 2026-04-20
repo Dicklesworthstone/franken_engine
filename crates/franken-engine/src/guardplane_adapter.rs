@@ -153,27 +153,25 @@ impl GuardplaneExtensionContext {
                 "guardplane.witness_confidence_millionths",
             ],
         )
-        .and_then(|(key, value)| {
-            match value.parse::<i64>() {
-                Ok(parsed) => {
-                    let clamped = parsed.clamp(0, MILLION);
-                    if clamped != parsed {
-                        diagnostics.push(GuardplaneDiagnosticRecord::metadata_clamped(
-                            key,
-                            value,
-                            "clamped witness confidence to [0, 1000000]",
-                        ));
-                    }
-                    Some(clamped)
-                }
-                Err(_) => {
-                    diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
+        .and_then(|(key, value)| match value.parse::<i64>() {
+            Ok(parsed) => {
+                let clamped = parsed.clamp(0, MILLION);
+                if clamped != parsed {
+                    diagnostics.push(GuardplaneDiagnosticRecord::metadata_clamped(
                         key,
                         value,
-                        "failed to parse witness confidence",
+                        "clamped witness confidence to [0, 1000000]",
                     ));
-                    None
                 }
+                Some(clamped)
+            }
+            Err(_) => {
+                diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
+                    key,
+                    value,
+                    "failed to parse witness confidence",
+                ));
+                None
             }
         })
         .unwrap_or(0);
@@ -899,7 +897,10 @@ mod tests {
         ]);
 
         let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _state = adapter.state.lock().expect("state lock should be available");
+            let _state = adapter
+                .state
+                .lock()
+                .expect("state lock should be available");
             // SAFETY: Test-only panic to intentionally poison adapter state for recovery testing
             panic!("poison guardplane adapter state");
         }));

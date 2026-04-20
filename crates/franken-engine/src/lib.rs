@@ -2077,12 +2077,11 @@ mod tests {
     fn control_plane_adoption_adr_contains_required_sections() {
         let adr_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../docs/adr/ADR-0001-control-plane-adoption-asupersync.md");
-        let adr = fs::read_to_string(&adr_path)
-            .unwrap_or_else(|err| {
-                // SAFETY: Test-only panic when ADR file is missing or unreadable.
-                // Test expects control plane adoption ADR to exist at compile time.
-                panic!("failed to read {}: {err}", adr_path.display())
-            });
+        let adr = fs::read_to_string(&adr_path).unwrap_or_else(|err| {
+            // SAFETY: Test-only panic when ADR file is missing or unreadable.
+            // Test expects control plane adoption ADR to exist at compile time.
+            panic!("failed to read {}: {err}", adr_path.display())
+        });
 
         let required_sections = [
             "## Canonical Imported Types",

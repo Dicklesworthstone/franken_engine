@@ -7988,7 +7988,9 @@ mod tests {
 
     #[allow(dead_code)]
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
+        // SAFETY: Test helper assumes valid module execution; unwrap safe in test context
         assert_eq!(quickjs_execute(module).unwrap().value, expected);
+        // SAFETY: Test helper assumes valid module execution; unwrap safe in test context
         assert_eq!(v8_execute(module).unwrap().value, expected);
     }
 

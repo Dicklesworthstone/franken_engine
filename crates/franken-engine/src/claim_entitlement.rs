@@ -2591,13 +2591,11 @@ mod tests {
                 .unwrap();
         for i in 0..10 {
             let run = serde_json::to_string(
-                &contract
-                    .evaluate_scenarios(&scenarios)
-                    .unwrap_or_else(|_| {
-                        // SAFETY: Test-only panic for deterministic evaluation failure.
-                        // Test expects scenario evaluation to succeed consistently across runs.
-                        panic!("run {i}")
-                    }),
+                &contract.evaluate_scenarios(&scenarios).unwrap_or_else(|_| {
+                    // SAFETY: Test-only panic for deterministic evaluation failure.
+                    // Test expects scenario evaluation to succeed consistently across runs.
+                    panic!("run {i}")
+                }),
             )
             .unwrap();
             assert_eq!(baseline, run, "determinism failed on run {i}");

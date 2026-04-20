@@ -797,6 +797,7 @@ mod tests {
             .register_key(make_role_entry(
                 KeyRole::Encryption,
                 SigningKey::from_bytes([0x01; 32])
+                    // SAFETY: Test helper with fixed 32-byte array should create valid SigningKey
                     .unwrap()
                     .verification_key(), // placeholder for encryption role
                 Some(enc.public_key()),
@@ -804,6 +805,7 @@ mod tests {
                 epoch,
                 0,
             ))
+            // SAFETY: Test-only unwrap with valid key registration parameters
             .unwrap();
         store
             .register_key(make_role_entry(
@@ -814,9 +816,11 @@ mod tests {
                 epoch,
                 0,
             ))
+            // SAFETY: Test-only unwrap with valid key registration parameters
             .unwrap();
 
         // Revoke only the signing key.
+        // SAFETY: Test-only unwrap with valid revocation parameters (registered key)
         store.revoke_key(KeyRole::Signing, 0, epoch2).unwrap();
 
         // Signing is revoked.
@@ -847,6 +851,7 @@ mod tests {
             epoch,
             1,
         )
+        // SAFETY: Test-only unwrap with valid bundle creation parameters
         .unwrap();
 
         assert!(bundle.verify(&owner_vk).is_ok());
@@ -870,9 +875,11 @@ mod tests {
             epoch,
             1,
         )
+        // SAFETY: Test-only unwrap with valid bundle creation parameters
         .unwrap();
 
         let wrong_vk = SigningKey::from_bytes([0xAB; 32])
+            // SAFETY: Test helper with fixed 32-byte array should create valid SigningKey
             .unwrap()
             .verification_key();
         assert_eq!(

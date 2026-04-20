@@ -94,6 +94,7 @@ fn manager_at_state(state: ExtensionState) -> ExtensionLifecycleManager {
     };
 
     for (transition, ts) in steps {
+        // SAFETY: Test helper uses valid transition sequences that should succeed in test context.
         m.apply_transition(*transition, *ts, &cx).unwrap();
     }
     assert_eq!(m.state(), state);
@@ -396,12 +397,16 @@ fn budget_exhaustion_with_suspend_policy_suspends_from_running() {
         CancellationConfig::default(),
     );
     m.set_validated_manifest(manifest()).expect("manifest");
+    // SAFETY: Valid lifecycle transition sequence in test - Validate should succeed after setting manifest.
     m.apply_transition(LifecycleTransition::Validate, 10, &cx)
         .unwrap();
+    // SAFETY: Valid lifecycle transition sequence in test - Load should succeed after Validate.
     m.apply_transition(LifecycleTransition::Load, 20, &cx)
         .unwrap();
+    // SAFETY: Valid lifecycle transition sequence in test - Start should succeed after Load.
     m.apply_transition(LifecycleTransition::Start, 30, &cx)
         .unwrap();
+    // SAFETY: Valid lifecycle transition sequence in test - Activate should succeed after Start.
     m.apply_transition(LifecycleTransition::Activate, 40, &cx)
         .unwrap();
 

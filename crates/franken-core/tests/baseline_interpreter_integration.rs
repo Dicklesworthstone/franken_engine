@@ -94,6 +94,7 @@ fn test_receipt_chaining_preserves_extension_id() {
 
     // Verify receipt chaining doesn't affect extension_id
     assert!(receipt2.previous_receipt_hash.is_some(), "Second receipt should reference first");
+    // SAFETY: Just asserted that previous_receipt_hash is Some, so unwrap cannot fail.
     assert_eq!(receipt2.previous_receipt_hash.as_ref().unwrap(), &receipt1.signature);
 }
 

@@ -1181,6 +1181,7 @@ mod tests {
     fn ingest_plas_witness_generates_two_hypotheses() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses.len(), 2);
@@ -1192,6 +1193,7 @@ mod tests {
     fn ingest_ifc_proof_generates_flow_elision() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses.len(), 1);
@@ -1203,6 +1205,7 @@ mod tests {
     fn ingest_replay_motif_generates_superinstruction() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
+        // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         assert_eq!(hypotheses.len(), 1);

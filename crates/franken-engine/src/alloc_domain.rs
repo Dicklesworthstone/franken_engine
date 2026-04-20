@@ -1916,6 +1916,7 @@ mod tests {
             let reg = DomainRegistry::with_standard_domains(size);
             assert_eq!(
                 reg.get(&AllocationDomain::ExtensionHeap)
+                    // SAFETY: with_standard_domains always registers ExtensionHeap.
                     .unwrap()
                     .budget
                     .max_bytes,

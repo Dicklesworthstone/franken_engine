@@ -3136,6 +3136,7 @@ mod tests {
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
         assert_eq!(
+            // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
             result.evaluation.unwrap().severity,
             DemotionSeverity::Advisory
         );
@@ -3200,7 +3201,9 @@ mod tests {
         assert_eq!(receipt.evidence[2].category, "risk_score");
 
         // Serde roundtrip preserves all evidence
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DemotionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.evidence.len(), 3);
     }
@@ -3612,6 +3615,7 @@ mod tests {
         };
         let result = monitor.process_observation(&obs2);
         assert!(result.trigger_fired);
+        // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result.evaluation.unwrap();
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "performance_sample");
@@ -3619,11 +3623,15 @@ mod tests {
 
     #[test]
     fn receipt_id_differs_by_slot() {
+        // SAFETY: Test-only unwrap with valid slot ID string
         let slot_a = SlotId::new("parser").unwrap();
+        // SAFETY: Test-only unwrap with valid slot ID string
         let slot_b = SlotId::new("interpreter").unwrap();
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_a =
             DemotionReceipt::derive_receipt_id(&slot_a, "native", "delegate", 1_000_000_000, "z")
                 .unwrap();
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b =
             DemotionReceipt::derive_receipt_id(&slot_b, "native", "delegate", 1_000_000_000, "z")
                 .unwrap();

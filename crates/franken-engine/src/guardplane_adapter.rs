@@ -899,6 +899,7 @@ mod tests {
 
         let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _state = adapter.state.lock().expect("state lock should be available");
+            // SAFETY: Test-only panic to intentionally poison adapter state for recovery testing
             panic!("poison guardplane adapter state");
         }));
         assert!(poison_result.is_err());

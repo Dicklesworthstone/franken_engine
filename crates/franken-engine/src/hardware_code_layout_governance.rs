@@ -1401,7 +1401,11 @@ mod tests {
     #[test]
     fn test_layout_strategy_serde_roundtrip() {
         for s in LayoutStrategy::ALL {
+            // SAFETY: LayoutStrategy derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let j = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid LayoutStrategy,
+            // so from_str back to LayoutStrategy cannot fail (valid format + matching schema).
             let back: LayoutStrategy = serde_json::from_str(&j).unwrap();
             assert_eq!(*s, back);
         }

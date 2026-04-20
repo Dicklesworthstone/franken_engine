@@ -9301,67 +9301,6 @@ impl InterpreterCore {
                 let result = this_str.replacen(&search_str, &replace_str, 1);
                 Ok(Value::Str(result))
             }
-            "builtin:ArrayPrototypeMap" => {
-                // Array.prototype.map(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Snapshot length + indexed values from heap under an
-                // immutable borrow so we can release it before the &mut self
-                // allocator/setter calls below.
-                let snapshot: Option<(usize, Vec<(usize, Value)>)> =
-                    self.heap.get(array_id.0 as usize).map(|array_obj| {
-                        let length = array_obj
-                            .properties
-                            .get("length")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i as usize),
-                                Value::Float(f) => Some(f.inner() as usize),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                        for (key, value) in &array_obj.properties {
-                            if let Ok(index) = key.parse::<usize>() {
-                                if index < length {
-                                    indexed_values.push((index, value.clone()));
-                                }
-                            }
-                        }
-                        (length, indexed_values)
-                    });
-
-                if let Some((length, mut indexed_values)) = snapshot {
-                    let result_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        result_id,
-                        "length".to_string(),
-                        Value::Int(length as i64),
-                    )?;
-                    indexed_values.sort_by_key(|(index, _)| *index);
-                    for (index, value) in indexed_values {
-                        // TODO: In full implementation, would call callback and use result
-                        self.set_object_property(result_id, index.to_string(), value)?;
-                    }
-                    Ok(Value::Object(result_id))
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
             "builtin:ArrayPrototypeFilter" => {
                 // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
                 if args.count == 0 {
@@ -13354,82 +13293,6 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ArrayPrototypeMap" => {
-                // Array.prototype.map(callback[, thisArg]) implementation (simplified)
-                if args.count < 2 {
-                    // Return empty array if no callback provided
-                    let empty_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-                    return Ok(Value::Object(empty_array_id));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Create result array
-                let result_array_id = self.alloc_object_with_prototype(None)?;
-
-                // Simplified implementation: map elements to strings (since we can't call functions)
-                let mut mapped_elements = Vec::new();
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            // Simple mapping: convert to string representation
-                            let mapped = match element {
-                                Value::Str(s) => Value::Str(format!("mapped({})", s)),
-                                Value::Int(n) => Value::Str(format!("mapped({})", n)),
-                                Value::Float(f) => Value::Str(format!("mapped({})", f.inner())),
-                                Value::Bool(b) => Value::Str(format!("mapped({})", b)),
-                                Value::Null => Value::Str("mapped(null)".to_string()),
-                                Value::Undefined => Value::Str("mapped(undefined)".to_string()),
-                                _ => Value::Str("mapped(object)".to_string()),
-                            };
-                            mapped_elements.push(mapped);
-                        } else {
-                            mapped_elements.push(Value::Undefined);
-                        }
-                    }
-                }
-
-                // Set the mapped elements to the result array
-                for (i, element) in mapped_elements.iter().enumerate() {
-                    self.set_object_property(result_array_id, i.to_string(), element.clone())?;
-                }
-
-                // Set result array length
-                self.set_object_property(
-                    result_array_id,
-                    "length".to_string(),
-                    Value::Int(mapped_elements.len() as i64),
-                )?;
-
-                Ok(Value::Object(result_array_id))
-            }
 
             "builtin:StringPrototypeIncludes" => {
                 // String.prototype.includes(searchString[, position]) implementation
@@ -17656,61 +17519,40 @@ impl InterpreterCore {
             }
 
             "builtin:ArrayPrototypeMap" => {
-                // Array.prototype.map() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
+                // Array.prototype.map() implementation
+                // FAIL-CLOSED: Array.map requires callback invocation which is not yet supported
+                // Previous implementations silently returned incorrect results (identity mapping)
+                // or applied hardcoded transformations instead of calling the provided callback
 
                 if args.count < 2 {
-                    return Ok(Value::Undefined); // No callback provided
+                    return Err(InterpreterError::TypeError {
+                        expected: "callback function".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+
+                let this_val = self.read_reg(args.start)?;
+                if !matches!(this_val, Value::Object(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object".to_string(),
+                        got: format!("{:?}", this_val),
+                    });
                 }
 
                 let callback_val = self.read_reg(args.start + 1)?;
                 if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Undefined); // Callback is not a function
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: format!("{:?}", callback_val),
+                    });
                 }
 
-                let mapped_array_id = self.alloc_object_with_prototype(None)?;
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: copy all existing elements (identity mapping)
-                    // (Full implementation would require callback execution)
-                    let elements: Vec<_> = (0..length)
-                        .map(|i| {
-                            (
-                                i,
-                                obj.properties
-                                    .get(&i.to_string())
-                                    .cloned()
-                                    .unwrap_or(Value::Undefined),
-                            )
-                        })
-                        .collect();
-
-                    for (i, element) in elements {
-                        self.set_object_property(mapped_array_id, i.to_string(), element)?;
-                    }
-
-                    self.set_object_property(
-                        mapped_array_id,
-                        "length".to_string(),
-                        Value::Int(length as i64),
-                    )?;
-                }
-
-                Ok(Value::Object(mapped_array_id))
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [1,2].map(x => x * 2) should error rather than silently return [1,2]
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.map implementation".to_string(),
+                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args and thisArg handling".to_string(),
+                })
             }
 
             "builtin:MathSqrt" => {

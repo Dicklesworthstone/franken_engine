@@ -4940,3 +4940,135 @@ fn regression_matrix_case_coverage_fails_on_untested_cases() {
         covered_cases.difference(&mock_case_ids).collect::<Vec<_>>()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Array.prototype.map regression tests - bd-1oyow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_array_map_callback_validation_regression() {
+    // Regression test for bd-1oyow: Array.prototype.map must properly validate callback
+    // Previous broken implementations silently accepted non-function callbacks
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value, InterpreterError};
+
+    let mut interpreter = BaselineInterpreter::new();
+
+    // Create test array [1, 2, 3]
+    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    interpreter.set_object_property(array_id, "length".to_string(), Value::Int(3)).unwrap();
+    interpreter.set_object_property(array_id, "0".to_string(), Value::Int(1)).unwrap();
+    interpreter.set_object_property(array_id, "1".to_string(), Value::Int(2)).unwrap();
+    interpreter.set_object_property(array_id, "2".to_string(), Value::Int(3)).unwrap();
+
+    // Test: No callback provided should error
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 1);
+    assert!(result.is_err(), "Array.map with no callback should error");
+
+    // Test: Non-function callback should error
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter.write_reg(1, Value::Str("not-a-function".to_string())).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map with non-function callback should error");
+
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter.write_reg(1, Value::Int(42)).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map with integer callback should error");
+
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter.write_reg(1, Value::Null).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map with null callback should error");
+}
+
+#[test]
+fn test_array_map_this_validation_regression() {
+    // Regression test for bd-1oyow: Array.prototype.map must validate this value is object
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value, InterpreterError};
+
+    let mut interpreter = BaselineInterpreter::new();
+
+    // Create mock function value for callback
+    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    let callback = Value::Function(callback_id);
+
+    // Test: Non-object this values should error
+    interpreter.write_reg(0, Value::Str("not-array".to_string())).unwrap();
+    interpreter.write_reg(1, callback.clone()).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map on string should error");
+
+    interpreter.write_reg(0, Value::Int(123)).unwrap();
+    interpreter.write_reg(1, callback.clone()).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map on integer should error");
+
+    interpreter.write_reg(0, Value::Null).unwrap();
+    interpreter.write_reg(1, callback.clone()).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map on null should error");
+
+    interpreter.write_reg(0, Value::Undefined).unwrap();
+    interpreter.write_reg(1, callback.clone()).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+    assert!(result.is_err(), "Array.map on undefined should error");
+}
+
+#[test]
+fn test_array_map_fail_closed_behavior() {
+    // Regression test for bd-1oyow: Array.prototype.map should fail closed rather than
+    // return incorrect results when callback dispatch is not implemented
+    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value, InterpreterError};
+
+    let mut interpreter = BaselineInterpreter::new();
+
+    // Create test array [1, 2]
+    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    interpreter.set_object_property(array_id, "length".to_string(), Value::Int(2)).unwrap();
+    interpreter.set_object_property(array_id, "0".to_string(), Value::Int(1)).unwrap();
+    interpreter.set_object_property(array_id, "1".to_string(), Value::Int(2)).unwrap();
+
+    // Create mock function value for callback
+    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
+    let callback = Value::Function(callback_id);
+
+    // Array.map should fail-closed instead of returning identity mapping or hardcoded transforms
+    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
+    interpreter.write_reg(1, callback).unwrap();
+    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
+
+    // Should error with TypeError rather than return incorrect results
+    assert!(result.is_err(), "Array.map should fail-closed when callback dispatch unsupported");
+
+    match result.unwrap_err() {
+        InterpreterError::TypeError { expected, got } => {
+            assert!(expected.contains("supported Array.prototype.map implementation"),
+                "Error should mention unsupported implementation, got: {}", expected);
+            assert!(got.contains("callback invocation not yet supported"),
+                "Error should mention unsupported callback invocation, got: {}", got);
+        }
+        other => panic!("Expected TypeError, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_array_map_deduplication_regression() {
+    // Regression test for bd-1oyow: Ensure only one Array.prototype.map implementation exists
+    // Previous issue: multiple broken implementations where earlier ones shadowed correct ones
+    use frankenengine_engine::baseline_interpreter::BaselineInterpreter;
+
+    let interpreter = BaselineInterpreter::new();
+
+    // Count how many mnemonic mappings exist for ArrayPrototypeMap
+    let mut map_count = 0;
+    for i in 0..1000 {  // Check reasonable range of builtin IDs
+        if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
+            if mnemonic == "builtin:ArrayPrototypeMap" {
+                map_count += 1;
+            }
+        }
+    }
+
+    assert_eq!(map_count, 1, "Should have exactly one Array.prototype.map dispatch arm, found: {}", map_count);
+}

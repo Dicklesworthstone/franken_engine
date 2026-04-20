@@ -851,6 +851,8 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: Test runner always generates at least one event (gate_validation_complete).
+        // The events vector is guaranteed to be non-empty for valid test results.
         let final_event = result.events.last().unwrap();
         assert_eq!(final_event.event, "gate_validation_complete");
         assert_eq!(final_event.outcome, "pass");
@@ -887,7 +889,11 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: GateValidationResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateValidationResult,
+        // so from_str back to GateValidationResult cannot fail (valid format + matching schema).
         let back: GateValidationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }
@@ -902,7 +908,11 @@ mod tests {
             expect_quarantine: true,
             seed: 42,
         };
+        // SAFETY: FaultScenario derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&scenario).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FaultScenario,
+        // so from_str back to FaultScenario cannot fail (valid format + matching schema).
         let back: FaultScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(scenario, back);
     }
@@ -924,7 +934,11 @@ mod tests {
             isolation_verified: true,
             recovery_verified: true,
         };
+        // SAFETY: FaultScenarioResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FaultScenarioResult,
+        // so from_str back to FaultScenarioResult cannot fail (valid format + matching schema).
         let back: FaultScenarioResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }

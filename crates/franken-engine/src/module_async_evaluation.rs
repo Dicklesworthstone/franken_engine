@@ -1035,6 +1035,7 @@ pub fn compute_async_evaluation_order(
     let mut order = Vec::new();
     while let Some(spec) = queue.pop() {
         order.push(spec.to_string());
+        // SAFETY: Every module specifier in queue was inserted into adjacency map above
         let successors: Vec<&str> = adjacency.get(spec).cloned().unwrap();
         for succ in successors {
             if let Some(deg) = in_degree.get_mut(succ) {

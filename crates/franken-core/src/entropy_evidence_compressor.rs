@@ -740,7 +740,11 @@ mod tests {
         est.observe(0);
         est.observe(1);
         est.observe(0);
+        // SAFETY: EntropyEstimator derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&est).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid EntropyEstimator,
+        // so from_str back to EntropyEstimator cannot fail (valid format + matching schema).
         let restored: EntropyEstimator = serde_json::from_str(&json).unwrap();
         assert_eq!(est, restored);
     }
@@ -784,7 +788,11 @@ mod tests {
     fn sufficient_statistic_serde_roundtrip() {
         let est = EntropyEstimator::new();
         let ss = SufficientStatistic::from_estimator(&est, 0, 0, ContentHash::compute(b"empty"));
+        // SAFETY: SufficientStatistic derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ss).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SufficientStatistic,
+        // so from_str back to SufficientStatistic cannot fail (valid format + matching schema).
         let restored: SufficientStatistic = serde_json::from_str(&json).unwrap();
         assert_eq!(ss, restored);
     }
@@ -879,8 +887,14 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         est.observe(1);
+        // SAFETY: EntropyEstimator contains valid observed data (0,1), so from_estimator
+        // has non-empty frequency table and cannot fail with InvalidInput.
         let coder = ArithmeticCoder::from_estimator(&est).unwrap();
+        // SAFETY: ArithmeticCoder derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&coder).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ArithmeticCoder,
+        // so from_str back to ArithmeticCoder cannot fail (valid format + matching schema).
         let restored: ArithmeticCoder = serde_json::from_str(&json).unwrap();
         assert_eq!(coder, restored);
     }
@@ -899,7 +913,11 @@ mod tests {
             compression_ratio_millionths: 160_000,
             content_hash: ContentHash::compute(b"test"),
         };
+        // SAFETY: CompressedEvidence derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ce).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CompressedEvidence,
+        // so from_str back to CompressedEvidence cannot fail (valid format + matching schema).
         let restored: CompressedEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(ce, restored);
     }

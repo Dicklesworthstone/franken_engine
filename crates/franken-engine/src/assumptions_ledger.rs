@@ -673,6 +673,7 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         assert_eq!(ledger.monitors().len(), 1);
     }

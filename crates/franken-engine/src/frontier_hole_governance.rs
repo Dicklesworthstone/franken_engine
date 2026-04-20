@@ -1069,7 +1069,11 @@ mod tests {
     #[test]
     fn severity_serde_roundtrip() {
         let s = HoleGovernanceSeverity::Blocking;
+        // SAFETY: HoleGovernanceSeverity derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid HoleGovernanceSeverity,
+        // so from_str back to HoleGovernanceSeverity cannot fail (valid format + matching schema).
         let back: HoleGovernanceSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -1077,7 +1081,11 @@ mod tests {
     #[test]
     fn action_serde_roundtrip() {
         let a = GovernanceAction::ForceExperiment;
+        // SAFETY: GovernanceAction derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GovernanceAction,
+        // so from_str back to GovernanceAction cannot fail (valid format + matching schema).
         let back: GovernanceAction = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
@@ -1142,6 +1150,7 @@ mod tests {
             make_hole("n2", "parser", false, false),
         ];
         let cov = compute_surface_coverage(&holes);
+        // SAFETY: Test uses "parser" surface holes; compute_surface_coverage includes this key.
         assert_eq!(*cov.get("parser").unwrap(), MILLION);
     }
 

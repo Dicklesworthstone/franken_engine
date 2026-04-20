@@ -796,9 +796,11 @@ mod tests {
 
     fn make_complete_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
+        // SAFETY: Test helper with valid node IDs should succeed topology creation
         let mut topo = GossipTopology::new(node_ids).unwrap();
         for i in 0..n {
             for j in (i + 1)..n {
+                // SAFETY: Test helper with valid node indices should succeed edge addition
                 topo.add_edge(i, j, MILLION).unwrap();
             }
         }
@@ -807,8 +809,10 @@ mod tests {
 
     fn make_cycle_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
+        // SAFETY: Test helper with valid node IDs should succeed topology creation
         let mut topo = GossipTopology::new(node_ids).unwrap();
         for i in 0..n {
+            // SAFETY: Test helper with valid node indices should succeed edge addition
             topo.add_edge(i, (i + 1) % n, MILLION).unwrap();
         }
         topo
@@ -816,8 +820,10 @@ mod tests {
 
     fn make_path_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
+        // SAFETY: Test helper with valid node IDs should succeed topology creation
         let mut topo = GossipTopology::new(node_ids).unwrap();
         for i in 0..n - 1 {
+            // SAFETY: Test helper with valid node indices should succeed edge addition
             topo.add_edge(i, i + 1, MILLION).unwrap();
         }
         topo

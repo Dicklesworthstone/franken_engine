@@ -1485,6 +1485,7 @@ mod tests {
     #[test]
     fn add_and_count_specimens() {
         let mut corpus = WorkloadCorpus::new();
+        // SAFETY: Test with valid specimen created by test helper should succeed
         corpus
             .add_specimen(make_specimen(
                 "s1",

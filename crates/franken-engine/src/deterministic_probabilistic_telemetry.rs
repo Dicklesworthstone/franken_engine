@@ -2211,6 +2211,7 @@ mod tests {
         // Event at t=200 should create a new window.
         plane.record_exact("e3", "dom", 200, b"c");
 
+        // SAFETY: Test recorded events with "dom" domain; windows map contains this key.
         let windows = plane.windows.get("dom").unwrap();
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].event_count(), 2);
@@ -2323,11 +2324,13 @@ mod tests {
         assert_eq!(report.total_events_captured, 10);
         assert_eq!(report.mode_breakdowns.len(), 2);
 
+        // SAFETY: Test setup creates both ExactCounting and ProbabilisticSampling modes; both exist in breakdowns.
         let exact_bd = report
             .mode_breakdowns
             .iter()
             .find(|b| b.mode == CaptureMode::ExactCounting)
             .unwrap();
+        // SAFETY: Test setup creates both ExactCounting and ProbabilisticSampling modes; both exist in breakdowns.
         let prob_bd = report
             .mode_breakdowns
             .iter()

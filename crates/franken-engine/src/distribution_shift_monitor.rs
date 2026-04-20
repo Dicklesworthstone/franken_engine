@@ -767,7 +767,9 @@ mod tests {
     fn test_stream_kind_serde_roundtrip() {
         let kinds = [StreamKind::Benchmark, StreamKind::LiveWorkload];
         for kind in &kinds {
+            // SAFETY: StreamKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid StreamKind serialization
             let back: StreamKind = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, kind);
         }
@@ -782,7 +784,9 @@ mod tests {
             slide_step: 50,
             min_samples: 10,
         };
+        // SAFETY: WindowConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&wc).unwrap();
+        // SAFETY: JSON was just produced by valid WindowConfig serialization
         let back: WindowConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, wc);
     }

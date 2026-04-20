@@ -2088,7 +2088,9 @@ mod tests {
     #[test]
     fn source_span_round_trips_through_serde() {
         let span = SourceSpan::new(7, 99, 3, 8, 10, 1);
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&span).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: SourceSpan = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, span);
     }
@@ -2223,6 +2225,7 @@ mod tests {
                 assert!(map.contains_key("body"));
                 assert!(map.contains_key("span"));
             }
+            // SAFETY: Test validates canonical value returns expected Map format for SyntaxTree
             _ => panic!("canonical_value must be a Map"),
         }
     }
@@ -2244,7 +2247,9 @@ mod tests {
             ],
             span: make_span(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&tree).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: SyntaxTree = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, tree);
     }
@@ -2308,6 +2313,7 @@ mod tests {
                 assert!(map.contains_key("payload"));
                 assert!(map.contains_key("span"));
             }
+            // SAFETY: Test validates import statement canonical value returns expected Map format
             _ => panic!("expected map"),
         }
     }

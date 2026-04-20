@@ -732,6 +732,7 @@ impl FrirArtifact {
                 // Keep only invariants unique to this pass
                 pass.invariants_checked.retain(|inv| {
                     !frequent_invariants.contains(&inv.kind)
+                        || !inv.passed
                         || inv.kind == InvariantKind::TypeSafety // Always keep type safety per-pass
                 });
             }

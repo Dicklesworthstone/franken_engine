@@ -1033,7 +1033,9 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
+        // SAFETY: Test with valid tournament config and matrix should create harness successfully
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with valid configuration should run tournament successfully
         let result = harness.run().unwrap();
         assert_eq!(result.rounds_played, 500);
         assert_eq!(result.schema_version, COEVOLUTION_SCHEMA_VERSION);
@@ -1047,7 +1049,9 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
+        // SAFETY: Test with valid security game config and matrix should create harness successfully
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
+        // SAFETY: Test harness with security game configuration should run tournament successfully
         let result = harness.run().unwrap();
         assert_eq!(result.rounds_played, 200);
         assert!(!result.policy_delta.recommended_mix.is_empty());
@@ -1061,10 +1065,14 @@ mod tests {
         };
         let matrix = rock_paper_scissors_matrix();
 
+        // SAFETY: Test with valid config and matrix should create first harness successfully
         let mut h1 = CoevolutionHarness::new(config.clone(), matrix.clone()).unwrap();
+        // SAFETY: Test with same config and matrix should create second harness successfully
         let mut h2 = CoevolutionHarness::new(config, matrix).unwrap();
 
+        // SAFETY: First test harness with valid configuration should run successfully
         let r1 = h1.run().unwrap();
+        // SAFETY: Second test harness with identical configuration should run successfully
         let r2 = h2.run().unwrap();
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);

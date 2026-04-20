@@ -1115,6 +1115,7 @@ mod tests {
     fn generate_log_entries_creates_entries() {
         let evidence = passing_gate_evidence();
         let schema = default_schema();
+        // SAFETY: Test with valid evidence and schema should succeed
         let execution = execute_disruption_track(
             &evidence,
             &schema,
@@ -1131,6 +1132,7 @@ mod tests {
     fn generate_log_entries_trace_id_consistent() {
         let evidence = passing_gate_evidence();
         let schema = default_schema();
+        // SAFETY: Test with valid evidence and schema should succeed
         let execution = execute_disruption_track(
             &evidence,
             &schema,

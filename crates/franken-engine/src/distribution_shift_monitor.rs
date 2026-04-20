@@ -830,7 +830,9 @@ mod tests {
     #[test]
     fn test_embedding_vector_serde() {
         let ev = emb(&[500_000, 750_000]);
+        // SAFETY: EmbeddingVector derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ev).unwrap();
+        // SAFETY: JSON was just produced by valid EmbeddingVector serialization
         let back: EmbeddingVector = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ev);
     }

@@ -1614,6 +1614,7 @@ mod tests {
             EnforcementResult::Denied(denial) => {
                 assert_eq!(denial.target_id, EngineObjectId([5; 32]));
             }
+            // SAFETY: Test validates revocation enforcement denial on last token in batch
             _ => panic!("expected denial on last token"),
         }
         // 2 events per cleared token (2 tokens cleared) + 1 for the revoked token = 5

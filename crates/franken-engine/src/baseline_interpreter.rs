@@ -23268,6 +23268,26 @@ mod tests {
     }
 
     #[test]
+    fn string_prototype_ends_with_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [40_u32, 230_u32, 336_u32] {
+            interpreter.registers[0] = Value::Str("frankenengine".to_string());
+            interpreter.registers[1] = Value::Str("engine".to_string());
+            interpreter.registers[2] = Value::Int(13);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeEndsWith".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("StringPrototypeEndsWith ID should execute");
+            assert_eq!(result, Value::Bool(true));
+        }
+    }
+
+    #[test]
     fn array_prototype_fill_deduplication_regression() {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 

@@ -785,6 +785,8 @@ mod tests {
     fn verify_valid_artifact() {
         let mut store = RecoveryArtifactStore::new(test_epoch(), &test_key());
         let artifact = build_valid_artifact();
+        // SAFETY: Test uses valid artifact from build_valid_artifact helper.
+        // verify() only fails on malformed artifacts or signature errors (both impossible here).
         let verdict = store.verify(&artifact, "t1").unwrap();
         assert!(verdict.is_valid());
     }

@@ -6590,8 +6590,8 @@ impl InterpreterCore {
     /// Returns Ok(()) if validation passes, otherwise returns appropriate TypeError
     fn validate_array_callback_args(
         &self,
-        args: &ArgSlice,
-        method_name: &str,
+        args: RegRange,
+        _method_name: &str,
     ) -> Result<(), InterpreterError> {
         if args.count < 2 {
             return Err(InterpreterError::TypeError {

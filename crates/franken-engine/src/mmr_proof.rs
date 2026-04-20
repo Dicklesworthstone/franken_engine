@@ -894,6 +894,7 @@ mod tests {
             let old_root = build_mmr(old_n).root_hash().unwrap();
             let new_mmr = build_mmr(new_n);
             let proof = new_mmr.consistency_proof(old_n).unwrap();
+            // SAFETY: Test validates MMR consistency proof verification succeeds
             verify_consistency(&old_root, &proof)
                 .unwrap_or_else(|e| panic!("old={old_n}, new={new_n}: {e}"));
         }

@@ -1648,9 +1648,11 @@ mod tests {
                             JsxAttributeValue::Expression { expression } => {
                                 assert_eq!(expression, "42");
                             }
+                            // SAFETY: Test validates attribute value is expression for "{42}" syntax
                             _ => panic!("expected expression"),
                         }
                     }
+                    // SAFETY: Test validates attribute is named type for JSX expression attribute
                     _ => panic!("expected named attribute"),
                 }
             }

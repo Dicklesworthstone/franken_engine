@@ -860,6 +860,7 @@ mod tests {
         })
         .build();
 
+        // SAFETY: verify cannot fail with valid artifact from builder
         let verdict = store.verify(&artifact, "t1").unwrap();
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
@@ -889,6 +890,7 @@ mod tests {
         })
         .build();
 
+        // SAFETY: verify cannot fail with valid artifact from builder
         let verdict = store.verify(&artifact, "t1").unwrap();
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
@@ -907,6 +909,7 @@ mod tests {
 
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
+        // SAFETY: get cannot fail for artifact ID we just recorded
         assert_eq!(store.get(&hex_id).unwrap().epoch_id, 1);
     }
 
@@ -919,7 +922,9 @@ mod tests {
         assert_eq!(exported.len(), 1);
 
         // Verify exported artifact can be serialized.
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(exported[0]).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.artifact_type, ArtifactType::ForcedReconciliation);
     }
@@ -929,6 +934,7 @@ mod tests {
         let mut store = RecoveryArtifactStore::new(test_epoch(), &test_key());
         let artifact = build_valid_artifact();
         store.record(artifact.clone(), "t1");
+        // SAFETY: verify cannot fail with valid artifact from helper
         store.verify(&artifact, "t1").unwrap();
 
         let events = store.drain_events();
@@ -963,7 +969,9 @@ mod tests {
             ArtifactType::FailedAttestation,
         ];
         for t in &types {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: ArtifactType = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }
@@ -995,7 +1003,9 @@ mod tests {
             },
         ];
         for t in &triggers {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: RecoveryTrigger = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }

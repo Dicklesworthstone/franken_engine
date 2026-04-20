@@ -8356,28 +8356,8 @@ impl InterpreterCore {
                 }
             }
             "builtin:MathRandom" => {
-                // Math.random implementation - returns pseudo-random number between 0 and 1
-
-                // Generate a pseudo-random number between 0 and 1 using deterministic PRNG
-                use crate::security_e2e::Xorshift64;
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-
-                // Create deterministic seed based on current execution state
-                let mut hasher = DefaultHasher::new();
-                self.call_stack.len().hash(&mut hasher);
-                self.heap.len().hash(&mut hasher);
-                self.instructions_executed.hash(&mut hasher);
-                self.ip.hash(&mut hasher);
-
-                let seed = hasher.finish();
-                let mut rng = Xorshift64::new(seed);
-
-                // Generate random value in [0, 1) using full u64 precision
-                let random_u64 = rng.next_u64();
-                let normalized = (random_u64 as f64) / (u64::MAX as f64);
-
-                Ok(Value::Float(Float64::new(normalized)))
+                // Math.random implementation - deterministic with proper [0,1) range
+                self.math_random_impl()
             }
 
             // JSON methods
@@ -11682,7 +11662,7 @@ impl InterpreterCore {
             }
 
             "builtin:NumberPrototypeToString" => {
-                // Number.prototype.toString(radix) implementation
+                // Number.prototype.toString(radix) implementation - unified spec-consistent version
                 let this_val = self.read_reg(args.start)?;
 
                 let number_val = match this_val {
@@ -11701,65 +11681,9 @@ impl InterpreterCore {
                     10
                 };
 
-                // Validate radix (2-36)
-                if radix < 2 || radix > 36 {
-                    return Ok(Value::Str("RangeError".to_string()));
-                }
-
-                if radix == 10 {
-                    // Use standard decimal representation
-                    if number_val.is_nan() {
-                        Ok(Value::Str("NaN".to_string()))
-                    } else if number_val.is_infinite() {
-                        if number_val.is_sign_negative() {
-                            Ok(Value::Str("-Infinity".to_string()))
-                        } else {
-                            Ok(Value::Str("Infinity".to_string()))
-                        }
-                    } else {
-                        Ok(Value::Str(number_val.to_string()))
-                    }
-                } else {
-                    // Proper radix conversion for bases 2-36
-                    if number_val.is_nan() {
-                        Ok(Value::Str("NaN".to_string()))
-                    } else if number_val.is_infinite() {
-                        if number_val.is_sign_negative() {
-                            Ok(Value::Str("-Infinity".to_string()))
-                        } else {
-                            Ok(Value::Str("Infinity".to_string()))
-                        }
-                    } else {
-                        // Convert to integer (truncate fractional part for radix conversion)
-                        let int_val = number_val.trunc() as i64;
-                        let result = if int_val == 0 {
-                            "0".to_string()
-                        } else {
-                            let mut num = int_val.unsigned_abs();
-                            let mut digits = Vec::new();
-                            let chars = b"0123456789abcdefghijklmnopqrstuvwxyz";
-
-                            while num > 0 {
-                                let digit = (num % radix as u64) as usize;
-                                digits.push(chars[digit] as char);
-                                num /= radix as u64;
-                            }
-
-                            // Build result by reversing digits
-                            let mut result = String::with_capacity(
-                                digits.len() + if int_val < 0 { 1 } else { 0 },
-                            );
-                            if int_val < 0 {
-                                result.push('-');
-                            }
-                            // Reverse iteration for correct digit order
-                            for &digit in digits.iter().rev() {
-                                result.push(digit);
-                            }
-                            result
-                        };
-                        Ok(Value::Str(result))
-                    }
+                match self.number_to_string_impl(number_val, radix) {
+                    Ok(result) => Ok(Value::Str(result)),
+                    Err(_) => Ok(Value::Str("RangeError".to_string())),
                 }
             }
 
@@ -17486,63 +17410,30 @@ impl InterpreterCore {
             }
 
             "builtin:NumberPrototypeToString" => {
-                // Number.prototype.toString() implementation - converts number to string
+                // Number.prototype.toString() implementation - unified spec-consistent version
                 let this_val = self.read_reg(args.start)?;
+
+                let number_val = match this_val {
+                    Value::Int(n) => n as f64,
+                    Value::Float(f) => f.inner(),
+                    _ => return Ok(Value::Str("NaN".to_string())),
+                };
 
                 let radix = if args.count >= 2 {
                     let radix_val = self.read_reg(args.start + 1)?;
                     match radix_val {
-                        Value::Int(n) => n.clamp(2, 36) as u32,
-                        Value::Float(f) => f.inner().clamp(2.0, 36.0) as u32,
+                        Value::Int(n) => n as i32,
+                        Value::Float(f) => f.inner() as i32,
                         _ => 10,
                     }
                 } else {
                     10
                 };
 
-                let result = match this_val {
-                    Value::Int(n) => {
-                        if radix == 10 {
-                            n.to_string()
-                        } else {
-                            // Convert integer to specified radix
-                            let mut result = String::new();
-                            let mut num = n.unsigned_abs();
-                            let radix = radix as u64;
-
-                            if num == 0 {
-                                result.push('0');
-                            } else {
-                                while num > 0 {
-                                    let digit = num % radix;
-                                    let ch = if digit < 10 {
-                                        (b'0' + digit as u8) as char
-                                    } else {
-                                        (b'a' + (digit - 10) as u8) as char
-                                    };
-                                    result.insert(0, ch);
-                                    num /= radix;
-                                }
-                            }
-
-                            if n < 0 {
-                                result.insert(0, '-');
-                            }
-                            result
-                        }
-                    }
-                    Value::Float(f) => {
-                        if radix == 10 {
-                            f.to_string()
-                        } else {
-                            // Simplified: just use decimal for non-10 radix floats
-                            f.to_string()
-                        }
-                    }
-                    _ => "0".to_string(), // Non-numbers default to "0"
-                };
-
-                Ok(Value::Str(result))
+                match self.number_to_string_impl(number_val, radix) {
+                    Ok(result) => Ok(Value::Str(result)),
+                    Err(_) => Ok(Value::Str("RangeError".to_string())),
+                }
             }
 
             "builtin:ObjectPrototypeHasOwnProperty" => {
@@ -18255,23 +18146,8 @@ impl InterpreterCore {
             }
 
             "builtin:MathRandom" => {
-                // Math.random() implementation - returns pseudo-random number between 0 and 1
-                // For deterministic execution, use a simple PRNG based on a seed
-                // This is a simplified implementation for runtime compatibility
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-
-                let mut hasher = DefaultHasher::new();
-                // Use current timestamp as seed for pseudo-randomness
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-                    .hash(&mut hasher);
-
-                let hash_val = hasher.finish();
-                let random_val = (hash_val as f64) / (u64::MAX as f64);
-                Ok(Value::Float(Float64::new(random_val)))
+                // Math.random implementation - deterministic with proper [0,1) range
+                self.math_random_impl()
             }
 
             "builtin:DateNow" => {
@@ -19212,6 +19088,96 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
         }
+    }
+
+    /// Unified Math.random implementation - deterministic with proper [0,1) range.
+    fn math_random_impl(&mut self) -> Result<Value, InterpreterError> {
+        // Generate deterministic pseudo-random number using execution state as seed
+        use crate::security_e2e::Xorshift64;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        self.call_stack.len().hash(&mut hasher);
+        self.heap.len().hash(&mut hasher);
+        self.instructions_executed.hash(&mut hasher);
+        self.ip.hash(&mut hasher);
+
+        let seed = hasher.finish();
+        let mut rng = Xorshift64::new(seed);
+
+        // Generate random value in [0, 1) using 53-bit precision to avoid rounding to 1.0
+        // JavaScript Number uses IEEE 754 double precision with 53-bit significand
+        let random_bits = rng.next_u64() >> 11; // Use top 53 bits
+        let normalized = (random_bits as f64) / (1u64 << 53) as f64;
+
+        Ok(Value::Float(Float64::new(normalized)))
+    }
+
+    /// Unified Number.prototype.toString implementation - spec-consistent radix handling.
+    fn number_to_string_impl(
+        &self,
+        number_val: f64,
+        radix: i32,
+    ) -> Result<String, InterpreterError> {
+        // Validate radix according to ECMAScript spec (2-36)
+        if radix < 2 || radix > 36 {
+            return Err(InterpreterError::DivisionByZero); // Reuse error type for RangeError
+        }
+
+        // Handle special values
+        if number_val.is_nan() {
+            return Ok("NaN".to_string());
+        }
+        if number_val.is_infinite() {
+            return Ok(if number_val.is_sign_positive() {
+                "Infinity"
+            } else {
+                "-Infinity"
+            }
+            .to_string());
+        }
+
+        // For radix 10, use standard formatting
+        if radix == 10 {
+            // Convert to integer if possible for cleaner output
+            if number_val.fract() == 0.0 && number_val.abs() <= (i64::MAX as f64) {
+                return Ok((number_val as i64).to_string());
+            } else {
+                return Ok(number_val.to_string());
+            }
+        }
+
+        // For non-decimal radix, only support integers (spec-compliant)
+        if number_val.fract() != 0.0 {
+            return Ok(number_val.to_string()); // Return decimal representation for fractional
+        }
+
+        // Convert integer to specified radix
+        let mut result = String::new();
+        let mut num = number_val.abs() as u64;
+        let radix_u64 = radix as u64;
+
+        if num == 0 {
+            result.push('0');
+        } else {
+            while num > 0 {
+                let digit = (num % radix_u64) as u8;
+                let ch = if digit < 10 {
+                    (b'0' + digit) as char
+                } else {
+                    (b'a' + (digit - 10)) as char
+                };
+                result.insert(0, ch);
+                num /= radix_u64;
+            }
+        }
+
+        if number_val.is_sign_negative() && number_val != 0.0 {
+            result.insert(0, '-');
+        }
+
+        Ok(result)
     }
 
     /// Map a function index to a builtin capability string if it corresponds to a builtin.

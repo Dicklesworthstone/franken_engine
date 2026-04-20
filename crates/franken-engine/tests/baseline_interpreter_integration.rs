@@ -10409,3 +10409,210 @@ fn console_output_hostcall_bounds_capability_based() {
     assert_eq!(console_output[2].message, "hostcall_log2");
     assert_eq!(console_output[2].level, ConsoleLevel::Log);
 }
+
+// ============================================================================
+// Builtin Deduplication Tests (bd-kn1yy)
+// ============================================================================
+
+#[test]
+fn math_random_builtin_ids_produce_deterministic_results() {
+    // Test that both Math.random builtin IDs (56 and 361) produce deterministic results
+    // and use the same unified implementation
+    let create_math_random_module = |func_index: u32| {
+        let mut module = test_module(vec![
+            Ir3Instruction::CallFunction {
+                func_index,
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ]);
+        // Add function table entry for the builtin
+        module.function_table.push(Ir3FunctionDesc {
+            name: "Math.random".to_string(),
+            param_count: 0,
+            local_count: 1,
+            body_start: 0,
+        });
+        module
+    };
+
+    // Test builtin ID 56 (first Math.random mapping)
+    let module_56 = create_math_random_module(56);
+    let result_56_a = qjs_run(&module_56).unwrap();
+    let result_56_b = qjs_run(&module_56).unwrap();
+
+    // Test builtin ID 361 (second Math.random mapping)
+    let module_361 = create_math_random_module(361);
+    let result_361_a = qjs_run(&module_361).unwrap();
+    let result_361_b = qjs_run(&module_361).unwrap();
+
+    // Both should return Float values in [0, 1) range
+    match (
+        &result_56_a.value,
+        &result_56_b.value,
+        &result_361_a.value,
+        &result_361_b.value,
+    ) {
+        (Value::Float(f56a), Value::Float(f56b), Value::Float(f361a), Value::Float(f361b)) => {
+            let vals = [f56a.inner(), f56b.inner(), f361a.inner(), f361b.inner()];
+
+            // Verify all values are in [0, 1) range (should not equal 1.0)
+            for (i, &val) in vals.iter().enumerate() {
+                assert!(
+                    val >= 0.0 && val < 1.0,
+                    "Math.random value {} is not in [0, 1) range: {}",
+                    i,
+                    val
+                );
+                assert!(
+                    val.is_finite(),
+                    "Math.random value {} is not finite: {}",
+                    i,
+                    val
+                );
+            }
+
+            // Deterministic: same execution should produce same results
+            assert_eq!(
+                f56a.inner(),
+                f56b.inner(),
+                "Math.random builtin ID 56 not deterministic"
+            );
+            assert_eq!(
+                f361a.inner(),
+                f361b.inner(),
+                "Math.random builtin ID 361 not deterministic"
+            );
+
+            // Both builtin IDs should use same implementation (same results)
+            assert_eq!(
+                f56a.inner(),
+                f361a.inner(),
+                "Math.random builtin IDs produce different values"
+            );
+        }
+        _ => panic!("Math.random should return Float values"),
+    }
+}
+
+#[test]
+fn number_to_string_builtin_ids_consistent_radix_handling() {
+    // Test that both Number.toString builtin IDs (196 and 343) handle radix consistently
+    let create_number_tostring_module = |func_index: u32, number: i64, radix: i64| {
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadInt {
+                dst: 0,
+                value: number,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            Ir3Instruction::CallFunction {
+                func_index,
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        // Add function table entry for the builtin
+        module.function_table.push(Ir3FunctionDesc {
+            name: "Number.prototype.toString".to_string(),
+            param_count: 2,
+            local_count: 3,
+            body_start: 0,
+        });
+        module
+    };
+
+    // Test cases: [number, radix, expected_behavior]
+    let test_cases = [
+        (42, 10, "42"),    // Decimal
+        (42, 16, "2a"),    // Hexadecimal
+        (42, 2, "101010"), // Binary
+        (0, 16, "0"),      // Zero in any base
+        (-42, 10, "-42"),  // Negative decimal
+        (-42, 16, "-2a"),  // Negative hex
+    ];
+
+    for (number, radix, expected) in test_cases {
+        // Test builtin ID 196 (first NumberPrototypeToString mapping)
+        let module_196 = create_number_tostring_module(196, number, radix);
+        let result_196 = qjs_run(&module_196).unwrap();
+
+        // Test builtin ID 343 (second NumberPrototypeToString mapping)
+        let module_343 = create_number_tostring_module(343, number, radix);
+        let result_343 = qjs_run(&module_343).unwrap();
+
+        // Both should produce the same result
+        match (&result_196.value, &result_343.value) {
+            (Value::Str(s196), Value::Str(s343)) => {
+                assert_eq!(
+                    s196, s343,
+                    "Number.toString({}, {}) produces inconsistent results: {} vs {}",
+                    number, radix, s196, s343
+                );
+                assert_eq!(
+                    s196, expected,
+                    "Number.toString({}, {}) = {}, expected {}",
+                    number, radix, s196, expected
+                );
+            }
+            _ => panic!("Number.toString should return String values"),
+        }
+    }
+}
+
+#[test]
+fn number_to_string_invalid_radix_handling() {
+    // Test that invalid radix values are handled consistently (should error, not clamp)
+    let create_invalid_radix_module = |func_index: u32, radix: i64| {
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: radix,
+            },
+            Ir3Instruction::CallFunction {
+                func_index,
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ]);
+        module.function_table.push(Ir3FunctionDesc {
+            name: "Number.prototype.toString".to_string(),
+            param_count: 2,
+            local_count: 3,
+            body_start: 0,
+        });
+        module
+    };
+
+    // Test invalid radix values (< 2 or > 36)
+    let invalid_radices = [1, 37, 50, -5];
+
+    for radix in invalid_radices {
+        // Both builtin IDs should handle invalid radix the same way
+        let result_196 = qjs_run(&create_invalid_radix_module(196, radix)).unwrap();
+        let result_343 = qjs_run(&create_invalid_radix_module(343, radix)).unwrap();
+
+        match (&result_196.value, &result_343.value) {
+            (Value::Str(s196), Value::Str(s343)) => {
+                // Should both return RangeError for invalid radix (spec-compliant)
+                assert_eq!(
+                    s196, "RangeError",
+                    "Number.toString with invalid radix {} should return RangeError, got {}",
+                    radix, s196
+                );
+                assert_eq!(
+                    s196, s343,
+                    "Number.toString invalid radix {} handling inconsistent: {} vs {}",
+                    radix, s196, s343
+                );
+            }
+            _ => panic!("Number.toString should return String values"),
+        }
+    }
+}

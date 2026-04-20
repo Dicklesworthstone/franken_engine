@@ -922,7 +922,9 @@ mod tests {
             ForbiddenCallCategory::DirectTime,
         ];
         for cat in &categories {
+            // SAFETY: ForbiddenCallCategory derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(cat).unwrap();
+            // SAFETY: JSON was just produced by valid ForbiddenCallCategory serialization
             let restored: ForbiddenCallCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(*cat, restored);
         }
@@ -938,7 +940,9 @@ mod tests {
             witness: "w".to_string(),
             line: 42,
         };
+        // SAFETY: Exemption derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ex).unwrap();
+        // SAFETY: JSON was just produced by valid Exemption serialization
         let restored: Exemption = serde_json::from_str(&json).unwrap();
         assert_eq!(ex, restored);
     }
@@ -956,7 +960,9 @@ mod tests {
             suggested_alternative: "Use FileSystemCap".to_string(),
             exempted: false,
         };
+        // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&finding).unwrap();
+        // SAFETY: JSON was just produced by valid AuditFinding serialization
         let restored: AuditFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(finding, restored);
     }
@@ -970,7 +976,9 @@ mod tests {
             modules_audited: vec!["m".to_string()],
             passed: true,
         };
+        // SAFETY: AuditResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by valid AuditResult serialization
         let restored: AuditResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
@@ -978,7 +986,9 @@ mod tests {
     #[test]
     fn audit_config_serialization_round_trip() {
         let config = AuditConfig::standard();
+        // SAFETY: AuditConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by valid AuditConfig serialization
         let restored: AuditConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }

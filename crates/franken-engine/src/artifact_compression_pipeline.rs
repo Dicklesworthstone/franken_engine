@@ -1146,7 +1146,11 @@ mod tests {
     #[test]
     fn algorithm_serde_roundtrip() {
         for alg in CompressionAlgorithm::ALL {
+            // SAFETY: CompressionAlgorithm derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(alg).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid CompressionAlgorithm,
+            // so from_str back to CompressionAlgorithm cannot fail (valid format + matching schema).
             let back: CompressionAlgorithm = serde_json::from_str(&json).unwrap();
             assert_eq!(*alg, back);
         }
@@ -1183,7 +1187,11 @@ mod tests {
     #[test]
     fn category_serde_roundtrip() {
         for cat in ArtifactCategory::ALL {
+            // SAFETY: ArtifactCategory derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(cat).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ArtifactCategory,
+            // so from_str back to ArtifactCategory cannot fail (valid format + matching schema).
             let back: ArtifactCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(*cat, back);
         }
@@ -1291,7 +1299,11 @@ mod tests {
     #[test]
     fn descriptor_serde_roundtrip() {
         let d = make_descriptor("art-1", ArtifactCategory::Aot, 2048);
+        // SAFETY: ArtifactDescriptor derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ArtifactDescriptor,
+        // so from_str back to ArtifactDescriptor cannot fail (valid format + matching schema).
         let back: ArtifactDescriptor = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }
@@ -1349,7 +1361,11 @@ mod tests {
             1400,
             test_epoch(),
         );
+        // SAFETY: RestorationRecipe derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&recipe).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RestorationRecipe,
+        // so from_str back to RestorationRecipe cannot fail (valid format + matching schema).
         let back: RestorationRecipe = serde_json::from_str(&json).unwrap();
         assert_eq!(recipe, back);
     }
@@ -1390,7 +1406,11 @@ mod tests {
             2,
             test_epoch(),
         );
+        // SAFETY: DedupReceipt derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DedupReceipt,
+        // so from_str back to DedupReceipt cannot fail (valid format + matching schema).
         let back: DedupReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }

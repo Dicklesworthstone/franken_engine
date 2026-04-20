@@ -2955,6 +2955,7 @@ mod tests {
         };
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
+        // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result.evaluation.unwrap();
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "divergence_trace");
@@ -2972,6 +2973,7 @@ mod tests {
         };
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
+        // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result.evaluation.unwrap();
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "capability_violation");
@@ -2987,6 +2989,7 @@ mod tests {
         };
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
+        // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result.evaluation.unwrap();
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "risk_score");
@@ -3061,6 +3064,7 @@ mod tests {
 
     #[test]
     fn receipt_id_differs_by_zone() {
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_a = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native",
@@ -3069,6 +3073,7 @@ mod tests {
             "zone-a",
         )
         .unwrap();
+        // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b = DemotionReceipt::derive_receipt_id(
             &test_slot(),
             "native",

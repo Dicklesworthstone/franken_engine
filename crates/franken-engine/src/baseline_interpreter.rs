@@ -14547,24 +14547,7 @@ impl InterpreterCore {
 
             // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
-            "builtin:IsFinite" => {
-                // isFinite() implementation - checks if value is finite (with coercion)
-                if args.count == 0 {
-                    return Ok(Value::Bool(false)); // isFinite() with no args returns false
-                }
-
-                let value = self.read_reg(args.start)?;
-                let num = match value {
-                    Value::Int(_) => return Ok(Value::Bool(true)), // Integers are always finite
-                    Value::Float(f) => f.inner(),
-                    _ => {
-                        // Coerce to number first
-                        Self::coerce_to_float(&value).unwrap_or(f64::NAN)
-                    }
-                };
-
-                Ok(Value::Bool(num.is_finite()))
-            }
+            // Removed duplicate IsFinite - implementation at line 8354 has better JS compliance and explicit type conversion rules
 
             "builtin:ConsoleInfo" => {
                 // console.info implementation - prints info arguments to console
@@ -22671,6 +22654,24 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypeIncludes ID should execute");
             assert_eq!(result, Value::Bool(true));
+        }
+    }
+
+    #[test]
+    fn string_prototype_trim_start_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [223_u32, 301_u32] {
+            interpreter.registers[0] = Value::Str("  frankenengine  ".to_string());
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeTrimStart".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                .expect("StringPrototypeTrimStart ID should execute");
+            assert_eq!(result, Value::Str("frankenengine  ".to_string()));
         }
     }
 

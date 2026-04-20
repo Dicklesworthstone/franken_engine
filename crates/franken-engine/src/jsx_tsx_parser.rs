@@ -1540,6 +1540,7 @@ mod tests {
                 assert!(!el.self_closing);
                 assert_eq!(el.children.len(), 1);
             }
+            // SAFETY: Test validates JSX parsing produces element node for "<div>hello</div>"
             _ => panic!("expected element"),
         }
     }

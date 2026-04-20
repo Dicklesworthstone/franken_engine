@@ -1191,6 +1191,7 @@ mod tests {
     fn disruption_track_execution_serde_roundtrip() {
         let evidence = passing_gate_evidence();
         let schema = default_schema();
+        // SAFETY: Test with valid evidence and schema should succeed
         let execution = execute_disruption_track(
             &evidence,
             &schema,
@@ -1198,7 +1199,9 @@ mod tests {
             "test-env".to_string(),
         )
         .unwrap();
+        // SAFETY: DisruptionTrackExecution derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&execution).unwrap();
+        // SAFETY: JSON was just produced by valid DisruptionTrackExecution serialization
         let back: DisruptionTrackExecution = serde_json::from_str(&json).unwrap();
         assert_eq!(execution, back);
     }
@@ -1209,7 +1212,9 @@ mod tests {
             gate_id: "bd-1ze".to_string(),
             reason: "timeout".to_string(),
         };
+        // SAFETY: DisruptionTrackError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&error).unwrap();
+        // SAFETY: JSON was just produced by valid DisruptionTrackError serialization
         let back: DisruptionTrackError = serde_json::from_str(&json).unwrap();
         assert_eq!(error, back);
     }
@@ -1225,7 +1230,9 @@ mod tests {
             track_status: DisruptionTrackStatus::Pass,
             error_message: None,
         };
+        // SAFETY: DisruptionTrackLogEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by valid DisruptionTrackLogEntry serialization
         let back: DisruptionTrackLogEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, back);
     }

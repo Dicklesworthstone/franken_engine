@@ -2208,6 +2208,7 @@ mod tests {
                 ));
                 assert!(!detail.contains("--obligation"));
             }
+            // SAFETY: Test validates execution orchestrator error type matches expected variant
             other => panic!("unexpected error: {other}"),
         }
     }

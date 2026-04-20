@@ -24,9 +24,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::budgeted_optimization::{
     BudgetEnvelope, BudgetKind, BudgetLimit, BudgetedOptimizationStack, CampaignStatus,
-    EGraphSnapshot, EGraphSnapshotParts, ExtractionPolicy, ExtractionResult, InterferenceCheck, InterferenceKind,
-    OPTIMIZATION_SCHEMA_VERSION, OptimizationCampaign, OptimizationError, OptimizationEventKind,
-    OptimizationSummary, RewriteFamily, RewriteRule, RollbackArtifact, SaturationOutcome,
+    EGraphSnapshot, EGraphSnapshotParts, ExtractionPolicy, ExtractionResult, InterferenceCheck,
+    InterferenceKind, OPTIMIZATION_SCHEMA_VERSION, OptimizationCampaign, OptimizationError,
+    OptimizationEventKind, OptimizationSummary, RewriteFamily, RewriteRule, RollbackArtifact,
+    SaturationOutcome,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 
@@ -1118,7 +1119,7 @@ fn egraph_snapshot_pathological_growth_detection() {
     // Normal growth: 400 nodes / 5 iterations = 80 nodes/iter (below threshold)
     let normal_growth = EGraphSnapshot::new(EGraphSnapshotParts {
         class_count: 100,
-        node_count: 500, // 400 node increase
+        node_count: 500,     // 400 node increase
         iteration_count: 10, // 5 iter increase
         rewrite_count: 60,
         outcome: SaturationOutcome::Saturated,
@@ -1133,7 +1134,7 @@ fn egraph_snapshot_pathological_growth_detection() {
     // Pathological growth: 50,005 nodes / 5 iterations = 10,001 nodes/iter (above threshold)
     let pathological_growth = EGraphSnapshot::new(EGraphSnapshotParts {
         class_count: 5000,
-        node_count: 50_105, // 50,005 node increase
+        node_count: 50_105,  // 50,005 node increase
         iteration_count: 10, // 5 iter increase
         rewrite_count: 500,
         outcome: SaturationOutcome::NodeLimitReached,

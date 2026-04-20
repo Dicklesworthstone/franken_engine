@@ -11698,7 +11698,7 @@ impl InterpreterCore {
 
                             // Build result by reversing digits
                             let mut result = String::with_capacity(
-                                digits.len() + if int_val < 0 { 1 } else { 0 }
+                                digits.len() + if int_val < 0 { 1 } else { 0 },
                             );
                             if int_val < 0 {
                                 result.push('-');

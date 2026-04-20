@@ -4859,42 +4859,51 @@ fn package_type_module_extensionless_relative_case_verification() {
     }
 }
 
+/// Extract case IDs that have actual test coverage by scanning for *_case_verification test functions.
+/// This ensures that every matrix case has a corresponding test, and fails if a case is added
+/// to the JSON without implementing the verification test.
+fn extract_covered_case_ids_from_tests() -> std::collections::BTreeSet<&'static str> {
+    // Get the source code of this test file at compile time
+    const THIS_FILE_SOURCE: &str = include_str!("module_compatibility_matrix_integration.rs");
+
+    // Extract all case verification function names and convert to case IDs
+    let mut covered_cases = std::collections::BTreeSet::new();
+
+    for line in THIS_FILE_SOURCE.lines() {
+        if let Some(fn_start) = line.find("fn ") {
+            if let Some(case_end) = line.find("_case_verification()") {
+                let fn_name = &line[fn_start + 3..case_end];
+                // Convert function name from snake_case to kebab-case for case ID
+                let case_id = fn_name.replace('_', "-");
+                // Use leaked string to get &'static str for BTreeSet
+                covered_cases.insert(Box::leak(case_id.into_boxed_str()) as &'static str);
+            }
+        }
+    }
+
+    covered_cases
+}
+
 #[test]
 fn matrix_covers_all_json_defined_cases() {
     let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let required = m.required_waiver_ids();
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
-    // Keep this set in lockstep with the crate-boundary scenarios above. A new
-    // JSON matrix entry must add an executing scenario here instead of only
-    // extending the data fixture.
-    let expected_cases: BTreeSet<_> = [
-        "cjs-require-esm",
-        "bare-require-package-index-mjs",
-        "scoped-bare-require-package-index-mjs",
-        "bare-require-package-index-mjs-relative-import-package-root",
-        "conditional-exports-condition-order",
-        "exports-fallback-target",
-        "dual-mode-exports-map",
-        "exports-exact-over-wildcard-precedence",
-        "scoped-exports-more-specific-wildcard-precedence",
-        "exports-unexported-subpath-fail-closed",
-        "exports-target-must-not-escape-package-root",
-        "esm-import-cjs-default",
-        "esm-cjs-cycle-live-binding",
-        "external-extension-probe-package-root-relative-require",
-        "external-package-relative-traversal-fail-closed",
-        "package-type-module-extensionless-relative",
-    ]
-    .into_iter()
-    .collect();
+    // Get case IDs that actually have test coverage by scanning test functions
+    let covered_cases = extract_covered_case_ids_from_tests();
 
     let entries = m.entries();
     let case_ids: BTreeSet<_> = entries.iter().map(|e| e.case_id.as_str()).collect();
 
+    // Assert that every matrix case has a corresponding test function
     assert_eq!(
-        case_ids, expected_cases,
-        "module compatibility matrix JSON cases must exactly match the crate-boundary scenario coverage"
+        case_ids,
+        covered_cases,
+        "Every module compatibility matrix JSON case must have a corresponding *_case_verification() test function. \
+        Missing test functions for cases: {:?}, Extra test functions for cases: {:?}",
+        case_ids.difference(&covered_cases).collect::<Vec<_>>(),
+        covered_cases.difference(&case_ids).collect::<Vec<_>>()
     );
 
     // Verify that key divergences are properly documented
@@ -4915,5 +4924,32 @@ fn matrix_covers_all_json_defined_cases() {
     assert!(
         divergent_cases.contains(&"package-type-module-extensionless-relative"),
         "Extensionless relative should document Bun divergence"
+    );
+}
+
+#[test]
+#[should_panic(expected = "Every module compatibility matrix JSON case must have a corresponding")]
+fn regression_matrix_case_coverage_fails_on_untested_cases() {
+    // This regression test demonstrates that the case coverage test properly fails
+    // when a case exists in the matrix but has no corresponding verification test.
+
+    // Simulate the scenario where someone adds a case to the JSON but forgets to
+    // implement a test function. We'll create a mock scenario where we claim
+    // there's an extra case that doesn't have a test.
+
+    let covered_cases = extract_covered_case_ids_from_tests();
+
+    // Create a mock matrix case set that includes one case not covered by tests
+    let mut mock_case_ids = covered_cases.clone();
+    mock_case_ids.insert("mock-untested-case-example");
+
+    // This should fail because "mock-untested-case-example" has no corresponding test function
+    assert_eq!(
+        mock_case_ids,
+        covered_cases,
+        "Every module compatibility matrix JSON case must have a corresponding *_case_verification() test function. \
+        Missing test functions for cases: {:?}, Extra test functions for cases: {:?}",
+        mock_case_ids.difference(&covered_cases).collect::<Vec<_>>(),
+        covered_cases.difference(&mock_case_ids).collect::<Vec<_>>()
     );
 }

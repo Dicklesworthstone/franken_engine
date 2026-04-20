@@ -2234,7 +2234,9 @@ mod tests {
             value_label: Label::TopSecret,
             scope_max: Label::Internal,
         };
+        // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ScopeError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
@@ -2253,9 +2255,13 @@ mod tests {
     fn boundary_env_value_number_extremes() {
         let min_val = EnvValue::Number(i64::MIN);
         let max_val = EnvValue::Number(i64::MAX);
+        // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
         let json_min = serde_json::to_string(&min_val).unwrap();
+        // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
         let json_max = serde_json::to_string(&max_val).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back_min: EnvValue = serde_json::from_str(&json_min).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back_max: EnvValue = serde_json::from_str(&json_max).unwrap();
         assert_eq!(back_min, min_val);
         assert_eq!(back_max, max_val);
@@ -2265,9 +2271,13 @@ mod tests {
     fn boundary_env_value_objectref_zero_and_max() {
         let zero = EnvValue::ObjectRef(0);
         let max = EnvValue::ObjectRef(u64::MAX);
+        // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
         let j0 = serde_json::to_string(&zero).unwrap();
+        // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
         let jm = serde_json::to_string(&max).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let b0: EnvValue = serde_json::from_str(&j0).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let bm: EnvValue = serde_json::from_str(&jm).unwrap();
         assert_eq!(b0, zero);
         assert_eq!(bm, max);
@@ -2277,7 +2287,9 @@ mod tests {
     fn boundary_closure_handle_zero() {
         let h = ClosureHandle(0);
         assert_eq!(h.0, 0);
+        // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ClosureHandle = serde_json::from_str(&json).unwrap();
         assert_eq!(h, back);
     }

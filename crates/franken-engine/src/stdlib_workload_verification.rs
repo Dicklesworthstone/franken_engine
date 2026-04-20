@@ -1227,7 +1227,9 @@ mod tests {
             WorkloadOutcome::Timeout,
         ];
         for o in &outcomes {
+            // SAFETY: WorkloadOutcome derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(o).unwrap();
+            // SAFETY: JSON was just produced by valid WorkloadOutcome serialization
             let decoded: WorkloadOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(*o, decoded);
         }

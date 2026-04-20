@@ -1661,7 +1661,9 @@ mod tests {
     #[test]
     fn registry_serde_empty_enrichment() {
         let reg = DomainRegistry::new();
+        // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: JSON was produced from the same empty DomainRegistry schema immediately above.
         let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
         assert!(restored.is_empty());
         assert_eq!(restored.allocation_sequence(), 0);
@@ -1670,16 +1672,22 @@ mod tests {
     #[test]
     fn registry_serde_after_reset_enrichment() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 5000)
             .unwrap();
+        // SAFETY: Allocation is within the registered 5000-byte IrArena budget.
         reg.allocate(AllocationDomain::IrArena, 3000).unwrap();
+        // SAFETY: IrArena was registered above and can be reset.
         reg.reset_domain(AllocationDomain::IrArena).unwrap();
 
+        // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: JSON was produced from the same DomainRegistry schema immediately above.
         let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(
             restored
                 .get(&AllocationDomain::IrArena)
+                // SAFETY: IrArena was registered before serialization and must survive roundtrip.
                 .unwrap()
                 .budget
                 .used_bytes,

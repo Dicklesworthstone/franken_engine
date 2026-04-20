@@ -858,7 +858,11 @@ mod tests {
     #[test]
     fn doc_source_serde_roundtrip() {
         let s = DocSource::OperatorDocs;
+        // SAFETY: DocSource derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DocSource,
+        // so from_str back to DocSource cannot fail (valid format + matching schema).
         let back: DocSource = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -896,7 +900,11 @@ mod tests {
     #[test]
     fn drift_serde_roundtrip() {
         let d = DriftClass::BrokenExample;
+        // SAFETY: DriftClass derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&d).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DriftClass,
+        // so from_str back to DriftClass cannot fail (valid format + matching schema).
         let back: DriftClass = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
     }

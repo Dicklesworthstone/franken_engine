@@ -1102,7 +1102,11 @@ mod tests {
     #[test]
     fn strategy_serde_roundtrip() {
         for s in SynthesisStrategy::ALL {
+            // SAFETY: SynthesisStrategy derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid SynthesisStrategy,
+            // so from_str back to SynthesisStrategy cannot fail (valid format + matching schema).
             let back: SynthesisStrategy = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }

@@ -1227,7 +1227,11 @@ mod tests {
     #[test]
     fn test_tsconfig_serde_roundtrip() {
         let snap = TsconfigSnapshot::default();
+        // SAFETY: TsconfigSnapshot derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&snap).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsconfigSnapshot,
+        // so from_str back to TsconfigSnapshot cannot fail (valid format + matching schema).
         let rt: TsconfigSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, rt);
     }
@@ -1286,7 +1290,11 @@ mod tests {
             resolved_content_hash: Some("sha256:abc".into()),
             probe_count: 3,
         };
+        // SAFETY: TsResolutionReplayEntry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TsResolutionReplayEntry,
+        // so from_str back to TsResolutionReplayEntry cannot fail (valid format + matching schema).
         let rt: TsResolutionReplayEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, rt);
     }

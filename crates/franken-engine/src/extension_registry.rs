@@ -2327,7 +2327,9 @@ mod tests {
             EventOutcome::Denied,
             EventOutcome::Error,
         ] {
+            // SAFETY: EventOutcome derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&o).unwrap();
+            // SAFETY: JSON was just produced by valid EventOutcome serialization
             let restored: EventOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, o);
         }

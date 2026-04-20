@@ -1051,6 +1051,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(5000);
 
+        // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
         assert_eq!(mgr.events().len(), 1);
 

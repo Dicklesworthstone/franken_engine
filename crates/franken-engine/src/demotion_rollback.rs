@@ -1487,8 +1487,12 @@ mod tests {
         assert!(result.trigger_fired);
         assert!(monitor.is_demotion_triggered());
 
+        // SAFETY: Test verifies demotion trigger conditions were met,
+        // so evaluation field must be Some (monitor.is_demotion_triggered() == true).
         let eval = result.evaluation.unwrap();
         assert_eq!(eval.severity, DemotionSeverity::Critical);
+        // SAFETY: Test verifies critical demotion was triggered,
+        // so reason field must be Some (severity is Critical).
         match eval.reason.unwrap() {
             DemotionReason::SemanticDivergence {
                 divergence_count, ..

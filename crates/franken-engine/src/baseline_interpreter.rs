@@ -12264,67 +12264,7 @@ impl InterpreterCore {
 
             // StringPrototypePadStart: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:StringPrototypePadEnd" => {
-                // String.prototype.padEnd(targetLength[, padString]) implementation
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
-                        }
-                    }
-                };
-
-                let target_length = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => f.inner().max(0.0) as usize,
-                        _ => 0,
-                    }
-                } else {
-                    return Ok(Value::Str(string_val));
-                };
-
-                let pad_string = if args.count >= 3 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => " ".to_string(), // Default to space
-                        _ => " ".to_string(),
-                    }
-                } else {
-                    " ".to_string() // Default to space
-                };
-
-                if pad_string.is_empty() || string_val.len() >= target_length {
-                    return Ok(Value::Str(string_val));
-                }
-
-                let chars_needed = target_length - string_val.len();
-                let mut padding = String::new();
-
-                // Repeat pad_string to fill the needed characters
-                while padding.len() < chars_needed {
-                    padding.push_str(&pad_string);
-                }
-
-                // Truncate if necessary
-                if padding.len() > chars_needed {
-                    padding.truncate(chars_needed);
-                }
-
-                Ok(Value::Str(format!("{}{}", string_val, padding)))
-            }
+            // StringPrototypePadEnd: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:ObjectPrototypeHasOwnProperty" => {
                 // Object.prototype.hasOwnProperty(prop) implementation

@@ -670,7 +670,11 @@ mod tests {
             BoundaryOutcome::Timeout,
             BoundaryOutcome::Cancelled,
         ] {
+            // SAFETY: BoundaryOutcome derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&outcome).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid BoundaryOutcome,
+            // so from_str back to BoundaryOutcome cannot fail (valid format + matching schema).
             let round: BoundaryOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(outcome, round);
         }

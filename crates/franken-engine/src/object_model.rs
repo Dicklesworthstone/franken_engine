@@ -2287,6 +2287,8 @@ mod tests {
     #[test]
     fn define_own_property_new() {
         let mut obj = OrdinaryObject::default();
+        // SAFETY: Test creates valid PropertyDescriptor with data property.
+        // define_own_property only fails on invariant violations (none expected here).
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
             .unwrap();

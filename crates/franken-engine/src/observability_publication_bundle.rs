@@ -1259,22 +1259,27 @@ fn build_support_bundle_attestation(
         bead_id: BEAD_ID.to_string(),
         attested,
         shipped_capture_mode,
+        // SAFETY: Required observability file key exists in artifact_hashes map from bundle creation.
         quality_report_hash: artifact_hashes
             .get(OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE)
             .cloned()
             .unwrap(),
+        // SAFETY: Required supremacy matrix file key exists in artifact_hashes map from bundle creation.
         supremacy_matrix_hash: artifact_hashes
             .get(OBSERVABILITY_ON_SUPREMACY_MATRIX_FILE)
             .cloned()
             .unwrap(),
+        // SAFETY: Required claim delta file key exists in artifact_hashes map from bundle creation.
         claim_delta_hash: artifact_hashes
             .get(OBSERVABILITY_CLAIM_DELTA_REPORT_FILE)
             .cloned()
             .unwrap(),
+        // SAFETY: Required telemetry demotion receipts file key exists in artifact_hashes map from bundle creation.
         demotion_receipts_hash: artifact_hashes
             .get(TELEMETRY_DEMOTION_RECEIPTS_FILE)
             .cloned()
             .unwrap(),
+        // SAFETY: Required publication policy file key exists in artifact_hashes map from bundle creation.
         publication_policy_hash: artifact_hashes
             .get(OBSERVABILITY_PUBLICATION_POLICY_FILE)
             .cloned()

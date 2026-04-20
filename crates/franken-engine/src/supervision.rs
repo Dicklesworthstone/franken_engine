@@ -520,6 +520,7 @@ mod tests {
     #[test]
     fn failure_with_budget_triggers_restart() {
         let mut sup = test_supervisor();
+        // SAFETY: Test with valid service and error budget should succeed
         let action = sup.report_failure("svc-a", "crash", 10).unwrap();
         assert_eq!(action, SupervisorAction::Restart);
         assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Running));

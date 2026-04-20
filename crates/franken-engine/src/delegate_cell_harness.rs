@@ -1847,6 +1847,8 @@ mod tests {
                 assert_eq!(actual_hash, ContentHash::compute(b"wrong"));
                 assert_ne!(expected_hash, actual_hash);
             }
+            // SAFETY: Test-only panic to validate replay verification mismatch detection.
+            // Test expects Mismatch when replay output differs from recorded output.
             _ => panic!("expected Mismatch"),
         }
     }

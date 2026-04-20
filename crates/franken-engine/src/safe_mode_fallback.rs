@@ -158,13 +158,23 @@ pub struct RingBufferEntry {
 impl EvidenceRingBuffer {
     /// Create a ring buffer with the specified capacity.
     pub fn new(capacity: usize) -> Self {
-        let capacity = capacity.max(1);
+        let capacity = Self::normalize_capacity(capacity);
         Self {
             entries: Vec::with_capacity(capacity),
             capacity,
             write_pos: 0,
             total_written: 0,
         }
+    }
+
+    /// Normalize requested capacity to the effective bounded fallback capacity.
+    pub const fn normalize_capacity(capacity: usize) -> usize {
+        if capacity == 0 { 1 } else { capacity }
+    }
+
+    /// Effective capacity of the ring buffer.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Push an entry into the ring buffer (overwrites oldest on overflow).
@@ -272,9 +282,11 @@ impl Default for SafeModeManager {
 impl SafeModeManager {
     /// Create a new manager with the specified ring buffer capacity.
     pub fn new(ring_buffer_capacity: usize) -> Self {
+        let ring_buffer = EvidenceRingBuffer::new(ring_buffer_capacity);
+        let ring_buffer_capacity = ring_buffer.capacity();
         Self {
             status: BTreeMap::new(),
-            ring_buffer: EvidenceRingBuffer::new(ring_buffer_capacity),
+            ring_buffer,
             ring_buffer_capacity,
             high_impact_blocked: false,
             extensions_refused: false,
@@ -1553,6 +1565,7 @@ mod tests {
     #[test]
     fn ring_buffer_zero_capacity_normalizes_to_single_slot() {
         let mut rb = EvidenceRingBuffer::new(0);
+        assert_eq!(rb.capacity(), 1);
         rb.push(RingBufferEntry {
             trace_id: "t1".to_string(),
             event: "e1".to_string(),
@@ -1699,6 +1712,29 @@ mod tests {
             mgr.status(FailureType::EvidenceLedgerFull),
             SafeModeStatus::Active
         );
+    }
+
+    #[test]
+    fn manager_zero_capacity_reports_effective_single_slot() {
+        let mut mgr = SafeModeManager::new(0);
+        let action = mgr.handle_evidence_ledger_full("trace-1", "ledger_capacity_exceeded");
+
+        assert!(matches!(
+            action,
+            SafeModeAction::RingBufferFallback {
+                capacity: 1,
+                high_impact_blocked: true
+            }
+        ));
+        assert_eq!(mgr.ring_buffer_capacity, 1);
+        assert_eq!(mgr.ring_buffer().capacity(), 1);
+
+        mgr.write_ring_buffer_entry("trace-1", "ev1", "ok", "comp");
+        mgr.write_ring_buffer_entry("trace-2", "ev2", "ok", "comp");
+
+        let entries = mgr.ring_buffer().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].trace_id, "trace-2");
     }
 
     #[test]

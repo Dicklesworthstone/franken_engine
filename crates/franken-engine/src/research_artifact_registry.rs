@@ -142,6 +142,67 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the fuzzing harness manifest entry.
+    pub fn with_fuzzing_harness_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "fuzzing-harness-manifest-0001".to_string(),
+            title: "Fuzzing Harness Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Testing Team".to_string()],
+            abstract_text: "Comprehensive fuzzing strategy manifest defining target priorities, coverage instrumentation, corpus sources, crash triage workflow, and MTBC baselines for security testing."
+                .to_string(),
+            bundle_path: "docs/FUZZING_HARNESS_MANIFEST.md".to_string(),
+            artifact_type: "testing_strategy".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the benchmark reproducibility audit entry.
+    pub fn with_benchmark_reproducibility_audit_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "benchmark-reproducibility-audit-0001".to_string(),
+            title: "Benchmark Reproducibility Audit".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Performance Team".to_string()],
+            abstract_text:
+                "Audit framework for benchmark environment pinning, workload manifests, budgets, and peer replication logs."
+                    .to_string(),
+            bundle_path: "docs/BENCHMARK_REPRODUCIBILITY_AUDIT.md".to_string(),
+            artifact_type: "benchmark_audit".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the data provenance bundle entry.
+    pub fn with_data_provenance_bundle_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "data-provenance-bundle-0001".to_string(),
+            title: "Data Provenance Bundle".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text: "Provenance skeleton for source attribution, hash chains, temporal bounds, signatures, and replay rights."
+                .to_string(),
+            bundle_path: "docs/DATA_PROVENANCE_BUNDLE.md".to_string(),
+            artifact_type: "provenance_bundle".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts
@@ -292,5 +353,33 @@ mod tests {
                 .bundle_path
                 .ends_with("VULNERABILITY_DISCLOSURE_POLICY.md")
         );
+    }
+
+    #[test]
+    fn test_benchmark_reproducibility_audit_entry() {
+        let registry = ResearchArtifactRegistry::with_benchmark_reproducibility_audit_entry();
+
+        let artifact = registry
+            .get_artifact("benchmark-reproducibility-audit-0001")
+            .expect("expected benchmark reproducibility audit artifact");
+        assert_eq!(artifact.artifact_type, "benchmark_audit");
+        assert_eq!(artifact.title, "Benchmark Reproducibility Audit");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("BENCHMARK_REPRODUCIBILITY_AUDIT.md")
+        );
+    }
+
+    #[test]
+    fn test_data_provenance_bundle_entry() {
+        let registry = ResearchArtifactRegistry::with_data_provenance_bundle_entry();
+
+        let artifact = registry
+            .get_artifact("data-provenance-bundle-0001")
+            .expect("expected data provenance bundle artifact");
+        assert_eq!(artifact.artifact_type, "provenance_bundle");
+        assert_eq!(artifact.title, "Data Provenance Bundle");
+        assert!(artifact.bundle_path.ends_with("DATA_PROVENANCE_BUNDLE.md"));
     }
 }

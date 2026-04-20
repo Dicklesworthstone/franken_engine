@@ -1860,6 +1860,7 @@ mod tests {
                 assert_eq!(enforcement_point, point);
                 assert_eq!(checks_performed, 2);
             } else {
+                // SAFETY: Test validates revocation enforcement results are cleared for valid tokens
                 panic!("expected cleared");
             }
         }

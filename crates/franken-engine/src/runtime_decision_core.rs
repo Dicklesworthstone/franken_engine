@@ -1517,6 +1517,7 @@ mod tests {
     }
 
     fn make_core() -> RuntimeDecisionCore {
+        // SAFETY: Test helper with valid core name, lanes, and epoch should succeed construction
         RuntimeDecisionCore::new(
             "test-core",
             vec![LaneId::quickjs_native(), LaneId::v8_native()],
@@ -1551,14 +1552,20 @@ mod tests {
     #[test]
     fn lane_id_serde_roundtrip() {
         let lane = LaneId::v8_native();
+        // SAFETY: LaneId derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&lane).unwrap();
         assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
+        // SAFETY: JSON was just produced by to_string of a valid LaneId,
+        // so from_str back to LaneId cannot fail (valid format + matching schema).
         let back: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, back);
     }
 
     #[test]
     fn lane_id_deserialize_accepts_legacy_lineage_labels() {
+        // SAFETY: String literal is valid JSON format for LaneId deserialization.
+        // from_str only fails on invalid JSON or schema mismatch (both impossible here).
         let back: LaneId = serde_json::from_str("\"v8_inspired_native\"").unwrap();
         assert_eq!(back, LaneId::v8_native());
         assert_eq!(back.to_string(), THROUGHPUT_PROFILE_LABEL);
@@ -1604,7 +1611,11 @@ mod tests {
     #[test]
     fn routing_action_serde_roundtrip() {
         let action = RoutingAction::SelectLane(LaneId::quickjs_native());
+        // SAFETY: RoutingAction derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&action).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RoutingAction,
+        // so from_str back to RoutingAction cannot fail (valid format + matching schema).
         let back: RoutingAction = serde_json::from_str(&json).unwrap();
         assert_eq!(action, back);
     }
@@ -1712,6 +1723,7 @@ mod tests {
             format!("select:{DETERMINISTIC_PROFILE_LABEL}"),
             "hold".to_string(),
         ];
+        // SAFETY: Test with valid candidates and policies should succeed selection
         let (best, _loss) = policy
             .select_min_loss_action(&candidates, &posteriors, RegimeEstimate::Normal)
             .unwrap();

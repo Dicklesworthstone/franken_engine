@@ -954,6 +954,7 @@ mod tests {
     #[test]
     fn challenge_validity() {
         let verifier = test_verifier();
+        // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
         let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
         assert!(challenge.is_valid_at(1000));
         assert!(challenge.is_valid_at(1500));
@@ -963,7 +964,9 @@ mod tests {
     #[test]
     fn challenge_canonical_bytes_deterministic() {
         let verifier = test_verifier();
+        // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
         let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        // SAFETY: Same valid parameters as c1; this call verifies deterministic encoding.
         let c2 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
         assert_eq!(c1.canonical_bytes(), c2.canonical_bytes());
     }

@@ -946,6 +946,8 @@ mod tests {
             AllocDomainError::BudgetExceeded { domain, .. } => {
                 assert_eq!(domain, Some(AllocationDomain::ExtensionHeap));
             }
+            // SAFETY: Test-only panic to validate budget exceeded error type.
+            // Test expects BudgetExceeded when allocation exceeds domain budget.
             other => panic!("expected BudgetExceeded, got {other:?}"),
         }
     }

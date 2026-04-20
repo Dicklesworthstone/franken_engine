@@ -1287,7 +1287,11 @@ mod tests {
             fast_controller: "gc_pressure".into(),
             slow_controller: "policy_update".into(),
         };
+        // SAFETY: ControllerPairId derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&pair).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ControllerPairId,
+        // so from_str back to ControllerPairId cannot fail (valid format + matching schema).
         let back: ControllerPairId = serde_json::from_str(&json).unwrap();
         assert_eq!(pair, back);
     }
@@ -1301,7 +1305,11 @@ mod tests {
             sample_count: 50,
             measured_epoch: 1,
         };
+        // SAFETY: ControllerTimescaleProfile derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&profile).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ControllerTimescaleProfile,
+        // so from_str back to ControllerTimescaleProfile cannot fail (valid format + matching schema).
         let back: ControllerTimescaleProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(profile, back);
     }
@@ -1316,7 +1324,11 @@ mod tests {
             ratio_millionths: 10_000_000,
             ratio_basis: RatioBasis::Observation,
         };
+        // SAFETY: TimescaleRatio derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ratio).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TimescaleRatio,
+        // so from_str back to TimescaleRatio cannot fail (valid format + matching schema).
         let back: TimescaleRatio = serde_json::from_str(&json).unwrap();
         assert_eq!(ratio, back);
     }

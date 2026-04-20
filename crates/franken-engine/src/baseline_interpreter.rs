@@ -12752,37 +12752,7 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
 
-            "builtin:ObjectGetPrototypeOf" => {
-                // Object.getPrototypeOf(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Null);
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        // Simplified implementation: check if object has prototype reference
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(proto) = obj.properties.get("__proto__") {
-                                Ok(proto.clone())
-                            } else {
-                                // Default object prototype (simplified)
-                                Ok(Value::Null)
-                            }
-                        } else {
-                            Ok(Value::Null)
-                        }
-                    }
-                    Value::Null | Value::Undefined => {
-                        // Primitive null/undefined throw TypeError in real JS, here return null
-                        Ok(Value::Null)
-                    }
-                    _ => {
-                        // Primitives have their corresponding prototype objects (simplified)
-                        Ok(Value::Null)
-                    }
-                }
-            }
+            // Removed duplicate ObjectGetPrototypeOf - implementation at line ~10941 uses correct prototype field
 
             "builtin:StringPrototypeToWellFormed" => {
                 // String.prototype.toWellFormed() implementation (ES2024)

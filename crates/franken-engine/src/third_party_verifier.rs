@@ -1593,6 +1593,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "latency_sla:s1")
+            // SAFETY: Test-only unwrap expecting latency_sla:s1 check to be present in verification report
             .unwrap();
         assert!(check.passed);
     }

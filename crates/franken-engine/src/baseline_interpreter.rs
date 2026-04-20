@@ -14310,13 +14310,7 @@ impl InterpreterCore {
                 Ok(obj_val) // Return the modified object
             }
 
-            "builtin:StringPrototypeToLowerCase" => {
-                // String.prototype.toLowerCase() implementation
-                let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
-
-                Ok(Value::Str(str_text.to_lowercase()))
-            }
+            // StringPrototypeToLowerCase: Removed duplicate dispatch arm (use first occurrence at line 8124)
 
             "builtin:MathAtanh" => {
                 // Math.atanh(x) implementation (inverse hyperbolic tangent)
@@ -15722,13 +15716,7 @@ impl InterpreterCore {
 
             // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:StringPrototypeToLowerCase" => {
-                // String.prototype.toLowerCase() implementation
-                let this_val = self.read_reg(args.start)?;
-                let str_text = Self::require_object_coercible_to_string(&this_val)?;
-
-                Ok(Value::Str(str_text.to_lowercase()))
-            }
+            // StringPrototypeToLowerCase: Removed duplicate dispatch arm (use first occurrence at line 8124)
 
             // StringPrototypeToUpperCase: Removed duplicate dispatch arm (use first occurrence at line 8137)
 

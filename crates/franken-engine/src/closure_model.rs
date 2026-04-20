@@ -2298,7 +2298,9 @@ mod tests {
     fn boundary_closure_handle_max() {
         let h = ClosureHandle(u32::MAX);
         assert_eq!(h.0, u32::MAX);
+        // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ClosureHandle = serde_json::from_str(&json).unwrap();
         assert_eq!(h, back);
     }
@@ -2318,11 +2320,14 @@ mod tests {
         }
         assert_eq!(chain.depth(), 51); // 1 global + 50 blocks
         // Declare var in deepest — should hoist to global
+        // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
         chain.declare_var("deep".into(), 1).unwrap();
+        // SAFETY: Test gets valid global environment handle; get_env succeeds in controlled test environment.
         let global = chain.get_env(EnvironmentHandle(0)).unwrap();
         assert!(global.get_binding("deep").is_some());
         // Pop all
         for _ in 0..50 {
+            // SAFETY: Test pops valid non-empty scope chain; pop_scope succeeds in controlled test environment.
             chain.pop_scope().unwrap();
         }
         assert_eq!(chain.depth(), 1);
@@ -2333,11 +2338,14 @@ mod tests {
         let mut chain = fresh_chain();
         for i in 0..100u32 {
             let name = format!("v{i}");
+            // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
             chain.declare_var(name, i).unwrap();
         }
+        // SAFETY: Test gets valid global environment handle; get_env succeeds in controlled test environment.
         let global = chain.get_env(EnvironmentHandle(0)).unwrap();
         assert_eq!(global.bindings.len(), 100);
         // BTreeMap keeps them sorted
+        // SAFETY: Test gets first key from non-empty BTreeMap; next succeeds in controlled test environment.
         let first_key = global.bindings.keys().next().unwrap();
         assert_eq!(first_key, "v0");
     }
@@ -2345,7 +2353,9 @@ mod tests {
     #[test]
     fn boundary_scope_id_zero_zero() {
         let sid = ScopeId { depth: 0, index: 0 };
+        // SAFETY: Test serializes known-valid ScopeId; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&sid).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ScopeId = serde_json::from_str(&json).unwrap();
         assert_eq!(sid, back);
     }
@@ -2355,6 +2365,7 @@ mod tests {
     #[test]
     fn duplicate_const_in_same_scope_fails() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid const binding; declare_const succeeds in controlled test environment.
         chain.declare_const("C".into(), 1).unwrap();
         let result = chain.declare_const("C".into(), 2);
         assert!(matches!(result, Err(ScopeError::DuplicateBinding { .. })));

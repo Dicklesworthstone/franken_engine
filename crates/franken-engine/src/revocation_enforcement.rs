@@ -1589,6 +1589,7 @@ mod tests {
                 assert_eq!(denial.target_id, EngineObjectId([1; 32]));
                 assert!(!denial.transitive);
             }
+            // SAFETY: Test validates revocation enforcement denial on first token in batch
             _ => panic!("expected denial on first token"),
         }
         // Only 1 audit event for the direct token check (short-circuits)

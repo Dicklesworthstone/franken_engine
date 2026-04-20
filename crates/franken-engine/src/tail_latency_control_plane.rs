@@ -1598,7 +1598,9 @@ mod tests {
             GuardrailState::NearLimit,
             GuardrailState::FallbackEngaged,
         ] {
+            // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&state).unwrap();
+            // SAFETY: JSON was just produced by valid GuardrailState serialization
             let deserialized: GuardrailState = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, state);
         }

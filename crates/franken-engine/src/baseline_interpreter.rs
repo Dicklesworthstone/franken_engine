@@ -6753,7 +6753,7 @@ impl InterpreterCore {
         }
     }
 
-    /// Dispatch console hostcalls: console.log, console.error, console.warn.
+    /// Dispatch console hostcalls: console.log, console.error, console.warn, console.info.
     ///
     /// Hostcall capabilities:
     /// - `console:log` — console.log(...args)
@@ -6770,6 +6770,7 @@ impl InterpreterCore {
             "console:log" => ConsoleLevel::Log,
             "console:error" => ConsoleLevel::Error,
             "console:warn" => ConsoleLevel::Warn,
+            "console:info" => ConsoleLevel::Info,
             _ => return Ok(Value::Undefined), // Unknown console method
         };
 
@@ -17353,7 +17354,7 @@ impl InterpreterCore {
             353 => Some("builtin:MathFloor".to_string()),
             354 => Some("builtin:MathCeil".to_string()),
             355 => Some("builtin:MathRound".to_string()),
-            356 => Some("builtin:StringPrototypeSplit".to_string()),
+            // 356: Removed duplicate StringPrototypeSplit mapping (use ID 36 instead)
             357 => Some("builtin:ArrayPrototypeMap".to_string()),
             358 => Some("builtin:MathSqrt".to_string()),
             359 => Some("builtin:MathPow".to_string()),
@@ -23559,6 +23560,20 @@ mod tests {
     }
 
     #[test]
+    fn console_info_hostcall_dispatch() {
+        let mut core = quickjs_test_core();
+
+        core.registers[0] = Value::Str("Info hostcall".to_string());
+        core.dispatch_console_hostcall("console:info", RegRange { start: 0, count: 1 })
+            .unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        let console_entry = &core.console_output[0];
+        assert_eq!(console_entry.level, ConsoleLevel::Info);
+        assert_eq!(console_entry.message, "Info hostcall");
+    }
+
+    #[test]
     fn console_builtin_ids_100_102_captured() {
         // Test that the original builtin IDs 100-102 properly capture output
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
@@ -24546,5 +24561,52 @@ mod tests {
         // Verify ConsoleInfo no longer silently drops output as mentioned in audit
         assert!(!core.console_output[0].message.is_empty(),
                "ConsoleInfo should capture output, not silently drop it");
+    }
+
+    #[test]
+    fn string_prototype_split_builtin_id_deduplication_audit_fix() {
+        // Regression test for bd-5wpm4 StringPrototypeSplit deduplication audit
+        // Verifies that ID 36 is the primary mapping, and ID 356 was correctly removed
+        let interpreter = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Verify ID 36 maps to StringPrototypeSplit
+        assert_eq!(
+            interpreter.builtin_name_from_id(36),
+            Some("builtin:StringPrototypeSplit".to_string())
+        );
+
+        // Verify ID 356 no longer maps to StringPrototypeSplit (duplicate removed)
+        assert_ne!(
+            interpreter.builtin_name_from_id(356),
+            Some("builtin:StringPrototypeSplit".to_string())
+        );
+
+        // Verify ID 357 still works (ArrayPrototypeMap should be unaffected)
+        assert_eq!(
+            interpreter.builtin_name_from_id(357),
+            Some("builtin:ArrayPrototypeMap".to_string())
+        );
+    }
+
+    #[test]
+    fn string_prototype_split_execution_works() {
+        // Verify StringPrototypeSplit builtin is functional after deduplication
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Test string split functionality
+        core.registers[0] = Value::Str("hello,world,test".to_string());
+        core.registers[1] = Value::Str(",".to_string());
+
+        let result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:StringPrototypeSplit".to_string(),
+                args: RegRange { start: 0, count: 2 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+
+        // Verify the call succeeded (should not panic or error)
+        assert!(result.is_ok(), "StringPrototypeSplit builtin should work after deduplication");
     }
 }

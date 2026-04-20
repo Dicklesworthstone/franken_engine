@@ -797,6 +797,7 @@ mod tests {
                 );
                 assert!(!denial.transitive);
             }
+            // SAFETY: Test validates revocation enforcement produces expected denial result
             _ => panic!("expected denial"),
         }
     }

@@ -1353,7 +1353,9 @@ mod tests {
 
     #[test]
     fn default_matrix_round_trips_and_hashes_deterministically() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix_a = ModuleCompatibilityMatrix::from_default_json().unwrap();
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix_b = ModuleCompatibilityMatrix::from_default_json().unwrap();
 
         assert_eq!(matrix_a.canonical_hash(), matrix_b.canonical_hash());

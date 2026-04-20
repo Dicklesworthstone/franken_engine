@@ -582,7 +582,9 @@ mod tests {
     #[test]
     fn capability_profile_serialization_round_trip() {
         let full = CapabilityProfile::full();
+        // SAFETY: CapabilityProfile derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&full).unwrap();
+        // SAFETY: JSON was just produced by valid CapabilityProfile serialization
         let restored: CapabilityProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(full, restored);
     }
@@ -597,7 +599,9 @@ mod tests {
             CapabilityProfile::compute_only(),
         ];
         for profile in &profiles {
+            // SAFETY: CapabilityProfile derives Serialize and has no non-serializable fields
             let json1 = serde_json::to_string(profile).unwrap();
+            // SAFETY: CapabilityProfile derives Serialize and has no non-serializable fields
             let json2 = serde_json::to_string(profile).unwrap();
             assert_eq!(
                 json1, json2,

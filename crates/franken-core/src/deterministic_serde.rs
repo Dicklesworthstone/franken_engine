@@ -370,11 +370,13 @@ fn decode_at(
     match tag {
         TAG_U64 => {
             need_bytes(data, pos, 8)?;
+            // SAFETY: need_bytes() verified 8 bytes available, slice conversion cannot fail
             let v = u64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
             Ok((CanonicalValue::U64(v), pos + 8))
         }
         TAG_I64 => {
             need_bytes(data, pos, 8)?;
+            // SAFETY: need_bytes() verified 8 bytes available, slice conversion cannot fail
             let v = i64::from_be_bytes(data[pos..pos + 8].try_into().unwrap());
             Ok((CanonicalValue::I64(v), pos + 8))
         }
@@ -391,6 +393,7 @@ fn decode_at(
         }
         TAG_BYTES => {
             need_bytes(data, pos, 4)?;
+            // SAFETY: need_bytes() verified 4 bytes available, slice conversion cannot fail
             let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             let start = pos + 4;
             need_bytes(data, start, len)?;
@@ -399,6 +402,7 @@ fn decode_at(
         }
         TAG_STRING => {
             need_bytes(data, pos, 4)?;
+            // SAFETY: need_bytes() verified 4 bytes available, slice conversion cannot fail
             let len = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             let start = pos + 4;
             need_bytes(data, start, len)?;
@@ -408,6 +412,7 @@ fn decode_at(
         }
         TAG_ARRAY => {
             need_bytes(data, pos, 4)?;
+            // SAFETY: need_bytes() verified 4 bytes available, slice conversion cannot fail
             let count = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             let mut cur = pos + 4;
 

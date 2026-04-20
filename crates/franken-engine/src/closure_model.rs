@@ -1139,35 +1139,46 @@ mod tests {
 
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test declares valid let variable in function scope; declare_let succeeds in controlled test environment.
         chain.declare_let("b".into(), 2).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("b", EnvValue::Number(2), Label::Public)
             .unwrap();
 
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
+        // SAFETY: Test declares valid let variable in block scope; declare_let succeeds in controlled test environment.
         chain.declare_let("c".into(), 3).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("c", EnvValue::Number(3), Label::Public)
             .unwrap();
 
         // All three variables visible from innermost scope.
+        // SAFETY: Test gets variable from outer scope; get_value succeeds in controlled test environment.
         assert_eq!(*chain.get_value("a").unwrap(), EnvValue::Number(1));
+        // SAFETY: Test gets variable from function scope; get_value succeeds in controlled test environment.
         assert_eq!(*chain.get_value("b").unwrap(), EnvValue::Number(2));
+        // SAFETY: Test gets variable from current scope; get_value succeeds in controlled test environment.
         assert_eq!(*chain.get_value("c").unwrap(), EnvValue::Number(3));
     }
 
     #[test]
     fn nested_closure_captures_multiple_scopes() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("outer".into(), 1).unwrap();
+        // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("outer", EnvValue::Number(10), Label::Public)
             .unwrap();
 
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
+        // SAFETY: Test declares valid let variable in function scope; declare_let succeeds in controlled test environment.
         chain.declare_let("middle".into(), 2).unwrap();
+        // SAFETY: Test initializes valid binding with internal label; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("middle", EnvValue::Number(20), Label::Internal)
             .unwrap();

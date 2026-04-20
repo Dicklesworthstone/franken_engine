@@ -4911,7 +4911,11 @@ mod tests {
             pattern: BindingPattern::Identifier("arg".to_string()),
             span: SourceSpan::new(5, 8, 1, 6, 1, 9),
         };
+        // SAFETY: FunctionParam derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&param).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FunctionParam,
+        // so from_str back to FunctionParam cannot fail (valid format + matching schema).
         let restored: FunctionParam = serde_json::from_str(&json).unwrap();
         assert_eq!(param, restored);
     }

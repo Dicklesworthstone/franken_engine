@@ -1769,6 +1769,7 @@ mod tests {
         ];
         let mut jsons = BTreeSet::new();
         for v in &variants {
+            // SAFETY: ForbiddenCallCategory derives Serialize and has no non-serializable fields
             jsons.insert(serde_json::to_string(v).unwrap());
         }
         assert_eq!(

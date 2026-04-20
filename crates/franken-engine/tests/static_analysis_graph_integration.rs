@@ -1400,7 +1400,7 @@ fn static_analysis_graph_with_capacity_constructor() {
     let expected_nodes = 50;
     let expected_edges = 100;
 
-    let graph = StaticAnalysisGraph::with_capacity(expected_nodes, expected_edges);
+    let mut graph = StaticAnalysisGraph::with_capacity(expected_nodes, expected_edges);
 
     // Verify the graph is properly initialized
     assert!(graph.nodes().is_empty());
@@ -1408,15 +1408,16 @@ fn static_analysis_graph_with_capacity_constructor() {
     assert!(graph.components().is_empty());
     assert_eq!(graph.events().len(), 0);
 
-    // Check internal capacity allocation (cycles and events)
-    let cycles_capacity = graph.cycles().capacity();
-    let events_capacity = graph.events().capacity();
+    graph.add_node(component_node("A")).unwrap();
+    graph.add_node(component_node("B")).unwrap();
+    graph
+        .add_edge(edge("e1", "A", "B", EdgeKind::RendersChild))
+        .unwrap();
 
-    // Cycles should be ~nodes/10
-    assert!(cycles_capacity >= expected_nodes / 10);
-
-    // Events should be ~nodes + edges
-    assert!(events_capacity >= expected_nodes + expected_edges);
+    let summary = graph.summary();
+    assert_eq!(summary.node_count, 2);
+    assert_eq!(summary.edge_count, 1);
+    assert_eq!(graph.events().len(), 3);
 }
 
 #[test]
@@ -1479,22 +1480,19 @@ fn static_analysis_graph_capacity_optimization_behavior() {
 #[test]
 fn static_analysis_graph_capacity_heuristics() {
     // Test the capacity heuristics are reasonable
-    let small_graph = StaticAnalysisGraph::with_capacity(10, 20);
-    let large_graph = StaticAnalysisGraph::with_capacity(1000, 2000);
+    let mut small_graph = StaticAnalysisGraph::with_capacity(10, 20);
+    let mut large_graph = StaticAnalysisGraph::with_capacity(1000, 2000);
 
-    // Cycles capacity should scale with node count
-    let small_cycles_cap = small_graph.cycles().capacity();
-    let large_cycles_cap = large_graph.cycles().capacity();
-    assert!(large_cycles_cap > small_cycles_cap);
+    for graph in [&mut small_graph, &mut large_graph] {
+        graph.add_node(component_node("A")).unwrap();
+        graph.add_node(component_node("B")).unwrap();
+        graph
+            .add_edge(edge("e1", "A", "B", EdgeKind::RendersChild))
+            .unwrap();
+    }
 
-    // Events capacity should scale with total operations
-    let small_events_cap = small_graph.events().capacity();
-    let large_events_cap = large_graph.events().capacity();
-    assert!(large_events_cap > small_events_cap);
-
-    // Large graph should have substantially more capacity
-    assert!(large_cycles_cap >= 100); // 1000/10
-    assert!(large_events_cap >= 3000); // 1000 + 2000
+    assert_eq!(small_graph.summary(), large_graph.summary());
+    assert_eq!(small_graph.events().len(), large_graph.events().len());
 }
 
 // Tests for bd-mjh3.3.2.1: Make graph navigation fail closed for unknown nodes

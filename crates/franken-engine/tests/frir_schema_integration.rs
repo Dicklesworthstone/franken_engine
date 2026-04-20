@@ -2131,9 +2131,9 @@ fn json_field_names_equivalence_witness() {
 fn frir_artifact_compact_metadata_single_pass() {
     let mut artifact = FrirArtifact {
         schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        artifact_version: FrirVersion::V1_0,
-        artifact_hash: make_hash(b"artifact"),
+        frir_version: FrirVersion::V1_0,
         source_hash: make_hash(b"source"),
+        target_lane: LaneTarget::Js,
         witness_chain: WitnessChain {
             input_hash: make_hash(b"input"),
             output_hash: make_hash(b"output"),
@@ -2141,8 +2141,9 @@ fn frir_artifact_compact_metadata_single_pass() {
             verification: ChainVerification::Verified,
         },
         equivalence_witnesses: vec![],
-        pipeline_config: PipelineConfig::default(),
-        fallback_reasons: vec![],
+        aggregated_effects: vec![],
+        required_capabilities: BTreeSet::new(),
+        output_hash: make_hash(b"output"),
     };
 
     // Store original pass count for comparison
@@ -2162,9 +2163,9 @@ fn frir_artifact_compact_metadata_single_pass() {
 fn frir_artifact_compact_metadata_no_passes() {
     let mut artifact = FrirArtifact {
         schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        artifact_version: FrirVersion::V1_0,
-        artifact_hash: make_hash(b"artifact"),
+        frir_version: FrirVersion::V1_0,
         source_hash: make_hash(b"source"),
+        target_lane: LaneTarget::Js,
         witness_chain: WitnessChain {
             input_hash: make_hash(b"input"),
             output_hash: make_hash(b"output"),
@@ -2172,8 +2173,9 @@ fn frir_artifact_compact_metadata_no_passes() {
             verification: ChainVerification::Verified,
         },
         equivalence_witnesses: vec![],
-        pipeline_config: PipelineConfig::default(),
-        fallback_reasons: vec![],
+        aggregated_effects: vec![],
+        required_capabilities: BTreeSet::new(),
+        output_hash: make_hash(b"output"),
     };
 
     // compact_metadata should no-op on empty passes
@@ -2208,9 +2210,9 @@ fn frir_artifact_compact_metadata_deduplication() {
 
     let mut artifact = FrirArtifact {
         schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        artifact_version: FrirVersion::V1_0,
-        artifact_hash: make_hash(b"artifact"),
+        frir_version: FrirVersion::V1_0,
         source_hash: make_hash(b"source"),
+        target_lane: LaneTarget::Js,
         witness_chain: WitnessChain {
             input_hash: make_hash(b"input"),
             output_hash: make_hash(b"output"),
@@ -2218,8 +2220,9 @@ fn frir_artifact_compact_metadata_deduplication() {
             verification: ChainVerification::Verified,
         },
         equivalence_witnesses: vec![],
-        pipeline_config: PipelineConfig::default(),
-        fallback_reasons: vec![],
+        aggregated_effects: vec![],
+        required_capabilities: BTreeSet::new(),
+        output_hash: make_hash(b"output"),
     };
 
     // Before compaction: each pass has its invariants
@@ -2274,9 +2277,9 @@ fn frir_artifact_compact_metadata_preserves_type_safety() {
 
     let mut artifact = FrirArtifact {
         schema_version: FRIR_SCHEMA_VERSION.to_string(),
-        artifact_version: FrirVersion::V1_0,
-        artifact_hash: make_hash(b"artifact"),
+        frir_version: FrirVersion::V1_0,
         source_hash: make_hash(b"source"),
+        target_lane: LaneTarget::Js,
         witness_chain: WitnessChain {
             input_hash: make_hash(b"input"),
             output_hash: make_hash(b"output"),
@@ -2284,8 +2287,9 @@ fn frir_artifact_compact_metadata_preserves_type_safety() {
             verification: ChainVerification::Verified,
         },
         equivalence_witnesses: vec![],
-        pipeline_config: PipelineConfig::default(),
-        fallback_reasons: vec![],
+        aggregated_effects: vec![],
+        required_capabilities: BTreeSet::new(),
+        output_hash: make_hash(b"output"),
     };
 
     artifact.compact_metadata();

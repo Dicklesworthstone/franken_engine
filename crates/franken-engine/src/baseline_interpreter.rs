@@ -26,7 +26,6 @@
 //! Dependencies: bd-crp (parser), bd-1wa (IR contract), bd-20b (slot registry).
 
 #![allow(
-    unreachable_patterns,
     clippy::collapsible_if,
     clippy::collapsible_match,
     clippy::if_same_then_else,
@@ -9772,15 +9771,11 @@ impl InterpreterCore {
                 }
             }
             "builtin:ArrayPrototypeSort" => {
-                // Array.prototype.sort([compareFunction]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
+                // Array.prototype.sort([compareFunction]) implementation (consolidated for builtin IDs 28, 248, 385)
                 let this_val = self.read_reg(args.start)?;
                 let array_id = match this_val {
                     Value::Object(id) => id,
-                    _ => return Ok(this_val), // Non-arrays return themselves
+                    _ => return Ok(this_val), // Non-objects return as-is
                 };
 
                 let _compare_fn = if args.count > 1 {
@@ -9789,70 +9784,74 @@ impl InterpreterCore {
                     None
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    if length <= 1 {
-                        return Ok(Value::Object(array_id)); // Nothing to sort
+                // Get array length
+                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    match obj.properties.get("length") {
+                        Some(Value::Int(len)) => (*len).max(0) as usize,
+                        Some(Value::Float(len)) => len.inner().max(0.0) as usize,
+                        _ => 0,
                     }
+                } else {
+                    return Ok(this_val);
+                };
 
-                    // Collect indexed properties
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
-                            }
+                if length <= 1 {
+                    return Ok(this_val); // Nothing to sort
+                }
+
+                // Collect all elements, filling holes with Undefined
+                let mut elements = Vec::new();
+                if let Some(obj) = self.heap.get(array_id.0 as usize) {
+                    for i in 0..length {
+                        if let Some(element) = obj.properties.get(&i.to_string()) {
+                            elements.push(element.clone());
+                        } else {
+                            elements.push(Value::Undefined);
                         }
                     }
+                }
 
-                    // Simple lexicographic sort (TODO: implement compareFunction support)
-                    indexed_values.sort_by(|a, b| {
-                        let a_str = match &a.1 {
-                            Value::Str(s) => s.clone(),
-                            Value::Int(i) => i.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => "".to_string(),
-                        };
-                        let b_str = match &b.1 {
-                            Value::Str(s) => s.clone(),
-                            Value::Int(i) => i.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => "".to_string(),
-                        };
-                        a_str.cmp(&b_str)
-                    });
+                // Sort by string representation while preserving original values
+                elements.sort_by(|a, b| {
+                    let a_str = match a {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
 
+                    let b_str = match b {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(n) => n.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => "null".to_string(),
+                        Value::Undefined => "undefined".to_string(),
+                        Value::Object(_) => "[object Object]".to_string(),
+                        _ => "".to_string(),
+                    };
+
+                    a_str.cmp(&b_str)
+                });
+
+                // Clear existing indexed properties and set sorted elements
+                if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
                     // Remove old indexed properties
-                    array_obj
-                        .properties
-                        .retain(|k, _| k.parse::<usize>().is_err());
-
-                    // Add back in sorted order
-                    for (new_index, (_, value)) in indexed_values.into_iter().enumerate() {
-                        array_obj.properties.insert(new_index.to_string(), value);
+                    for i in 0..length {
+                        obj_mut.properties.remove(&i.to_string());
                     }
 
-                    Ok(Value::Object(array_id))
-                } else {
-                    Ok(this_val)
+                    // Set sorted elements back in order
+                    for (i, element) in elements.iter().enumerate() {
+                        obj_mut.properties.insert(i.to_string(), element.clone());
+                    }
                 }
+
+                Ok(this_val)
             }
             "builtin:Error" => {
                 // Error(message) constructor implementation
@@ -13920,74 +13919,6 @@ impl InterpreterCore {
 
                 let result = x.tan();
                 Ok(Value::Float(result.into()))
-            }
-
-            "builtin:ArrayPrototypeSort" => {
-                // Array.prototype.sort([compareFunction]) implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Object(array_id)),
-                    }
-                } else {
-                    return Ok(Value::Object(array_id));
-                };
-
-                if length <= 1 {
-                    return Ok(Value::Object(array_id)); // Nothing to sort
-                }
-
-                // Collect all elements first
-                let mut elements = Vec::new();
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            elements.push(element.clone());
-                        } else {
-                            elements.push(Value::Undefined);
-                        }
-                    }
-                }
-
-                // Simple string-based sorting (convert all to strings and sort)
-                elements.sort_by(|a, b| {
-                    let a_str = match a {
-                        Value::Str(s) => s.clone(),
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        _ => "object".to_string(),
-                    };
-
-                    let b_str = match b {
-                        Value::Str(s) => s.clone(),
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        _ => "object".to_string(),
-                    };
-
-                    a_str.cmp(&b_str)
-                });
-
-                // Set the sorted elements back
-                for (i, element) in elements.iter().enumerate() {
-                    self.set_object_property(array_id, i.to_string(), element.clone())?;
-                }
-
-                Ok(Value::Object(array_id))
             }
 
             "builtin:StringPrototypeMatch" => {
@@ -18610,7 +18541,7 @@ impl InterpreterCore {
             }
 
             "builtin:SetTimeout" => {
-                // setTimeout() implementation - simplified timer scheduling
+                // setTimeout() implementation - route through deterministic timer state
                 if args.count < 2 {
                     return Ok(Value::Int(0)); // Invalid timer ID
                 }
@@ -18620,7 +18551,7 @@ impl InterpreterCore {
                     return Ok(Value::Int(0)); // Callback is not a function
                 }
 
-                let _delay = if args.count >= 3 {
+                let delay_ms = if args.count >= 3 {
                     let delay_val = self.read_reg(args.start + 2)?;
                     match delay_val {
                         Value::Int(n) => n.max(0) as u64,
@@ -18631,25 +18562,56 @@ impl InterpreterCore {
                     0
                 };
 
-                // Simplified implementation: generate a timer ID
-                // In a real implementation, this would schedule the callback
-                let timer_id = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
+                // Use deterministic timer ID allocation
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
 
-                Ok(Value::Int(timer_id))
+                let handler_id = match callback_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                // Store active timer for cancellation support
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: false,
+                    },
+                );
+
+                // Emit deterministic witness for replay consistency
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("builtin:setTimeout:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
             }
 
             "builtin:ClearTimeout" => {
-                // clearTimeout() implementation - simplified timer cancellation
+                // clearTimeout() implementation - cancel timer through deterministic state
                 if args.count < 2 {
                     return Ok(Value::Undefined);
                 }
 
-                let _timer_id_val = self.read_reg(args.start + 1)?;
-                // In a simplified implementation, we just acknowledge the call
-                // A real implementation would cancel the scheduled timer
+                let timer_id_val = self.read_reg(args.start + 1)?;
+                let timer_id = match timer_id_val {
+                    Value::Int(i) => i as u32,
+                    _ => return Ok(Value::Undefined), // Invalid timer ID type
+                };
+
+                // Remove timer from active timers for proper cancellation
+                let was_active = self.active_timers.remove(&timer_id).is_some();
+
+                // Emit witness for cancellation (only if timer was actually active)
+                if was_active {
+                    self.emit_witness(
+                        WitnessEventKind::HostcallDispatched,
+                        Some(&format!("builtin:clearTimeout:{}", timer_id)),
+                    );
+                }
 
                 Ok(Value::Undefined)
             }
@@ -18930,64 +18892,6 @@ impl InterpreterCore {
                 // In a real implementation, this would output to info console
                 // For now, we just acknowledge the call
                 Ok(Value::Undefined)
-            }
-
-            "builtin:ArrayPrototypeSort" => {
-                // Array.prototype.sort() implementation - simplified in-place sorting
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(this_val), // Non-objects return as-is
-                };
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Collect elements for sorting (preserve original values)
-                    let mut elements: Vec<(usize, Value, String)> = Vec::new();
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let element_str = match element {
-                                Value::Str(s) => s.clone(),
-                                Value::Int(n) => n.to_string(),
-                                Value::Float(f) => f.to_string(),
-                                Value::Bool(b) => b.to_string(),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                _ => "[object Object]".to_string(),
-                            };
-                            elements.push((i, element.clone(), element_str));
-                        }
-                    }
-
-                    // Sort elements lexicographically by string representation
-                    elements.sort_by(|a, b| a.2.cmp(&b.2));
-
-                    // Clear existing elements and reassign sorted ones
-                    if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
-                        for i in 0..length {
-                            obj_mut.properties.remove(&i.to_string());
-                        }
-                    }
-
-                    for (new_index, (_, original_value, _)) in elements.into_iter().enumerate() {
-                        self.set_object_property(
-                            array_id,
-                            new_index.to_string(),
-                            original_value,
-                        )?;
-                    }
-                }
-
-                Ok(this_val) // Return the array itself
             }
 
             "builtin:StringPrototypeToLocaleLowerCase" => {
@@ -23382,35 +23286,212 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn set_timeout_fires_after_delay() {
-        // TODO: Test that setTimeout callback executes after specified delay
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout with a callback and delay
-        // 2. Verify timer ID is returned
-        // 3. Run event loop until timer fires
-        // 4. Verify callback executed at the right time
-        // Placeholder until implementation — empty body so the test still compiles/runs.
+    fn set_timeout_deterministic_regression() {
+        // Regression test: Verify setTimeout uses deterministic timer IDs instead of wall-clock time
+        // This test ensures the fix for bd-1orko where SystemTime::now() was replaced with next_timer_id
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+
+        // Create two identical interpreter instances with same initial state
+        let mut core1 = InterpreterCore::new(config.clone(), "deterministic-timer-test-1");
+        let mut core2 = InterpreterCore::new(config, "deterministic-timer-test-2");
+
+        let function_id_1 = core1.allocate_function(
+            "callback1",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            std::collections::BTreeMap::new(),
+        );
+        let function_id_2 = core2.allocate_function(
+            "callback2",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            std::collections::BTreeMap::new(),
+        );
+
+        let callback1 = Value::Function(function_id_1);
+        let callback2 = Value::Function(function_id_2);
+
+        // Execute setTimeout on both cores - should get identical timer IDs
+        // because they use deterministic next_timer_id, not wall-clock time
+        let timer_id_1 = core1
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback1, Value::Int(1000)],
+            )
+            .expect("setTimeout should succeed on core1");
+
+        let timer_id_2 = core2
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback2, Value::Int(1000)],
+            )
+            .expect("setTimeout should succeed on core2");
+
+        // Timer IDs should be identical because they're deterministic, not wall-clock based
+        assert_eq!(
+            timer_id_1, timer_id_2,
+            "Timer IDs should be identical across identical interpreter instances (deterministic)"
+        );
+
+        // Both should be the first timer ID (starting from next_timer_id initial value)
+        match timer_id_1 {
+            Value::Int(id) => {
+                assert!(id >= 0, "Timer ID should be non-negative");
+                // The exact value depends on initial next_timer_id, but should be consistent
+            }
+            _ => panic!("setTimeout should return integer timer ID"),
+        }
+
+        // Verify both interpreters have the timer in their active_timers state
+        assert_eq!(core1.active_timers.len(), 1);
+        assert_eq!(core2.active_timers.len(), 1);
+
+        let timer_id_val = timer_id_1.as_int().unwrap() as u32;
+        assert!(core1.active_timers.contains_key(&timer_id_val));
+        assert!(core2.active_timers.contains_key(&timer_id_val));
     }
 
     #[test]
-    fn set_timeout_returns_id() {
-        // TODO: Test that setTimeout returns numeric timer ID
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout(callback, delay)
-        // 2. Verify return value is a numeric timer ID
-        // 3. Verify IDs are deterministic and monotonic
-        // Placeholder until implementation.
+    fn set_timeout_returns_deterministic_id() {
+        // Regression test: setTimeout returns deterministic, monotonic timer IDs
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+
+        let mut core = InterpreterCore::new(config, "setTimeout-deterministic-test");
+
+        // Create a simple callback function
+        let function_id = core.allocate_function(
+            "test_callback",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            std::collections::BTreeMap::new(),
+        );
+        let callback_val = Value::Function(function_id);
+
+        // Test multiple setTimeout calls return sequential IDs
+        let timer_id_1 = core
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback_val.clone(), Value::Int(1000)],
+            )
+            .expect("setTimeout should succeed");
+
+        let timer_id_2 = core
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback_val.clone(), Value::Int(2000)],
+            )
+            .expect("setTimeout should succeed");
+
+        // Verify timer IDs are deterministic and sequential
+        match (timer_id_1, timer_id_2) {
+            (Value::Int(id1), Value::Int(id2)) => {
+                assert!(id1 >= 0, "Timer ID should be non-negative");
+                assert!(id2 >= 0, "Timer ID should be non-negative");
+                assert_eq!(id2, id1 + 1, "Timer IDs should be sequential");
+            }
+            _ => panic!("setTimeout should return integer timer IDs"),
+        }
+
+        // Verify timers are stored in active_timers
+        assert_eq!(core.active_timers.len(), 2, "Both timers should be active");
+        assert!(core.active_timers.contains_key(&(timer_id_1.as_int().unwrap() as u32)));
+        assert!(core.active_timers.contains_key(&(timer_id_2.as_int().unwrap() as u32)));
     }
 
     #[test]
-    fn clear_timeout_cancels() {
-        // TODO: Test that clearTimeout prevents timer from firing
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout to schedule a timer
-        // 2. Call clearTimeout with the timer ID
-        // 3. Run event loop
-        // 4. Verify callback never executes
-        // Placeholder until implementation.
+    fn clear_timeout_cancels_deterministic() {
+        // Regression test: clearTimeout properly cancels timers from active_timers
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+
+        let mut core = InterpreterCore::new(config, "clearTimeout-test");
+
+        // Create a callback function
+        let function_id = core.allocate_function(
+            "test_callback",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            std::collections::BTreeMap::new(),
+        );
+        let callback_val = Value::Function(function_id);
+
+        // Schedule multiple timers
+        let timer_id_1 = core
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback_val.clone(), Value::Int(1000)],
+            )
+            .expect("setTimeout should succeed");
+
+        let timer_id_2 = core
+            .execute_builtin_call(
+                "builtin:SetTimeout",
+                vec![Value::Undefined, callback_val.clone(), Value::Int(2000)],
+            )
+            .expect("setTimeout should succeed");
+
+        // Verify both timers are active
+        assert_eq!(core.active_timers.len(), 2, "Both timers should be active");
+
+        // Clear the first timer
+        let clear_result = core
+            .execute_builtin_call(
+                "builtin:ClearTimeout",
+                vec![Value::Undefined, timer_id_1.clone()],
+            )
+            .expect("clearTimeout should succeed");
+
+        assert_eq!(clear_result, Value::Undefined, "clearTimeout returns undefined");
+
+        // Verify first timer was removed but second remains
+        assert_eq!(core.active_timers.len(), 1, "Only one timer should remain active");
+        assert!(!core.active_timers.contains_key(&(timer_id_1.as_int().unwrap() as u32)));
+        assert!(core.active_timers.contains_key(&(timer_id_2.as_int().unwrap() as u32)));
+
+        // Clear the second timer
+        let clear_result_2 = core
+            .execute_builtin_call(
+                "builtin:ClearTimeout",
+                vec![Value::Undefined, timer_id_2.clone()],
+            )
+            .expect("clearTimeout should succeed");
+
+        assert_eq!(clear_result_2, Value::Undefined, "clearTimeout returns undefined");
+
+        // Verify all timers are cleared
+        assert_eq!(core.active_timers.len(), 0, "No timers should remain active");
+
+        // Test clearing non-existent timer (should be safe)
+        let clear_invalid = core
+            .execute_builtin_call(
+                "builtin:ClearTimeout",
+                vec![Value::Undefined, Value::Int(99999)],
+            )
+            .expect("clearTimeout with invalid ID should succeed");
+
+        assert_eq!(clear_invalid, Value::Undefined, "clearing invalid timer returns undefined");
     }
 
     #[test]
@@ -24266,9 +24347,9 @@ mod tests {
             // Create test array with mixed types that should be preserved after sorting
             let array_id = ObjectId::from_raw(100);
             let test_elements = vec![
-                (0, Value::Int(42)),           // Should remain Int(42), not Str("42")
-                (1, Value::Bool(true)),        // Should remain Bool(true), not Str("true")
-                (2, Value::Float(3.14.into())), // Should remain Float, not Str("3.14")
+                (0, Value::Int(42)),                  // Should remain Int(42), not Str("42")
+                (1, Value::Bool(true)),               // Should remain Bool(true), not Str("true")
+                (2, Value::Float(3.14.into())),       // Should remain Float, not Str("3.14")
                 (3, Value::Str("apple".to_string())), // Should remain Str
                 (4, Value::Object(ObjectId::from_raw(200))), // Should remain Object, not Str("[object Object]")
             ];
@@ -24309,31 +24390,35 @@ mod tests {
                 }
 
                 // Invoke ArrayPrototypeSort via builtin dispatcher
-                let result = interpreter.call_builtin_by_id(
-                    builtin_id,
-                    RegRange { start: 0, count: 1 }
-                );
+                let result =
+                    interpreter.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 });
 
-                assert!(result.is_ok(), "Builtin ID {} should complete successfully", builtin_id);
+                assert!(
+                    result.is_ok(),
+                    "Builtin ID {} should complete successfully",
+                    builtin_id
+                );
 
                 // Verify all element types are preserved after sorting
                 if let Some(sorted_obj) = interpreter.heap.get(array_id.0 as usize) {
                     for i in 0..5 {
-                        let element = sorted_obj.properties.get(&i.to_string())
-                            .expect(&format!("Builtin ID {} should preserve element {}", builtin_id, i));
+                        let element = sorted_obj.properties.get(&i.to_string()).expect(&format!(
+                            "Builtin ID {} should preserve element {}",
+                            builtin_id, i
+                        ));
 
                         // Verify types are preserved, not converted to strings
                         match element {
-                            Value::Int(_) => {}, // Good - preserved as Int
-                            Value::Bool(_) => {}, // Good - preserved as Bool
-                            Value::Float(_) => {}, // Good - preserved as Float
-                            Value::Str(_) => {}, // Good - was already Str
-                            Value::Object(_) => {}, // Good - preserved as Object
-                            Value::Undefined => {}, // Acceptable for missing elements
+                            Value::Int(_) => {}    // Good - preserved as Int
+                            Value::Bool(_) => {}   // Good - preserved as Bool
+                            Value::Float(_) => {}  // Good - preserved as Float
+                            Value::Str(_) => {}    // Good - was already Str
+                            Value::Object(_) => {} // Good - preserved as Object
+                            Value::Undefined => {} // Acceptable for missing elements
                             other => panic!(
                                 "Builtin ID {} corrupted element {} type: expected original type, got {:?}",
                                 builtin_id, i, other
-                            )
+                            ),
                         }
                     }
                 }
@@ -24348,7 +24433,11 @@ mod tests {
                             break;
                         }
                     }
-                    assert!(found_int, "Builtin ID {} should preserve Int(42) as Int type", builtin_id);
+                    assert!(
+                        found_int,
+                        "Builtin ID {} should preserve Int(42) as Int type",
+                        builtin_id
+                    );
 
                     // Find where Bool(true) ended up
                     let mut found_bool = false;
@@ -24358,17 +24447,27 @@ mod tests {
                             break;
                         }
                     }
-                    assert!(found_bool, "Builtin ID {} should preserve Bool(true) as Bool type", builtin_id);
+                    assert!(
+                        found_bool,
+                        "Builtin ID {} should preserve Bool(true) as Bool type",
+                        builtin_id
+                    );
 
                     // Find where Object ended up
                     let mut found_object = false;
                     for i in 0..5 {
-                        if let Some(Value::Object(ObjectId(200))) = sorted_obj.properties.get(&i.to_string()) {
+                        if let Some(Value::Object(ObjectId(200))) =
+                            sorted_obj.properties.get(&i.to_string())
+                        {
                             found_object = true;
                             break;
                         }
                     }
-                    assert!(found_object, "Builtin ID {} should preserve Object as Object type", builtin_id);
+                    assert!(
+                        found_object,
+                        "Builtin ID {} should preserve Object as Object type",
+                        builtin_id
+                    );
                 }
             }
 
@@ -24380,16 +24479,156 @@ mod tests {
                 let elem_4 = final_obj.properties.get("4").unwrap();
 
                 // First element should be 3.14 (string "3.14" comes first lexicographically)
-                assert!(matches!(elem_0, Value::Float(_)),
-                    "First element should be Float(3.14), got {:?}", elem_0);
+                assert!(
+                    matches!(elem_0, Value::Float(_)),
+                    "First element should be Float(3.14), got {:?}",
+                    elem_0
+                );
 
                 // Second element should be 42 (string "42" comes second)
-                assert!(matches!(elem_1, Value::Int(42)),
-                    "Second element should be Int(42), got {:?}", elem_1);
+                assert!(
+                    matches!(elem_1, Value::Int(42)),
+                    "Second element should be Int(42), got {:?}",
+                    elem_1
+                );
 
                 // Last element should be true (string "true" comes last)
-                assert!(matches!(elem_4, Value::Bool(true)),
-                    "Last element should be Bool(true), got {:?}", elem_4);
+                assert!(
+                    matches!(elem_4, Value::Bool(true)),
+                    "Last element should be Bool(true), got {:?}",
+                    elem_4
+                );
+            }
+        }
+
+        /// Regression test for ArrayPrototypeSort builtin dispatch deduplication.
+        ///
+        /// The issue was that three separate match arms for "builtin:ArrayPrototypeSort"
+        /// existed in the builtin dispatcher (at different line numbers), all matching
+        /// the same string. Due to match ordering, only the first arm could execute,
+        /// making builtin IDs 248 and 385 unreachable dead code despite being mapped
+        /// in map_function_index_to_builtin_capability().
+        ///
+        /// After consolidation, all three builtin IDs (28, 248, 385) should route through
+        /// the same shared implementation and work correctly with mixed Value types.
+        #[test]
+        fn array_prototype_sort_builtin_dispatch_deduplication_regression() {
+            let mut interpreter = test_interpreter();
+
+            // Create test array with mixed types including holes
+            let array_id = ObjectId::from_raw(100);
+            let test_elements = vec![
+                (0, Value::Int(3)),                    // "3"
+                (1, Value::Str("banana".to_string())), // "banana"
+                (2, Value::Bool(false)),               // "false"
+                // index 3 is a hole (should become Undefined)
+                (4, Value::Float(1.5.into())),               // "1.5"
+                (5, Value::Object(ObjectId::from_raw(200))), // "[object Object]"
+            ];
+
+            // Add objects to heap
+            interpreter.heap.insert(
+                array_id.0 as usize,
+                HeapObject {
+                    properties: test_elements
+                        .iter()
+                        .map(|(i, val)| (i.to_string(), val.clone()))
+                        .chain(std::iter::once(("length".to_string(), Value::Int(6))))
+                        .collect(),
+                    prototype_id: None,
+                },
+            );
+
+            interpreter.heap.insert(
+                200,
+                HeapObject {
+                    properties: BTreeMap::new(),
+                    prototype_id: None,
+                },
+            );
+
+            // Test all three builtin IDs that should map to the same consolidated implementation
+            let builtin_ids = [28u32, 248u32, 385u32];
+
+            for builtin_id in builtin_ids {
+                // Reset array to original state
+                if let Some(obj) = interpreter.heap.get_mut(array_id.0 as usize) {
+                    obj.properties.clear();
+                    for (i, val) in &test_elements {
+                        obj.properties.insert(i.to_string(), val.clone());
+                    }
+                    obj.properties.insert("length".to_string(), Value::Int(6));
+                }
+
+                // Invoke ArrayPrototypeSort via the specific builtin ID
+                // This tests that the mapping works and reaches the consolidated implementation
+                let builtin_name = interpreter.map_function_index_to_builtin_capability(builtin_id);
+                assert_eq!(
+                    builtin_name,
+                    Some("builtin:ArrayPrototypeSort".to_string()),
+                    "Builtin ID {} should map to ArrayPrototypeSort",
+                    builtin_id
+                );
+
+                // Simulate builtin call through dispatcher
+                let result = interpreter.call_builtin(
+                    "builtin:ArrayPrototypeSort",
+                    RegRange { start: 0, count: 1 },
+                );
+                assert!(
+                    result.is_ok(),
+                    "Builtin ID {} should execute successfully",
+                    builtin_id
+                );
+
+                // Verify the array was sorted correctly
+                if let Some(sorted_obj) = interpreter.heap.get(array_id.0 as usize) {
+                    // Expected lexicographic order: "1.5", "3", "[object Object]", "banana", "false", "undefined"
+                    let elem_0 = sorted_obj.properties.get("0").unwrap();
+                    let elem_1 = sorted_obj.properties.get("1").unwrap();
+                    let elem_2 = sorted_obj.properties.get("2").unwrap();
+                    let elem_3 = sorted_obj.properties.get("3").unwrap();
+                    let elem_4 = sorted_obj.properties.get("4").unwrap();
+                    let elem_5 = sorted_obj.properties.get("5").unwrap();
+
+                    // Verify elements are in correct sorted order and types preserved
+                    assert!(
+                        matches!(elem_0, Value::Float(_)),
+                        "ID {}: elem[0] should be Float(1.5), got {:?}",
+                        builtin_id,
+                        elem_0
+                    );
+                    assert!(
+                        matches!(elem_1, Value::Int(3)),
+                        "ID {}: elem[1] should be Int(3), got {:?}",
+                        builtin_id,
+                        elem_1
+                    );
+                    assert!(
+                        matches!(elem_2, Value::Object(_)),
+                        "ID {}: elem[2] should be Object, got {:?}",
+                        builtin_id,
+                        elem_2
+                    );
+                    assert!(
+                        matches!(elem_3, Value::Str(s) if s == "banana"),
+                        "ID {}: elem[3] should be Str(banana), got {:?}",
+                        builtin_id,
+                        elem_3
+                    );
+                    assert!(
+                        matches!(elem_4, Value::Bool(false)),
+                        "ID {}: elem[4] should be Bool(false), got {:?}",
+                        builtin_id,
+                        elem_4
+                    );
+                    assert!(
+                        matches!(elem_5, Value::Undefined),
+                        "ID {}: elem[5] should be Undefined (from hole), got {:?}",
+                        builtin_id,
+                        elem_5
+                    );
+                }
             }
         }
     }

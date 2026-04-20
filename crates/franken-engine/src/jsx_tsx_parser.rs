@@ -1669,6 +1669,7 @@ mod tests {
                     _ => panic!("expected spread"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

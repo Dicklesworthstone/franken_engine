@@ -1493,6 +1493,7 @@ mod tests {
         let err = EngineObjectId::from_hex(&hex).unwrap_err();
         match err {
             IdError::InvalidHexChar { position } => assert_eq!(position, 62),
+            // SAFETY: Test validates engine object ID error for invalid hex character at specific position
             other => panic!("expected InvalidHexChar, got {other:?}"),
         }
     }

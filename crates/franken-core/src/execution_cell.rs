@@ -1028,7 +1028,9 @@ mod tests {
     #[test]
     fn cell_kind_serde_roundtrip() {
         for kind in [CellKind::Extension, CellKind::Session, CellKind::Delegate] {
+            // SAFETY: CellKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just produced by valid CellKind serialization
             let restored: CellKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, restored);
         }
@@ -1084,7 +1086,9 @@ mod tests {
             current: RegionState::Running,
             attempted: "finalize".to_string(),
         };
+        // SAFETY: CellError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by valid CellError serialization
         let restored: CellError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
@@ -1126,12 +1130,15 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut cx = mock_cx(100);
 
+        // SAFETY: Test executes valid effects with sufficient budget; execute_effect succeeds in controlled test environment
         let s1 = cell
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
             .unwrap();
+        // SAFETY: Test executes valid effects with sufficient budget; execute_effect succeeds in controlled test environment
         let s2 = cell
             .execute_effect(&mut cx, EffectCategory::PolicyCheck, "op2")
             .unwrap();
+        // SAFETY: Test executes valid effects with sufficient budget; execute_effect succeeds in controlled test environment
         let s3 = cell
             .execute_effect(&mut cx, EffectCategory::TelemetryEmit, "op3")
             .unwrap();
@@ -2795,6 +2802,7 @@ mod tests {
     fn cell_event_fields_carry_cell_kind_and_state() {
         let mut cell = ExecutionCell::with_context("ev-cell", CellKind::Extension, "t", "d", "p");
         let mut cx = mock_cx(200);
+        // SAFETY: Test executes valid effect with sufficient budget; execute_effect succeeds in controlled test environment
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "some-op")
             .unwrap();
 
@@ -2825,6 +2833,7 @@ mod tests {
     fn create_session_inherits_parent_context() {
         let mut parent =
             ExecutionCell::with_context("ext-p", CellKind::Extension, "t-p", "d-p", "p-p");
+        // SAFETY: Test creates session with valid parameters; create_session succeeds in controlled test environment
         let session = parent.create_session("sess-1", "t-sess").unwrap();
         assert_eq!(session.kind(), CellKind::Session);
         assert_eq!(session.decision_id(), "d-p");

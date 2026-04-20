@@ -1740,6 +1740,8 @@ mod tests {
             assert!(reasons[0].contains("hash chain"));
             assert!(reasons[1].contains("expired"));
         } else {
+            // SAFETY: Test-only panic to validate multiple failure collection logic.
+            // Test expects Invalid verdict when multiple validation failures occur.
             panic!("expected Invalid verdict");
         }
     }

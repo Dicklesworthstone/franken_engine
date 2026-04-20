@@ -1811,7 +1811,9 @@ mod tests {
         engine.ingest_proof(proof, 1000).unwrap();
 
         let event = &engine.events()[0];
+        // SAFETY: Serialization of valid IngestionEvent should succeed
         let json = serde_json::to_string(event).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: IngestionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(*event, restored);
     }
@@ -1830,6 +1832,7 @@ mod tests {
             b"test",
             &test_key(),
         )
+        // SAFETY: Test helper with valid proof creation parameters should succeed
         .unwrap();
 
         // Even at a very large timestamp, it shouldn't expire.
@@ -1847,8 +1850,11 @@ mod tests {
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
         let p3 = make_proof(ProofType::ReplaySequenceMotif, b"c", "policy-001");
 
+        // SAFETY: Test with valid proof should successfully ingest
         engine.ingest_proof(p1, 1000).unwrap();
+        // SAFETY: Test with valid proof should successfully ingest
         engine.ingest_proof(p2, 1000).unwrap();
+        // SAFETY: Test with valid proof should successfully ingest
         engine.ingest_proof(p3, 1000).unwrap();
 
         assert_eq!(engine.active_proofs().len(), 3);

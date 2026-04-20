@@ -8998,59 +8998,37 @@ impl InterpreterCore {
                 Ok(Value::Bool(result))
             }
             "builtin:ArrayPrototypeForEach" => {
-                // Array.prototype.forEach(callback[, thisArg]) implementation
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
+                // Array.prototype.forEach(callback[, thisArg]) implementation - fail-closed until proper callback invocation
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callback function".to_string(),
+                        got: "missing callback argument".to_string(),
+                    });
                 }
 
                 let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays are ignored
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Collect all indexed values first to avoid borrow issues
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
-                            }
-                        }
-                    }
-
-                    // Sort by index to process in order
-                    indexed_values.sort_by_key(|(index, _)| *index);
-
-                    // Process each element (simplified - in full implementation would call callback)
-                    for (_index, _value) in indexed_values {
-                        // TODO: In full implementation, would call the callback function
-                        // with (value, index, array) arguments
-                        // For now, we'll just iterate through the elements
-                    }
+                if !matches!(this_val, Value::Object(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object".to_string(),
+                        got: format!("{:?}", this_val),
+                    });
                 }
 
-                Ok(Value::Undefined)
+                let callback = self.read_reg(args.start + 1)?;
+                if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: format!("{:?}", callback),
+                    });
+                }
+
+                // Fail-closed until proper callback dispatch is implemented
+                // Programs like [1, 2].forEach(x => console.log(x)) should error rather than
+                // silently do nothing or process elements incorrectly
+                Err(InterpreterError::TypeError {
+                    expected: "supported Array.prototype.forEach implementation".to_string(),
+                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and side-effect execution for each element".to_string(),
+                })
             }
             "builtin:ArrayPrototypeFind" => {
                 // Array.prototype.find(callback[, thisArg]) implementation (simplified)
@@ -13489,40 +13467,6 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeCharCodeAt" => {
-                // String.prototype.charCodeAt(index) implementation
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let index = if args.count > 1 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(n) => n as usize,
-                        Value::Float(f) => f.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                if index < str_text.len() {
-                    let chars: Vec<char> = str_text.chars().collect();
-                    if index < chars.len() {
-                        Ok(Value::Int(chars[index] as u32 as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(f64::NAN)))
-                    }
-                } else {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                }
-            }
 
             "builtin:MathLog2" => {
                 // Math.log2(x) implementation
@@ -14752,33 +14696,6 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ObjectHasOwnProperty" => {
-                // Object.hasOwnProperty(property) implementation
-                if args.count < 2 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let obj_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Primitives don't have own properties
-                };
-
-                let prop_val = self.read_reg(args.start + 1)?;
-                let prop_key = match prop_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                // Check if the object has the property
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    Ok(Value::Bool(obj.properties.contains_key(&prop_key)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
-            }
 
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase() implementation
@@ -16410,34 +16327,6 @@ impl InterpreterCore {
                 })
             }
 
-            "builtin:StringPrototypeCharCodeAt" => {
-                // String.prototype.charCodeAt() implementation - returns char code at index
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                let index = if args.count >= 2 {
-                    let index_val = self.read_reg(args.start + 1)?;
-                    match index_val {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => f.inner().max(0.0) as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                let char_code = str_text.chars().nth(index).map(|c| c as u32).unwrap_or(0);
-                Ok(Value::Float(Float64::new(char_code as f64)))
-            }
 
             "builtin:NumberPrototypeToString" => {
                 // Number.prototype.toString() implementation - unified spec-consistent version
@@ -16461,33 +16350,6 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ObjectPrototypeHasOwnProperty" => {
-                // Object.prototype.hasOwnProperty() implementation
-                let this_val = self.read_reg(args.start)?;
-                let obj_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects return false
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false)); // No property name provided
-                }
-
-                let prop_val = self.read_reg(args.start + 1)?;
-                let prop_name = match prop_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    Ok(Value::Bool(obj.properties.contains_key(&prop_name)))
-                } else {
-                    Ok(Value::Bool(false))
-                }
-            }
 
             "builtin:StringPrototypeSubstring" => {
                 // String.prototype.substring() implementation - returns substring between indices

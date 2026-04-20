@@ -634,7 +634,9 @@ mod tests {
             RuntimeCapability::FsWrite,
         ];
         for cap in &all {
+            // SAFETY: RuntimeCapability derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(cap).unwrap();
+            // SAFETY: JSON was just produced by valid RuntimeCapability serialization
             let restored: RuntimeCapability = serde_json::from_str(&json).unwrap();
             assert_eq!(*cap, restored);
         }
@@ -650,7 +652,9 @@ mod tests {
             ProfileKind::ComputeOnly,
         ];
         for kind in &all {
+            // SAFETY: ProfileKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by valid ProfileKind serialization
             let restored: ProfileKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, restored);
         }

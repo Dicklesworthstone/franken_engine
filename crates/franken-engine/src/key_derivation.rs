@@ -1064,7 +1064,9 @@ mod tests {
             algorithm: "DeterministicTestDeriver".to_string(),
             trace_id: "trace-xyz".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
@@ -1074,7 +1076,9 @@ mod tests {
         let mut ctx = DerivationContext::empty();
         ctx.add("ext_id", "abc");
         ctx.add("session", "xyz");
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ctx).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivationContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, restored);
     }
@@ -1137,7 +1141,9 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: KeyDerivationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
@@ -1189,6 +1195,7 @@ mod tests {
     #[test]
     fn derive_output_len_one_succeeds() {
         let deriver = DeterministicTestDeriver;
+        // SAFETY: test deriver with valid parameters should succeed
         let key = deriver
             .derive(&DerivationRequest {
                 master_key: test_master_key(),
@@ -1204,6 +1211,7 @@ mod tests {
     #[test]
     fn derive_output_len_max_succeeds() {
         let deriver = DeterministicTestDeriver;
+        // SAFETY: test deriver with valid parameters should succeed
         let key = deriver
             .derive(&DerivationRequest {
                 master_key: test_master_key(),
@@ -1245,6 +1253,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let ctx = DerivationContext::empty();
 
+        // SAFETY: test deriver with valid parameters should succeed
         let key_a = deriver
             .derive(&DerivationRequest {
                 master_key: b"master-key-alpha-32-bytes-long!!".to_vec(),
@@ -1255,6 +1264,7 @@ mod tests {
             })
             .unwrap();
 
+        // SAFETY: test deriver with valid parameters should succeed
         let key_b = deriver
             .derive(&DerivationRequest {
                 master_key: b"master-key-bravo-32-bytes-long!!".to_vec(),

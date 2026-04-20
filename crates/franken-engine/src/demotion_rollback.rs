@@ -1951,7 +1951,9 @@ mod tests {
         )
         .expect("create");
 
+        // SAFETY: DemotionReceipt derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: JSON was just produced by valid DemotionReceipt serialization
         let restored: DemotionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, restored);
     }
@@ -1961,7 +1963,9 @@ mod tests {
         let mut policy = test_policy();
         policy.block_candidate("blocked-digest".to_string());
 
+        // SAFETY: DemotionPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by valid DemotionPolicy serialization
         let restored: DemotionPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
@@ -1975,7 +1979,9 @@ mod tests {
         };
         monitor.process_observation(&obs);
 
+        // SAFETY: AutoDemotionMonitor derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&monitor).unwrap();
+        // SAFETY: JSON was just produced by valid AutoDemotionMonitor serialization
         let restored: AutoDemotionMonitor = serde_json::from_str(&json).unwrap();
         assert_eq!(monitor, restored);
     }
@@ -2154,7 +2160,9 @@ mod tests {
             },
         ];
         for reason in reasons {
+            // SAFETY: DemotionReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&reason).unwrap();
+            // SAFETY: JSON was just produced by valid DemotionReason serialization
             let back: DemotionReason = serde_json::from_str(&json).unwrap();
             assert_eq!(reason, back);
         }

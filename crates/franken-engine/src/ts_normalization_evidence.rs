@@ -697,6 +697,7 @@ mod tests {
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let ts = std::time::SystemTime::now()
+            // SAFETY: Test helper getting current timestamp; system time is after UNIX_EPOCH
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();

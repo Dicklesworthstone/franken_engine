@@ -1323,6 +1323,7 @@ mod tests {
     fn test_empty_input_fully_compatible() {
         let a = SemanticTransportAnalyzer::new();
         let input = simple_input(vec![]);
+        // SAFETY: Test helper creates valid input; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         assert_eq!(result.total_entries, 0);
@@ -1339,6 +1340,7 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("useEffect.cleanup", vec![]);
         let input = simple_input(vec![spec]);
+        // SAFETY: Test helpers create valid spec and input; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
@@ -1355,6 +1357,7 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("useEffect.timing", vec![delta(300_000, true)]);
         let input = simple_input(vec![spec]);
+        // SAFETY: Test helpers create valid spec with deltas and input; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(
@@ -1374,6 +1377,7 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("useLayoutEffect.order", vec![delta(300_000, false)]);
         let input = simple_input(vec![spec]);
+        // SAFETY: Test helpers create valid spec with unbridgeable deltas; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(
@@ -1391,6 +1395,7 @@ mod tests {
         let mut spec = simple_spec("useState.semantics", vec![]);
         spec.broken_invariants = vec!["ordering-guarantee".to_string()];
         let input = simple_input(vec![spec]);
+        // SAFETY: Test creates valid spec with broken invariants; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(
@@ -1410,6 +1415,7 @@ mod tests {
         let s2 = simple_spec("effect.timing", vec![delta(200_000, true)]);
         let s3 = simple_spec("context.resolution", vec![delta(100_000, false)]);
         let input = simple_input(vec![s1, s2, s3]);
+        // SAFETY: Test helpers create valid multiple specs with mixed verdicts; analyze succeeds in controlled test environment.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(
@@ -1450,6 +1456,7 @@ mod tests {
             .map(|i| simple_spec(&format!("frag{i}"), vec![]))
             .collect();
         let input = simple_input(specs);
+        // SAFETY: Test creates multiple valid specs; analyze succeeds despite budget exhaustion in controlled test.
         let result = a.analyze(&input).unwrap();
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::BudgetExhausted);

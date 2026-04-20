@@ -808,6 +808,7 @@ impl SpecializationRollbackGate {
 
         let record = RollbackRecord::new(record_id, self.epoch, envelope_id, reason, timestamp_ns);
         self.rollback_history.push(record);
+        // SAFETY: We just pushed a record, so rollback_history is non-empty and last() returns Some
         self.rollback_history.last().unwrap()
     }
 

@@ -1436,6 +1436,7 @@ mod tests {
             make_module("c.js", 100, false),
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
+        // SAFETY: Test with valid graph and default config should compile for receipt building
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
         let receipt = build_receipt(&report, graph.graph_hash, &default_config());
         assert_eq!(receipt.schema_version, SCHEMA_VERSION);
@@ -1453,6 +1454,7 @@ mod tests {
             make_module("z.js", 50, false),
         ];
         let graph = make_graph("gd", EntryKind::PackageMain, modules);
+        // SAFETY: Test with valid graph and default config should compile for deterministic receipt
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
         let r1 = build_receipt(&report, graph.graph_hash, &default_config());
         let r2 = build_receipt(&report, graph.graph_hash, &default_config());
@@ -1642,7 +1644,9 @@ mod tests {
             CompileError::MultipleRoots { count: 2 },
         ];
         for e in &errors {
+            // SAFETY: CompileError derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(e).unwrap();
+            // SAFETY: JSON was just produced by valid CompileError serialization
             let back: CompileError = serde_json::from_str(&json).unwrap();
             assert_eq!(*e, back);
         }

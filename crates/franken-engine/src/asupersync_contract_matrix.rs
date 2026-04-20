@@ -1500,6 +1500,7 @@ mod tests {
 
     #[test]
     fn surface_serde_is_snake_case() {
+        // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&AsupersyncSurface::KernelContext).unwrap();
         assert_eq!(json, "\"kernel_context\"");
     }

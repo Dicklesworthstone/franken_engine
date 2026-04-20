@@ -1855,6 +1855,7 @@ mod tests {
     fn verify_attestation_unsigned_partially_verified() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let attestation = generate_attestation(&input).unwrap();
         let verification = verify_attestation(&attestation);
         // Unsigned → skipped signature check → PartiallyVerified

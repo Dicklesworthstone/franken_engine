@@ -2,9 +2,7 @@
 //! Integration regression tests for commit 3b448a39: charAt UTF-16 indexing fix
 //! Addresses missing regression test from docs/MISSING_REGRESSION_TESTS_AUDIT.md
 
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, Value,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 
 #[test]
 fn test_charat_utf16_basic_regression() {
@@ -35,7 +33,10 @@ fn test_charat_utf16_out_of_bounds_regression() {
     // Test out-of-bounds index returns empty string
     let result = interpreter.evaluate_expression("'abc'.charAt(5)");
     if let Ok(Value::Str(s)) = result {
-        assert_eq!(s, "", "charAt(5) on 3-char string should return empty string");
+        assert_eq!(
+            s, "",
+            "charAt(5) on 3-char string should return empty string"
+        );
     } else {
         panic!("charAt(5) should return empty string, got: {:?}", result);
     }
@@ -62,7 +63,11 @@ fn test_charat_utf16_surrogate_pairs_regression() {
         // Test passes if it returns some string value (documents behavior)
     } else {
         // charAt might fail-closed for complex UTF-16, which is acceptable
-        assert!(result.is_err(), "charAt with UTF-16 may fail-closed, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "charAt with UTF-16 may fail-closed, got: {:?}",
+            result
+        );
     }
 }
 

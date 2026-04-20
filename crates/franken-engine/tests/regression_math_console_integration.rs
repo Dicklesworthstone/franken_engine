@@ -5,7 +5,9 @@
 //! Regression tests for commit 5e20ceac701c03a02f70fda1966e2677c9a73f8e
 //! Verifies Math.round negative half semantics and ConsoleLevel::Info dispatch
 
-use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterConfig, ConsoleLevel};
+use frankenengine_engine::baseline_interpreter::{
+    ConsoleLevel, InterpreterConfig, InterpreterCore,
+};
 use frankenengine_engine::ir3::{Ir3Instruction, Module, RegRange};
 use frankenengine_engine::value::Value;
 
@@ -34,11 +36,21 @@ fn math_round_negative_half_integration() {
 
     let rounded_value = core.registers[10].clone();
     if let Value::Int(n) = rounded_value {
-        assert_eq!(n, 0, "Math.round(-0.5) should equal 0 per JavaScript semantics");
+        assert_eq!(
+            n, 0,
+            "Math.round(-0.5) should equal 0 per JavaScript semantics"
+        );
     } else if let Value::Float(f) = rounded_value {
-        assert_eq!(f.inner(), 0.0, "Math.round(-0.5) should equal 0.0 per JavaScript semantics");
+        assert_eq!(
+            f.inner(),
+            0.0,
+            "Math.round(-0.5) should equal 0.0 per JavaScript semantics"
+        );
     } else {
-        panic!("Math.round should return numeric value, got {:?}", rounded_value);
+        panic!(
+            "Math.round should return numeric value, got {:?}",
+            rounded_value
+        );
     }
 }
 
@@ -66,7 +78,10 @@ fn math_round_positive_half_integration() {
     } else if let Value::Float(f) = rounded_value {
         assert_eq!(f.inner(), 1.0, "Math.round(0.5) should equal 1.0");
     } else {
-        panic!("Math.round should return numeric value, got {:?}", rounded_value);
+        panic!(
+            "Math.round should return numeric value, got {:?}",
+            rounded_value
+        );
     }
 }
 
@@ -90,11 +105,21 @@ fn math_round_edge_cases_integration() {
 
     let rounded_value = core.registers[10].clone();
     if let Value::Int(n) = rounded_value {
-        assert_eq!(n, -1, "Math.round(-1.5) should equal -1 per JavaScript floor(x + 0.5) semantics");
+        assert_eq!(
+            n, -1,
+            "Math.round(-1.5) should equal -1 per JavaScript floor(x + 0.5) semantics"
+        );
     } else if let Value::Float(f) = rounded_value {
-        assert_eq!(f.inner(), -1.0, "Math.round(-1.5) should equal -1.0 per JavaScript floor(x + 0.5) semantics");
+        assert_eq!(
+            f.inner(),
+            -1.0,
+            "Math.round(-1.5) should equal -1.0 per JavaScript floor(x + 0.5) semantics"
+        );
     } else {
-        panic!("Math.round should return numeric value, got {:?}", rounded_value);
+        panic!(
+            "Math.round should return numeric value, got {:?}",
+            rounded_value
+        );
     }
 }
 
@@ -118,11 +143,21 @@ fn console_info_dispatch_integration() {
     assert!(result.is_ok(), "Console.info execution should succeed");
 
     // Verify console output was captured
-    assert!(!core.console_output.is_empty(), "Console.info should produce output");
+    assert!(
+        !core.console_output.is_empty(),
+        "Console.info should produce output"
+    );
 
     let console_entry = &core.console_output[0];
-    assert_eq!(console_entry.level, ConsoleLevel::Info, "Console entry should have Info level");
-    assert_eq!(console_entry.message, "Info level message", "Console entry should have correct message");
+    assert_eq!(
+        console_entry.level,
+        ConsoleLevel::Info,
+        "Console entry should have Info level"
+    );
+    assert_eq!(
+        console_entry.message, "Info level message",
+        "Console entry should have correct message"
+    );
 }
 
 #[test]
@@ -167,7 +202,11 @@ fn console_info_vs_other_levels_integration() {
     ]));
 
     // Verify all three console outputs
-    assert_eq!(core.console_output.len(), 3, "Should have 3 console outputs");
+    assert_eq!(
+        core.console_output.len(),
+        3,
+        "Should have 3 console outputs"
+    );
 
     assert_eq!(core.console_output[0].level, ConsoleLevel::Log);
     assert_eq!(core.console_output[0].message, "Log message");

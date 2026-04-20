@@ -3,9 +3,7 @@
 //! Provides integration test coverage for fixes that had unit tests but lacked
 //! integration tests per docs/MISSING_REGRESSION_TESTS_AUDIT.md
 
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, Value,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 
 #[test]
 fn test_console_level_info_dispatch_regression() {
@@ -17,17 +15,25 @@ fn test_console_level_info_dispatch_regression() {
     assert!(result.is_ok(), "console.info should not error");
 
     // Verify it returns undefined (standard console behavior)
-    assert_eq!(result.unwrap(), Value::Undefined, "console.info should return undefined");
+    assert_eq!(
+        result.unwrap(),
+        Value::Undefined,
+        "console.info should return undefined"
+    );
 
     // Test with different argument types
     let result = interpreter.evaluate_expression("console.info(42)");
     assert!(result.is_ok(), "console.info with number should work");
 
     let result = interpreter.evaluate_expression("console.info(true, false, null)");
-    assert!(result.is_ok(), "console.info with multiple args should work");
+    assert!(
+        result.is_ok(),
+        "console.info with multiple args should work"
+    );
 
     // Test that console.info doesn't interfere with other console methods
-    let result = interpreter.evaluate_expression("console.log('test'); console.info('info'); console.error('error')");
+    let result = interpreter
+        .evaluate_expression("console.log('test'); console.info('info'); console.error('error')");
     assert!(result.is_ok(), "Mixed console calls should work");
 }
 
@@ -87,7 +93,10 @@ fn test_math_round_comprehensive_integration_regression() {
     let result = interpreter.evaluate_expression("Math.round(Infinity)");
     if result.is_ok() {
         match result.unwrap() {
-            Value::Float(f) => assert!(f.inner().is_infinite() && f.inner().is_sign_positive(), "Math.round(Infinity) should be Infinity"),
+            Value::Float(f) => assert!(
+                f.inner().is_infinite() && f.inner().is_sign_positive(),
+                "Math.round(Infinity) should be Infinity"
+            ),
             _ => panic!("Math.round(Infinity) should return Float Infinity"),
         }
     }
@@ -95,7 +104,10 @@ fn test_math_round_comprehensive_integration_regression() {
     let result = interpreter.evaluate_expression("Math.round(-Infinity)");
     if result.is_ok() {
         match result.unwrap() {
-            Value::Float(f) => assert!(f.inner().is_infinite() && f.inner().is_sign_negative(), "Math.round(-Infinity) should be -Infinity"),
+            Value::Float(f) => assert!(
+                f.inner().is_infinite() && f.inner().is_sign_negative(),
+                "Math.round(-Infinity) should be -Infinity"
+            ),
             _ => panic!("Math.round(-Infinity) should return Float -Infinity"),
         }
     }
@@ -121,13 +133,17 @@ fn test_math_round_type_coercion_integration_regression() {
 
     // String to number coercion
     assert_eq!(
-        interpreter.evaluate_expression("Math.round('4.7')").unwrap(),
+        interpreter
+            .evaluate_expression("Math.round('4.7')")
+            .unwrap(),
         Value::Int(5),
         "Math.round('4.7') should coerce string to number"
     );
 
     assert_eq!(
-        interpreter.evaluate_expression("Math.round('4.3')").unwrap(),
+        interpreter
+            .evaluate_expression("Math.round('4.3')")
+            .unwrap(),
         Value::Int(4),
         "Math.round('4.3') should coerce string to number"
     );
@@ -140,7 +156,9 @@ fn test_math_round_type_coercion_integration_regression() {
     );
 
     assert_eq!(
-        interpreter.evaluate_expression("Math.round(false)").unwrap(),
+        interpreter
+            .evaluate_expression("Math.round(false)")
+            .unwrap(),
         Value::Int(0),
         "Math.round(false) should be 0"
     );
@@ -169,28 +187,41 @@ fn test_math_round_expression_context_integration_regression() {
 
     // Math.round in arithmetic expressions
     assert_eq!(
-        interpreter.evaluate_expression("Math.round(4.7) + Math.round(3.2)").unwrap(),
+        interpreter
+            .evaluate_expression("Math.round(4.7) + Math.round(3.2)")
+            .unwrap(),
         Value::Int(8),
         "Math.round in addition should work: 5 + 3 = 8"
     );
 
     // Math.round with variables
-    let result = interpreter.evaluate_expression(
-        "var x = 4.7; var y = 3.2; Math.round(x) + Math.round(y)"
-    );
+    let result =
+        interpreter.evaluate_expression("var x = 4.7; var y = 3.2; Math.round(x) + Math.round(y)");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Int(8), "Math.round with variables should work");
+        assert_eq!(
+            result.unwrap(),
+            Value::Int(8),
+            "Math.round with variables should work"
+        );
     }
 
     // Math.round with function calls
     let result = interpreter.evaluate_expression("Math.round(Math.abs(-4.7))");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Int(5), "Math.round with Math.abs should work");
+        assert_eq!(
+            result.unwrap(),
+            Value::Int(5),
+            "Math.round with Math.abs should work"
+        );
     }
 
     // Math.round edge case interactions
     let result = interpreter.evaluate_expression("Math.round(4.5) + Math.round(-4.5)");
     if result.is_ok() {
-        assert_eq!(result.unwrap(), Value::Int(1), "Math.round half cases should work: 5 + (-4) = 1");
+        assert_eq!(
+            result.unwrap(),
+            Value::Int(1),
+            "Math.round half cases should work: 5 + (-4) = 1"
+        );
     }
 }

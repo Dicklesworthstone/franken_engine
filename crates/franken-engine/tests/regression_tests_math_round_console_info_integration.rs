@@ -2,9 +2,7 @@
 //! Integration regression tests for commit 5e20ceac: Math.round + ConsoleLevel::Info fix
 //! Addresses missing regression test from docs/MISSING_REGRESSION_TESTS_AUDIT.md
 
-use frankenengine_engine::baseline_interpreter::{
-    InterpreterConfig, InterpreterCore, Value,
-};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 
 #[test]
 fn test_math_round_basic_regression() {
@@ -16,14 +14,20 @@ fn test_math_round_basic_regression() {
     if let Ok(Value::Number(n)) = result {
         assert_eq!(n, 5.0, "Math.round(4.7) should equal 5");
     } else {
-        panic!("Math.round(4.7) should return Number(5.0), got: {:?}", result);
+        panic!(
+            "Math.round(4.7) should return Number(5.0), got: {:?}",
+            result
+        );
     }
 
     let result = interpreter.evaluate_expression("Math.round(4.4)");
     if let Ok(Value::Number(n)) = result {
         assert_eq!(n, 4.0, "Math.round(4.4) should equal 4");
     } else {
-        panic!("Math.round(4.4) should return Number(4.0), got: {:?}", result);
+        panic!(
+            "Math.round(4.4) should return Number(4.0), got: {:?}",
+            result
+        );
     }
 }
 
@@ -37,7 +41,10 @@ fn test_math_round_edge_cases_regression() {
     if let Ok(Value::Number(n)) = result {
         assert_eq!(n, -5.0, "Math.round(-4.7) should equal -5");
     } else {
-        panic!("Math.round(-4.7) should return Number(-5.0), got: {:?}", result);
+        panic!(
+            "Math.round(-4.7) should return Number(-5.0), got: {:?}",
+            result
+        );
     }
 
     // Test zero
@@ -45,7 +52,10 @@ fn test_math_round_edge_cases_regression() {
     if let Ok(Value::Number(n)) = result {
         assert_eq!(n, 0.0, "Math.round(0.0) should equal 0");
     } else {
-        panic!("Math.round(0.0) should return Number(0.0), got: {:?}", result);
+        panic!(
+            "Math.round(0.0) should return Number(0.0), got: {:?}",
+            result
+        );
     }
 
     // Test exactly 0.5
@@ -53,7 +63,10 @@ fn test_math_round_edge_cases_regression() {
     if let Ok(Value::Number(n)) = result {
         assert_eq!(n, 1.0, "Math.round(0.5) should equal 1");
     } else {
-        panic!("Math.round(0.5) should return Number(1.0), got: {:?}", result);
+        panic!(
+            "Math.round(0.5) should return Number(1.0), got: {:?}",
+            result
+        );
     }
 }
 

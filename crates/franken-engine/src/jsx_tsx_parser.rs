@@ -1594,6 +1594,8 @@ mod tests {
                     _ => panic!("expected element child"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX fragment parsing.
+            // Test expects fragment node type for JSX empty tag expressions.
             _ => panic!("expected fragment"),
         }
     }

@@ -102,6 +102,8 @@ impl TsconfigSnapshot {
         hasher.update(self.root_dir.as_bytes());
         hasher.update(self.base_url.as_bytes());
         hasher.update(
+            // SAFETY: ModuleResolution derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             serde_json::to_string(&self.module_resolution)
                 .unwrap()
                 .as_bytes(),
@@ -253,6 +255,8 @@ impl TsResolutionReplayIndex {
 
         let mut hasher = Sha256::new();
         hasher.update(tsconfig_hash.as_bytes());
+        // SAFETY: ResolutionMode derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         hasher.update(serde_json::to_string(&mode).unwrap().as_bytes());
         for (k, v) in &map {
             hasher.update(k.as_bytes());
@@ -1322,6 +1326,7 @@ mod tests {
         assert_eq!(index.entry_count(), 1);
         let found = index.lookup("react", Some("./app.tsx"), TsRequestStyle::Import);
         assert!(found.is_some());
+        // SAFETY: Test just verified found.is_some(), so unwrap() cannot panic
         assert_eq!(found.unwrap().resolved_path, "node_modules/react/index.js");
     }
 

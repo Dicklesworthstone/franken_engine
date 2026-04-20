@@ -1091,12 +1091,15 @@ mod tests {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
         let mut tracker = ObligationTracker::default();
 
+        // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "alloc-1", TwoPhaseCategory::ResourceAlloc, "a1")
             .unwrap();
+        // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "alloc-2", TwoPhaseCategory::ResourceAlloc, "a2")
             .unwrap();
+        // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "perm-1", TwoPhaseCategory::PermissionGrant, "p1")
             .unwrap();

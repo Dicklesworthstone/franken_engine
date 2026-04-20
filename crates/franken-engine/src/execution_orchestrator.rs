@@ -2245,6 +2245,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let artifact =
             artifact_with_required_declassification("trace-allow", "obl-allow", "decision-allow");
+        // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key = SigningKey::from_bytes([17u8; 32]).unwrap();
         let receipt = signed_receipt("trace-allow", "decision-allow", &signing_key);
 
@@ -2269,6 +2270,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let artifact =
             artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
+        // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key = SigningKey::from_bytes([18u8; 32]).unwrap();
         let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
         let staged_key = ("trace-block".to_string(), "obl-block".to_string());
@@ -2343,6 +2345,7 @@ mod tests {
                 reason: "dynamic_capability".to_string(),
             },
         );
+        // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key = SigningKey::from_bytes([19u8; 32]).unwrap();
         let receipt = signed_receipt("trace-partial", "decision-partial", &signing_key);
         let staged_key = ("trace-partial".to_string(), "obl-partial".to_string());
@@ -2565,7 +2568,9 @@ mod tests {
             LossMatrixPreset::Conservative,
             LossMatrixPreset::Permissive,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(preset).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: LossMatrixPreset = serde_json::from_str(&json).unwrap();
             assert_eq!(*preset, back);
         }
@@ -2585,10 +2590,13 @@ mod tests {
                 m
             },
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&pkg).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ExtensionPackage = serde_json::from_str(&json).unwrap();
         assert_eq!(back.extension_id, "ext-serde");
         assert_eq!(back.capabilities.len(), 2);
+        // SAFETY: get cannot fail for key we just inserted in test
         assert_eq!(back.metadata.get("author").unwrap(), "test");
     }
 

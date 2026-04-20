@@ -14433,24 +14433,7 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
 
-            "builtin:ParseInt" => {
-                // parseInt() implementation - parses string to integer
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start)?;
-                let radix_arg = if args.count >= 2 {
-                    Some(self.read_reg(args.start + 1)?)
-                } else {
-                    None
-                };
-
-                match Self::parse_int_with_sign_and_radix(&value, radix_arg.as_ref()) {
-                    Some(result) => Ok(Value::Int(result)),
-                    None => Ok(Value::Float(Float64::new(f64::NAN))),
-                }
-            }
+            // Removed duplicate ParseInt - implementation at line 8385 (builtin:parseInt) is identical
 
             "builtin:ParseFloat" => {
                 // parseFloat() implementation - parses string to float

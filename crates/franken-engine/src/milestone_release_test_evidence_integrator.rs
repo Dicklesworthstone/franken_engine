@@ -424,6 +424,7 @@ fn validate_signal(
                     ),
                 ));
             }
+            // SAFETY: signer field is guaranteed to be Some in this validation context
             if artifact
                 .signer
                 .as_deref()

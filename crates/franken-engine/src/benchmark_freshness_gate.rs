@@ -2361,7 +2361,11 @@ mod tests {
     #[test]
     fn test_alarm_serde_roundtrip() {
         let alarm = make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 5);
+        // SAFETY: ShiftAlarm derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&alarm).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ShiftAlarm,
+        // so from_str back to ShiftAlarm cannot fail (valid format + matching schema).
         let back: ShiftAlarm = serde_json::from_str(&json).unwrap();
         assert_eq!(alarm, back);
     }
@@ -2369,7 +2373,11 @@ mod tests {
     #[test]
     fn test_acquisition_serde_roundtrip() {
         let ev = make_acquisition(ShiftDomain::General, 50, 100, AcquisitionStatus::Active);
+        // SAFETY: AcquisitionEvidence derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ev).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid AcquisitionEvidence,
+        // so from_str back to AcquisitionEvidence cannot fail (valid format + matching schema).
         let back: AcquisitionEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
     }
@@ -2377,7 +2385,11 @@ mod tests {
     #[test]
     fn test_config_serde_roundtrip() {
         let config = GateConfig::default();
+        // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateConfig,
+        // so from_str back to GateConfig cannot fail (valid format + matching schema).
         let back: GateConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }
@@ -2388,7 +2400,11 @@ mod tests {
         gate.silence_tracker.record_signal(epoch(10));
         let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
         let verdict = gate.evaluate_claim(&claim);
+        // SAFETY: FreshnessVerdict derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&verdict).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FreshnessVerdict,
+        // so from_str back to FreshnessVerdict cannot fail (valid format + matching schema).
         let back: FreshnessVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(verdict, back);
     }
@@ -2402,7 +2418,11 @@ mod tests {
             ShiftSeverity::Info,
             5,
         ));
+        // SAFETY: FreshnessGate derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&gate).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FreshnessGate,
+        // so from_str back to FreshnessGate cannot fail (valid format + matching schema).
         let back: FreshnessGate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.alarm_ledger.active_count(), 1);
     }

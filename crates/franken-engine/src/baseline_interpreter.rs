@@ -8111,82 +8111,6 @@ impl InterpreterCore {
                 let uppercase = string_val.to_uppercase();
                 Ok(Value::Str(uppercase))
             }
-            "builtin:StringPrototypeSplit" => {
-                // String.prototype.split implementation - splits string into array
-                if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
-                }
-
-                let string_arg = self.read_reg(args.start)?;
-                let string_val = match string_arg {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "".to_string(),
-                };
-
-                if args.count == 1 {
-                    let array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(
-                        array_id,
-                        "0".to_string(),
-                        Value::Str(string_val.clone()),
-                    )?;
-                    self.set_object_property(array_id, "length".to_string(), Value::Int(1))?;
-                    return Ok(Value::Object(array_id));
-                }
-
-                // Get separator argument (default to undefined which means split into characters)
-                let separator = if args.count > 1 {
-                    let sep_arg = self.read_reg(args.start + 1)?;
-                    match sep_arg {
-                        Value::Str(s) => Some(s),
-                        Value::Null => Some("null".to_string()),
-                        Value::Undefined => None,
-                        Value::Int(n) => Some(n.to_string()),
-                        Value::Float(f) => Some(f.inner().to_string()),
-                        Value::Bool(b) => Some(b.to_string()),
-                        _ => None,
-                    }
-                } else {
-                    None // Split each character
-                };
-
-                // Create result array
-                let array_id = self.alloc_object_with_prototype(None)?;
-
-                let parts: Vec<String> = match separator {
-                    Some(sep) if !sep.is_empty() => {
-                        // Split by separator
-                        string_val.split(&sep).map(|s| s.to_string()).collect()
-                    }
-                    Some(_) => {
-                        // Empty separator - split into characters
-                        string_val.chars().map(|c| c.to_string()).collect()
-                    }
-                    None => {
-                        // No separator / separator omitted / separator undefined
-                        vec![string_val]
-                    }
-                };
-
-                // Add parts to array
-                for (i, part) in parts.iter().enumerate() {
-                    self.set_object_property(array_id, i.to_string(), Value::Str(part.clone()))?;
-                }
-
-                // Set length property
-                self.set_object_property(
-                    array_id,
-                    "length".to_string(),
-                    Value::Int(parts.len() as i64),
-                )?;
-
-                Ok(Value::Object(array_id))
-            }
             "builtin:StringPrototypeTrim" => {
                 // String.prototype.trim implementation - removes whitespace from both ends
                 if args.count == 0 {
@@ -8278,7 +8202,16 @@ impl InterpreterCore {
                     match arg {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already rounded
                         Value::Float(f) => {
-                            let val = f.inner().round();
+                            let input = f.inner();
+                            // Implement JavaScript Math.round semantics:
+                            // Round towards positive infinity for ties (0.5 cases)
+                            let val = if input.is_nan() || input.is_infinite() {
+                                input
+                            } else if input == -0.5 {
+                                -0.0  // Special case: -0.5 rounds to -0
+                            } else {
+                                (input + 0.5).floor()
+                            };
                             // Check if the result fits in an integer range
                             if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
                                 Ok(Value::Int(val as i64))
@@ -17012,83 +16945,8 @@ impl InterpreterCore {
                 Ok(Value::Object(filtered_array_id))
             }
 
-            "builtin:MathFloor" => {
-                // Math.floor() implementation - returns largest integer <= x
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
 
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "floored"
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
 
-                if num.is_nan() || num.is_infinite() {
-                    Ok(Value::Float(Float64::new(num)))
-                } else {
-                    let floored = num.floor();
-                    // Return Int if in i64 range, otherwise Float
-                    if floored >= i64::MIN as f64 && floored <= i64::MAX as f64 {
-                        Ok(Value::Int(floored as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(floored)))
-                    }
-                }
-            }
-
-            "builtin:MathCeil" => {
-                // Math.ceil() implementation - returns smallest integer >= x
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "ceiling"
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                if num.is_nan() || num.is_infinite() {
-                    Ok(Value::Float(Float64::new(num)))
-                } else {
-                    let ceiled = num.ceil();
-                    // Return Int if in i64 range, otherwise Float
-                    if ceiled >= i64::MIN as f64 && ceiled <= i64::MAX as f64 {
-                        Ok(Value::Int(ceiled as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(ceiled)))
-                    }
-                }
-            }
-
-            "builtin:MathRound" => {
-                // Math.round() implementation - returns nearest integer
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => return Ok(Value::Int(n)), // Integers are already "rounded"
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                if num.is_nan() || num.is_infinite() {
-                    Ok(Value::Float(Float64::new(num)))
-                } else {
-                    let rounded = num.round();
-                    // Return Int if in i64 range, otherwise Float
-                    if rounded >= i64::MIN as f64 && rounded <= i64::MAX as f64 {
-                        Ok(Value::Int(rounded as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(rounded)))
-                    }
-                }
-            }
 
             "builtin:StringPrototypeSplit" => {
                 // String.prototype.split() implementation - splits string into array
@@ -17869,16 +17727,21 @@ impl InterpreterCore {
     fn math_random_impl(&mut self) -> Result<Value, InterpreterError> {
         // Generate deterministic pseudo-random number using execution state as seed
         use crate::security_e2e::Xorshift64;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use sha2::{Digest, Sha256};
 
-        let mut hasher = DefaultHasher::new();
-        self.call_stack.len().hash(&mut hasher);
-        self.heap.len().hash(&mut hasher);
-        self.instructions_executed.hash(&mut hasher);
-        self.ip.hash(&mut hasher);
+        // Create deterministic seed from execution state using stable hash
+        // (SHA-256 is deterministic across builds, unlike DefaultHasher)
+        let mut digest = Sha256::new();
+        digest.update(&(self.call_stack.len() as u64).to_le_bytes());
+        digest.update(&(self.heap.len() as u64).to_le_bytes());
+        digest.update(&self.instructions_executed.to_le_bytes());
+        digest.update(&(self.ip as u64).to_le_bytes());
 
-        let seed = hasher.finish();
+        let hash_result = digest.finalize();
+        let seed = u64::from_le_bytes([
+            hash_result[0], hash_result[1], hash_result[2], hash_result[3],
+            hash_result[4], hash_result[5], hash_result[6], hash_result[7],
+        ]);
         let mut rng = Xorshift64::new(seed);
 
         // Generate random value in [0, 1) using 53-bit precision to avoid rounding to 1.0
@@ -24788,5 +24651,52 @@ mod tests {
 
         // Should stop at first invalid character and return 123
         assert_eq!(core.registers[10], Value::Int(123));
+    }
+
+    #[test]
+    fn math_random_deterministic_replay() {
+        // Regression test: same execution state should produce same random sequence
+        // This ensures DefaultHasher replacement with SHA-256 maintains determinism
+        let mut core1 = BaselineInterpreter::new();
+        let mut core2 = BaselineInterpreter::new();
+
+        // Set both cores to identical state
+        core1.instructions_executed = 42;
+        core1.ip = 10;
+        core2.instructions_executed = 42;
+        core2.ip = 10;
+
+        // Call Math.random on both cores
+        let result1 = core1.math_random_impl().unwrap();
+        let result2 = core2.math_random_impl().unwrap();
+
+        // Should produce identical results (deterministic)
+        assert_eq!(result1, result2, "Math.random should be deterministic with same execution state");
+
+        // Verify it's actually a valid random number in [0, 1)
+        if let Value::Float(f) = result1 {
+            let val = f.inner();
+            assert!(val >= 0.0, "Math.random should be >= 0.0, got {}", val);
+            assert!(val < 1.0, "Math.random should be < 1.0, got {}", val);
+        } else {
+            panic!("Math.random should return a Float, got {:?}", result1);
+        }
+    }
+
+    #[test]
+    fn math_random_different_states_produce_different_values() {
+        // Test that different execution states produce different random values
+        let mut core1 = BaselineInterpreter::new();
+        let mut core2 = BaselineInterpreter::new();
+
+        // Set cores to different states
+        core1.instructions_executed = 10;
+        core2.instructions_executed = 20;
+
+        let result1 = core1.math_random_impl().unwrap();
+        let result2 = core2.math_random_impl().unwrap();
+
+        // Should produce different results
+        assert_ne!(result1, result2, "Different execution states should produce different random values");
     }
 }

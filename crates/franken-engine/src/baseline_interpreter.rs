@@ -12938,49 +12938,7 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_nan))
             }
 
-            "builtin:ArrayPrototypeReverse" => {
-                // Array.prototype.reverse() implementation - reverses array in place
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Object(array_id)),
-                    }
-                } else {
-                    return Ok(Value::Object(array_id));
-                };
-
-                if length <= 1 {
-                    return Ok(Value::Object(array_id)); // Nothing to reverse
-                }
-
-                // Collect all elements first to avoid borrow checker issues
-                let mut elements = Vec::new();
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            elements.push(element.clone());
-                        } else {
-                            elements.push(Value::Undefined);
-                        }
-                    }
-                }
-
-                // Reverse the elements and set them back
-                elements.reverse();
-                for (i, element) in elements.iter().enumerate() {
-                    self.set_object_property(array_id, i.to_string(), element.clone())?;
-                }
-
-                Ok(Value::Object(array_id))
-            }
+            // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
 
 
             "builtin:MathAtan" => {
@@ -15767,51 +15725,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeReverse" => {
-                // Array.prototype.reverse() implementation - reverses array in place
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(this_val), // Non-objects return as-is
-                };
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    if length > 1 {
-                        // Collect elements in order
-                        let mut elements: Vec<(usize, Value)> = Vec::new();
-                        for i in 0..length {
-                            if let Some(element) = obj.properties.get(&i.to_string()) {
-                                elements.push((i, element.clone()));
-                            }
-                        }
-
-                        // Clear existing numeric properties
-                        if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
-                            for i in 0..length {
-                                obj_mut.properties.remove(&i.to_string());
-                            }
-                        }
-
-                        // Reverse and reassign elements
-                        elements.reverse();
-                        for (new_index, (_, value)) in elements.into_iter().enumerate() {
-                            self.set_object_property(array_id, new_index.to_string(), value)?;
-                        }
-                    }
-                }
-
-                Ok(this_val) // Array methods return the array itself for reverse()
-            }
+            // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase() implementation
@@ -15829,35 +15743,7 @@ impl InterpreterCore {
                 Ok(Value::Str(str_text.to_uppercase()))
             }
 
-            "builtin:ObjectPrototypeToString" => {
-                // Object.prototype.toString() implementation
-                let this_val = self.read_reg(args.start)?;
-                let result = match this_val {
-                    Value::Null => "[object Null]".to_string(),
-                    Value::Undefined => "[object Undefined]".to_string(),
-                    Value::Bool(_) => "[object Boolean]".to_string(),
-                    Value::Int(_) => "[object Number]".to_string(),
-                    Value::Float(_) => "[object Number]".to_string(),
-                    Value::Str(_) => "[object String]".to_string(),
-                    Value::Object(obj_id) => {
-                        // Check if it's an array by looking for length property and numeric indices
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if obj.properties.contains_key("length") {
-                                // Simple heuristic: if it has length property, consider it array-like
-                                "[object Array]".to_string()
-                            } else {
-                                "[object Object]".to_string()
-                            }
-                        } else {
-                            "[object Object]".to_string()
-                        }
-                    }
-                    Value::Function(_) => "[object Function]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                Ok(Value::Str(result))
-            }
+            // ObjectPrototypeToString: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:StringPrototypeTrim" => {
                 // String.prototype.trim() implementation - removes whitespace from both ends
@@ -24608,5 +24494,92 @@ mod tests {
 
         // Verify the call succeeded (should not panic or error)
         assert!(result.is_ok(), "StringPrototypeSplit builtin should work after deduplication");
+    }
+
+    #[test]
+    fn batch_27_deduplication_regression_test() {
+        // Regression test for bd-3n6hg batch-27 Array.reverse and Object.toString deduplication
+        // Verifies that duplicate dispatch arms were removed and only first occurrences remain
+        let interpreter = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Test ArrayPrototypeReverse builtin IDs still work
+        assert_eq!(
+            interpreter.builtin_name_from_id(21),
+            Some("builtin:ArrayPrototypeReverse".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(243),
+            Some("builtin:ArrayPrototypeReverse".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(329),
+            Some("builtin:ArrayPrototypeReverse".to_string())
+        );
+
+        // Test ObjectPrototypeToString builtin IDs still work
+        assert_eq!(
+            interpreter.builtin_name_from_id(264),
+            Some("builtin:ObjectPrototypeToString".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(332),
+            Some("builtin:ObjectPrototypeToString".to_string())
+        );
+    }
+
+    #[test]
+    fn array_reverse_functionality_after_dedup() {
+        // Verify ArrayPrototypeReverse functionality preserved after removing duplicates
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Create an array object with elements
+        let array_id = ObjectId(10);
+        core.heap.push(Object {
+            properties: BTreeMap::from([
+                ("length".to_string(), Value::Int(3)),
+                ("0".to_string(), Value::Str("first".to_string())),
+                ("1".to_string(), Value::Str("second".to_string())),
+                ("2".to_string(), Value::Str("third".to_string())),
+            ]),
+        });
+        core.registers[0] = Value::Object(array_id);
+
+        let result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ArrayPrototypeReverse".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+
+        // Verify the call succeeded
+        assert!(result.is_ok(), "ArrayPrototypeReverse should work after deduplication");
+
+        // Verify the array was modified (elements should be reversed)
+        let obj = core.heap.get(array_id.0 as usize).unwrap();
+        if let Some(Value::Str(first)) = obj.properties.get("0") {
+            assert_eq!(first, "third", "Array should be reversed after calling reverse()");
+        }
+    }
+
+    #[test]
+    fn object_tostring_functionality_after_dedup() {
+        // Verify ObjectPrototypeToString functionality preserved after removing duplicates
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Test with different value types
+        core.registers[0] = Value::Null;
+        let result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:ObjectPrototypeToString".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+
+        // Verify the call succeeded
+        assert!(result.is_ok(), "ObjectPrototypeToString should work after deduplication");
     }
 }

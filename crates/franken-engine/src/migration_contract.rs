@@ -999,17 +999,23 @@ mod tests {
     }
 
     fn run_full_pipeline(runner: &mut MigrationRunner, mid: &str, cutover: CutoverType) {
+        // SAFETY: Test helper uses valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration(mid, cutover), "trace-1")
             .unwrap();
+        // SAFETY: Test helper uses valid dry run; dry_run succeeds in controlled test environment.
         runner
             .dry_run(mid, passing_dry_run(mid), "trace-1")
             .unwrap();
+        // SAFETY: Test helper uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner.create_checkpoint(mid, 42, "trace-1").unwrap();
+        // SAFETY: Test helper uses valid execution; complete_execution succeeds in controlled test environment.
         runner.complete_execution(mid, 100, "trace-1").unwrap();
+        // SAFETY: Test helper uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify(mid, passing_verification(mid), "trace-1")
             .unwrap();
+        // SAFETY: Test helper uses valid commit; commit succeeds in controlled test environment.
         runner.commit(mid, "trace-1").unwrap();
     }
 
@@ -1018,6 +1024,7 @@ mod tests {
     #[test]
     fn declare_migration() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();
@@ -1028,6 +1035,7 @@ mod tests {
     #[test]
     fn reject_duplicate_declaration() {
         let mut runner = MigrationRunner::new();
+        // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap();

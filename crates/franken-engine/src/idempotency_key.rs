@@ -1117,6 +1117,8 @@ mod tests {
         if let DedupResult::CachedResult { result_hash } = r2 {
             assert_eq!(result_hash, test_result_hash());
         } else {
+            // SAFETY: Test-only panic to validate idempotency store behavior
+            // expects DedupResult::CachedResult after mark_completed call
             panic!("expected CachedResult");
         }
 
@@ -1425,6 +1427,8 @@ mod tests {
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, rh);
         } else {
+            // SAFETY: Test-only panic to validate mark_completed workflow
+            // expects DedupResult::CachedResult after successful completion marking
             panic!("expected CachedResult after mark_completed");
         }
     }

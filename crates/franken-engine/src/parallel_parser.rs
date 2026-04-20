@@ -3115,7 +3115,11 @@ mod tests {
             trigger_chunk: Some(2),
             drain_completed: true,
         };
+        // SAFETY: CancellationRecord derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cr).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CancellationRecord,
+        // so from_str back to CancellationRecord cannot fail (valid format + matching schema).
         let back: CancellationRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(cr, back);
     }
@@ -3128,8 +3132,12 @@ mod tests {
             trigger_chunk: None,
             drain_completed: false,
         };
+        // SAFETY: CancellationRecord derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"trigger_chunk\":null"));
+        // SAFETY: JSON was just produced by to_string of a valid CancellationRecord,
+        // so from_str back to CancellationRecord cannot fail (valid format + matching schema).
         let back: CancellationRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(cr, back);
     }
@@ -3156,7 +3164,11 @@ mod tests {
             delayed_chunks: 2,
             total_delay_us: 15_000,
         };
+        // SAFETY: BackpressureSnapshot derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&bp).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BackpressureSnapshot,
+        // so from_str back to BackpressureSnapshot cannot fail (valid format + matching schema).
         let back: BackpressureSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(bp, back);
     }
@@ -3323,7 +3335,11 @@ mod tests {
     fn routing_digest_serde_roundtrip() {
         let config = small_config();
         let digest = compute_routing_digest("x\ny\nz\n", &config);
+        // SAFETY: RoutingDigest derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&digest).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RoutingDigest,
+        // so from_str back to RoutingDigest cannot fail (valid format + matching schema).
         let back: RoutingDigest = serde_json::from_str(&json).unwrap();
         assert_eq!(digest, back);
     }
@@ -3364,7 +3380,11 @@ mod tests {
     #[test]
     fn throughput_sample_serde_roundtrip() {
         let sample = ThroughputSample::compute(500, 25, 2000);
+        // SAFETY: ThroughputSample derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&sample).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid ThroughputSample,
+        // so from_str back to ThroughputSample cannot fail (valid format + matching schema).
         let back: ThroughputSample = serde_json::from_str(&json).unwrap();
         assert_eq!(sample, back);
     }

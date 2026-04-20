@@ -1483,6 +1483,7 @@ mod tests {
         .build(std::slice::from_ref(&sk))
         .unwrap();
 
+        // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         let cp2 = CheckpointBuilder::after(
             &cp1,
             6,

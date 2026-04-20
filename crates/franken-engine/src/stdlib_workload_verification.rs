@@ -1384,7 +1384,9 @@ mod tests {
     #[test]
     fn test_suite_serde_roundtrip() {
         let suite = build_canonical_pure_suite();
+        // SAFETY: WorkloadSuite derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&suite).unwrap();
+        // SAFETY: JSON was just produced by valid WorkloadSuite serialization
         let decoded: WorkloadSuite = serde_json::from_str(&json).unwrap();
         assert_eq!(suite, decoded);
     }

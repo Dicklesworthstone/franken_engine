@@ -1547,6 +1547,7 @@ pub enum ConsoleLevel {
     Log,
     Error,
     Warn,
+    Info,
 }
 
 /// A captured console output entry.
@@ -9300,68 +9301,6 @@ impl InterpreterCore {
                 // Perform simple string replacement (first occurrence only)
                 let result = this_str.replacen(&search_str, &replace_str, 1);
                 Ok(Value::Str(result))
-            }
-            "builtin:ArrayPrototypeFilter" => {
-                // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Snapshot indexed values under an immutable borrow so we
-                // can release it before the &mut self calls.
-                let snapshot: Option<Vec<(usize, Value)>> =
-                    self.heap.get(array_id.0 as usize).map(|array_obj| {
-                        let length = array_obj
-                            .properties
-                            .get("length")
-                            .and_then(|v| match v {
-                                Value::Int(i) => Some(*i as usize),
-                                Value::Float(f) => Some(f.inner() as usize),
-                                _ => None,
-                            })
-                            .unwrap_or(0);
-                        let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                        for (key, value) in &array_obj.properties {
-                            if let Ok(index) = key.parse::<usize>() {
-                                if index < length {
-                                    indexed_values.push((index, value.clone()));
-                                }
-                            }
-                        }
-                        indexed_values
-                    });
-
-                if let Some(mut indexed_values) = snapshot {
-                    let result_id = self.alloc_object_with_prototype(None)?;
-                    indexed_values.sort_by_key(|(index, _)| *index);
-                    let mut result_index: u64 = 0;
-                    for (_index, value) in indexed_values {
-                        // TODO: In full implementation, would call callback and filter
-                        self.set_object_property(result_id, result_index.to_string(), value)?;
-                        result_index += 1;
-                    }
-                    self.set_object_property(
-                        result_id,
-                        "length".to_string(),
-                        Value::Int(result_index as i64),
-                    )?;
-                    Ok(Value::Object(result_id))
-                } else {
-                    Ok(Value::Undefined)
-                }
             }
             "builtin:MathLog" => {
                 // Math.log(x) implementation - returns natural logarithm of x
@@ -18097,107 +18036,33 @@ impl InterpreterCore {
                 Ok(Value::Bool(num.is_finite()))
             }
 
-            "builtin:ConsoleLog" => {
-                // console.log() implementation - logs values to output
-                let mut output = String::new();
-                for i in 1..args.count {
-                    if i > 1 {
-                        output.push(' ');
-                    }
-                    let value = self.read_reg(args.start + i)?;
-                    let value_str = match value {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "".to_string(),
-                    };
-                    output.push_str(&value_str);
-                }
-
-                // In a real implementation, this would output to console
-                // For now, we just acknowledge the call
-                Ok(Value::Undefined)
-            }
-
-            "builtin:ConsoleError" => {
-                // console.error() implementation - logs error values to output
-                let mut output = String::new();
-                for i in 1..args.count {
-                    if i > 1 {
-                        output.push(' ');
-                    }
-                    let value = self.read_reg(args.start + i)?;
-                    let value_str = match value {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "".to_string(),
-                    };
-                    output.push_str(&value_str);
-                }
-
-                // In a real implementation, this would output to error console
-                // For now, we just acknowledge the call
-                Ok(Value::Undefined)
-            }
-
-            "builtin:ConsoleWarn" => {
-                // console.warn() implementation - logs warning values to output
-                let mut output = String::new();
-                for i in 1..args.count {
-                    if i > 1 {
-                        output.push(' ');
-                    }
-                    let value = self.read_reg(args.start + i)?;
-                    let value_str = match value {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "".to_string(),
-                    };
-                    output.push_str(&value_str);
-                }
-
-                // In a real implementation, this would output to warning console
-                // For now, we just acknowledge the call
-                Ok(Value::Undefined)
-            }
-
             "builtin:ConsoleInfo" => {
-                // console.info() implementation - logs info values to output
-                let mut output = String::new();
-                for i in 1..args.count {
-                    if i > 1 {
-                        output.push(' ');
-                    }
-                    let value = self.read_reg(args.start + i)?;
-                    let value_str = match value {
-                        Value::Str(s) => s,
-                        Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        Value::Object(_) => "[object Object]".to_string(),
-                        _ => "".to_string(),
-                    };
-                    output.push_str(&value_str);
+                // console.info implementation - prints info arguments to console
+                let mut output_parts = Vec::new();
+
+                // Convert all arguments to strings and collect them
+                for i in 0..args.count {
+                    let arg = self.read_reg(args.start + i)?;
+                    let str_representation = self.value_to_string(&arg);
+                    output_parts.push(str_representation);
                 }
 
-                // In a real implementation, this would output to info console
-                // For now, we just acknowledge the call
+                // Join with spaces (standard console behavior)
+                let output = output_parts.join(" ");
+
+                // Bounded console output to prevent DoS via console spam
+                if self.console_output.len() >= self.config.max_console_entries {
+                    // Ring buffer: drop oldest entry when limit reached
+                    self.console_output.remove(0);
+                }
+
+                // Capture console output for deterministic replay
+                self.console_output.push(ConsoleEntry {
+                    level: ConsoleLevel::Info,
+                    message: output,
+                    instruction_index: self.instructions_executed,
+                });
+
                 Ok(Value::Undefined)
             }
 
@@ -24571,5 +24436,123 @@ mod tests {
                 panic!("Date.prototype.getTime should return a float");
             }
         }
+    }
+
+    // Regression tests for bd-7f1a4: Console builtin deduplication and info capture
+    #[test]
+    fn console_info_capture_output() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Set up arguments for console.info
+        core.registers[0] = Value::Str("Info message".to_string());
+        core.registers[1] = Value::Int(42);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ConsoleInfo".to_string(),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should capture console.info output
+        assert_eq!(core.console_output.len(), 1);
+        let console_entry = &core.console_output[0];
+        assert_eq!(console_entry.level, ConsoleLevel::Info);
+        assert_eq!(console_entry.message, "Info message 42");
+        assert_eq!(console_entry.instruction_index, 1);
+    }
+
+    #[test]
+    fn console_builtin_ids_100_102_captured() {
+        // Test that the original builtin IDs 100-102 properly capture output
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        core.registers[0] = Value::Str("Log test".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ConsoleLog".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should capture output with Log level
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Log);
+        assert_eq!(core.console_output[0].message, "Log test");
+
+        core.console_output.clear();
+        core.registers[0] = Value::Str("Error test".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ConsoleError".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should capture output with Error level
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Error);
+        assert_eq!(core.console_output[0].message, "Error test");
+
+        core.console_output.clear();
+        core.registers[0] = Value::Str("Warn test".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ConsoleWarn".to_string(),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        // Should capture output with Warn level
+        assert_eq!(core.console_output.len(), 1);
+        assert_eq!(core.console_output[0].level, ConsoleLevel::Warn);
+        assert_eq!(core.console_output[0].message, "Warn test");
+    }
+
+    #[test]
+    fn console_output_deterministic_metadata() {
+        let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        // Test that console output includes proper metadata
+        core.registers[0] = Value::Str("Test".to_string());
+        core.registers[1] = Value::Int(123);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::CallBuiltin {
+                    builtin: "builtin:ConsoleInfo".to_string(),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 10,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        assert_eq!(core.console_output.len(), 1);
+        let entry = &core.console_output[0];
+
+        // Check all metadata fields are populated
+        assert_eq!(entry.level, ConsoleLevel::Info);
+        assert_eq!(entry.message, "Test 123");
+        assert!(entry.instruction_index > 0, "Should have instruction index");
     }
 }

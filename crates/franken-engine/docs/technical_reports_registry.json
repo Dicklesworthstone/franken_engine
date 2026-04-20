@@ -40,6 +40,25 @@
       "dependencies": ["bd-3gsv", "bd-1ze"],
       "reproducible": false,
       "validation_status": "not_started"
+    },
+    {
+      "id": "FKTR-2026-003",
+      "title": "Compatibility Advisory Report",
+      "authors": ["FrankenEngine Research Team"],
+      "date": "2026-04-20",
+      "type": "Advisory",
+      "status": "Draft Skeleton",
+      "artifact_bundle": "crates/franken-engine/docs/COMPATIBILITY_ADVISORY_REPORT.md",
+      "external_replication": false,
+      "doi": null,
+      "contributions": [
+        "Compatibility divergence advisory schema",
+        "Regression-evidence promotion criteria",
+        "Initial String.prototype.split omitted-separator advisory"
+      ],
+      "dependencies": ["bd-2501", "bd-2qzil"],
+      "reproducible": false,
+      "validation_status": "draft_skeleton"
     }
   ],
   "external_replications": [

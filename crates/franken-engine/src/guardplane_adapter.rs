@@ -379,6 +379,10 @@ impl GuardplaneAdapter {
             .clone()
     }
 
+    pub fn diagnostic_records(&self) -> &[GuardplaneDiagnosticRecord] {
+        &self.context.diagnostics
+    }
+
     fn evaluate_operation(
         &self,
         hook_context: &HookContext,

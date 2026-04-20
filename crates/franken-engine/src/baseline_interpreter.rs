@@ -9045,61 +9045,7 @@ impl InterpreterCore {
                     got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and side-effect execution for each element".to_string(),
                 })
             }
-            "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-arrays return undefined
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Collect indexed values
-                    let mut indexed_values: Vec<(usize, Value)> = Vec::new();
-                    for (key, value) in &array_obj.properties {
-                        if let Ok(index) = key.parse::<usize>() {
-                            if index < length {
-                                indexed_values.push((index, value.clone()));
-                            }
-                        }
-                    }
-
-                    // Sort by index and return first element (simplified)
-                    indexed_values.sort_by_key(|(index, _)| *index);
-                    if let Some((_index, value)) = indexed_values.first() {
-                        // TODO: In full implementation, would call callback and test condition
-                        // For now, just return first element to demonstrate structure
-                        Ok(value.clone())
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
+            // ArrayPrototypeFind: Removed duplicate dispatch arm (use occurrence at line 12492)
             "builtin:MathSin" => {
                 // Math.sin(x) implementation - returns sine of x in radians
                 if args.count == 0 {

@@ -809,6 +809,7 @@ mod tests {
         let vk = sk.verification_key();
         let obj = test_object();
 
+        // SAFETY: Test signs with valid parameters (object, signing key, trace ID); sign succeeds in controlled test environment
         let sig = ctx.sign(&obj, &sk, "t-001").unwrap();
         assert!(ctx.verify(&obj, &vk, &sig, "t-001").is_ok());
     }
@@ -819,7 +820,9 @@ mod tests {
         let sk = test_signing_key();
         let obj = test_object();
 
+        // SAFETY: Test signs with valid parameters (object, signing key, trace ID); sign succeeds in controlled test environment
         let sig1 = ctx.sign(&obj, &sk, "t-det-1").unwrap();
+        // SAFETY: Test signs with valid parameters (object, signing key, trace ID); sign succeeds in controlled test environment
         let sig2 = ctx.sign(&obj, &sk, "t-det-2").unwrap();
         assert_eq!(sig1, sig2);
     }

@@ -21737,9 +21737,12 @@ mod tests {
     fn string_prototype_char_at_basic() {
         // Test basic charAt functionality with ASCII characters
         let mut core = BaselineInterpreter::new();
+        // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
         core.set_register(0, Value::Str("Hello".to_string())).unwrap();
+        // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(1)).unwrap(); // index 1
 
+        // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -21750,6 +21753,7 @@ mod tests {
         ])).unwrap();
 
         // "Hello"[1] = 'e'
+        // SAFETY: StringPrototypeCharAt writes destination register 2 before halt.
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Str("e".to_string()), "charAt(1) should return 'e'");
     }

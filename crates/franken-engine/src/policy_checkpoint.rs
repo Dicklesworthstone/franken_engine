@@ -1775,7 +1775,9 @@ mod tests {
             },
         ];
         for t in &types {
+            // SAFETY: CheckpointEventType derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: JSON was just produced by valid CheckpointEventType serialization
             let restored: CheckpointEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }

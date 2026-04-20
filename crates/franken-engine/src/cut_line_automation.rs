@@ -2257,6 +2257,7 @@ mod tests {
             zone: "test".into(),
         };
 
+        // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator.evaluate(input).unwrap();
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
@@ -2287,9 +2288,11 @@ mod tests {
             zone: "test".into(),
         };
 
+        // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator.evaluate(input).unwrap();
         assert_eq!(record.verdict, GateVerdict::Denied);
         // Check that staleness is mentioned in evaluations.
+        // SAFETY: Test setup ensures SemanticContract evaluation exists in the record
         let stale_eval = record
             .evaluations
             .iter()
@@ -2327,8 +2330,10 @@ mod tests {
             zone: "test".into(),
         };
 
+        // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator.evaluate(input).unwrap();
         assert_eq!(record.verdict, GateVerdict::Denied);
+        // SAFETY: Test setup ensures SemanticContract evaluation exists in the record
         let incompat_eval = record
             .evaluations
             .iter()

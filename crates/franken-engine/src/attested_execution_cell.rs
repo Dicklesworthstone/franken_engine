@@ -1820,6 +1820,7 @@ mod tests {
         let mut input2 = default_cell_input();
         input2.label = "evidence-accumulator-1".to_string();
         input2.function = CellFunction::EvidenceAccumulator;
+        // SAFETY: create_cell cannot fail with valid test inputs
         reg.create_cell(input2, 2_000).unwrap();
 
         assert_eq!(
@@ -1841,11 +1842,13 @@ mod tests {
     #[test]
     fn cells_in_zone_lookup() {
         let mut reg = CellRegistry::new();
+        // SAFETY: create_cell cannot fail with valid test inputs
         reg.create_cell(default_cell_input(), 1_000).unwrap();
 
         let mut input2 = default_cell_input();
         input2.label = "staging-cell".to_string();
         input2.zone = "staging".to_string();
+        // SAFETY: create_cell cannot fail with valid test inputs
         reg.create_cell(input2, 2_000).unwrap();
 
         assert_eq!(reg.cells_in_zone("production").len(), 1);
@@ -1859,17 +1862,22 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
 
+        // SAFETY: create_cell cannot fail with valid test inputs
         let cell_id = reg.create_cell(default_cell_input(), 1_000).unwrap();
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
+        // SAFETY: measure_cell cannot fail with valid test inputs
         reg.measure_cell(&cid, m.clone(), 2_000, epoch).unwrap();
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
+        // SAFETY: attest_cell cannot fail with valid test inputs
         reg.attest_cell(&cid, q, 3_000, epoch).unwrap();
+        // SAFETY: activate_cell cannot fail with valid test inputs
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
 
         // Create a second cell that stays in Provisioning.
         let mut input2 = default_cell_input();
         input2.label = "other".to_string();
+        // SAFETY: create_cell cannot fail with valid test inputs
         reg.create_cell(input2, 5_000).unwrap();
 
         assert_eq!(reg.active_cells().len(), 1);

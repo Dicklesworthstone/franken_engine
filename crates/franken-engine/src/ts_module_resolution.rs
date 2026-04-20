@@ -1695,6 +1695,7 @@ struct MutableArtNode {
 }
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
+    // SAFETY: serde_json::to_vec only fails on writer errors, not possible with Vec<u8>
     let bytes = serde_json::to_vec(value).unwrap();
     ContentHash::compute(&bytes).to_hex()
 }
@@ -2044,7 +2045,9 @@ mod tests {
             TsModuleResolutionMode::NodeNext,
             TsModuleResolutionMode::Bundler,
         ] {
+            // SAFETY: TsModuleResolutionMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&mode).unwrap();
+            // SAFETY: JSON was just produced by valid TsModuleResolutionMode serialization
             let back: TsModuleResolutionMode = serde_json::from_str(&json).unwrap();
             assert_eq!(mode, back);
         }
@@ -2053,7 +2056,9 @@ mod tests {
     #[test]
     fn request_style_serde_roundtrip() {
         for style in [TsRequestStyle::Import, TsRequestStyle::Require] {
+            // SAFETY: TsRequestStyle derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&style).unwrap();
+            // SAFETY: JSON was just produced by valid TsRequestStyle serialization
             let back: TsRequestStyle = serde_json::from_str(&json).unwrap();
             assert_eq!(style, back);
         }

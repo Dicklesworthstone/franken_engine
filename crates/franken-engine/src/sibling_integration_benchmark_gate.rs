@@ -1158,7 +1158,11 @@ mod tests {
             BenchmarkGateFailureCode::RegressionThresholdExceeded,
             BenchmarkGateFailureCode::IntegrationOverheadExceeded,
         ] {
+            // SAFETY: BenchmarkGateFailureCode derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&code).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid BenchmarkGateFailureCode,
+            // so from_str back to BenchmarkGateFailureCode cannot fail (valid format + matching schema).
             let back: BenchmarkGateFailureCode = serde_json::from_str(&json).unwrap();
             assert_eq!(back, code);
         }
@@ -1197,7 +1201,11 @@ mod tests {
     #[test]
     fn thresholds_serde_roundtrip() {
         let t = BenchmarkGateThresholds::default();
+        // SAFETY: BenchmarkGateThresholds derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&t).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BenchmarkGateThresholds,
+        // so from_str back to BenchmarkGateThresholds cannot fail (valid format + matching schema).
         let back: BenchmarkGateThresholds = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
     }
@@ -1447,7 +1455,11 @@ mod tests {
     #[test]
     fn benchmark_snapshot_serde_roundtrip() {
         let snap = base_snapshot();
+        // SAFETY: BenchmarkSnapshot derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&snap).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BenchmarkSnapshot,
+        // so from_str back to BenchmarkSnapshot cannot fail (valid format + matching schema).
         let back: BenchmarkSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back, snap);
     }

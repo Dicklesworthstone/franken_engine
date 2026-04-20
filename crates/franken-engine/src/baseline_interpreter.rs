@@ -8178,11 +8178,8 @@ impl InterpreterCore {
                     let arg = self.read_reg(args.start)?;
                     match arg {
                         Value::Int(n) => {
-                            if n == i64::MIN {
-                                Ok(Value::Float(Float64::new(-(i64::MIN as f64))))
-                            } else {
-                                Ok(Value::Int(n.abs()))
-                            }
+                            // Use saturating_abs to handle i64::MIN safely (returns i64::MAX)
+                            Ok(Value::Int(n.saturating_abs()))
                         }
                         Value::Float(f) => Ok(Value::Float(Float64::new(f.inner().abs()))),
                         _ => {
@@ -21494,10 +21491,8 @@ mod tests {
             call_math_abs(Value::Float(Float64::new(-2.5))),
             Value::Float(Float64::new(2.5))
         );
-        assert_eq!(
-            call_math_abs(Value::Int(i64::MIN)),
-            Value::Float(Float64::new(-(i64::MIN as f64)))
-        );
+        // Math.abs(i64::MIN) uses saturating_abs -> i64::MAX (consistent with stdlib)
+        assert_eq!(call_math_abs(Value::Int(i64::MIN)), Value::Int(i64::MAX));
         assert_eq!(
             call_math_abs(Value::Str(" -3.5 ".to_string())),
             Value::Float(Float64::new(3.5))
@@ -21512,6 +21507,56 @@ mod tests {
             panic!("expected Math.abs(undefined) to produce NaN float");
         };
         assert!(result.inner().is_nan());
+    }
+
+    #[test]
+    fn math_abs_i64_min_saturating_regression() {
+        // Regression test for bd-3iu4f: Math.abs(i64::MIN) should use saturating_abs
+        // instead of panicking or converting to Float
+        fn call_math_abs(value: Value) -> Value {
+            let mut core = quickjs_test_core();
+            core.registers.resize(1, Value::Undefined);
+            core.registers[0] = value;
+            core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 })
+                .unwrap()
+        }
+
+        // Core fix: i64::MIN should saturate to i64::MAX (not panic or convert to Float)
+        assert_eq!(call_math_abs(Value::Int(i64::MIN)), Value::Int(i64::MAX));
+
+        // Edge cases around i64::MIN
+        assert_eq!(
+            call_math_abs(Value::Int(i64::MIN + 1)),
+            Value::Int(i64::MAX)
+        );
+        assert_eq!(call_math_abs(Value::Int(-1)), Value::Int(1));
+        assert_eq!(call_math_abs(Value::Int(0)), Value::Int(0));
+        assert_eq!(call_math_abs(Value::Int(i64::MAX)), Value::Int(i64::MAX));
+
+        // Float coercion should still work normally
+        assert_eq!(
+            call_math_abs(Value::Float(Float64::new(-42.5))),
+            Value::Float(Float64::new(42.5))
+        );
+
+        // String coercion should still work normally
+        assert_eq!(
+            call_math_abs(Value::Str("-123".to_string())),
+            Value::Float(Float64::new(123.0))
+        );
+
+        // Boolean coercion should still work normally
+        assert_eq!(
+            call_math_abs(Value::Bool(false)),
+            Value::Float(Float64::new(0.0))
+        );
+
+        // Null/undefined should still produce NaN
+        let result = call_math_abs(Value::Null);
+        let Value::Float(f) = result else {
+            panic!("expected Math.abs(null) to produce NaN float");
+        };
+        assert!(f.inner().is_nan());
     }
 
     // -----------------------------------------------------------------------

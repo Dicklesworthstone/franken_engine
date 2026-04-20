@@ -60,6 +60,27 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the first reproducibility scorecard entry.
+    pub fn with_reproducibility_scorecard_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "reproducibility-scorecard-0001".to_string(),
+            title: "Reproducibility Scorecard".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Research Team".to_string()],
+            abstract_text:
+                "Reproducibility scorecard documenting deterministic replay and verification thresholds."
+                    .to_string(),
+            bundle_path: "docs/REPRODUCIBILITY_SCORECARD.md".to_string(),
+            artifact_type: "reproducibility_scorecard".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Construct a registry containing the open specifications publication entry.
     pub fn with_open_specs_publication_entry() -> Self {
         let mut registry = Self::new();
@@ -215,6 +236,22 @@ mod tests {
     }
 
     #[test]
+    fn test_reproducibility_scorecard_entry() {
+        let registry = ResearchArtifactRegistry::with_reproducibility_scorecard_entry();
+
+        let artifact = registry
+            .get_artifact("reproducibility-scorecard-0001")
+            .expect("expected seeded reproducibility scorecard artifact");
+        assert_eq!(artifact.artifact_type, "reproducibility_scorecard");
+        assert_eq!(artifact.title, "Reproducibility Scorecard");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("REPRODUCIBILITY_SCORECARD.md")
+        );
+    }
+
+    #[test]
     fn test_open_specs_publication_entry() {
         let registry = ResearchArtifactRegistry::with_open_specs_publication_entry();
 
@@ -250,6 +287,10 @@ mod tests {
             .expect("expected vulnerability disclosure policy artifact");
         assert_eq!(artifact.artifact_type, "security_policy");
         assert_eq!(artifact.title, "Vulnerability Disclosure Policy");
-        assert!(artifact.bundle_path.ends_with("VULNERABILITY_DISCLOSURE_POLICY.md"));
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("VULNERABILITY_DISCLOSURE_POLICY.md")
+        );
     }
 }

@@ -1163,6 +1163,8 @@ mod tests {
                 assert_eq!(graph_ext, "ext-simple");
                 assert_eq!(manifest_ext, "ext-other");
             }
+            // SAFETY: Test-only panic to validate authority analysis error handling
+            // expects specific AuthorityError::ManifestExtensionConflict from test scenario
             other => panic!("unexpected error: {other}"),
         }
     }

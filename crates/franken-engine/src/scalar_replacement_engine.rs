@@ -1919,6 +1919,7 @@ mod tests {
             last_use: Some(40),
             precise: true,
         };
+        // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
         let plan = build_sinking_plan(&cert, &[]).unwrap();
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.sunk_position, 20);
@@ -1945,6 +1946,7 @@ mod tests {
             effect_kind: SideEffectKind::Call,
             description: "call before use".to_string(),
         }];
+        // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
         let plan = build_sinking_plan(&cert, &barriers).unwrap();
         assert_eq!(plan.sunk_position, 11); // Just after the barrier.
     }
@@ -2596,7 +2598,9 @@ mod tests {
             RegionScope::CallerManaged,
         ];
         for s in &scopes {
+            // SAFETY: RegionScope derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by valid RegionScope serialization
             let back: RegionScope = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -2612,7 +2616,9 @@ mod tests {
             SideEffectKind::DebuggerStatement,
         ];
         for k in &kinds {
+            // SAFETY: SideEffectKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).unwrap();
+            // SAFETY: JSON was just produced by valid SideEffectKind serialization
             let back: SideEffectKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*k, back);
         }

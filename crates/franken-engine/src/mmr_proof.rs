@@ -1141,8 +1141,13 @@ mod tests {
     #[test]
     fn mmr_proof_serde_deterministic() {
         let mmr = build_mmr(8);
+        // SAFETY: MMR with 8 elements has valid leaf at index 4, inclusion_proof should succeed
         let proof = mmr.inclusion_proof(4).unwrap();
+        // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json1 = serde_json::to_string(&proof).unwrap();
+        // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json2 = serde_json::to_string(&proof).unwrap();
         assert_eq!(json1, json2);
     }
@@ -1194,6 +1199,7 @@ mod tests {
         let n = 64;
         let mmr = build_mmr(n);
         for i in 0..n {
+            // SAFETY: MMR with n elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr.inclusion_proof(i).unwrap();
             // SAFETY: Test validates MMR inclusion proof verification succeeds for all leaves
             verify_inclusion(&leaf_hash(i), i, &proof)
@@ -1206,6 +1212,7 @@ mod tests {
     #[test]
     fn verify_inclusion_rejects_consistency_proof_type() {
         let mmr = build_mmr(8);
+        // SAFETY: MMR with 8 elements has valid leaf at index 0, inclusion_proof should succeed
         let mut proof = mmr.inclusion_proof(0).unwrap();
         proof.proof_type = ProofType::Consistency;
         let err = verify_inclusion(&leaf_hash(0), 0, &proof).unwrap_err();
@@ -1217,7 +1224,9 @@ mod tests {
     #[test]
     fn verify_consistency_rejects_inclusion_proof_type() {
         let mmr = build_mmr(8);
+        // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let old_root = build_mmr(4).root_hash().unwrap();
+        // SAFETY: MMR with 8 elements and valid old_length=4, consistency_proof should succeed
         let mut proof = mmr.consistency_proof(4).unwrap();
         proof.proof_type = ProofType::Inclusion;
         let err = verify_consistency(&old_root, &proof).unwrap_err();
@@ -1289,7 +1298,10 @@ mod tests {
     #[test]
     fn mmr_proof_json_field_presence() {
         let mmr = build_mmr(4);
+        // SAFETY: MMR with 4 elements has valid leaf at index 1, inclusion_proof should succeed
         let proof = mmr.inclusion_proof(1).unwrap();
+        // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&proof).unwrap();
         for field in [
             "proof_type",

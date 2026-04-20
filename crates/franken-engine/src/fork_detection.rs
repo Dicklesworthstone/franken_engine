@@ -4335,6 +4335,8 @@ mod tests {
                 "reason should include operation name: {reason}"
             );
         } else {
+            // SAFETY: Test-only panic to validate fork detector safe mode error handling
+            // expects specific ForkError::SafeModeActive variant with operation name
             panic!("expected SafeModeActive, got {err:?}");
         }
     }

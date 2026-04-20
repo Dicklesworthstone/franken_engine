@@ -1620,6 +1620,8 @@ mod tests {
                 assert_eq!(metric_name, "latency_p99_ns");
                 assert_eq!(observed_millionths, 65_000_000);
             }
+            // SAFETY: Test-only panic to catch unexpected DemotionReason variants
+            // in performance threshold validation. Expected reason is PerformanceThreshold only.
             other => panic!("unexpected reason: {other}"),
         }
     }

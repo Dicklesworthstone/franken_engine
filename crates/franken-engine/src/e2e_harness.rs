@@ -5236,6 +5236,8 @@ mod enrichment_tests {
         let registry = rgc_advanced_scenario_matrix_registry();
         for entry in &registry {
             entry.fixture.validate().unwrap_or_else(|e| {
+                // SAFETY: Test-only panic to validate fixture registry integrity.
+                // Test expects all fixtures in registry to be valid for scenario execution.
                 panic!("fixture for {} should be valid: {e}", entry.scenario_id);
             });
         }

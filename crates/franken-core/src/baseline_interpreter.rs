@@ -1516,7 +1516,7 @@ pub struct InterpreterEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Console output capture (RC-1.10: console.log/error/warn)
+// Console output capture (RC-1.10: console.log/error/warn/info)
 // ---------------------------------------------------------------------------
 
 /// Console log level for deterministic capture.
@@ -1525,12 +1525,13 @@ pub enum ConsoleLevel {
     Log,
     Error,
     Warn,
+    Info,
 }
 
 /// A captured console output entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsoleEntry {
-    /// Log level (log, error, warn).
+    /// Log level (log, error, warn, info).
     pub level: ConsoleLevel,
     /// Stringified arguments joined by space.
     pub message: String,
@@ -1557,7 +1558,7 @@ pub struct ExecutionResult {
     pub hostcall_decisions: Vec<HostcallDecisionRecord>,
     /// Structured events emitted.
     pub events: Vec<InterpreterEvent>,
-    /// Console output captured from console.log/error/warn calls.
+    /// Console output captured from console.log/error/warn/info calls.
     pub console_output: Vec<ConsoleEntry>,
 }
 
@@ -6641,12 +6642,13 @@ impl InterpreterCore {
         }
     }
 
-    /// Dispatch console hostcalls: console.log, console.error, console.warn.
+    /// Dispatch console hostcalls: console.log, console.error, console.warn, console.info.
     ///
     /// Hostcall capabilities:
     /// - `console:log` — console.log(...args)
     /// - `console:error` — console.error(...args)
     /// - `console:warn` — console.warn(...args)
+    /// - `console:info` — console.info(...args)
     ///
     /// Console output is captured in `self.console_output` for deterministic replay.
     fn dispatch_console_hostcall(
@@ -6658,6 +6660,7 @@ impl InterpreterCore {
             "console:log" => ConsoleLevel::Log,
             "console:error" => ConsoleLevel::Error,
             "console:warn" => ConsoleLevel::Warn,
+            "console:info" => ConsoleLevel::Info,
             _ => return Ok(Value::Undefined), // Unknown console method
         };
 
@@ -6691,6 +6694,7 @@ impl InterpreterCore {
                     ConsoleLevel::Log => "log",
                     ConsoleLevel::Error => "error",
                     ConsoleLevel::Warn => "warn",
+                    ConsoleLevel::Info => "info",
                 }
             )),
         );

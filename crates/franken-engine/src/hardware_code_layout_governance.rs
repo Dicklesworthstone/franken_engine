@@ -1988,6 +1988,8 @@ mod tests {
             assert!(uncovered.contains("neoverse_n2"));
             assert!(uncovered.contains("apple_m2"));
         } else {
+            // SAFETY: Test-only panic to validate governance evaluation logic
+            // expects specific ViolationKind::HardwareCoverageGap. Any other kind is test failure.
             panic!("expected HardwareCoverageGap violation");
         }
     }

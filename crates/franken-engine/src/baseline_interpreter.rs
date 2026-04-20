@@ -16291,6 +16291,7 @@ impl InterpreterCore {
                 // Handle sign
                 if let Some(&first_char) = chars.peek() {
                     if first_char == '+' || first_char == '-' {
+                        // SAFETY: peek() just confirmed a character exists, so next() cannot return None
                         result_str.push(chars.next().unwrap());
                     }
                 }

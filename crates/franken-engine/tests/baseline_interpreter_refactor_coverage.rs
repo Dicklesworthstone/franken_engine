@@ -426,6 +426,54 @@ fn console_warn_captured_with_correct_metadata() {
 }
 
 #[test]
+fn console_info_captured_with_correct_metadata() {
+    // Test that console.info calls are captured with Info level
+    let module = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt {
+                dst: 1,
+                value: 42,
+            },
+            Ir3Instruction::HostCall {
+                capability: "console:info".to_string(),
+                args: RegRange { start: 0, count: 2 },
+                dst: 2,
+            },
+            Ir3Instruction::Return { value: 2 },
+        ],
+        vec!["Info message".to_string()],
+    );
+
+    let result = qjs_run(&module).unwrap();
+
+    assert_eq!(
+        result.console_output.len(),
+        1,
+        "Expected exactly one console output entry"
+    );
+
+    let entry = &result.console_output[0];
+    assert_eq!(
+        entry.level,
+        ConsoleLevel::Info,
+        "Console entry should have Info level"
+    );
+    assert_eq!(
+        entry.message,
+        "Info message 42",
+        "Console info message should include number"
+    );
+    assert!(
+        entry.instruction_index > 0,
+        "Console entry should have non-zero instruction index"
+    );
+}
+
+#[test]
 fn console_output_captured_instead_of_printed() {
     // Test that console calls no longer print to stdout/stderr, only capture
     let module = test_module_with_pool(

@@ -379,8 +379,8 @@ impl GuardplaneAdapter {
             .clone()
     }
 
-    pub fn diagnostic_records(&self) -> &[GuardplaneDiagnosticRecord] {
-        &self.context.diagnostics
+    pub fn diagnostic_records(&self) -> Vec<GuardplaneDecisionRecord> {
+        self.decision_records()
     }
 
     fn evaluate_operation(
@@ -744,5 +744,49 @@ mod tests {
             ("capability_witness.trust_level", "signed"),
         ]);
         assert!(explicit.instruction_hooks_enabled());
+    }
+
+    #[test]
+    fn malformed_guardplane_metadata_emits_diagnostics() {
+        let context = context_with_metadata(&[
+            ("capability_witness.trust_level", "mostly-trusted"),
+            ("capability_witness.confidence_millionths", "high"),
+        ]);
+
+        assert_eq!(context.trust_level, GuardplaneTrustLevel::Unknown);
+        assert_eq!(context.witness_confidence_millionths, 0);
+        assert_eq!(context.diagnostics.len(), 2);
+        assert!(context.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "guardplane.metadata_parse_error"
+                && diagnostic.metadata_key == "capability_witness.trust_level"
+        }));
+        assert!(context.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "guardplane.metadata_parse_error"
+                && diagnostic.metadata_key == "capability_witness.confidence_millionths"
+        }));
+
+        let adapter = GuardplaneAdapter::from_runtime_config(
+            context.clone(),
+            LossMatrix::balanced(),
+            &RuntimeConfig::default(),
+            SecurityEpoch::from_raw(1),
+        );
+        assert_eq!(adapter.diagnostic_records(), context.diagnostics.as_slice());
+    }
+
+    #[test]
+    fn out_of_range_guardplane_confidence_emits_clamp_diagnostic() {
+        let context = context_with_metadata(&[
+            ("capability_witness.trust_level", "trusted"),
+            ("capability_witness.confidence_millionths", "1200000"),
+        ]);
+
+        assert_eq!(context.witness_confidence_millionths, MILLION);
+        assert_eq!(context.diagnostics.len(), 1);
+        assert_eq!(context.diagnostics[0].code, "guardplane.metadata_clamped");
+        assert_eq!(
+            context.diagnostics[0].metadata_key,
+            "capability_witness.confidence_millionths"
+        );
     }
 }

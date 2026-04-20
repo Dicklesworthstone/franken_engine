@@ -2016,7 +2016,11 @@ mod tests {
     #[test]
     fn loss_entry_serde_roundtrip() {
         let entry = le(ContainmentAction::Allow, RiskState::Benign, 0);
+        // SAFETY: LossEntry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LossEntry,
+        // so from_str back to LossEntry cannot fail (valid format + matching schema).
         let restored: LossEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, restored);
     }

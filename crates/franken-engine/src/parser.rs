@@ -7972,6 +7972,7 @@ mod tests {
         };
         let right_expr = match &right.body[0] {
             Statement::Expression(expr) => &expr.expression,
+            // SAFETY: Test validates parsed statement is expression type
             _ => panic!("expected expression statement"),
         };
         assert_eq!(left_expr.canonical_value(), right_expr.canonical_value());

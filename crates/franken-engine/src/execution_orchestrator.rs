@@ -2326,6 +2326,7 @@ mod tests {
                 assert!(detail.contains("runtime checkpoints=1"));
                 assert!(detail.contains("hostcall.invoke"));
             }
+            // SAFETY: Test validates orchestrator error for unresolved runtime checkpoint
             other => panic!("unexpected error: {other}"),
         }
     }

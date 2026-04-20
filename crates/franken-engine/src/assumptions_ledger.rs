@@ -659,6 +659,7 @@ mod tests {
         let mut ledger = default_ledger();
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
+            // SAFETY: Test records first assumption successfully before testing duplicate handling
             .unwrap();
         let err = ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))

@@ -675,6 +675,8 @@ mod tests {
                 assert!(denial.transitive_root.is_none());
                 assert_eq!(denial.enforcement_point, EnforcementPoint::TokenAcceptance);
             }
+            // SAFETY: Test-only panic to validate revocation enforcement error handling
+            // expects specific RevocationEnforcementResult::Denied from test scenario
             _ => panic!("expected denial"),
         }
     }

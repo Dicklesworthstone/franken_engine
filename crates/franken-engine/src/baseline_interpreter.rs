@@ -16750,8 +16750,10 @@ mod tests {
         let length = match array_obj.properties.get("length") {
             Some(Value::Int(length)) => *length as usize,
             Some(other) => {
+                // SAFETY: Test helper validates string split array has integer length property
                 panic!("split length should be Int, got {other:?}");
             }
+            // SAFETY: Test helper validates string split array has length property
             None => panic!("split result missing length"),
         };
 

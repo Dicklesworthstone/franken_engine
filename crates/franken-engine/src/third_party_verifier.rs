@@ -1694,6 +1694,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "criteria_consistency:s1")
+            // SAFETY: Test-only unwrap expecting criteria_consistency:s1 check to be present in verification report
             .unwrap();
         assert!(!failed.passed);
     }

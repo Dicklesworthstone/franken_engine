@@ -2239,6 +2239,7 @@ mod tests {
             zone: "test".into(),
         };
 
+        // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator.evaluate(input).unwrap();
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert!(!evaluator.is_promoted(CutLine::C0));

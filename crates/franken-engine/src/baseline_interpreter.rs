@@ -13417,18 +13417,6 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(y.atan2(x))))
             }
 
-            "builtin:DatePrototypeGetTime" => {
-                // Date.prototype.getTime() implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                match this_val {
-                    Value::Object(_) => {
-                        // For now, return a fixed timestamp (simplified implementation)
-                        // In a real implementation, this would read from the Date object's internal slot
-                        Ok(Value::Float(Float64::new(1713355200000.0))) // 2024-04-17 12:00:00 UTC
-                    }
-                    _ => Ok(Value::Float(Float64::new(f64::NAN))), // Non-Date objects return NaN
-                }
-            }
 
 
             "builtin:MathLog10" => {

@@ -412,6 +412,27 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the baseline dedup review audit entry.
+    pub fn with_baseline_dedup_review_audit_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "baseline-dedup-review-audit-0001".to_string(),
+            title: "Baseline Dedup Review Audit".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Runtime Review Team".to_string()],
+            abstract_text:
+                "Review audit for baseline interpreter builtin deduplication, builtin ID routing, and String ownership risk."
+                    .to_string(),
+            bundle_path: "docs/BASELINE_DEDUP_REVIEW_AUDIT.md".to_string(),
+            artifact_type: "review_audit".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Register a new artifact
     pub fn register_artifact(&mut self, metadata: ArtifactMetadata) {
         self.artifacts

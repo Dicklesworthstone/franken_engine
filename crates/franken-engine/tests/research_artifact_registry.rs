@@ -191,6 +191,12 @@ fn test_seeded_research_artifact_entries_have_coverage() {
             ResearchArtifactRegistry::with_bd2501_audit_report_entry,
         ),
         (
+            "baseline-dedup-review-audit-0001",
+            "review_audit",
+            "BASELINE_DEDUP_REVIEW_AUDIT.md",
+            ResearchArtifactRegistry::with_baseline_dedup_review_audit_entry,
+        ),
+        (
             "golden-artifact-test-bundle-0001",
             "testing_framework",
             "GOLDEN_ARTIFACT_TEST_BUNDLE.md",
@@ -234,7 +240,7 @@ fn test_seeded_research_artifact_entries_have_coverage() {
         ),
     ];
 
-    assert_eq!(seeded_entries.len(), 25);
+    assert_eq!(seeded_entries.len(), 26);
 
     for (artifact_id, artifact_type, bundle_suffix, build_registry) in seeded_entries {
         let registry = build_registry();

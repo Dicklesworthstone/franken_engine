@@ -868,9 +868,11 @@ mod tests {
     fn advanced_composition_reduces_cost() {
         let mut acc = test_accountant_advanced();
         // First operation: full cost (k=0).
+        // SAFETY: Test-only unwrap with valid budget consumption parameters
         let r1 = acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
         assert_eq!(r1.composed_epsilon_millionths, 100_000); // k=0, scale=1.0
         // Second operation: reduced cost.
+        // SAFETY: Test-only unwrap with valid budget consumption parameters
         let r2 = acc.consume(100_000, 10_000, "op2", 3_000_000_000).unwrap();
         assert!(r2.composed_epsilon_millionths < 100_000); // k=1, scale < 1.0
     }

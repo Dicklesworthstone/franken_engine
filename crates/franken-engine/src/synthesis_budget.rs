@@ -2016,9 +2016,12 @@ mod tests {
             ..Default::default()
         };
         let mut m = BudgetMonitor::new(contract);
+        // SAFETY: Test-only unwrap with valid synthesis phase
         m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        // SAFETY: Test-only unwrap with valid consumption values
         m.record_consumption(u64::MAX - 1, 0, 0).unwrap();
         // Adding more should saturate at u64::MAX, not panic.
+        // SAFETY: Test-only unwrap with valid consumption values
         m.record_consumption(10, 0, 0).unwrap();
         assert_eq!(m.total_consumption().time_ns, u64::MAX);
     }

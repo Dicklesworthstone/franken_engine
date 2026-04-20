@@ -3068,7 +3068,9 @@ mod tests {
             max_chunk_us: 200_000,
             allow_drain: false,
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&tp).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: TimeoutPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(tp, back);
     }

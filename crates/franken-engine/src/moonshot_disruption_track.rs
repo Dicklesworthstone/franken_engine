@@ -1029,6 +1029,7 @@ mod tests {
             "test-env".to_string(),
         );
         assert!(result.is_ok());
+        // SAFETY: Just verified result.is_ok() above
         let execution = result.unwrap();
         assert!(execution.scorecard_result.is_none()); // No scorecard if gates fail
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Fail);
@@ -1045,6 +1046,7 @@ mod tests {
             "test-env".to_string(),
         );
         assert!(result.is_ok());
+        // SAFETY: Just verified result.is_ok() above
         let execution = result.unwrap();
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pending);
     }
@@ -1057,6 +1059,7 @@ mod tests {
     fn allows_frontier_release_all_pass() {
         let evidence = passing_gate_evidence();
         let schema = default_schema();
+        // SAFETY: Test with valid evidence and schema should succeed
         let execution = execute_disruption_track(
             &evidence,
             &schema,
@@ -1071,6 +1074,7 @@ mod tests {
     fn allows_frontier_release_some_fail() {
         let evidence = failing_gate_evidence();
         let schema = default_schema();
+        // SAFETY: Test with valid evidence and schema should succeed even with some failing gates
         let execution = execute_disruption_track(
             &evidence,
             &schema,

@@ -1128,7 +1128,11 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         "{}:{}:{}:{}",
         specimen.specimen_id,
         verdict as u8,
+        // SAFETY: signature_valid is a bool, which always serializes successfully to JSON.
+        // to_string on primitive types only fails on writer errors (impossible with String).
         serde_json::to_string(&signature_valid).unwrap(),
+        // SAFETY: classified_regime derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         serde_json::to_string(&classified_regime).unwrap(),
     );
 

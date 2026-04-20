@@ -1084,7 +1084,9 @@ mod tests {
             &[("cpu", 500_000), ("mem", 300_000)],
             50,
         );
+        // SAFETY: SignatureSnapshot derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by valid SignatureSnapshot serialization.
         let back: SignatureSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -1161,7 +1163,9 @@ mod tests {
         let bl = snapshot("bl", normal_regime(), &[("cpu", 100_000)], 100);
         let cur = snapshot("cur", normal_regime(), &[("cpu", 200_000)], 100);
         let drift = compute_drift(&bl, &cur);
+        // SAFETY: DriftMeasurement derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&drift).unwrap();
+        // SAFETY: JSON was just produced by valid DriftMeasurement serialization.
         let back: DriftMeasurement = serde_json::from_str(&json).unwrap();
         assert_eq!(drift, back);
     }

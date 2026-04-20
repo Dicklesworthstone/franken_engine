@@ -14243,24 +14243,7 @@ impl InterpreterCore {
                 Ok(Value::Bool(result))
             }
 
-            "builtin:NumberIsFinite" => {
-                // Number.isFinite() implementation - checks if value is finite number
-                if args.count == 0 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let result = match value {
-                    Value::Int(_) => true, // Integers are always finite
-                    Value::Float(f) => {
-                        let num = f.inner();
-                        !num.is_nan() && !num.is_infinite()
-                    }
-                    _ => false, // Only numbers can be finite
-                };
-
-                Ok(Value::Bool(result))
-            }
+            // Removed duplicate NumberIsFinite - implementation at line ~8630 has correct argument handling
 
             "builtin:StringPrototypeCharAt" => {
                 // String.prototype.charAt() implementation - returns character at index

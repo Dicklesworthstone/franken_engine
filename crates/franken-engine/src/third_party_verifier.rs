@@ -2113,6 +2113,7 @@ mod tests {
         let bundle = make_containment_bundle(result);
         // SAFETY: ContainmentClaimBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just produced by valid ContainmentClaimBundle serialization
         let back: ContainmentClaimBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(back, bundle);
     }

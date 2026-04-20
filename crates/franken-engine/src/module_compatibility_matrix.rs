@@ -1411,6 +1411,7 @@ mod tests {
 
     #[test]
     fn validation_requires_approved_waiver_for_native_divergence() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let mut matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         let waivers = BTreeSet::new();
 
@@ -1436,6 +1437,7 @@ mod tests {
             migration_guidance: "use compat mode".to_string(),
         });
 
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let waivers = BTreeSet::from(["w-empty-reason".to_string()]);
         let error = matrix
@@ -1459,6 +1461,7 @@ mod tests {
             migration_guidance: "use compat mode".to_string(),
         });
 
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let waivers = BTreeSet::from(["w-empty-impact".to_string()]);
         let error = matrix
@@ -1724,6 +1727,7 @@ mod tests {
 
     #[test]
     fn entry_lookup_found() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         let entries = matrix.entries();
         assert!(!entries.is_empty());
@@ -1733,6 +1737,7 @@ mod tests {
 
     #[test]
     fn entry_lookup_not_found() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         assert!(matrix.entry("nonexistent-case-id-xyz").is_none());
     }
@@ -1741,7 +1746,9 @@ mod tests {
 
     #[test]
     fn canonical_bytes_deterministic() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let a = ModuleCompatibilityMatrix::from_default_json().unwrap();
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let b = ModuleCompatibilityMatrix::from_default_json().unwrap();
         assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     }
@@ -1750,6 +1757,7 @@ mod tests {
 
     #[test]
     fn events_empty_initially() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         assert!(matrix.events().is_empty());
     }
@@ -1827,6 +1835,7 @@ mod tests {
 
     #[test]
     fn evaluate_observation_unknown_case_fails() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let mut matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         let obs = CompatibilityObservation::new(
             "nonexistent-case-xyz",
@@ -1842,6 +1851,7 @@ mod tests {
 
     #[test]
     fn required_waiver_ids_from_default() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
         let waivers = matrix.required_waiver_ids();
         // Default matrix should have at least one waiver
@@ -1883,6 +1893,7 @@ mod tests {
     fn validate_entry_empty_scenario_fails() {
         let mut entry = valid_entry("case-1");
         entry.scenario.clear();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1895,6 +1906,7 @@ mod tests {
     fn validate_entry_empty_lockstep_refs_fails() {
         let mut entry = valid_entry("case-1");
         entry.lockstep_case_refs.clear();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1907,6 +1919,7 @@ mod tests {
     fn validate_entry_empty_test262_refs_fails() {
         let mut entry = valid_entry("case-1");
         entry.test262_refs.clear();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1924,6 +1937,7 @@ mod tests {
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.shim_id.clear();
         entry.explicit_shims.push(shim);
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1939,6 +1953,7 @@ mod tests {
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.description.clear();
         entry.explicit_shims.push(shim);
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1954,6 +1969,7 @@ mod tests {
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.test_case_ref.clear();
         entry.explicit_shims.push(shim);
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1969,6 +1985,7 @@ mod tests {
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.test_case_ref = "lockstep/unknown-ref".to_string();
         entry.explicit_shims.push(shim);
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -1984,6 +2001,7 @@ mod tests {
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.removable = false;
         entry.explicit_shims.push(shim);
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -2005,6 +2023,7 @@ mod tests {
             waiver_id: "w-1".to_string(),
             migration_guidance: "guidance".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
@@ -2029,6 +2048,7 @@ mod tests {
             waiver_id: "w-1".to_string(),
             migration_guidance: "g".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
@@ -2052,6 +2072,7 @@ mod tests {
             waiver_id: "".to_string(),
             migration_guidance: "g".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -2074,6 +2095,7 @@ mod tests {
             waiver_id: "w-1".to_string(),
             migration_guidance: "".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
@@ -2094,6 +2116,7 @@ mod tests {
         entry.bun_behavior = "native".to_string();
         // No divergence policy declared
         entry.divergence = None;
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -2106,6 +2129,7 @@ mod tests {
     #[test]
     fn validate_entry_fully_valid_passes() {
         let entry = valid_entry("case-ok");
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -2128,6 +2152,7 @@ mod tests {
             waiver_id: "w-div".to_string(),
             migration_guidance: "use native API".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         matrix
             .validate_with_waivers(&BTreeSet::from(["w-div".to_string()]), &context())
@@ -2139,6 +2164,7 @@ mod tests {
     #[test]
     fn evaluate_observation_behavior_mismatch_fails() {
         let entry = valid_entry("case-obs");
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-obs",
@@ -2154,6 +2180,7 @@ mod tests {
     #[test]
     fn evaluate_observation_matching_behavior_succeeds() {
         let entry = valid_entry("case-obs");
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-obs",
@@ -2181,6 +2208,7 @@ mod tests {
             waiver_id: "w-obs".to_string(),
             migration_guidance: "use compat mode".to_string(),
         });
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-div-obs",
@@ -2188,6 +2216,7 @@ mod tests {
             CompatibilityMode::Native,
             "native-behavior",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert!(outcome.matched);
         assert!(outcome.divergence.is_some());
@@ -2197,6 +2226,7 @@ mod tests {
     fn evaluate_observation_node_runtime() {
         let mut entry = valid_entry("case-node");
         entry.node_behavior = "node-ok".to_string();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-node",
@@ -2204,6 +2234,7 @@ mod tests {
             CompatibilityMode::Native,
             "node-ok",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert!(outcome.matched);
     }
@@ -2212,6 +2243,7 @@ mod tests {
     fn evaluate_observation_bun_runtime() {
         let mut entry = valid_entry("case-bun");
         entry.bun_behavior = "bun-ok".to_string();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-bun",
@@ -2219,6 +2251,7 @@ mod tests {
             CompatibilityMode::Native,
             "bun-ok",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert!(outcome.matched);
     }
@@ -2227,6 +2260,7 @@ mod tests {
     fn evaluate_observation_franken_node_compat_mode() {
         let mut entry = valid_entry("case-nc");
         entry.franken_node_compat_behavior = "nc-behavior".to_string();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-nc",
@@ -2234,6 +2268,7 @@ mod tests {
             CompatibilityMode::NodeCompat,
             "nc-behavior",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert!(outcome.matched);
     }
@@ -2242,6 +2277,7 @@ mod tests {
     fn evaluate_observation_franken_bun_compat_mode() {
         let mut entry = valid_entry("case-bc");
         entry.franken_bun_compat_behavior = "bc-behavior".to_string();
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let obs = CompatibilityObservation::new(
             "case-bc",
@@ -2249,6 +2285,7 @@ mod tests {
             CompatibilityMode::BunCompat,
             "bc-behavior",
         );
+        // SAFETY: Test-only unwrap expecting observation to match expected behavior
         let outcome = matrix.evaluate_observation(&obs, &context()).unwrap();
         assert!(outcome.matched);
     }
@@ -2257,8 +2294,11 @@ mod tests {
 
     #[test]
     fn to_json_pretty_round_trips() {
+        // SAFETY: Test-only unwrap expecting default JSON to parse successfully
         let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
+        // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
         let json = matrix.to_json_pretty().unwrap();
+        // SAFETY: Test-only unwrap expecting pretty JSON to parse back successfully
         let reparsed = ModuleCompatibilityMatrix::from_json_str(&json).unwrap();
         assert_eq!(matrix.canonical_hash(), reparsed.canonical_hash());
     }
@@ -2269,7 +2309,9 @@ mod tests {
     fn canonical_hash_differs_for_different_entries() {
         let entry_a = valid_entry("case-a");
         let entry_b = valid_entry("case-b");
+        // SAFETY: Test-only unwrap expecting valid entries to create matrices successfully
         let ma = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_a]).unwrap();
+        // SAFETY: Test-only unwrap expecting valid entries to create matrices successfully
         let mb = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_b]).unwrap();
         assert_ne!(ma.canonical_hash(), mb.canonical_hash());
     }
@@ -2281,6 +2323,7 @@ mod tests {
         let mut entry = valid_entry("case-bun-shim");
         entry.franken_bun_compat_behavior = "different".to_string();
         // No shim declared for BunCompat
+        // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
@@ -2292,6 +2335,7 @@ mod tests {
 
     #[test]
     fn events_have_incrementing_sequence_numbers() {
+        // SAFETY: Test-only unwrap expecting valid entries to create matrix successfully
         let mut matrix = ModuleCompatibilityMatrix::from_entries(
             "1.0.0",
             vec![valid_entry("case-1"), valid_entry("case-2")],
@@ -2337,7 +2381,9 @@ mod tests {
     #[test]
     fn reference_runtime_serde_round_trip() {
         for variant in [ReferenceRuntime::Node, ReferenceRuntime::Bun] {
+            // SAFETY: ReferenceRuntime derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid ReferenceRuntime serialization
             let back: ReferenceRuntime = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -2346,7 +2392,9 @@ mod tests {
     #[test]
     fn explicit_shim_serde_round_trip() {
         let shim = valid_shim(CompatibilityMode::NodeCompat);
+        // SAFETY: ExplicitShim derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&shim).unwrap();
+        // SAFETY: JSON was just produced by valid ExplicitShim serialization
         let back: ExplicitShim = serde_json::from_str(&json).unwrap();
         assert_eq!(shim, back);
     }
@@ -2360,7 +2408,9 @@ mod tests {
             waiver_id: "waiver-1".to_string(),
             migration_guidance: "wrap in try/catch".to_string(),
         };
+        // SAFETY: DivergencePolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by valid DivergencePolicy serialization
         let back: DivergencePolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, back);
     }
@@ -2368,7 +2418,9 @@ mod tests {
     #[test]
     fn compatibility_matrix_entry_serde_round_trip() {
         let entry = valid_entry("case-serde");
+        // SAFETY: CompatibilityMatrixEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by valid CompatibilityMatrixEntry serialization
         let back: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, back);
     }

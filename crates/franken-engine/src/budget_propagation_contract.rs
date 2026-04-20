@@ -1031,6 +1031,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             BudgetPropagationError::NoRuleForBoundary { .. } => {}
+            // SAFETY: Test-only panic to validate BudgetPropagationError matches expected NoRuleForBoundary variant
             other => panic!("expected NoRuleForBoundary, got {:?}", other),
         }
     }

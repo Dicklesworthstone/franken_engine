@@ -2056,6 +2056,7 @@ mod tests {
         let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
         let attestation = generate_attestation(&input).unwrap();
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("signed=true"));

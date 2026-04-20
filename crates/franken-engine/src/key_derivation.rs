@@ -1048,7 +1048,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(5),
             context_hash: vec![10, 20],
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&key).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivedKey = serde_json::from_str(&json).unwrap();
         assert_eq!(key, restored);
     }

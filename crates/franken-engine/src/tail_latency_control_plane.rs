@@ -1608,8 +1608,10 @@ mod tests {
 
     #[test]
     fn serde_guardrail_state_uses_snake_case() {
+        // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&GuardrailState::NearLimit).unwrap();
         assert_eq!(json, "\"near_limit\"");
+        // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
         let json_fallback = serde_json::to_string(&GuardrailState::FallbackEngaged).unwrap();
         assert_eq!(json_fallback, "\"fallback_engaged\"");
     }

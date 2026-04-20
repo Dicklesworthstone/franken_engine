@@ -2607,7 +2607,11 @@ mod tests {
             4,
         );
         motif.observation_count = 100;
+        // SAFETY: FusionMotif derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&motif).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FusionMotif,
+        // so from_str back to FusionMotif cannot fail (valid format + matching schema).
         let decoded: FusionMotif = serde_json::from_str(&json).unwrap();
         assert_eq!(motif, decoded);
     }
@@ -2615,7 +2619,11 @@ mod tests {
     #[test]
     fn test_proof_lineage_serde() {
         let lineage = proof_lineage();
+        // SAFETY: FusionProofLineage derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&lineage).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FusionProofLineage,
+        // so from_str back to FusionProofLineage cannot fail (valid format + matching schema).
         let decoded: FusionProofLineage = serde_json::from_str(&json).unwrap();
         assert_eq!(lineage, decoded);
     }
@@ -2624,7 +2632,11 @@ mod tests {
     fn test_fused_trace_serde() {
         let mut trace = FusedTrace::new("fn_test", test_epoch());
         trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add"));
+        // SAFETY: FusedTrace derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&trace).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FusedTrace,
+        // so from_str back to FusedTrace cannot fail (valid format + matching schema).
         let decoded: FusedTrace = serde_json::from_str(&json).unwrap();
         assert_eq!(trace, decoded);
     }
@@ -2632,7 +2644,11 @@ mod tests {
     #[test]
     fn test_fusion_policy_serde() {
         let policy = FusionPolicy::default();
+        // SAFETY: FusionPolicy derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&policy).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FusionPolicy,
+        // so from_str back to FusionPolicy cannot fail (valid format + matching schema).
         let decoded: FusionPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, decoded);
     }

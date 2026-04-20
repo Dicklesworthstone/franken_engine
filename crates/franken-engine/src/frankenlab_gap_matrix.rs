@@ -1476,7 +1476,9 @@ mod tests {
     #[test]
     fn lab_surface_kind_serde_roundtrip() {
         for s in LabSurfaceKind::ALL {
+            // SAFETY: LabSurfaceKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: JSON was just produced by valid LabSurfaceKind serialization
             let s2: LabSurfaceKind = serde_json::from_str(&json).unwrap();
             assert_eq!(s, s2);
         }
@@ -1505,7 +1507,9 @@ mod tests {
     #[test]
     fn upstream_capability_serde_roundtrip() {
         for c in UpstreamCapability::ALL {
+            // SAFETY: UpstreamCapability derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&c).unwrap();
+            // SAFETY: JSON was just produced by valid UpstreamCapability serialization
             let c2: UpstreamCapability = serde_json::from_str(&json).unwrap();
             assert_eq!(c, c2);
         }
@@ -1529,7 +1533,9 @@ mod tests {
             GapStatus::FullGap,
             GapStatus::Redundant,
         ] {
+            // SAFETY: GapStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&s).unwrap();
+            // SAFETY: JSON was just produced by valid GapStatus serialization
             let s2: GapStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(s, s2);
         }

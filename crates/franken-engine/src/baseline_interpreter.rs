@@ -11755,58 +11755,7 @@ impl InterpreterCore {
                 Ok(Value::Int(result))
             }
 
-            "builtin:ArrayPrototypeAt" => {
-                // Array.prototype.at(index) implementation - access with negative indexing
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let index = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(idx) => idx,
-                        Value::Float(idx) => idx.inner() as i64,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len,
-                        Some(Value::Float(len)) => len.inner() as i64,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                if length == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                // Handle negative indexing
-                let actual_index = if index < 0 { length + index } else { index };
-
-                // Check bounds
-                if actual_index < 0 || actual_index >= length {
-                    return Ok(Value::Undefined);
-                }
-
-                // Get the element at the index
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    if let Some(element) = obj.properties.get(&actual_index.to_string()) {
-                        Ok(element.clone())
-                    } else {
-                        Ok(Value::Undefined)
-                    }
-                } else {
-                    Ok(Value::Undefined)
-                }
-            }
+            // Removed duplicate ArrayPrototypeAt - implementation at line ~13242 is more concise
 
             // Removed duplicate StringPrototypeAt - implementation at line ~13959 is more complete
 

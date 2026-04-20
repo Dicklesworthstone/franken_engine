@@ -1566,6 +1566,7 @@ mod tests {
                 assert!(el.name.is_component());
                 assert!(el.self_closing);
             }
+            // SAFETY: Test validates JSX parsing produces element node for component "<App />"
             _ => panic!("expected element"),
         }
     }

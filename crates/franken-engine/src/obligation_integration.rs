@@ -1335,7 +1335,9 @@ mod tests {
             trace_id: "t".to_string(),
             phase: OperationPhase::Phase1Active,
         };
+        // SAFETY: TwoPhaseOperation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&op).unwrap();
+        // SAFETY: JSON was just produced by valid TwoPhaseOperation serialization
         let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap();
         assert_eq!(op, restored);
     }
@@ -1353,7 +1355,9 @@ mod tests {
             component: "obligation_integration".to_string(),
             phase: OperationPhase::Phase1Active,
         };
+        // SAFETY: ObligationEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by valid ObligationEvent serialization
         let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
@@ -1367,7 +1371,9 @@ mod tests {
             trace_id: "t".to_string(),
             description: "leaked buffer".to_string(),
         };
+        // SAFETY: LeakRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&leak).unwrap();
+        // SAFETY: JSON was just produced by valid LeakRecord serialization
         let restored: LeakRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(leak, restored);
     }

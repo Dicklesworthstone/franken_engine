@@ -1867,7 +1867,9 @@ mod tests {
 
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"a", "policy-001");
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
+        // SAFETY: Test with valid proof should successfully ingest
         engine.ingest_proof(p1, 1000).unwrap();
+        // SAFETY: Test with valid proof should successfully ingest
         engine.ingest_proof(p2, 1000).unwrap();
 
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);

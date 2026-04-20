@@ -975,7 +975,9 @@ mod tests {
         let obs = shipped_observation("serde_test")
             .with_detail("detail")
             .with_minimized_repro_command("cmd");
+        // SAFETY: BehaviorEquivalenceObservation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&obs).unwrap();
+        // SAFETY: JSON was just produced by valid BehaviorEquivalenceObservation serialization
         let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(obs, back);
     }
@@ -988,7 +990,9 @@ mod tests {
             POLICY_ID,
             &[shipped_observation("w1").with_output_equivalence(false)],
         );
+        // SAFETY: BehaviorEquivalenceReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: JSON was just produced by valid BehaviorEquivalenceReport serialization
         let back: BehaviorEquivalenceReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }
@@ -1241,7 +1245,9 @@ mod tests {
     #[test]
     fn evidence_surface_serde_roundtrip() {
         for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
+            // SAFETY: EvidenceSurface derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&surface).unwrap();
+            // SAFETY: JSON was just produced by valid EvidenceSurface serialization
             let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
             assert_eq!(surface, back);
         }
@@ -1258,7 +1264,9 @@ mod tests {
             BehaviorEquivalenceClass::ShippedPathDrift,
         ];
         for variant in variants {
+            // SAFETY: BehaviorEquivalenceClass derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&variant).unwrap();
+            // SAFETY: JSON was just produced by valid BehaviorEquivalenceClass serialization
             let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
@@ -1271,7 +1279,9 @@ mod tests {
             PublicationDisposition::NonPublicationEvidence,
             PublicationDisposition::Blocked,
         ] {
+            // SAFETY: PublicationDisposition derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&disp).unwrap();
+            // SAFETY: JSON was just produced by valid PublicationDisposition serialization
             let back: PublicationDisposition = serde_json::from_str(&json).unwrap();
             assert_eq!(disp, back);
         }
@@ -1289,7 +1299,9 @@ mod tests {
             OwnerRouteHint::DocsContract,
         ];
         for hint in hints {
+            // SAFETY: OwnerRouteHint derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&hint).unwrap();
+            // SAFETY: JSON was just produced by valid OwnerRouteHint serialization
             let back: OwnerRouteHint = serde_json::from_str(&json).unwrap();
             assert_eq!(hint, back);
         }
@@ -1300,7 +1312,9 @@ mod tests {
         let obs = shipped_observation("w1").with_output_equivalence(false);
         let record = build_record(&obs);
         assert!(record.owner_route.is_some());
+        // SAFETY: BenchmarkParityVerdictRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&record).unwrap();
+        // SAFETY: JSON was just produced by valid BenchmarkParityVerdictRecord serialization
         let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, back);
     }

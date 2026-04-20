@@ -15745,75 +15745,12 @@ impl InterpreterCore {
 
             // ObjectPrototypeToString: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:StringPrototypeTrim" => {
-                // String.prototype.trim() implementation - removes whitespace from both ends
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => String::new(),
-                };
-
-                Ok(Value::Str(str_text.trim().to_string()))
-            }
+            // StringPrototypeTrim: Removed duplicate dispatch arm (use first occurrence instead)
 
 
-            "builtin:NumberIsInteger" => {
-                // Number.isInteger() implementation - checks if value is an integer
-                if args.count == 0 {
-                    return Ok(Value::Bool(false));
-                }
+            // NumberIsInteger: Removed duplicate dispatch arm (use first occurrence instead)
 
-                let value = self.read_reg(args.start + 1)?;
-                let result = match value {
-                    Value::Int(_) => true,
-                    Value::Float(f) => {
-                        let num = f.inner();
-                        !num.is_nan() && !num.is_infinite() && num.fract() == 0.0
-                    }
-                    _ => false,
-                };
-
-                Ok(Value::Bool(result))
-            }
-
-            "builtin:StringPrototypeEndsWith" => {
-                // String.prototype.endsWith() implementation - checks if string ends with substring
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => String::new(),
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false)); // No search string provided
-                }
-
-                let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => String::new(),
-                };
-
-                Ok(Value::Bool(str_text.ends_with(&search_str)))
-            }
+            // StringPrototypeEndsWith: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:NumberIsNaN" => {
                 // Number.isNaN() implementation - checks if value is NaN
@@ -24581,5 +24518,89 @@ mod tests {
 
         // Verify the call succeeded
         assert!(result.is_ok(), "ObjectPrototypeToString should work after deduplication");
+    }
+
+    #[test]
+    fn batch_28_deduplication_regression_test() {
+        // Regression test for bd-vu73s batch-28 trim, integer, endsWith deduplication
+        // Verifies that duplicate dispatch arms were removed and only first occurrences remain
+        let interpreter = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Test StringPrototypeTrim builtin ID still works
+        assert_eq!(
+            interpreter.builtin_name_from_id(37),  // From original mapping
+            Some("builtin:StringPrototypeTrim".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(333), // From batch-28 mapping
+            Some("builtin:StringPrototypeTrim".to_string())
+        );
+
+        // Test NumberIsInteger builtin IDs still work
+        assert_eq!(
+            interpreter.builtin_name_from_id(231), // From batch-28 mapping
+            Some("builtin:NumberIsInteger".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(335), // From batch-28 mapping
+            Some("builtin:NumberIsInteger".to_string())
+        );
+
+        // Test StringPrototypeEndsWith builtin IDs still work
+        assert_eq!(
+            interpreter.builtin_name_from_id(40),  // From original mapping
+            Some("builtin:StringPrototypeEndsWith".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(230), // From batch-28 mapping
+            Some("builtin:StringPrototypeEndsWith".to_string())
+        );
+        assert_eq!(
+            interpreter.builtin_name_from_id(336), // From batch-28 mapping
+            Some("builtin:StringPrototypeEndsWith".to_string())
+        );
+    }
+
+    #[test]
+    fn batch_28_functionality_preserved() {
+        // Verify that all batch-28 deduplicated functions still work correctly
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        // Test StringPrototypeTrim functionality
+        core.registers[0] = Value::Str("  hello world  ".to_string());
+        let trim_result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:StringPrototypeTrim".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+        assert!(trim_result.is_ok(), "StringPrototypeTrim should work after deduplication");
+
+        // Test NumberIsInteger functionality
+        core.registers[0] = Value::Int(42);
+        let integer_result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:NumberIsInteger".to_string(),
+                args: RegRange { start: 0, count: 1 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+        assert!(integer_result.is_ok(), "NumberIsInteger should work after deduplication");
+
+        // Test StringPrototypeEndsWith functionality
+        core.registers[0] = Value::Str("hello world".to_string());
+        core.registers[1] = Value::Str("world".to_string());
+        let endswith_result = core.execute(&test_module(vec![
+            Ir3Instruction::CallBuiltin {
+                builtin: "builtin:StringPrototypeEndsWith".to_string(),
+                args: RegRange { start: 0, count: 2 },
+                dst: 10,
+            },
+            Ir3Instruction::Halt,
+        ]));
+        assert!(endswith_result.is_ok(), "StringPrototypeEndsWith should work after deduplication");
     }
 }

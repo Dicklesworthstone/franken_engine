@@ -1471,7 +1471,11 @@ mod tests {
         let matrix = security_game_matrix();
         let mut harness = CoevolutionHarness::new(config, matrix).unwrap();
         let result = harness.run().unwrap();
+        // SAFETY: TournamentResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TournamentResult,
+        // so from_str back to TournamentResult cannot fail (valid format + matching schema).
         let back: TournamentResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
     }
@@ -1486,7 +1490,11 @@ mod tests {
             ExploitClass::ReplayAttack,
             ExploitClass::Novel("custom".to_string()),
         ] {
+            // SAFETY: ExploitClass derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&class).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ExploitClass,
+            // so from_str back to ExploitClass cannot fail (valid format + matching schema).
             let back: ExploitClass = serde_json::from_str(&json).unwrap();
             assert_eq!(class, back);
         }
@@ -1497,7 +1505,11 @@ mod tests {
         let err = CoevolutionError::EmptyStrategies {
             player: PlayerRole::Defender,
         };
+        // SAFETY: CoevolutionError derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CoevolutionError,
+        // so from_str back to CoevolutionError cannot fail (valid format + matching schema).
         let back: CoevolutionError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
@@ -1505,7 +1517,11 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = TournamentConfig::default();
+        // SAFETY: TournamentConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid TournamentConfig,
+        // so from_str back to TournamentConfig cannot fail (valid format + matching schema).
         let back: TournamentConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, back);
     }

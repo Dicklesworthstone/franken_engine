@@ -1183,7 +1183,11 @@ mod tests {
         ];
         let config = BifurcationDetectorConfig::default();
         let bundle = build_certificate_bundle(&profiles, &config, 0);
+        // SAFETY: CertificateBundle derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid CertificateBundle,
+        // so from_str back to CertificateBundle cannot fail (valid format + matching schema).
         let deser: CertificateBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle, deser);
     }
@@ -1193,7 +1197,11 @@ mod tests {
         let config = BifurcationDetectorConfig::default();
         let telemetry = vec![snapshot("a", "b", 10_000_000, 50_000, 1_500_000, 0)];
         let result = detect_bifurcation_signals(&telemetry, &config, 0);
+        // SAFETY: BifurcationDetectorResult derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BifurcationDetectorResult,
+        // so from_str back to BifurcationDetectorResult cannot fail (valid format + matching schema).
         let deser: BifurcationDetectorResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, deser);
     }
@@ -1210,7 +1218,11 @@ mod tests {
             detected_epoch: 5,
             description: "test signal".to_string(),
         };
+        // SAFETY: BifurcationSignal derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&signal).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BifurcationSignal,
+        // so from_str back to BifurcationSignal cannot fail (valid format + matching schema).
         let deser: BifurcationSignal = serde_json::from_str(&json).unwrap();
         assert_eq!(signal, deser);
     }
@@ -1218,7 +1230,11 @@ mod tests {
     #[test]
     fn config_serde_round_trip() {
         let config = BifurcationDetectorConfig::default();
+        // SAFETY: BifurcationDetectorConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BifurcationDetectorConfig,
+        // so from_str back to BifurcationDetectorConfig cannot fail (valid format + matching schema).
         let deser: BifurcationDetectorConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, deser);
     }

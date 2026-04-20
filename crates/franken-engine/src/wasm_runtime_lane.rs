@@ -823,12 +823,15 @@ mod tests {
     fn graph_register_derived() {
         let mut g = WasmSignalGraph::new(64, 1000);
         let s = g.next_id();
+        // SAFETY: register cannot fail with valid test inputs and unique IDs
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
+        // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps).unwrap();
+        // SAFETY: get cannot fail for ID we just registered
         assert_eq!(g.get(d).unwrap().depth, 1);
     }
 
@@ -836,6 +839,7 @@ mod tests {
     fn graph_depth_exceeded() {
         let mut g = WasmSignalGraph::new(2, 100);
         let s = g.next_id();
+        // SAFETY: register cannot fail with valid test inputs and unique IDs
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
         let d1 = g.next_id();

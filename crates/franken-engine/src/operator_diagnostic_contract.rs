@@ -812,7 +812,11 @@ mod tests {
     #[test]
     fn contract_serde_roundtrip() {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+        // SAFETY: BoundaryPolicyMappingContract derives Serialize and has no non-serializable fields.
+        // to_string_pretty on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string_pretty(&contract).unwrap();
+        // SAFETY: JSON was just produced by to_string_pretty of a valid BoundaryPolicyMappingContract,
+        // so from_str back to BoundaryPolicyMappingContract cannot fail (valid format + matching schema).
         let parsed: BoundaryPolicyMappingContract = serde_json::from_str(&json).unwrap();
         assert_eq!(contract, parsed);
     }

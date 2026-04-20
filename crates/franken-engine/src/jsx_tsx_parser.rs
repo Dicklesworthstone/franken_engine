@@ -1684,9 +1684,11 @@ mod tests {
                         assert_eq!(name, "disabled");
                         assert_eq!(*value, JsxAttributeValue::ImplicitTrue);
                     }
+                    // SAFETY: Test-only panic to validate JSX attribute type matches expected Named variant
                     _ => panic!("expected named attribute"),
                 }
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

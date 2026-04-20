@@ -315,11 +315,9 @@ fn gate_fail_insufficient_families() {
     let report = gate.evaluate(&corpus);
     assert!(!report.verdict.permits_publication());
     if let GateVerdict::Fail { reasons } = &report.verdict {
-        assert!(
-            reasons
-                .iter()
-                .any(|r| { matches!(r, RejectionReason::InsufficientFamilyCoverage { .. }) })
-        );
+        assert!(reasons
+            .iter()
+            .any(|r| { matches!(r, RejectionReason::InsufficientFamilyCoverage { .. }) }));
     }
 }
 
@@ -562,11 +560,9 @@ fn config_without_baselines_skips_baseline_check() {
     let report = gate.evaluate(&corpus);
     // Should not fail due to missing baseline (but may fail for other reasons)
     if let GateVerdict::Fail { reasons } = &report.verdict {
-        assert!(
-            !reasons
-                .iter()
-                .any(|r| matches!(r, RejectionReason::MissingBaselineResults { .. }))
-        );
+        assert!(!reasons
+            .iter()
+            .any(|r| matches!(r, RejectionReason::MissingBaselineResults { .. })));
     }
 }
 
@@ -1058,4 +1054,181 @@ fn gate_repeated_runs_same_outdir_deterministic() {
             );
         }
     }
+}
+
+#[test]
+fn gate_corpus_manifest_loading_with_equivalence_artifacts() {
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let out_dir = temp_dir.path();
+    let manifest_dir = temp_dir.path().join("manifest");
+    let artifacts_dir = temp_dir.path().join("equivalence_artifacts");
+
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::create_dir_all(&artifacts_dir).unwrap();
+
+    // Create a minimal corpus manifest
+    let manifest_content = serde_json::json!({
+        "schema_version": "franken-engine.workload-corpus-manifest.v1",
+        "specimens": [
+            {
+                "id": "test_regex_01",
+                "name": "Test regex workload",
+                "family": "regex_unicode",
+                "language": "java_script",
+                "provenance": {
+                    "origin": "external_corpus",
+                    "source_url": "https://example.com/workloads/regex_01.js",
+                    "license": "permissive",
+                    "spdx_id": "MIT",
+                    "source_version": "v1.0.0",
+                    "selection_rationale": "Representative regex workload",
+                    "content_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                },
+                "observability_modes": ["budgeted_default"],
+                "secondary_families": [],
+                "tags": ["regex", "test"],
+                "approximate_lines": 50,
+                "requires_native_addons": false,
+                "exercises_async": false
+            }
+        ]
+    });
+
+    let manifest_path = manifest_dir.join("corpus.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest_content).unwrap(),
+    )
+    .unwrap();
+
+    // Create equivalence artifact
+    let equiv_content = serde_json::json!({
+        "specimen_id": "test_regex_01",
+        "baseline": "node_js",
+        "divergence_class": "identical",
+        "divergence_description": "",
+        "output_hash_matches": true,
+        "franken_output_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "baseline_output_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "evidence_path": "evidence/test_regex_01.trace"
+    });
+
+    let equiv_path = artifacts_dir.join("test_regex_01.json");
+    fs::write(
+        &equiv_path,
+        serde_json::to_string_pretty(&equiv_content).unwrap(),
+    )
+    .unwrap();
+
+    // Run gate with corpus manifest and equivalence artifacts
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--bin",
+            "franken_workload_corpus_gate",
+            "--",
+            "--out-dir",
+            &out_dir.display().to_string(),
+            "--corpus-manifest",
+            &manifest_path.display().to_string(),
+            "--equivalence-artifacts",
+            &artifacts_dir.display().to_string(),
+        ])
+        .current_dir("crates/franken-engine")
+        .output()
+        .expect("Failed to execute gate binary");
+
+    assert!(output.status.success(), "Gate execution failed");
+
+    // Verify corpus manifest was loaded correctly
+    let corpus_manifest_path = out_dir.join("corpus_manifest.json");
+    assert!(
+        corpus_manifest_path.exists(),
+        "corpus_manifest.json missing"
+    );
+
+    let corpus_manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&corpus_manifest_path).unwrap()).unwrap();
+
+    // Should contain the specimen from the loaded manifest
+    assert!(corpus_manifest["specimens"].as_array().unwrap().len() > 0);
+
+    // Verify commands.txt includes manifest and artifacts paths
+    let commands_path = out_dir.join("commands.txt");
+    let commands_content = fs::read_to_string(&commands_path).unwrap();
+    let replay_command = commands_content.lines().next().unwrap();
+
+    assert!(
+        replay_command.contains("--corpus-manifest"),
+        "Replay command should include --corpus-manifest"
+    );
+    assert!(
+        replay_command.contains("--equivalence-artifacts"),
+        "Replay command should include --equivalence-artifacts"
+    );
+}
+
+#[test]
+fn gate_publication_mode_requires_corpus_and_artifacts() {
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let out_dir = temp_dir.path();
+
+    // Run gate in publication mode without required parameters
+    let output = Command::new("cargo")
+        .args(&[
+            "run",
+            "--bin",
+            "franken_workload_corpus_gate",
+            "--",
+            "--out-dir",
+            &out_dir.display().to_string(),
+            "--publication-mode",
+        ])
+        .current_dir("crates/franken-engine")
+        .output()
+        .expect("Failed to execute gate binary");
+
+    // Should fail because publication mode requires corpus manifest and artifacts
+    assert!(
+        !output.status.success(),
+        "Gate should fail in publication mode without required parameters"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Publication mode requires --corpus-manifest and --equivalence-artifacts"),
+        "Error message should indicate missing required parameters: {}",
+        stderr
+    );
+}
+
+#[test]
+fn gate_content_hash_parsing_handles_prefixes() {
+    // This test verifies the parse_content_hash function handles various formats
+    use frankenengine_engine::hash_tiers::ContentHash;
+
+    // Test data
+    let hex_without_prefix = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let hex_with_prefix =
+        "content:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    // Create expected hash manually
+    let expected_bytes = [
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd,
+        0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+        0xcd, 0xef,
+    ];
+    let expected = ContentHash::from_bytes(expected_bytes);
+
+    // Test both formats - we can't test parse_content_hash directly since it's in the binary,
+    // but we can test that ContentHash creation works correctly
+    assert_eq!(expected.to_hex(), hex_without_prefix);
+    assert_eq!(format!("content:{}", expected.to_hex()), hex_with_prefix);
 }

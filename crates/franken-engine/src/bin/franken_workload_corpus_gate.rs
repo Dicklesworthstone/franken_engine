@@ -30,6 +30,9 @@ enum CliAction {
         out_dir: PathBuf,
         min_per_family: Option<usize>,
         min_equivalence_rate: Option<u64>,
+        corpus_manifest_path: Option<PathBuf>,
+        equivalence_artifacts_path: Option<PathBuf>,
+        publication_mode: bool,
     },
 }
 
@@ -101,6 +104,9 @@ fn parse_args_from(args: &[String]) -> CliAction {
             let mut out_dir = None;
             let mut min_per_family = None;
             let mut min_equivalence_rate = None;
+            let mut corpus_manifest_path = None;
+            let mut equivalence_artifacts_path = None;
+            let mut publication_mode = false;
 
             let mut i = 1;
             while i < args.len() {
@@ -164,6 +170,44 @@ fn parse_args_from(args: &[String]) -> CliAction {
                             };
                         }
                     }
+                    "--corpus-manifest" => {
+                        if i + 1 < args.len() {
+                            if args[i + 1].starts_with("--") {
+                                return CliAction::Error {
+                                    argument: args[i].clone(),
+                                    message: "missing value".to_string(),
+                                };
+                            }
+                            corpus_manifest_path = Some(PathBuf::from(&args[i + 1]));
+                            i += 2;
+                        } else {
+                            return CliAction::Error {
+                                argument: args[i].clone(),
+                                message: "missing value".to_string(),
+                            };
+                        }
+                    }
+                    "--equivalence-artifacts" => {
+                        if i + 1 < args.len() {
+                            if args[i + 1].starts_with("--") {
+                                return CliAction::Error {
+                                    argument: args[i].clone(),
+                                    message: "missing value".to_string(),
+                                };
+                            }
+                            equivalence_artifacts_path = Some(PathBuf::from(&args[i + 1]));
+                            i += 2;
+                        } else {
+                            return CliAction::Error {
+                                argument: args[i].clone(),
+                                message: "missing value".to_string(),
+                            };
+                        }
+                    }
+                    "--publication-mode" => {
+                        publication_mode = true;
+                        i += 1;
+                    }
                     unknown => {
                         return CliAction::Error {
                             argument: unknown.to_string(),
@@ -177,6 +221,9 @@ fn parse_args_from(args: &[String]) -> CliAction {
                 out_dir: out_dir.unwrap_or_else(|| PathBuf::from(".")),
                 min_per_family,
                 min_equivalence_rate,
+                corpus_manifest_path,
+                equivalence_artifacts_path,
+                publication_mode,
             }
         }
     }
@@ -194,9 +241,219 @@ fn print_help() {
     println!("  --out-dir <DIR>              Output directory for artifacts");
     println!("  --min-per-family <N>         Minimum specimens per family");
     println!("  --min-equivalence-rate <N>   Minimum equivalence rate (millionths)");
+    println!("  --corpus-manifest <FILE>     Path to curated workload corpus manifest");
+    println!("  --equivalence-artifacts <DIR> Path to directory with equivalence artifacts");
+    println!("  --publication-mode           Reject internal fixtures for publication");
     println!("  --help, -h                   Show this help");
     println!();
     println!("Evaluates workload corpus for behavior-equivalence gating of performance claims.");
+}
+
+fn load_curated_corpus(
+    manifest_path: &Path,
+    equivalence_artifacts_path: Option<&PathBuf>,
+) -> Result<WorkloadCorpus, Box<dyn std::error::Error>> {
+    let manifest_content = fs::read_to_string(manifest_path)?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)?;
+
+    let specimens = manifest["specimens"]
+        .as_array()
+        .ok_or("Missing 'specimens' array in manifest")?;
+
+    let mut corpus = WorkloadCorpus::new();
+
+    for specimen_data in specimens {
+        let specimen = parse_specimen_from_manifest(specimen_data)?;
+        corpus.add_specimen(specimen)?;
+    }
+
+    // Load equivalence artifacts if provided
+    if let Some(artifacts_path) = equivalence_artifacts_path {
+        load_equivalence_artifacts(&mut corpus, artifacts_path)?;
+    }
+
+    Ok(corpus)
+}
+
+fn parse_specimen_from_manifest(
+    data: &serde_json::Value,
+) -> Result<WorkloadSpecimen, Box<dyn std::error::Error>> {
+    let id = data["id"]
+        .as_str()
+        .ok_or("Missing 'id' field")?
+        .to_string();
+    let name = data["name"]
+        .as_str()
+        .ok_or("Missing 'name' field")?
+        .to_string();
+
+    let family: WorkloadFamily = serde_json::from_value(data["family"].clone())?;
+    let language: InputLanguage = serde_json::from_value(data["language"].clone())?;
+
+    let provenance_data = data["provenance"]
+        .as_object()
+        .ok_or("Missing 'provenance' object")?;
+
+    let origin: WorkloadOrigin = serde_json::from_value(provenance_data["origin"].clone())?;
+    let license: LicenseStatus = serde_json::from_value(provenance_data["license"].clone())?;
+
+    let source_url = provenance_data["source_url"]
+        .as_str()
+        .ok_or("Missing 'provenance.source_url' field")?
+        .to_string();
+
+    let source_version = provenance_data["source_version"]
+        .as_str()
+        .ok_or("Missing 'provenance.source_version' field")?
+        .to_string();
+
+    let selection_rationale = provenance_data["selection_rationale"]
+        .as_str()
+        .ok_or("Missing 'provenance.selection_rationale' field")?
+        .to_string();
+
+    let content_hash_str = provenance_data["content_hash"]
+        .as_str()
+        .ok_or("Missing 'provenance.content_hash' field")?;
+    let content_hash = parse_content_hash(content_hash_str)?;
+
+    let spdx_id = provenance_data["spdx_id"].as_str().map(|s| s.to_string());
+
+    let mut observability_modes = BTreeSet::new();
+    if let Some(modes_array) = data["observability_modes"].as_array() {
+        for mode_val in modes_array {
+            let mode: ObservabilityMode = serde_json::from_value(mode_val.clone())?;
+            observability_modes.insert(mode);
+        }
+    } else {
+        observability_modes.insert(ObservabilityMode::BudgetedDefault);
+    }
+
+    let mut secondary_families = BTreeSet::new();
+    if let Some(sec_fam_array) = data["secondary_families"].as_array() {
+        for fam_val in sec_fam_array {
+            let fam: WorkloadFamily = serde_json::from_value(fam_val.clone())?;
+            secondary_families.insert(fam);
+        }
+    }
+
+    let mut tags = BTreeSet::new();
+    if let Some(tags_array) = data["tags"].as_array() {
+        for tag_val in tags_array {
+            if let Some(tag_str) = tag_val.as_str() {
+                tags.insert(tag_str.to_string());
+            }
+        }
+    }
+
+    let approximate_lines = data["approximate_lines"].as_u64().unwrap_or(0) as usize;
+    let requires_native_addons = data["requires_native_addons"].as_bool().unwrap_or(false);
+    let exercises_async = data["exercises_async"].as_bool().unwrap_or(false);
+
+    let provenance = WorkloadProvenance {
+        origin,
+        source_url,
+        license,
+        spdx_id,
+        source_version,
+        selection_rationale,
+        content_hash,
+    };
+
+    Ok(WorkloadSpecimen {
+        id,
+        name,
+        family,
+        secondary_families,
+        language,
+        provenance,
+        observability_modes,
+        approximate_lines,
+        requires_native_addons,
+        exercises_async,
+        tags,
+    })
+}
+
+fn parse_content_hash(hex_str: &str) -> Result<ContentHash, Box<dyn std::error::Error>> {
+    // Remove 'content:' prefix if present
+    let hex_str = hex_str.strip_prefix("content:").unwrap_or(hex_str);
+
+    if hex_str.len() != 64 {
+        return Err("ContentHash hex string must be exactly 64 characters".into());
+    }
+
+    let mut bytes = [0u8; 32];
+    for (i, chunk) in hex_str.as_bytes().chunks(2).enumerate() {
+        if i >= 32 {
+            return Err("ContentHash hex string too long".into());
+        }
+        let hex_byte = std::str::from_utf8(chunk)?;
+        bytes[i] = u8::from_str_radix(hex_byte, 16)?;
+    }
+
+    Ok(ContentHash::from_bytes(bytes))
+}
+
+fn load_equivalence_artifacts(
+    corpus: &mut WorkloadCorpus,
+    artifacts_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for entry in fs::read_dir(artifacts_path)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().unwrap_or_default() == "json" {
+            let content = fs::read_to_string(&path)?;
+            let equiv_data: serde_json::Value = serde_json::from_str(&content)?;
+
+            let specimen_id = equiv_data["specimen_id"]
+                .as_str()
+                .ok_or("Missing 'specimen_id' in equivalence data")?
+                .to_string();
+
+            let baseline: BaselineRuntime = serde_json::from_value(equiv_data["baseline"].clone())?;
+            let divergence_class: DivergenceClass = serde_json::from_value(equiv_data["divergence_class"].clone())?;
+
+            let divergence_description = equiv_data["divergence_description"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+
+            let output_hash_matches = equiv_data["output_hash_matches"]
+                .as_bool()
+                .unwrap_or(false);
+
+            let franken_hash_str = equiv_data["franken_output_hash"]
+                .as_str()
+                .ok_or("Missing 'franken_output_hash' in equivalence data")?;
+            let franken_output_hash = parse_content_hash(franken_hash_str)?;
+
+            let baseline_hash_str = equiv_data["baseline_output_hash"]
+                .as_str()
+                .ok_or("Missing 'baseline_output_hash' in equivalence data")?;
+            let baseline_output_hash = parse_content_hash(baseline_hash_str)?;
+
+            let evidence_path = equiv_data["evidence_path"]
+                .as_str()
+                .map(|s| s.to_string());
+
+            let equivalence_result = EquivalenceResult {
+                specimen_id,
+                baseline,
+                divergence_class,
+                divergence_description,
+                output_hash_matches,
+                franken_output_hash,
+                baseline_output_hash,
+                evidence_path,
+            };
+
+            corpus.record_equivalence(equivalence_result);
+        }
+    }
+
+    Ok(())
 }
 
 fn build_seed_corpus() -> WorkloadCorpus {
@@ -318,6 +575,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             out_dir,
             min_per_family,
             min_equivalence_rate,
+            corpus_manifest_path,
+            equivalence_artifacts_path,
+            publication_mode,
         } => {
             // Ensure output directory exists
             fs::create_dir_all(&out_dir)?;
@@ -344,7 +604,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
 
             // Build or load corpus
-            let corpus = build_seed_corpus();
+            let corpus = if let Some(ref manifest_path) = corpus_manifest_path {
+                load_curated_corpus(manifest_path, equivalence_artifacts_path.as_ref())?
+            } else if publication_mode {
+                return Err(
+                    "Publication mode requires --corpus-manifest and --equivalence-artifacts"
+                        .into(),
+                );
+            } else {
+                build_seed_corpus()
+            };
             write_event(
                 &events_path,
                 "corpus_built",
@@ -428,6 +697,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(min_eq_rate) = min_equivalence_rate {
                 replay_cmd.push_str(&format!(" --min-equivalence-rate {}", min_eq_rate));
+            }
+            if let Some(ref manifest_path) = corpus_manifest_path {
+                replay_cmd.push_str(&format!(" --corpus-manifest {}", manifest_path.display()));
+            }
+            if let Some(ref artifacts_path) = equivalence_artifacts_path {
+                replay_cmd.push_str(&format!(" --equivalence-artifacts {}", artifacts_path.display()));
+            }
+            if publication_mode {
+                replay_cmd.push_str(" --publication-mode");
             }
 
             let commands = [replay_cmd, "# Corpus evaluation completed".to_string()];

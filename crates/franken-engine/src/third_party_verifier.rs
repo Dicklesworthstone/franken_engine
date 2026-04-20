@@ -2209,6 +2209,7 @@ mod tests {
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
         let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN]).unwrap();
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
         let attestation = generate_attestation(&input).unwrap();
 
         let verification = verify_attestation(&attestation);

@@ -984,7 +984,9 @@ mod tests {
     #[test]
     fn subsystem_serde_roundtrip() {
         for s in Subsystem::ALL {
+            // SAFETY: Subsystem derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by valid Subsystem serialization
             let back: Subsystem = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -1020,7 +1022,9 @@ mod tests {
     #[test]
     fn kind_serde_roundtrip() {
         for k in PlaceholderKind::ALL {
+            // SAFETY: PlaceholderKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).unwrap();
+            // SAFETY: JSON was just produced by valid PlaceholderKind serialization
             let back: PlaceholderKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*k, back);
         }
@@ -1050,7 +1054,9 @@ mod tests {
     #[test]
     fn severity_serde_roundtrip() {
         for s in PlaceholderSeverity::ALL {
+            // SAFETY: PlaceholderSeverity derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by valid PlaceholderSeverity serialization
             let back: PlaceholderSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }

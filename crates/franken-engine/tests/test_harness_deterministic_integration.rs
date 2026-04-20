@@ -327,15 +327,15 @@ fn test_isolation_level_behavior() {
 
     // Verify different isolation levels can be instantiated
     assert!(matches!(
-        runner_complete.config.isolation,
+        runner_complete.config().isolation,
         TestIsolationLevel::Complete
     ));
     assert!(matches!(
-        runner_shared.config.isolation,
+        runner_shared.config().isolation,
         TestIsolationLevel::Shared
     ));
     assert!(matches!(
-        runner_process.config.isolation,
+        runner_process.config().isolation,
         TestIsolationLevel::Process
     ));
 }
@@ -370,17 +370,22 @@ fn test_execution_mode_behavior() {
         // Verify mode is set correctly
         match mode {
             TestExecutionMode::Unit => {
-                assert!(matches!(runner.config.mode, TestExecutionMode::Unit))
+                assert!(matches!(runner.config().mode, TestExecutionMode::Unit))
             }
             TestExecutionMode::Integration => {
-                assert!(matches!(runner.config.mode, TestExecutionMode::Integration))
+                assert!(matches!(
+                    runner.config().mode,
+                    TestExecutionMode::Integration
+                ))
             }
-            TestExecutionMode::E2E => assert!(matches!(runner.config.mode, TestExecutionMode::E2E)),
+            TestExecutionMode::E2E => {
+                assert!(matches!(runner.config().mode, TestExecutionMode::E2E))
+            }
             TestExecutionMode::Security => {
-                assert!(matches!(runner.config.mode, TestExecutionMode::Security))
+                assert!(matches!(runner.config().mode, TestExecutionMode::Security))
             }
             TestExecutionMode::Parser => {
-                assert!(matches!(runner.config.mode, TestExecutionMode::Parser))
+                assert!(matches!(runner.config().mode, TestExecutionMode::Parser))
             }
         }
     }
@@ -433,7 +438,43 @@ fn test_artifact_directory_usage() {
     let runner = TestSuiteRunner::new(config);
 
     // Verify custom artifact directory is set
-    assert_eq!(runner.config.artifact_dir, custom_dir);
+    assert_eq!(runner.config().artifact_dir, custom_dir);
+}
+
+#[test]
+fn test_suite_runner_config_accessor_stays_consistent_with_results() {
+    let config = TestHarnessConfig {
+        mode: TestExecutionMode::Integration,
+        deterministic_seed: 424242,
+        timeout_millis: 30000,
+        artifact_dir: PathBuf::from("target/test_harness_config_accessor"),
+        isolation: TestIsolationLevel::Complete,
+    };
+
+    let mut runner = TestSuiteRunner::new(config);
+
+    assert_eq!(runner.config().deterministic_seed, 424242);
+
+    let result = runner.execute_test_suite(TestSuite {
+        suite_id: "config_accessor_consistency".to_string(),
+        runtime_tests: vec![RuntimeTestSpec {
+            test_id: "runtime_seed_consistency".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            data_size: 1,
+            expected_outcome: TestOutcome::Success,
+        }],
+        parser_tests: vec![],
+        security_tests: vec![],
+    });
+
+    assert_eq!(
+        result.deterministic_seed,
+        runner.config().deterministic_seed
+    );
+    assert_eq!(
+        result.results[0].deterministic_seed,
+        runner.config().deterministic_seed
+    );
 }
 
 #[test]
@@ -541,4 +582,155 @@ fn test_serialization_compatibility() {
         deserialized.isolation,
         TestIsolationLevel::Process
     ));
+}
+
+#[test]
+fn test_config_immutability_regression() {
+    // Regression test: Ensure post-construction config mutations cannot desynchronize
+    // suite result metadata from lane execution metadata
+
+    let original_seed = 424242u64;
+    let config = TestHarnessConfig {
+        mode: TestExecutionMode::Integration,
+        deterministic_seed: original_seed,
+        timeout_millis: 60000,
+        artifact_dir: PathBuf::from("target/test_harness_immutability_regression"),
+        isolation: TestIsolationLevel::Complete,
+    };
+
+    let mut runner = TestSuiteRunner::new(config);
+
+    // Verify initial state
+    assert_eq!(runner.config().deterministic_seed, original_seed);
+
+    // NOTE: The following line would cause compilation error if config field were public:
+    // runner.config.deterministic_seed = 999999; // Should NOT compile
+
+    // The config is properly encapsulated - only read-only access is available
+    let config_ref = runner.config();
+    assert_eq!(config_ref.deterministic_seed, original_seed);
+
+    // Even if we could somehow mutate the config (hypothetically),
+    // the harnesses should maintain their original configuration
+    let suite = TestSuite {
+        suite_id: "immutability_regression_test".to_string(),
+        runtime_tests: vec![RuntimeTestSpec {
+            test_id: "immutable_test_runtime".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            data_size: 2,
+            expected_outcome: TestOutcome::Success,
+        }],
+        parser_tests: vec![ParserTestSpec {
+            test_id: "immutable_test_parser".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            syntax_features: vec![SyntaxFeature::Variables],
+            expected_outcome: TestOutcome::Success,
+        }],
+        security_tests: vec![SecurityTestSpec {
+            test_id: "immutable_test_security".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            threat_model: ThreatModel::CodeInjection,
+            expected_outcome: TestOutcome::Success,
+        }],
+    };
+
+    let result = runner.execute_test_suite(suite);
+
+    // Critical assertion: suite result metadata must match the original configuration
+    assert_eq!(result.deterministic_seed, original_seed);
+
+    // Verify that the config accessor still returns the original values
+    assert_eq!(runner.config().deterministic_seed, original_seed);
+    assert_eq!(runner.config().mode, TestExecutionMode::Integration);
+
+    // Verify all test results use consistent metadata
+    for test_result in &result.results {
+        assert_eq!(test_result.deterministic_seed, original_seed);
+    }
+}
+
+#[test]
+fn test_config_accessor_immutability() {
+    // Additional regression: Verify that the config accessor returns immutable references
+    // that cannot be used to mutate the underlying configuration
+
+    let config = TestHarnessConfig {
+        mode: TestExecutionMode::Unit,
+        deterministic_seed: 123456,
+        timeout_millis: 30000,
+        artifact_dir: PathBuf::from("target/test_config_accessor"),
+        isolation: TestIsolationLevel::Complete,
+    };
+
+    let runner = TestSuiteRunner::new(config);
+
+    // Get immutable reference to config
+    let config_ref = runner.config();
+
+    // These should all be read-only operations
+    assert_eq!(config_ref.deterministic_seed, 123456);
+    assert!(matches!(config_ref.mode, TestExecutionMode::Unit));
+    assert_eq!(config_ref.timeout_millis, 30000);
+
+    // The following lines would cause compilation errors if attempted:
+    // config_ref.deterministic_seed = 999999; // Cannot mutate through & reference
+    // config_ref.mode = TestExecutionMode::E2E; // Cannot mutate through & reference
+
+    // Multiple calls to config() should return consistent data
+    assert_eq!(
+        runner.config().deterministic_seed,
+        config_ref.deterministic_seed
+    );
+    assert_eq!(runner.config().timeout_millis, config_ref.timeout_millis);
+}
+
+#[test]
+fn test_harness_config_isolation() {
+    // Verify that individual harnesses maintain their own configuration copies
+    // and are not affected by any hypothetical mutations to the runner's config
+
+    let config = TestHarnessConfig {
+        mode: TestExecutionMode::Integration,
+        deterministic_seed: 789012,
+        timeout_millis: 45000,
+        artifact_dir: PathBuf::from("target/test_harness_isolation"),
+        isolation: TestIsolationLevel::Shared,
+    };
+
+    let mut runner = TestSuiteRunner::new(config);
+
+    // Execute tests that would use the harness configurations
+    let suite = TestSuite {
+        suite_id: "harness_isolation_test".to_string(),
+        runtime_tests: vec![RuntimeTestSpec {
+            test_id: "isolation_runtime".to_string(),
+            source_complexity: SourceComplexity::Moderate,
+            data_size: 3,
+            expected_outcome: TestOutcome::Success,
+        }],
+        parser_tests: vec![ParserTestSpec {
+            test_id: "isolation_parser".to_string(),
+            source_complexity: SourceComplexity::Moderate,
+            syntax_features: vec![SyntaxFeature::ArrowFunctions, SyntaxFeature::Variables],
+            expected_outcome: TestOutcome::Success,
+        }],
+        security_tests: vec![],
+    };
+
+    let result1 = runner.execute_test_suite(suite.clone());
+
+    // Verify initial execution
+    assert_eq!(result1.deterministic_seed, 789012);
+    assert!(result1.total_tests >= 2);
+
+    // Execute again to verify consistency
+    let result2 = runner.execute_test_suite(suite);
+
+    // Results should be consistent because harnesses maintain their config copies
+    assert_eq!(result1.deterministic_seed, result2.deterministic_seed);
+    assert_eq!(result1.total_tests, result2.total_tests);
+
+    // The runner's config accessor should still return the original values
+    assert_eq!(runner.config().deterministic_seed, 789012);
+    assert_eq!(runner.config().timeout_millis, 45000);
 }

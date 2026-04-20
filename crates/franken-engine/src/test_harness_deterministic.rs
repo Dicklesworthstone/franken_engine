@@ -373,10 +373,24 @@ pub struct TestResult {
     pub deterministic_seed: u64,
 }
 
-/// Test suite runner for coordinated test execution
+/// Test suite runner for coordinated test execution.
+///
+/// This runner maintains configuration immutability to prevent desynchronization
+/// between suite-level metadata and individual lane execution contexts.
+/// The configuration is cloned into each harness at construction time and cannot
+/// be mutated afterward to ensure deterministic and consistent test execution.
 #[derive(Debug)]
 pub struct TestSuiteRunner {
-    pub config: TestHarnessConfig,
+    /// Configuration for the test suite runner.
+    ///
+    /// IMPORTANT: This field must remain private to prevent post-construction mutation
+    /// that could desynchronize suite result metadata from lane execution metadata.
+    /// Each harness (runtime, parser, security) receives a clone of this config at
+    /// construction time. If this field were public, external code could mutate it
+    /// after construction while the harnesses would retain their original cloned values,
+    /// leading to inconsistent deterministic_seed values between execute_test_suite()
+    /// results and individual lane test results.
+    config: TestHarnessConfig,
     runtime_harness: RuntimeTestHarness,
     parser_harness: ParserTestHarness,
     security_harness: SecurityTestHarness,
@@ -391,6 +405,11 @@ impl TestSuiteRunner {
             security_harness: SecurityTestHarness::new(config.clone()),
             config,
         }
+    }
+
+    /// Return the immutable suite runner configuration.
+    pub fn config(&self) -> &TestHarnessConfig {
+        &self.config
     }
 
     /// Execute a complete test suite across all lanes

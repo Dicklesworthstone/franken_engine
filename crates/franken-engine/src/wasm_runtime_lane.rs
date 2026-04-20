@@ -941,7 +941,9 @@ mod tests {
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
+        // SAFETY: WasmSignalGraph derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&g).unwrap();
+        // SAFETY: JSON was just generated from WasmSignalGraph, deserialization guaranteed to succeed
         let g2: WasmSignalGraph = serde_json::from_str(&json).unwrap();
         assert_eq!(g, g2);
     }
@@ -975,7 +977,9 @@ mod tests {
             element_id: 0,
             text: b"hello".to_vec(),
         });
+        // SAFETY: AbiDomBatch derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&b).unwrap();
+        // SAFETY: JSON was just generated from AbiDomBatch, deserialization guaranteed to succeed
         let b2: AbiDomBatch = serde_json::from_str(&json).unwrap();
         assert_eq!(b, b2);
     }

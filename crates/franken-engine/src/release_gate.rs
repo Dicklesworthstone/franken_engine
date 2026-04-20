@@ -1367,6 +1367,7 @@ mod tests {
                 assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
                 assert!(reason.contains("misconfigured"));
             }
+            // SAFETY: Test-only panic to validate gate verdict matches expected Fail variant
             _ => panic!("expected fail verdict"),
         }
     }

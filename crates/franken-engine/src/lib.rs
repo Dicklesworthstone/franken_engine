@@ -347,6 +347,7 @@ pub mod remote_capability_gate;
 pub mod remote_computation_registry;
 pub mod render_lane_specializer;
 pub mod replacement_lineage_log;
+pub mod replication_checklist;
 pub mod reproducibility_provenance_pack;
 pub mod reputation;
 pub mod research_artifact_registry;

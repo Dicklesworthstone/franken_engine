@@ -2062,7 +2062,9 @@ mod tests {
             error_code: Some("ERR-001".to_string()),
             detail: "detail text".to_string(),
         };
+        // SAFETY: VerificationCheckResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&check).unwrap();
+        // SAFETY: JSON was just produced by valid VerificationCheckResult serialization
         let back: VerificationCheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back, check);
     }

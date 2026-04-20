@@ -777,8 +777,11 @@ mod tests {
     #[test]
     fn bounded_queue_drain_all() {
         let mut q = BoundedQueue::new(5);
+        // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
         q.push(10).unwrap();
+        // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
         q.push(20).unwrap();
+        // SAFETY: Queue capacity is 5, pushing 3rd element cannot exceed capacity
         q.push(30).unwrap();
         let all = q.drain_all();
         assert_eq!(all, vec![10, 20, 30]);
@@ -788,7 +791,9 @@ mod tests {
     #[test]
     fn bounded_queue_clear_batch2() {
         let mut q = BoundedQueue::new(5);
+        // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
         q.push(1).unwrap();
+        // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
         q.push(2).unwrap();
         q.clear();
         assert!(q.is_empty());
@@ -806,9 +811,11 @@ mod tests {
     fn graph_register_source() {
         let mut g = WasmSignalGraph::new(64, 1000);
         let id = g.next_id();
+        // SAFETY: register cannot fail with valid test inputs
         g.register(id, WasmSignalKind::Source, BTreeSet::new())
             .unwrap();
         assert_eq!(g.active_count(), 1);
+        // SAFETY: get cannot fail for ID we just registered
         assert_eq!(g.get(id).unwrap().depth, 0);
     }
 

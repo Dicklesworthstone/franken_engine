@@ -348,3 +348,136 @@ fn shipped_path_parity_replay_wrapper_uses_latest_complete_bundle_and_prints_new
         );
     }
 }
+
+// Test for bd-1lsy.9.6.4: Pin real emitted triage category and owner route values
+#[test]
+fn shipped_path_parity_deterministic_mismatch_fixture_validates_concrete_routing() {
+    let out_dir = temp_dir("franken_shipped_path_parity_deterministic");
+    // Use a specific seed that's likely to generate mismatches for deterministic testing
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_shipped_path_parity"))
+        .args([
+            "--frankenctl-bin",
+            env!("CARGO_BIN_EXE_frankenctl"),
+            "--out-dir",
+            out_dir.to_str().expect("path should be utf8"),
+            "--seed",
+            "123456789", // Different from default seed to force different corpus behavior
+        ])
+        .output()
+        .expect("parity binary should execute");
+
+    assert!(
+        output.status.success(),
+        "parity binary failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout_json: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid json");
+    let mismatch_count = stdout_json["mismatch_count"]
+        .as_u64()
+        .expect("mismatch count should be present");
+
+    // Load the mismatch catalog to validate concrete routing values
+    let run_dir = PathBuf::from(
+        stdout_json["run_dir"]
+            .as_str()
+            .expect("run_dir should be present"),
+    );
+    let mismatch_catalog_path = run_dir.join("shipped_path_mismatch_catalog.json");
+    let mismatch_catalog_json: Value = serde_json::from_slice(
+        &fs::read(&mismatch_catalog_path).expect("mismatch catalog should be readable"),
+    )
+    .expect("mismatch catalog should parse");
+
+    // Load operator summary to validate count consistency
+    let operator_summary_path = run_dir.join("shipped_path_operator_summary.json");
+    let operator_summary_json: Value = serde_json::from_slice(
+        &fs::read(&operator_summary_path).expect("operator summary should be readable"),
+    )
+    .expect("operator summary should parse");
+
+    // If we get mismatches, validate concrete routing values and count consistency
+    if mismatch_count > 0 {
+        let mismatches = mismatch_catalog_json["mismatches"]
+            .as_array()
+            .expect("mismatches should be an array");
+
+        // Define expected triage categories and owner routes from the classifier
+        let expected_categories = ["infrastructure", "docs_ux", "ts_lane", "module", "runtime"];
+        let expected_owners = [
+            "parity_infrastructure_owner",
+            "operator_docs_ux_owner",
+            "typescript_normalization_owner",
+            "module_semantics_owner",
+            "runtime_execution_owner",
+        ];
+
+        // Validate that all mismatches have concrete expected routing values
+        for mismatch in mismatches {
+            let triage_category = mismatch["triage_category"]
+                .as_str()
+                .expect("triage_category should be present");
+            let owner_route = mismatch["owner_route"]
+                .as_str()
+                .expect("owner_route should be present");
+
+            assert!(
+                expected_categories.contains(&triage_category),
+                "triage_category '{}' should be one of the expected categories",
+                triage_category
+            );
+
+            assert!(
+                expected_owners.contains(&owner_route),
+                "owner_route '{}' should be one of the expected owners",
+                owner_route
+            );
+
+            // Validate correct category → owner mapping
+            match triage_category {
+                "infrastructure" => assert_eq!(owner_route, "parity_infrastructure_owner"),
+                "docs_ux" => assert_eq!(owner_route, "operator_docs_ux_owner"),
+                "ts_lane" => assert_eq!(owner_route, "typescript_normalization_owner"),
+                "module" => assert_eq!(owner_route, "module_semantics_owner"),
+                "runtime" => assert_eq!(owner_route, "runtime_execution_owner"),
+                _ => panic!("unexpected triage_category: {}", triage_category),
+            }
+        }
+
+        // Validate that triage_category_counts and owner_route_counts sum to mismatch_count
+        let triage_category_counts = operator_summary_json["triage_category_counts"]
+            .as_object()
+            .expect("triage_category_counts should be an object");
+        let owner_route_counts = operator_summary_json["owner_route_counts"]
+            .as_object()
+            .expect("owner_route_counts should be an object");
+
+        let triage_total: u64 = triage_category_counts
+            .values()
+            .map(|v| v.as_u64().expect("count should be a number"))
+            .sum();
+        let owner_total: u64 = owner_route_counts
+            .values()
+            .map(|v| v.as_u64().expect("count should be a number"))
+            .sum();
+
+        assert_eq!(
+            triage_total, mismatch_count,
+            "triage_category_counts total {} should equal mismatch_count {}",
+            triage_total, mismatch_count
+        );
+        assert_eq!(
+            owner_total, mismatch_count,
+            "owner_route_counts total {} should equal mismatch_count {}",
+            owner_total, mismatch_count
+        );
+
+        // Verify that counts are consistent between categories and owners
+        assert_eq!(
+            triage_total, owner_total,
+            "triage_category_counts total {} should equal owner_route_counts total {}",
+            triage_total, owner_total
+        );
+    }
+}

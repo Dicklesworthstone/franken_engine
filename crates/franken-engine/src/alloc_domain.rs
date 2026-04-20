@@ -948,6 +948,8 @@ mod tests {
             }
             // SAFETY: Test-only panic to validate budget exceeded error type.
             // Test expects BudgetExceeded when allocation exceeds domain budget.
+            // SAFETY: Test-only panic to validate budget exceeded error type.
+            // Test expects BudgetExceeded when allocation exceeds domain budget.
             other => panic!("expected BudgetExceeded, got {other:?}"),
         }
     }
@@ -1162,6 +1164,8 @@ mod tests {
                 assert_eq!(requested, 1);
                 assert_eq!(remaining, 0);
             }
+            // SAFETY: Test-only panic to validate budget exceeded error type.
+            // Test expects BudgetExceeded when allocation exceeds domain budget.
             other => panic!("expected BudgetExceeded, got {other:?}"),
         }
     }
@@ -1917,6 +1921,8 @@ mod tests {
                 assert_eq!(remaining, 30);
                 assert_eq!(domain, Some(AllocationDomain::ExtensionHeap));
             }
+            // SAFETY: Test-only panic to validate budget exceeded error type.
+            // Test expects BudgetExceeded when allocation exceeds domain budget.
             other => panic!("expected BudgetExceeded, got {other:?}"),
         }
     }

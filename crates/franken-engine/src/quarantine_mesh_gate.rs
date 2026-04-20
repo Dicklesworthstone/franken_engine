@@ -628,6 +628,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
+        // SAFETY: Test scenario with hardcoded ID "byzantine-ext-b" is guaranteed to exist in test results
         let byzantine = result
             .scenarios
             .iter()

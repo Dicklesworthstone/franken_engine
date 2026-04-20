@@ -1426,6 +1426,7 @@ mod tests {
 
     #[test]
     fn synthetic_contention_engages_fallback_guardrail() {
+        // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 42)
                 .unwrap();
@@ -1457,6 +1458,7 @@ mod tests {
 
     #[test]
     fn decomposition_keeps_queue_service_sync_and_gc_separate() {
+        // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 77)
                 .unwrap();
@@ -1567,7 +1569,11 @@ mod tests {
     #[test]
     fn serde_roundtrip_stress_profile() {
         for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
+            // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&profile).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid StressProfile,
+            // so from_str back to StressProfile cannot fail (valid format + matching schema).
             let deserialized: StressProfile = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized, profile);
         }
@@ -1575,8 +1581,12 @@ mod tests {
 
     #[test]
     fn serde_stress_profile_uses_kebab_case() {
+        // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&StressProfile::SyntheticContention).unwrap();
         assert_eq!(json, "\"synthetic-contention\"");
+        // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json_balanced = serde_json::to_string(&StressProfile::Balanced).unwrap();
         assert_eq!(json_balanced, "\"balanced\"");
     }

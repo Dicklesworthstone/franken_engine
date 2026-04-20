@@ -804,6 +804,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn test_gate_id(suffix: &str) -> EngineObjectId {
+        // SAFETY: derive_id with valid test inputs (valid domain, non-empty suffix,
+        // valid schema definition bytes) cannot fail.
         crate::engine_object_id::derive_id(
             crate::engine_object_id::ObjectDomain::EvidenceRecord,
             suffix,
@@ -1447,7 +1449,11 @@ mod tests {
             FrontierProgram::CausalTimeMachine,
             test_gate_id("serde-gate"),
         );
+        // SAFETY: GateDefinition derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&gate).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateDefinition,
+        // so from_str back to GateDefinition cannot fail (valid format + matching schema).
         let back: GateDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(gate, back);
     }

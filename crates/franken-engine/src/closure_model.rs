@@ -865,6 +865,7 @@ mod tests {
         chain
             .set_value("x", EnvValue::Number(2), Label::Public)
             .unwrap();
+        // SAFETY: Test gets reassigned variable; get_value succeeds in controlled test environment.
         let val = chain.get_value("x").unwrap();
         assert_eq!(*val, EnvValue::Number(2));
     }
@@ -874,6 +875,7 @@ mod tests {
     #[test]
     fn duplicate_let_in_same_scope_fails() {
         let mut chain = fresh_chain();
+        // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
         chain.declare_let("x".into(), 1).unwrap();
         let result = chain.declare_let("x".into(), 2);
         assert!(matches!(result, Err(ScopeError::DuplicateBinding { .. })));

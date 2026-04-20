@@ -147,6 +147,7 @@ impl VerificationKey {
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(VERIFICATION_KEY_LEN * 2);
         for byte in &self.inner {
+            // SAFETY: Writing to String never fails
             write!(s, "{byte:02x}").unwrap();
         }
         s

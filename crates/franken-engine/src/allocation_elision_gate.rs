@@ -2295,6 +2295,7 @@ mod tests {
             epoch(1),
         );
         assert!(record.is_some());
+        // SAFETY: Just verified record.is_some() above
         let record = record.unwrap();
         assert_eq!(record.trigger, RollbackTrigger::OperatorInitiated);
         assert_eq!(record.consecutive_count, 1);

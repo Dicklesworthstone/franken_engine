@@ -1504,7 +1504,9 @@ mod tests {
             WasmLaneMode::Degraded,
             WasmLaneMode::Halted,
         ] {
+            // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&mode).unwrap();
+            // SAFETY: JSON was just generated from WasmLaneMode, deserialization guaranteed to succeed
             let restored: WasmLaneMode = serde_json::from_str(&json).unwrap();
             assert_eq!(mode, restored);
         }

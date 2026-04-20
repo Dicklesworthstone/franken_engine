@@ -2401,6 +2401,8 @@ mod tests {
     fn receipt_id_format_prefix() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap();

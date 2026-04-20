@@ -114,7 +114,10 @@ rch_reject_local_fallback() {
 relation_report_has_contract() {
   local actual_schema actual_taxonomy
 
-  [[ -f "$relation_report_path" ]] || return 1
+  if ! covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json"; then
+    return 1
+  fi
+
   actual_schema="$(jq -r '.schema_version // empty' "$relation_report_path" 2>/dev/null || true)"
   actual_taxonomy="$(jq -r '.taxonomy_version // empty' "$relation_report_path" 2>/dev/null || true)"
 
@@ -264,6 +267,27 @@ is_rejected_anonymous_backfill() {
       return 1
       ;;
   esac
+}
+
+covered_artifact_is_present_and_not_placeholder() {
+  local artifact_path="$1"
+  local artifact_name="$2"
+
+  [[ -f "$artifact_path" ]] || return 1
+  [[ -s "$artifact_path" ]] || return 1
+
+  if is_rejected_anonymous_backfill "$artifact_path" "$artifact_name"; then
+    return 1
+  fi
+}
+
+read_relation_report_field() {
+  local jq_path="$1"
+  if ! covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json"; then
+    return 1
+  fi
+
+  jq -r "$jq_path" "$relation_report_path" 2>/dev/null
 }
 
 missing_artifact_reason_field() {
@@ -421,8 +445,12 @@ write_missing_artifact_receipt() {
 
 validate_relation_report_contract() {
   local actual_schema actual_taxonomy
-  actual_schema="$(jq -r '.schema_version // empty' "$relation_report_path")"
-  actual_taxonomy="$(jq -r '.taxonomy_version // empty' "$relation_report_path")"
+  if ! covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json"; then
+    return 1
+  fi
+
+  actual_schema="$(jq -r '.schema_version // empty' "$relation_report_path" 2>/dev/null || true)"
+  actual_taxonomy="$(jq -r '.taxonomy_version // empty' "$relation_report_path" 2>/dev/null || true)"
 
   if [[ "$actual_schema" != "$report_schema_version" ]]; then
     echo "parser oracle relation report schema mismatch: expected=${report_schema_version} actual=${actual_schema}" >&2
@@ -437,8 +465,12 @@ validate_relation_report_contract() {
 
 generate_drift_digest() {
   local actual_schema actual_taxonomy generated_at
-  actual_schema="$(jq -r '.schema_version // "unknown"' "$relation_report_path")"
-  actual_taxonomy="$(jq -r '.taxonomy_version // "unknown"' "$relation_report_path")"
+  if ! covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json"; then
+    return 1
+  fi
+
+  actual_schema="$(jq -r '.schema_version // "unknown"' "$relation_report_path" 2>/dev/null || true)"
+  actual_taxonomy="$(jq -r '.taxonomy_version // "unknown"' "$relation_report_path" 2>/dev/null || true)"
   generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   {
@@ -646,12 +678,28 @@ write_supporting_artifacts() {
   local outputs_json checksum_path checksum_value
   outputs_json='[]'
 
-  if [[ -f "$relation_report_path" && ! -f "$missing_artifact_receipt_path" ]]; then
-    equivalent="$(jq -r '.summary.equivalent_count // 0' "$relation_report_path")"
-    minor="$(jq -r '.summary.minor_drift_count // 0' "$relation_report_path")"
-    critical="$(jq -r '.summary.critical_drift_count // 0' "$relation_report_path")"
-    action="$(jq -r '.decision.action // "unknown"' "$relation_report_path")"
-    fallback="$(jq -r '.decision.fallback_reason // "none"' "$relation_report_path")"
+  if covered_artifact_is_present_and_not_placeholder "$relation_report_path" "relation_report.json" && ! -f "$missing_artifact_receipt_path"; then
+    equivalent="$(read_relation_report_field '.summary.equivalent_count // 0')"
+    minor="$(read_relation_report_field '.summary.minor_drift_count // 0')"
+    critical="$(read_relation_report_field '.summary.critical_drift_count // 0')"
+    action="$(read_relation_report_field '.decision.action // "unknown"')"
+    fallback="$(read_relation_report_field '.decision.fallback_reason // "none"')"
+
+    if [[ -z "$equivalent" ]]; then
+      equivalent="0"
+    fi
+    if [[ -z "$minor" ]]; then
+      minor="0"
+    fi
+    if [[ -z "$critical" ]]; then
+      critical="0"
+    fi
+    if [[ -z "$action" ]]; then
+      action="unknown"
+    fi
+    if [[ -z "$fallback" ]]; then
+      fallback="none"
+    fi
 
     cat >"$proof_note_path" <<EOF_NOTE
 # Parser Oracle Proof Note

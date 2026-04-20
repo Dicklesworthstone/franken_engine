@@ -480,6 +480,8 @@ impl HostApiAuthorizationError {
     ) -> Self {
         let message = message.into();
         let remediation = remediation.into();
+        // SAFETY: Function invariant requires descriptor to be Some when called.
+        // All call sites pass validated HostApiPermissionDescriptor references.
         let required_capabilities = descriptor
             .map(|value| value.required_capabilities.clone())
             .unwrap();

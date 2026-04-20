@@ -141,6 +141,8 @@ impl FusionMotif {
     /// Content hash of this motif for deterministic identity.
     pub fn content_hash(&self) -> ContentHash {
         let mut data = Vec::new();
+        // SAFETY: TraceFusionKind derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         data.extend_from_slice(serde_json::to_string(&self.kind).unwrap().as_bytes());
         for op in &self.opcode_pattern {
             data.extend_from_slice(op.as_bytes());
@@ -317,6 +319,8 @@ pub enum FusionGuardKind {
 impl FusionGuard {
     /// Create a new guard.
     pub fn new(kind: FusionGuardKind, side_exit_offset: u32) -> Self {
+        // SAFETY: FusionGuardKind derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let kind_bytes = serde_json::to_string(&kind).unwrap();
         let mut hash_preimage = Vec::with_capacity(kind_bytes.len() + std::mem::size_of::<u32>());
         hash_preimage.extend_from_slice(kind_bytes.as_bytes());

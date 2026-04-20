@@ -1864,6 +1864,8 @@ mod tests {
         if let PartitionMode::Healing(info) = &engine.partition_mode {
             assert_eq!(info.conflict_count, 1);
         } else {
+            // SAFETY: Test-only panic to catch unexpected convergence modes
+            // in healing validation. Expected mode is Healing only.
             panic!("expected healing mode");
         }
 

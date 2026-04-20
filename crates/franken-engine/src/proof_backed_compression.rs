@@ -1288,6 +1288,8 @@ mod tests {
                 assert_eq!(*size_bytes, 63);
                 assert_eq!(*min_bytes, 64);
             }
+            // SAFETY: Test-only panic to validate compression error handling
+            // expects specific CompressionError::TooSmall from mixed artifacts
             other => panic!("expected TooSmall, got {other:?}"),
         }
     }

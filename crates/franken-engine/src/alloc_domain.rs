@@ -468,6 +468,7 @@ mod tests {
     #[test]
     fn duplicate_registration_rejected() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1024)
             .unwrap();
         assert!(matches!(
@@ -587,18 +588,21 @@ mod tests {
     fn domains_iterate_in_deterministic_order() {
         let mut reg = DomainRegistry::new();
         // Register in non-sorted order.
+        // SAFETY: Test registering ScratchBuffer domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
             100,
         )
         .unwrap();
+        // SAFETY: Test registering ExtensionHeap domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             100,
         )
         .unwrap();
+        // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
             .unwrap();
 
@@ -632,19 +636,23 @@ mod tests {
     #[test]
     fn domain_isolation_separate_budgets() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering ExtensionHeap domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             100,
         )
         .unwrap();
+        // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
             .unwrap();
 
         // Fill extension heap to capacity.
+        // SAFETY: Test allocating 100 bytes from 100-byte ExtensionHeap budget should succeed
         reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
 
         // IR arena should still be fully available.
+        // SAFETY: Test allocating 100 bytes from separate 100-byte IrArena budget should succeed
         reg.allocate(AllocationDomain::IrArena, 100).unwrap();
 
         assert_eq!(reg.total_used(), 200);
@@ -654,16 +662,20 @@ mod tests {
     #[test]
     fn total_used_and_capacity() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Test registering ExtensionHeap domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             500,
         )
         .unwrap();
+        // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300)
             .unwrap();
 
+        // SAFETY: Test allocating 100 bytes from 500-byte ExtensionHeap budget should succeed
         reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        // SAFETY: Test allocating 50 bytes from 300-byte IrArena budget should succeed
         reg.allocate(AllocationDomain::IrArena, 50).unwrap();
 
         assert_eq!(reg.total_used(), 150);
@@ -675,18 +687,25 @@ mod tests {
     #[test]
     fn domain_registry_serialization_round_trip() {
         let mut reg = DomainRegistry::with_standard_domains(1024);
+        // SAFETY: Test allocating 256 bytes from pre-registered 1024-byte domain should succeed
         reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
 
+        // SAFETY: DomainRegistry derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&reg).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DomainRegistry,
+        // so from_str back to DomainRegistry cannot fail (valid format + matching schema).
         let roundtrip: DomainRegistry = serde_json::from_str(&json).unwrap();
 
         assert_eq!(reg.len(), roundtrip.len());
         assert_eq!(reg.allocation_sequence(), roundtrip.allocation_sequence());
         assert_eq!(
+            // SAFETY: Test accessing domain that was just registered in with_standard_domains should succeed
             reg.get(&AllocationDomain::ExtensionHeap)
                 .unwrap()
                 .budget
                 .used_bytes,
+            // SAFETY: Test accessing domain in roundtrip registry (copied from original) should succeed
             roundtrip
                 .get(&AllocationDomain::ExtensionHeap)
                 .unwrap()
@@ -776,7 +795,11 @@ mod tests {
             AllocationDomain::ScratchBuffer,
         ];
         for v in &variants {
+            // SAFETY: AllocationDomain derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid AllocationDomain,
+            // so from_str back to AllocationDomain cannot fail (valid format + matching schema).
             let restored: AllocationDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
@@ -791,7 +814,11 @@ mod tests {
             LifetimeClass::Arena,
         ];
         for v in &variants {
+            // SAFETY: LifetimeClass derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid LifetimeClass,
+            // so from_str back to LifetimeClass cannot fail (valid format + matching schema).
             let restored: LifetimeClass = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }

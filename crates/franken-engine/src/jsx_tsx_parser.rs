@@ -1620,6 +1620,8 @@ mod tests {
                             _ => panic!("expected string literal"),
                         }
                     }
+                    // SAFETY: Test-only panic to validate JSX named attribute parsing.
+                    // Test expects named attribute type for JSX component attributes.
                     _ => panic!("expected named attribute"),
                 }
             }

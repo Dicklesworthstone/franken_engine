@@ -13086,23 +13086,7 @@ impl InterpreterCore {
 
             // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 is more complete
 
-            "builtin:StringPrototypeNormalize" => {
-                // String.prototype.normalize([form]) implementation (simplified)
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified implementation: return the string as-is (real normalization is complex)
-                // In a full implementation, this would handle Unicode normalization forms
-                Ok(Value::Str(str_text))
-            }
+            // Removed duplicate StringPrototypeNormalize - implementation at line ~12187 is identical
 
             "builtin:MathCbrt" => {
                 // Math.cbrt(x) implementation (cube root)
@@ -23921,5 +23905,25 @@ mod tests {
             Ir3Instruction::Halt,
         ]));
         assert!(endswith_result.is_ok(), "StringPrototypeEndsWith should work after deduplication");
+    }
+
+    #[test]
+    fn string_prototype_pad_start_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [43_u32, 226_u32] {
+            interpreter.registers[0] = Value::Str("7".to_string());
+            interpreter.registers[1] = Value::Int(3);
+            interpreter.registers[2] = Value::Str("0".to_string());
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypePadStart".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("StringPrototypePadStart ID should execute");
+            assert_eq!(result, Value::Str("007".to_string()));
+        }
     }
 }

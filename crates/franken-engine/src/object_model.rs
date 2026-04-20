@@ -2293,6 +2293,8 @@ mod tests {
         assert!(result);
         assert!(obj.has_own_property(&str_key("x")));
         assert_eq!(
+            // SAFETY: Test just verified has_own_property("x") is true,
+            // so get_own_property("x") must return Some (property exists).
             obj.get_own_property(&str_key("x")).unwrap().value(),
             Some(&int_val(42))
         );

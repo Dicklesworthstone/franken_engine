@@ -528,7 +528,9 @@ mod tests {
     #[test]
     fn embedding_feature_serde() {
         for f in EmbeddingFeature::ALL {
+            // SAFETY: EmbeddingFeature derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(f).unwrap();
+            // SAFETY: JSON was just produced by valid EmbeddingFeature serialization
             let back: EmbeddingFeature = serde_json::from_str(&json).unwrap();
             assert_eq!(*f, back);
         }
@@ -595,7 +597,9 @@ mod tests {
             TransferKind::AllocationHints,
             TransferKind::TypeProfileHints,
         ] {
+            // SAFETY: TransferKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).unwrap();
+            // SAFETY: JSON was just produced by valid TransferKind serialization
             let back: TransferKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, back);
         }

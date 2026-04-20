@@ -976,7 +976,9 @@ mod tests {
             ManifoldDimension::Cache,
             ManifoldDimension::Policy,
         ] {
+            // SAFETY: ManifoldDimension derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&dim).unwrap();
+            // SAFETY: JSON was just produced by valid ManifoldDimension serialization
             let back: ManifoldDimension = serde_json::from_str(&json).unwrap();
             assert_eq!(dim, back);
         }

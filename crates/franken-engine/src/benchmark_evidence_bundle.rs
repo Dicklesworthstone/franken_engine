@@ -1142,6 +1142,7 @@ mod tests {
     fn populated_bundle() -> EvidenceBundle {
         let mut bundle = EvidenceBundle::new("test-bundle".to_string(), epoch(5));
         // SAFETY: Test helper with valid provenance should succeed
+        // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("wk-1", WorkloadCategory::Micro))
             .unwrap();

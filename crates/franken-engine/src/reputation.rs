@@ -1112,6 +1112,7 @@ mod tests {
     fn register_duplicate_extension_fails() {
         let mut graph = ReputationGraph::new();
         let ext = test_extension("ext-1", "pub-1");
+        // SAFETY: Test helper creates valid extension; register_extension succeeds for first registration.
         graph.register_extension(ext).unwrap();
         let ext2 = test_extension("ext-1", "pub-1");
         assert!(matches!(
@@ -1133,6 +1134,7 @@ mod tests {
     #[test]
     fn add_evidence_success() {
         let mut graph = ReputationGraph::new();
+        // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
             .unwrap();
@@ -1154,9 +1156,11 @@ mod tests {
     #[test]
     fn add_duplicate_evidence_fails() {
         let mut graph = ReputationGraph::new();
+        // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
             .unwrap();
+        // SAFETY: Test adds evidence to registered extension; add_evidence succeeds for first evidence.
         graph.add_evidence("ext-1", test_evidence("ev-1")).unwrap();
         assert!(matches!(
             graph.add_evidence("ext-1", test_evidence("ev-1")),
@@ -1171,6 +1175,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Established;
+        // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph.register_extension(ext).unwrap();
 
         let tt = graph

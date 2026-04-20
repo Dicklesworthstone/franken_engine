@@ -1313,7 +1313,11 @@ mod tests {
     #[test]
     fn posterior_serde_roundtrip() {
         let p = Posterior::default_prior();
+        // SAFETY: Posterior derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&p).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Posterior,
+        // so from_str back to Posterior cannot fail (valid format + matching schema).
         let back: Posterior = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
     }
@@ -1347,7 +1351,11 @@ mod tests {
             matches_typo_pattern: true,
             context_hash: test_hash(),
         };
+        // SAFETY: EvidenceFeatures derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&e).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid EvidenceFeatures,
+        // so from_str back to EvidenceFeatures cannot fail (valid format + matching schema).
         let back: EvidenceFeatures = serde_json::from_str(&json).unwrap();
         assert_eq!(e, back);
     }
@@ -1523,7 +1531,11 @@ mod tests {
     #[test]
     fn loss_matrix_serde_roundtrip() {
         let lm = LossMatrix::default();
+        // SAFETY: LossMatrix derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&lm).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid LossMatrix,
+        // so from_str back to LossMatrix cannot fail (valid format + matching schema).
         let back: LossMatrix = serde_json::from_str(&json).unwrap();
         assert_eq!(lm, back);
     }
@@ -1539,7 +1551,11 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = RecoveryConfig::default();
+        // SAFETY: RecoveryConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&cfg).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RecoveryConfig,
+        // so from_str back to RecoveryConfig cannot fail (valid format + matching schema).
         let back: RecoveryConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, back);
     }

@@ -586,6 +586,7 @@ mod tests {
     #[test]
     fn close_shortcut() {
         let mut region = test_region();
+        // SAFETY: test region starts in Running state, close should succeed
         let result = region
             .close(CancelReason::Quarantine, DrainDeadline::default())
             .unwrap();
@@ -619,7 +620,9 @@ mod tests {
         region.commit_obligation("ob-1");
         region.abort_obligation("ob-2");
 
+        // SAFETY: test region starts in Running state, cancel should succeed
         region.cancel(CancelReason::OperatorShutdown).unwrap();
+        // SAFETY: region is in CancelRequested state, drain should succeed
         region.drain(DrainDeadline::default()).unwrap();
         let result = region.finalize().unwrap();
 

@@ -1913,6 +1913,7 @@ mod tests {
             suggested_alternative: "alt".to_string(),
             exempted: false,
         };
+        // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"module_path\""));
         assert!(json.contains("\"forbidden_api\""));
@@ -1934,6 +1935,7 @@ mod tests {
             reason: "r".to_string(),
             suggested_alternative: "alt".to_string(),
         };
+        // SAFETY: ForbiddenPattern derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains("\"pattern_id\""));
         assert!(json.contains("\"category\""));
@@ -1951,6 +1953,7 @@ mod tests {
             modules_audited: vec![],
             passed: false,
         };
+        // SAFETY: AuditResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"findings\""));
         assert!(json.contains("\"violation_count\""));

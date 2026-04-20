@@ -1820,6 +1820,7 @@ mod tests {
             source_scope: ScopeId { depth: 0, index: 0 },
             label: Label::Public,
         };
+        // SAFETY: Test serializes known-valid ClosureCapture; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&cap).unwrap();
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"binding_id\""));
@@ -1830,6 +1831,7 @@ mod tests {
     #[test]
     fn json_field_names_scope_chain() {
         let chain = fresh_chain();
+        // SAFETY: Test serializes known-valid ScopeChain; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&chain).unwrap();
         assert!(json.contains("\"environments\""));
         assert!(json.contains("\"chain\""));
@@ -1839,6 +1841,7 @@ mod tests {
     #[test]
     fn json_field_names_closure_store() {
         let store = ClosureStore::new();
+        // SAFETY: Test serializes known-valid ClosureStore; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&store).unwrap();
         assert!(json.contains("\"closures\""));
     }
@@ -1846,6 +1849,7 @@ mod tests {
     #[test]
     fn json_field_names_scope_error_tdz() {
         let err = ScopeError::TemporalDeadZone { name: "abc".into() };
+        // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("\"TemporalDeadZone\""));
         assert!(json.contains("\"name\""));
@@ -1858,6 +1862,7 @@ mod tests {
             value_label: Label::Secret,
             scope_max: Label::Public,
         };
+        // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("\"LabelViolation\""));
         assert!(json.contains("\"name\""));
@@ -1881,6 +1886,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = variants
             .iter()
+            // SAFETY: Test serializes known-valid EnvValue variants; to_string succeeds in controlled test environment.
             .map(|v| serde_json::to_string(v).unwrap())
             .collect();
         assert_eq!(
@@ -1901,6 +1907,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = variants
             .iter()
+            // SAFETY: Test serializes known-valid EnvironmentKind variants; to_string succeeds in controlled test environment.
             .map(|v| serde_json::to_string(v).unwrap())
             .collect();
         assert_eq!(
@@ -1929,6 +1936,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = variants
             .iter()
+            // SAFETY: Test serializes known-valid ScopeError variants; to_string succeeds in controlled test environment.
             .map(|v| serde_json::to_string(v).unwrap())
             .collect();
         assert_eq!(
@@ -2099,8 +2107,10 @@ mod tests {
     #[test]
     fn clone_independence_scope_chain() {
         let mut a = fresh_chain();
+        // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
         a.declare_var("v".into(), 1).unwrap();
         let mut b = a.clone();
+        // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
         b.declare_let("extra".into(), 2).unwrap();
         // a should not have the new binding
         assert!(a.get_value("extra").is_err());
@@ -2162,7 +2172,9 @@ mod tests {
             EnvironmentKind::Function,
         ];
         for v in &variants {
+            // SAFETY: Test serializes known-valid EnvironmentKind; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
             let back: EnvironmentKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -2176,7 +2188,9 @@ mod tests {
             source_scope: ScopeId { depth: 5, index: 3 },
             label: Label::TopSecret,
         };
+        // SAFETY: Test serializes known-valid ClosureCapture; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&cap).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ClosureCapture = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, back);
     }
@@ -2197,11 +2211,16 @@ mod tests {
             }],
             EnvironmentHandle(3),
         );
+        // SAFETY: Test serializes known-valid ClosureStore; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&store).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ClosureStore = serde_json::from_str(&json).unwrap();
         assert_eq!(back.len(), 2);
+        // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
         assert_eq!(back.get(ClosureHandle(0)).unwrap().name, "f");
+        // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
         assert_eq!(back.get(ClosureHandle(1)).unwrap().name, "g");
+        // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
         assert_eq!(
             back.get(ClosureHandle(1)).unwrap().max_capture_label,
             Label::Confidential

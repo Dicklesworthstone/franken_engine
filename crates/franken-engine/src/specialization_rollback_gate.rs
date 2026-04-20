@@ -1004,7 +1004,11 @@ mod tests {
     #[test]
     fn test_specialization_kind_serde() {
         let k = SpecializationKind::GuardElision;
+        // SAFETY: SpecializationKind derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&k).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SpecializationKind,
+        // so from_str back to SpecializationKind cannot fail (valid format + matching schema).
         let back: SpecializationKind = serde_json::from_str(&json).unwrap();
         assert_eq!(k, back);
     }
@@ -1060,7 +1064,11 @@ mod tests {
             used: 800_000,
             budget: 500_000,
         };
+        // SAFETY: BlockingReason derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BlockingReason,
+        // so from_str back to BlockingReason cannot fail (valid format + matching schema).
         let back: BlockingReason = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
@@ -1180,7 +1188,11 @@ mod tests {
     #[test]
     fn test_config_serde() {
         let c = GateConfig::default();
+        // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid GateConfig,
+        // so from_str back to GateConfig cannot fail (valid format + matching schema).
         let back: GateConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }
@@ -1446,7 +1458,11 @@ mod tests {
         let mut g = SpecializationRollbackGate::with_defaults(epoch());
         let ev = good_evidence();
         g.evaluate("r-001", &ev, 100_000_000);
+        // SAFETY: SpecializationRollbackGate derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&g).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid SpecializationRollbackGate,
+        // so from_str back to SpecializationRollbackGate cannot fail (valid format + matching schema).
         let back: SpecializationRollbackGate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.evaluation_count(), 1);
     }

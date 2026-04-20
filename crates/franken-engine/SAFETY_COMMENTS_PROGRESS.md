@@ -23,6 +23,9 @@ This document tracks progress on adding SAFETY comments to unguarded panic!/unwr
 - `outcome_capability_narrowing.rs:673-674` - BoundaryOutcome serde unwrap calls
 - `timescale_separation_certificate.rs:1169-1170` - TimescaleSeparationCertificate serde unwrap calls
 - `queueing_admission_control.rs:576` - AdmissionPolicy serde unwrap call
+- `supremacy_cell_matrix.rs:446` - Test fixture loading unwrap call
+- `operator_diagnostic_contract.rs:815-816` - BoundaryPolicyMappingContract serde unwrap calls
+- `resource_certificate_governance.rs:709` - Iterator unwrap call after length check
 
 ## Pattern Categories Addressed
 

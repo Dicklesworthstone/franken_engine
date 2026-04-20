@@ -1270,6 +1270,7 @@ label_sha256 = "{bad_hash}"
             SecurityConformanceError::ManifestLabelHashMismatch { workload_id, .. } => {
                 assert_eq!(workload_id, "malicious-tamper");
             }
+            // SAFETY: Test-only panic to validate security conformance error type
             _ => panic!("expected manifest hash mismatch"),
         }
     }

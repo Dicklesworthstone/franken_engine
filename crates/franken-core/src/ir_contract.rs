@@ -4024,16 +4024,20 @@ mod tests {
         let ir0_hash = ir0.content_hash();
 
         let mut verifier = IrVerifier::new();
+        // SAFETY: verify_ir0 with valid test IR module and matching hash should succeed.
         verifier.verify_ir0(&ir0, &ir0_hash, "t-1").unwrap();
 
         let ir1 = Ir1Module::new(ir0_hash, "ev.js");
+        // SAFETY: verify_ir1 with valid test IR module and matching hash should succeed.
         verifier.verify_ir1(&ir1, &ir0_hash, "t-1").unwrap();
 
         let ir3 = Ir3Module::new(ContentHash::compute(b"ir2"), "ev.js");
+        // SAFETY: verify_ir3 with valid test IR module should succeed.
         verifier.verify_ir3(&ir3, "t-1").unwrap();
 
         let ir3_hash = ir3.content_hash();
         let ir4 = Ir4Module::new(ir3_hash, "ev.js");
+        // SAFETY: verify_ir4 with valid test IR module and matching hash should succeed.
         verifier.verify_ir4(&ir4, &ir3_hash, "t-1").unwrap();
 
         let events = verifier.drain_events();

@@ -861,6 +861,8 @@ mod tests {
     fn suspend_from_running() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
             .unwrap();
@@ -876,6 +878,8 @@ mod tests {
     fn terminate_from_running() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();
@@ -888,9 +892,11 @@ mod tests {
     fn terminate_from_suspended() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (suspend action) cannot fail under normal test conditions.
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
             .unwrap();
+        // SAFETY: execute() with valid test inputs (terminate action) cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();
@@ -906,6 +912,8 @@ mod tests {
     fn quarantine_from_running() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let receipt = executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
             .unwrap();
@@ -962,9 +970,12 @@ mod tests {
     fn idempotent_sandbox() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let r1 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap();
+        // SAFETY: Second execute() call for idempotency test with same valid inputs.
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap();
@@ -976,9 +987,12 @@ mod tests {
     fn idempotent_terminate() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (valid action, extension ID, context)
+        // cannot fail under normal test conditions.
         let r1 = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();
+        // SAFETY: Second execute() call for idempotency test with same valid inputs.
         let r2 = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();

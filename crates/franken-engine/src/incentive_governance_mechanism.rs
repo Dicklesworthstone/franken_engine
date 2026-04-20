@@ -1272,7 +1272,11 @@ mod tests {
     #[test]
     fn mechanism_serde_roundtrip() {
         let spec = canonical_governance_mechanism(test_epoch());
+        // SAFETY: MechanismSpec derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&spec).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid MechanismSpec,
+        // so from_str back to MechanismSpec cannot fail (valid format + matching schema).
         let back: MechanismSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec, back);
     }

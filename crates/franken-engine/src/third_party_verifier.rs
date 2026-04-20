@@ -2514,6 +2514,7 @@ mod tests {
             "alpha".to_string(), // duplicate after trim
             "  ".to_string(),    // empty after trim → filtered
         ];
+        // SAFETY: Test scenario with valid attestation input; generation should succeed
         let attestation = generate_attestation(&input).unwrap();
         assert_eq!(attestation.scope_limitations, vec!["alpha", "beta"]);
     }

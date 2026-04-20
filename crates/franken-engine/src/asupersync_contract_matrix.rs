@@ -1876,7 +1876,9 @@ mod tests {
             version_cell: "0.1.0".to_string(),
             dependency_versions: BTreeMap::new(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&cell).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: CompatibilityCell = serde_json::from_str(&json).unwrap();
         assert_eq!(back.disposition, CompatibilityDisposition::Compatible);
     }

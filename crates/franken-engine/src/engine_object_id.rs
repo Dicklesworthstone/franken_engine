@@ -507,6 +507,8 @@ mod tests {
 
     #[test]
     fn derive_id_is_deterministic() {
+        // SAFETY: Test uses valid parameters for engine object ID derivation.
+        // derive_id only fails on invalid domain or malformed inputs (both impossible here).
         let id1 = derive_id(
             ObjectDomain::PolicyObject,
             "zone-a",

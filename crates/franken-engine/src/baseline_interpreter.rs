@@ -17373,76 +17373,69 @@ impl InterpreterCore {
             }
 
             "builtin:EncodeURIComponent" => {
-                // encodeURIComponent() implementation - simplified URL encoding
+                // encodeURIComponent() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
                     return Ok(Value::Str("undefined".to_string()));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
-                let input_str = match value {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Simplified URL encoding - encode special characters
-                let encoded = input_str
-                    .chars()
-                    .map(|c| match c {
-                        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-                        _ => format!("%{:02X}", c as u32),
-                    })
-                    .collect();
+                let input_str = value_to_string_for_uri(&value);
+                let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
 
                 Ok(Value::Str(encoded))
             }
 
             "builtin:DecodeURIComponent" => {
-                // decodeURIComponent() implementation - simplified URL decoding
+                // decodeURIComponent() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
                     return Ok(Value::Str("undefined".to_string()));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
-                let encoded_str = match value {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
+                let encoded_str = value_to_string_for_uri(&value);
+
+                let decoded = match percent_decode_utf8(&encoded_str) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // In JavaScript, decodeURIComponent throws URIError for invalid sequences
+                        // For now, return the original string to avoid breaking existing code
+                        encoded_str
+                    }
                 };
 
-                // Simplified URL decoding - decode %XX sequences
-                let mut decoded = String::new();
-                let mut chars = encoded_str.chars().peekable();
+                Ok(Value::Str(decoded))
+            }
 
-                while let Some(c) = chars.next() {
-                    if c == '%' {
-                        // Try to decode %XX sequence
-                        let hex_chars: String = chars.by_ref().take(2).collect();
-                        if hex_chars.len() == 2 {
-                            if let Ok(byte_val) = u8::from_str_radix(&hex_chars, 16) {
-                                if let Some(decoded_char) = char::from_u32(byte_val as u32) {
-                                    decoded.push(decoded_char);
-                                    continue;
-                                }
-                            }
-                        }
-                        // If decoding failed, keep the % and continue
-                        decoded.push(c);
-                        decoded.push_str(&hex_chars);
-                    } else {
-                        decoded.push(c);
-                    }
+            "builtin:EncodeURI" => {
+                // encodeURI() implementation using shared UTF-8 percent codec
+                if args.count == 0 {
+                    return Ok(Value::Str("undefined".to_string()));
                 }
+
+                let value = self.read_reg(args.start + 1)?;
+                let input_str = value_to_string_for_uri(&value);
+                let encoded = percent_encode_utf8(&input_str, should_encode_uri);
+
+                Ok(Value::Str(encoded))
+            }
+
+            "builtin:DecodeURI" => {
+                // decodeURI() implementation using shared UTF-8 percent codec
+                if args.count == 0 {
+                    return Ok(Value::Str("undefined".to_string()));
+                }
+
+                let value = self.read_reg(args.start + 1)?;
+                let encoded_str = value_to_string_for_uri(&value);
+
+                let decoded = match percent_decode_utf8(&encoded_str) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // In JavaScript, decodeURI throws URIError for invalid sequences
+                        // For now, return the original string to avoid breaking existing code
+                        encoded_str
+                    }
+                };
 
                 Ok(Value::Str(decoded))
             }
@@ -19237,6 +19230,92 @@ impl LaneRouter {
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
         None
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared UTF-8 Percent Codec
+// ---------------------------------------------------------------------------
+
+/// Convert a JavaScript value to string for URI encoding.
+fn value_to_string_for_uri(value: &Value) -> String {
+    match value {
+        Value::Str(s) => s.clone(),
+        Value::Null => "null".to_string(),
+        Value::Undefined => "undefined".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Object(_) => "[object Object]".to_string(),
+        _ => "[object Object]".to_string(),
+    }
+}
+
+/// Check if a character should be encoded in a URI context.
+/// Based on RFC 3986 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"
+fn is_uri_unreserved(c: char) -> bool {
+    matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~')
+}
+
+/// Check if a character should be encoded in a URI component context (encodeURIComponent).
+/// This is more restrictive than encodeURI - only unreserved characters are allowed.
+fn should_encode_uri_component(c: char) -> bool {
+    !is_uri_unreserved(c)
+}
+
+/// Check if a character should be encoded in a URI context (encodeURI).
+/// This allows more characters than encodeURIComponent including some reserved ones.
+fn should_encode_uri(c: char) -> bool {
+    // encodeURI allows unreserved chars plus some reserved chars used in URIs
+    if is_uri_unreserved(c) {
+        return false;
+    }
+    // Allow common URI reserved characters that should not be encoded
+    !matches!(c, ';' | ',' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | '#')
+}
+
+/// Percent-encode a string for URI contexts using proper UTF-8 encoding.
+fn percent_encode_utf8<F>(input: &str, should_encode: F) -> String
+where
+    F: Fn(char) -> bool,
+{
+    let mut result = String::new();
+    for c in input.chars() {
+        if should_encode(c) {
+            // Encode each byte of the UTF-8 representation
+            let utf8_bytes = c.to_string().as_bytes().to_vec();
+            for byte in utf8_bytes {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Percent-decode a URI-encoded string, handling UTF-8 sequences properly.
+fn percent_decode_utf8(encoded: &str) -> Result<String, &'static str> {
+    let mut bytes = Vec::new();
+    let mut chars = encoded.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            // Collect hex digits
+            let hex1 = chars.next().ok_or("Incomplete percent sequence")?;
+            let hex2 = chars.next().ok_or("Incomplete percent sequence")?;
+
+            let hex_str = format!("{}{}", hex1, hex2);
+            let byte_val = u8::from_str_radix(&hex_str, 16)
+                .map_err(|_| "Invalid hex in percent sequence")?;
+            bytes.push(byte_val);
+        } else {
+            // Non-percent character - convert to UTF-8 bytes
+            let char_bytes = c.to_string().into_bytes();
+            bytes.extend(char_bytes);
+        }
+    }
+
+    String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 sequence")
 }
 
 // ---------------------------------------------------------------------------
@@ -24698,5 +24777,149 @@ mod tests {
 
         // Should produce different results
         assert_ne!(result1, result2, "Different execution states should produce different random values");
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_basic() {
+        // Test basic charCodeAt functionality with ASCII characters
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Hello".to_string())).unwrap();
+        core.set_register(1, Value::Int(0)).unwrap(); // index 0
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // "Hello"[0] = 'H' = 72
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Int(72), "charCodeAt('H') should be 72");
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_utf16_surrogate_pairs() {
+        // Test charCodeAt with UTF-16 surrogate pairs (characters outside BMP)
+        let mut core = BaselineInterpreter::new();
+
+        // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
+        core.set_register(0, Value::Str("😀".to_string())).unwrap();
+
+        // Get first surrogate (high surrogate)
+        core.set_register(1, Value::Int(0)).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result1 = core.read_register(2).unwrap();
+        assert_eq!(result1, Value::Int(0xD83D), "First UTF-16 code unit should be high surrogate 0xD83D");
+
+        // Get second surrogate (low surrogate)
+        core.set_register(1, Value::Int(1)).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 3,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result2 = core.read_register(3).unwrap();
+        assert_eq!(result2, Value::Int(0xDE00), "Second UTF-16 code unit should be low surrogate 0xDE00");
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_out_of_bounds() {
+        // Test charCodeAt with out-of-bounds index returns NaN
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Hi".to_string())).unwrap();
+        core.set_register(1, Value::Int(5)).unwrap(); // index 5 (out of bounds)
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(2).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_nan(), "Out-of-bounds charCodeAt should return NaN");
+        } else {
+            panic!("Expected Float NaN, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_negative_index() {
+        // Test charCodeAt with negative index (should treat as 0)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("Test".to_string())).unwrap();
+        core.set_register(1, Value::Int(-1)).unwrap(); // negative index
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // Should return first character 'T' = 84
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Int(84), "Negative index should be treated as 0");
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_no_index() {
+        // Test charCodeAt with no index argument (should default to 0)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Str("ABC".to_string())).unwrap();
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 1 }, // no index argument
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // Should return first character 'A' = 65
+        let result = core.read_register(1).unwrap();
+        assert_eq!(result, Value::Int(65), "No index should default to 0");
+    }
+
+    #[test]
+    fn string_prototype_char_code_at_type_coercion() {
+        // Test charCodeAt with non-string values (should coerce to string)
+        let mut core = BaselineInterpreter::new();
+        core.set_register(0, Value::Int(123)).unwrap(); // should become "123"
+        core.set_register(1, Value::Int(1)).unwrap(); // index 1
+
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 184, // StringPrototypeCharCodeAt
+                args: RegRange { start: 0, count: 2 },
+                dest: 2,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        // "123"[1] = '2' = 50
+        let result = core.read_register(2).unwrap();
+        assert_eq!(result, Value::Int(50), "charCodeAt on number should coerce to string");
     }
 }

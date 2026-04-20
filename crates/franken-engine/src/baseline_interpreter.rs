@@ -13232,30 +13232,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:MathAsin" => {
-                // Math.asin(x) implementation
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let val = self.read_reg(args.start)?;
-                let num = match val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Str(s) => s.parse::<f64>().unwrap_or(f64::NAN),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                // asin is only defined for values in [-1, 1]
-                if num < -1.0 || num > 1.0 {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                } else {
-                    Ok(Value::Float(Float64::new(num.asin())))
-                }
-            }
+            // Removed duplicate MathAsin - implementation at line ~11042 is identical
 
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
 

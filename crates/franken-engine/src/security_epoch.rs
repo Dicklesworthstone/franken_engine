@@ -512,6 +512,8 @@ mod tests {
     #[test]
     fn multiple_advances_produce_sequential_epochs() {
         let mut tracker = EpochTracker::new();
+        // SAFETY: Test-only epoch tracker advance with valid transition reasons and unique IDs.
+        // advance() only fails on invalid transitions or duplicate IDs (impossible in test sequence).
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
             .unwrap();

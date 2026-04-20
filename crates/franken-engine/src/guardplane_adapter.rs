@@ -8,7 +8,7 @@
 //! `capability_witness.*` / `guardplane.*` keys.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +91,16 @@ impl GuardplaneDiagnosticRecord {
             metadata_key: key.to_string(),
             metadata_value: value.to_string(),
             message: message.to_string(),
+        }
+    }
+
+    fn state_lock_poisoned(operation: &str) -> Self {
+        Self {
+            code: "guardplane.state_lock_poisoned".to_string(),
+            metadata_key: "operation".to_string(),
+            metadata_value: operation.to_string(),
+            message: "guardplane adapter state lock was poisoned; recovered inner state"
+                .to_string(),
         }
     }
 }
@@ -383,6 +393,7 @@ struct GuardplaneAdapterState {
     thresholds: ContainmentThresholds,
     operation_count: u64,
     decisions: Vec<GuardplaneDecisionRecord>,
+    diagnostics: Vec<GuardplaneDiagnosticRecord>,
 }
 
 pub struct GuardplaneAdapter {
@@ -412,12 +423,26 @@ impl GuardplaneAdapter {
                 thresholds: ContainmentThresholds::default(),
                 operation_count: 0,
                 decisions: Vec::new(),
+                diagnostics: Vec::new(),
             }),
         }
     }
 
+    fn lock_state(&self, operation: &'static str) -> MutexGuard<'_, GuardplaneAdapterState> {
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => {
+                let mut state = poisoned.into_inner();
+                state
+                    .diagnostics
+                    .push(GuardplaneDiagnosticRecord::state_lock_poisoned(operation));
+                state
+            }
+        }
+    }
+
     pub fn summary(&self) -> GuardplaneExecutionSummary {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.lock_state("summary");
         let last = state.decisions.last();
         GuardplaneExecutionSummary {
             decision_count: state.decisions.len(),
@@ -435,15 +460,13 @@ impl GuardplaneAdapter {
     }
 
     pub fn decision_records(&self) -> Vec<GuardplaneDecisionRecord> {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .decisions
-            .clone()
+        self.lock_state("decision_records").decisions.clone()
     }
 
     pub fn diagnostic_records(&self) -> Vec<GuardplaneDiagnosticRecord> {
-        self.context.diagnostics.clone()
+        let mut diagnostics = self.context.diagnostics.clone();
+        diagnostics.extend(self.lock_state("diagnostic_records").diagnostics.clone());
+        diagnostics
     }
 
     fn evaluate_operation(
@@ -451,7 +474,7 @@ impl GuardplaneAdapter {
         hook_context: &HookContext,
         operation: GuardplaneOperation,
     ) -> HookAction {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.lock_state("evaluate_operation");
         state.operation_count = state.operation_count.saturating_add(1);
 
         let evidence = self.build_evidence(&operation, state.operation_count);

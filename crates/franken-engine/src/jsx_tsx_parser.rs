@@ -1613,6 +1613,8 @@ mod tests {
                             JsxAttributeValue::StringLiteral { value } => {
                                 assert_eq!(value, "app");
                             }
+                            // SAFETY: Test-only panic to validate JSX attribute value parsing.
+                            // Test expects string literal value type for component attributes.
                             _ => panic!("expected string literal"),
                         }
                     }

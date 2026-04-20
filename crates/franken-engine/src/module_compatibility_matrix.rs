@@ -1360,7 +1360,9 @@ mod tests {
 
         assert_eq!(matrix_a.canonical_hash(), matrix_b.canonical_hash());
         assert_eq!(
+            // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
             matrix_a.to_json_pretty().unwrap(),
+            // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
             matrix_b.to_json_pretty().unwrap()
         );
     }

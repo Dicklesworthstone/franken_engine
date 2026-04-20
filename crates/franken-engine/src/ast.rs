@@ -1999,7 +1999,9 @@ mod tests {
     #[test]
     fn parse_goal_round_trips_through_serde() {
         for goal in [ParseGoal::Script, ParseGoal::Module] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&goal).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let decoded: ParseGoal = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, goal);
         }

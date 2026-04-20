@@ -2944,6 +2944,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = kinds
             .iter()
+            // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
             .map(|k| serde_json::to_string(k).unwrap())
             .collect();
         assert_eq!(jsons.len(), kinds.len());
@@ -2993,6 +2994,7 @@ mod tests {
             drift_critical_fixtures: 1,
             drift_counts_by_category: BTreeMap::from([("semantic".to_string(), 1)]),
         };
+        // SAFETY: MultiEngineHarnessSummary derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("\"total_fixtures\":50"));
         assert!(json.contains("\"divergent_fixtures\":1"));
@@ -3268,7 +3270,9 @@ mod tests {
 
     #[test]
     fn parse_goal_script_and_module() {
+        // SAFETY: Test uses known valid goal strings that parse_goal supports
         assert_eq!(parse_goal("f1", "script").unwrap(), ParseGoal::Script);
+        // SAFETY: Test uses known valid goal strings that parse_goal supports
         assert_eq!(parse_goal("f1", "module").unwrap(), ParseGoal::Module);
     }
 
@@ -3619,6 +3623,7 @@ mod tests {
             tokens_per_source_avg: 20,
             peak_rss_bytes: 4096,
         };
+        // SAFETY: Summary type derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("\"sample_count\":5"));
         assert!(json.contains("\"peak_rss_bytes\":4096"));
@@ -3637,7 +3642,9 @@ mod tests {
             policy_id: "policy-1".to_string(),
             engine_id: "ext-1".to_string(),
         };
+        // SAFETY: ExternalCommandRequest derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&request).unwrap();
+        // SAFETY: JSON was just generated from ExternalCommandRequest, deserialization guaranteed to succeed
         let restored: ExternalCommandRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.goal, "script");
         assert_eq!(restored.seed, 42);

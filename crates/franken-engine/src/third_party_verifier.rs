@@ -2497,6 +2497,7 @@ mod tests {
     fn render_attestation_summary_with_failed_verdict() {
         let report = make_report(VerificationVerdict::Failed);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test scenario with valid attestation input; generation should succeed
         let attestation = generate_attestation(&input).unwrap();
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("verdict=failed"), "summary: {summary}");

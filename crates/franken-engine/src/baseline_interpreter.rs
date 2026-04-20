@@ -19545,6 +19545,29 @@ mod tests {
     }
 
     #[test]
+    fn string_split_omitted_and_undefined_separator_handle_non_ascii() {
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Str("a🙂b".to_string());
+
+        let result = core
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 1 },
+            )
+            .unwrap();
+        assert_string_split_result(result, vec!["a🙂b"], &mut core);
+
+        core.registers[1] = Value::Undefined;
+        let result = core
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 2 },
+            )
+            .unwrap();
+        assert_string_split_result(result, vec!["a🙂b"], &mut core);
+    }
+
+    #[test]
     fn string_split_empty_separator_splits_characters() {
         let mut core = quickjs_test_core();
         core.registers[0] = Value::Str("ab".to_string());

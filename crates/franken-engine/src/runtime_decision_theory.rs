@@ -2732,7 +2732,9 @@ mod tests {
     #[test]
     fn decision_context_config_default_serde_roundtrip() {
         let config = DecisionContextConfig::default();
+        // SAFETY: DecisionContextConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by valid DecisionContextConfig serialization
         let back: DecisionContextConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.lanes.len(), config.lanes.len());
         assert_eq!(back.risk_weights.len(), config.risk_weights.len());

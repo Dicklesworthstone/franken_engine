@@ -13293,7 +13293,6 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-
             "builtin:StringPrototypeIncludes" => {
                 // String.prototype.includes(searchString[, position]) implementation
                 let this_val = self.read_reg(args.start)?;
@@ -13360,36 +13359,6 @@ impl InterpreterCore {
                 Ok(Value::Bool(is_nan))
             }
 
-            "builtin:MathPow" => {
-                // Math.pow(base, exponent) implementation
-                if args.count < 2 {
-                    return Ok(Value::Float(f64::NAN.into()));
-                }
-
-                let base_val = self.read_reg(args.start)?;
-                let exp_val = self.read_reg(args.start + 1)?;
-
-                let base = match base_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let exponent = match exp_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    Value::Bool(true) => 1.0,
-                    Value::Bool(false) => 0.0,
-                    Value::Null => 0.0,
-                    _ => f64::NAN,
-                };
-
-                let result = base.powf(exponent);
-                Ok(Value::Float(result.into()))
-            }
 
             "builtin:ArrayPrototypeReduce" => {
                 // Array.prototype.reduce(callback[, initialValue]) implementation (simplified)
@@ -17555,67 +17524,7 @@ impl InterpreterCore {
                 })
             }
 
-            "builtin:MathSqrt" => {
-                // Math.sqrt() implementation - returns square root
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
 
-                let value = self.read_reg(args.start + 1)?;
-                let num = match value {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-
-                if num < 0.0 {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                } else {
-                    let result = num.sqrt();
-                    // Return Int if result is whole number in i64 range
-                    if result.fract() == 0.0 && result >= 0.0 && result <= i64::MAX as f64 {
-                        Ok(Value::Int(result as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(result)))
-                    }
-                }
-            }
-
-            "builtin:MathPow" => {
-                // Math.pow(base, exponent) implementation - returns base^exponent
-                if args.count < 2 {
-                    return Ok(Value::Float(Float64::new(f64::NAN)));
-                }
-
-                let base_val = self.read_reg(args.start + 1)?;
-                let exp_val = self.read_reg(args.start + 2)?;
-
-                let base = match base_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&base_val).unwrap_or(f64::NAN),
-                };
-
-                let exponent = match exp_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => Self::coerce_to_float(&exp_val).unwrap_or(f64::NAN),
-                };
-
-                let result = base.powf(exponent);
-
-                // Return Int if result is whole number in i64 range
-                if result.fract() == 0.0
-                    && !result.is_infinite()
-                    && !result.is_nan()
-                    && result >= i64::MIN as f64
-                    && result <= i64::MAX as f64
-                {
-                    Ok(Value::Int(result as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(result)))
-                }
-            }
 
             "builtin:StringPrototypeReplace" => {
                 // String.prototype.replace() implementation - simplified version

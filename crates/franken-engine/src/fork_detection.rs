@@ -915,6 +915,8 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
+        // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
+        // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         SigningKey::from_bytes([seed; 32]).unwrap()
     }
 

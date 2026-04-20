@@ -1084,7 +1084,9 @@ mod tests {
     #[test]
     fn test_compile_target_serde_roundtrip() {
         for t in CompileTarget::ALL {
+            // SAFETY: CompileTarget derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: JSON was just produced by valid CompileTarget serialization
             let back: CompileTarget = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, back);
         }
@@ -1112,7 +1114,9 @@ mod tests {
     #[test]
     fn test_compile_status_serde_roundtrip() {
         for s in CompileStatus::ALL {
+            // SAFETY: CompileStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by valid CompileStatus serialization
             let back: CompileStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -1150,7 +1154,9 @@ mod tests {
     #[test]
     fn test_compile_verdict_serde_roundtrip() {
         for v in CompileVerdict::ALL {
+            // SAFETY: CompileVerdict derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by valid CompileVerdict serialization
             let back: CompileVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -1274,6 +1280,7 @@ mod tests {
             make_module("dep2.js", 200, false),
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
+        // SAFETY: Test with valid graph, config, and epoch should compile successfully
         let report = compile_entrygraph(&graph, &default_config(), epoch()).unwrap();
         assert_eq!(report.verdict, CompileVerdict::FullyCompiled);
         assert_eq!(report.compiled_count, 3);

@@ -1006,9 +1006,13 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = mock_cx(10000);
 
+        // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
+        // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        // SAFETY: Test scenario with active session; session close should succeed
         mgr.close_session("ext-a", "s1", &mut cx).unwrap();
+        // SAFETY: Test scenario with loaded extension and no active sessions; unload should succeed
         mgr.unload_extension("ext-a", &mut cx).unwrap();
 
         let events = mgr.events();

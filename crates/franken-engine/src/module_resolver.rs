@@ -5067,6 +5067,8 @@ mod tests {
             assert!(map.contains_key("required_capabilities"));
             assert!(map.contains_key("provenance"));
         } else {
+            // SAFETY: Test-only panic to validate canonical module value structure
+            // expects Value::Map from canonical serialization. Any other type is test failure.
             panic!("canonical_value should be a Map");
         }
     }

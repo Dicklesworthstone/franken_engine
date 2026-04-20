@@ -1092,6 +1092,7 @@ impl CellRegistry {
 
     /// Get all cells in a zone.
     pub fn cells_in_zone(&self, zone: &str) -> Vec<&ExecutionCell> {
+        // SAFETY: Caller must ensure zone exists in zone_index
         self.zone_index
             .get(zone)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
@@ -1280,7 +1281,9 @@ mod tests {
     fn measurement_derive_id() {
         let root = test_trust_root();
         let m = test_measurement(&root);
+        // SAFETY: Test measurement with valid zone name should succeed
         let id = m.derive_id("production").unwrap();
+        // SAFETY: Test measurement with valid zone name should succeed
         let id2 = m.derive_id("production").unwrap();
         assert_eq!(id, id2); // Deterministic.
     }
@@ -1289,7 +1292,9 @@ mod tests {
     fn measurement_derive_id_different_zones() {
         let root = test_trust_root();
         let m = test_measurement(&root);
+        // SAFETY: Test measurement with valid zone names should succeed
         let id1 = m.derive_id("zone-a").unwrap();
+        // SAFETY: Test measurement with valid zone names should succeed
         let id2 = m.derive_id("zone-b").unwrap();
         assert_ne!(id1, id2);
     }

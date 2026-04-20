@@ -762,6 +762,59 @@ fn integration_capability_token_count() {
 }
 
 #[test]
+fn integration_report_hash_includes_clean_transition_evidence() {
+    // Test that content hash changes when clean-transition evidence differs
+    let clean_report = {
+        let mut v = CapabilityNarrowingValidator::with_defaults();
+        // Valid narrowing with no violations
+        v.validate_narrowing(
+            "parent",
+            "child",
+            "clean_boundary",
+            &CapabilityGrant::full(),
+            &CapabilityGrant::sandbox(),
+        );
+        v.record_outcome_propagation(
+            "clean_boundary",
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Success,
+        );
+        v.build_report()
+    };
+
+    let violation_report = {
+        let mut v = CapabilityNarrowingValidator::with_defaults();
+        // Invalid widening that creates a violation
+        v.validate_narrowing(
+            "parent",
+            "child",
+            "violation_boundary",
+            &CapabilityGrant::sandbox(),
+            &CapabilityGrant::full(),
+        );
+        v.record_outcome_propagation(
+            "violation_boundary",
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Success,
+        );
+        v.build_report()
+    };
+
+    // Verify clean statuses are different
+    assert!(clean_report.is_clean(), "clean report should be clean");
+    assert!(
+        !violation_report.is_clean(),
+        "violation report should not be clean"
+    );
+
+    // Verify content hashes are different due to clean transition evidence
+    assert_ne!(
+        clean_report.content_hash, violation_report.content_hash,
+        "content hashes should differ when clean transition evidence differs"
+    );
+}
+
+#[test]
 fn integration_escalate_success_stays_success() {
     let rule = OutcomePropagationRule::EscalateToMostSevere;
     let result = rule.apply(BoundaryOutcome::Success, BoundaryOutcome::Success);

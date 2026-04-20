@@ -567,11 +567,13 @@ impl CapabilityNarrowingValidator {
         }
 
         let content = {
+            let is_clean = self.violations.is_empty();
             let mut s = format!(
-                "transitions={},violations={},epoch={}",
+                "transitions={},violations={},epoch={},clean={}",
                 self.transitions.len(),
                 self.violations.len(),
                 self.epoch.as_u64(),
+                is_clean,
             );
             // direction_counts and outcome_counts are BTreeMap — deterministic.
             for (dir, count) in &direction_counts {

@@ -2730,12 +2730,14 @@ mod tests {
     }
 
     fn sample_campaign(complexity: CampaignComplexity, seed: u64) -> AdversarialCampaign {
+        // SAFETY: Test helper creating generator with default grammar and config should succeed
         let mut generator = CampaignGenerator::new(
             AttackGrammar::default(),
             CampaignGeneratorConfig::default(),
             seed,
         )
         .unwrap();
+        // SAFETY: Test helper campaign generation with valid generator should succeed
         generator.generate_campaign(complexity).unwrap()
     }
 
@@ -2746,6 +2748,7 @@ mod tests {
         false_positive: bool,
         timestamp_ns: u64,
     ) -> CampaignOutcomeRecord {
+        // SAFETY: Test helper with valid campaign execution result should produce valid score
         let score = ExploitObjectiveScore::from_result(&result).unwrap();
         CampaignOutcomeRecord {
             campaign,
@@ -2773,10 +2776,14 @@ mod tests {
         let grammar = AttackGrammar::default();
         let config = CampaignGeneratorConfig::default();
 
+        // SAFETY: Test creating generator with default grammar, config, and valid seed should succeed
         let mut a = CampaignGenerator::new(grammar.clone(), config.clone(), 0xA11CE).unwrap();
+        // SAFETY: Test creating identical generator with same parameters should succeed
         let mut b = CampaignGenerator::new(grammar, config, 0xA11CE).unwrap();
 
+        // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let first = a.generate_campaign(CampaignComplexity::MultiStage).unwrap();
+        // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let second = b.generate_campaign(CampaignComplexity::MultiStage).unwrap();
         assert_eq!(first, second);
     }
@@ -2784,9 +2791,11 @@ mod tests {
     #[test]
     fn mutation_engine_preserves_well_formed_steps() {
         let grammar = AttackGrammar::default();
+        // SAFETY: Creating generator with default grammar, config, and valid seed should succeed
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA11CE)
                 .unwrap();
+        // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let base = generator
             .generate_campaign(CampaignComplexity::Probe)
             .unwrap();
@@ -2800,8 +2809,10 @@ mod tests {
                 donor_campaign: None,
             },
         )
+        // SAFETY: MutationEngine with valid grammar and mutation request should succeed
         .unwrap();
 
+        // SAFETY: Mutated campaign from valid base should pass validation
         mutated.validate().unwrap();
         for (idx, step) in mutated.steps.iter().enumerate() {
             assert_eq!(step.step_id as usize, idx);

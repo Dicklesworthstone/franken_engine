@@ -739,6 +739,7 @@ mod tests {
     fn delta_exhaustion() {
         let mut acc = test_accountant();
         // Delta budget is 100_000.
+        // SAFETY: Test with delta budget consumption within limits should succeed
         acc.consume(0, 90_000, "op1", 2_000_000_000).unwrap();
         let err = acc
             .consume(0, 20_000, "overflow", 3_000_000_000)
@@ -753,8 +754,10 @@ mod tests {
             lifetime_epsilon_budget_millionths: 500_000, // very small
             ..test_config()
         })
+        // SAFETY: Test with valid AccountantConfig should succeed
         .unwrap();
         // Consume within epoch budget but exceed lifetime.
+        // SAFETY: Test with budget consumption within epoch limits should succeed
         acc.consume(400_000, 0, "op1", 2_000_000_000).unwrap();
         let err = acc.consume(200_000, 0, "op2", 3_000_000_000).unwrap_err();
         assert!(matches!(

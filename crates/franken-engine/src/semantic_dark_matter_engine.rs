@@ -712,6 +712,7 @@ mod tests {
     fn test_promotion_above_threshold() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
         let candidates = vec![make_candidate("h", CandidateKind::Program, 900_000)];
+        // SAFETY: Test creates valid high-scoring candidate; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.candidates_promoted, 1);
         assert_eq!(result.candidates_rejected, 0);
@@ -721,6 +722,7 @@ mod tests {
     fn test_rejection_below_threshold() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
         let candidates = vec![make_candidate("l", CandidateKind::Program, 100_000)];
+        // SAFETY: Test creates valid low-scoring candidate; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.candidates_promoted, 0);
         assert_eq!(result.candidates_rejected, 1);
@@ -733,6 +735,7 @@ mod tests {
             make_candidate("a", CandidateKind::Program, 300_000),
             make_candidate("b", CandidateKind::Program, 700_000),
         ];
+        // SAFETY: Test creates valid candidates with different novelty scores; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.max_novelty_millionths, 700_000);
     }
@@ -899,6 +902,7 @@ mod tests {
             make_candidate("h3", CandidateKind::Program, 700_000),
             make_candidate("h4", CandidateKind::Program, 600_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.candidates_promoted, 2);
         assert_eq!(result.candidates_rejected, 2);
@@ -912,6 +916,7 @@ mod tests {
             make_candidate("b", CandidateKind::Program, 400_000),
             make_candidate("c", CandidateKind::Program, 600_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.avg_novelty_millionths, 400_000);
     }
@@ -919,9 +924,11 @@ mod tests {
     #[test]
     fn test_content_hash_differs_per_cycle() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+        // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r1 = engine
             .discover(&[make_candidate("c1", CandidateKind::Program, 800_000)])
             .unwrap();
+        // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r2 = engine
             .discover(&[make_candidate("c2", CandidateKind::Program, 800_000)])
             .unwrap();
@@ -932,6 +939,7 @@ mod tests {
     fn test_epoch_propagated() {
         let epoch = SecurityEpoch::from_raw(42);
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(epoch);
+        // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("x", CandidateKind::Program, 800_000)])
             .unwrap();
@@ -946,6 +954,7 @@ mod tests {
             make_candidate("h2", CandidateKind::Package, 800_000),
             make_candidate("h3", CandidateKind::ReactComponent, 700_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let _ = engine.discover(&candidates).unwrap();
         assert_eq!(*engine.board_state(), BoardState::Saturated);
     }
@@ -958,6 +967,7 @@ mod tests {
             make_candidate("l2", CandidateKind::Program, 200_000),
             make_candidate("l3", CandidateKind::Program, 300_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let _ = engine.discover(&candidates).unwrap();
         assert_eq!(*engine.board_state(), BoardState::Stale);
     }
@@ -1065,6 +1075,7 @@ mod tests {
     #[test]
     fn test_single_candidate_batch() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+        // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("solo", CandidateKind::Program, 800_000)])
             .unwrap();
@@ -1082,6 +1093,7 @@ mod tests {
             make_candidate("p4", CandidateKind::ModuleGraph, 500_000),
             make_candidate("p5", CandidateKind::WorkloadTrace, 400_000),
         ];
+        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine.discover(&candidates).unwrap();
         assert_eq!(result.candidates_evaluated, 5);
     }

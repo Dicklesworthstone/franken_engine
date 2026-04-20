@@ -1174,6 +1174,8 @@ semantic_domain = "security/benign"
             SecurityConformanceError::DuplicateWorkloadId { workload_id, .. } => {
                 assert_eq!(workload_id, "dup");
             }
+            // SAFETY: Test-only panic to validate security conformance error handling
+            // expects specific SecurityConformanceError::DuplicateWorkload from test scenario
             _ => panic!("expected duplicate workload error"),
         }
     }

@@ -1489,6 +1489,8 @@ mod tests {
             DemotionReason::SemanticDivergence {
                 divergence_count, ..
             } => assert_eq!(divergence_count, 1),
+            // SAFETY: Test-only panic to catch unexpected DemotionReason variants
+            // in semantic divergence validation. Expected reason is SemanticDivergence only.
             other => panic!("unexpected reason: {other}"),
         }
     }

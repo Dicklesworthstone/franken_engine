@@ -1740,12 +1740,17 @@ mod tests {
     #[test]
     fn deterministic_replay_serde_equivalence_enrichment() {
         let mut reg = DomainRegistry::with_standard_domains(10000);
+        // SAFETY: ExtensionHeap is registered by with_standard_domains and this allocation is in budget.
         reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        // SAFETY: IrArena is registered by with_standard_domains and this allocation is in budget.
         reg.allocate(AllocationDomain::IrArena, 200).unwrap();
+        // SAFETY: ScratchBuffer is registered by with_standard_domains and this allocation is in budget.
         reg.allocate(AllocationDomain::ScratchBuffer, 50).unwrap();
 
         // Serialize twice independently
+        // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
         let json1 = serde_json::to_string(&reg).unwrap();
+        // SAFETY: Re-serializing the same valid registry to an in-memory String cannot fail here.
         let json2 = serde_json::to_string(&reg).unwrap();
         assert_eq!(json1, json2, "deterministic serialization");
     }

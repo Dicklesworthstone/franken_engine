@@ -2277,7 +2277,9 @@ mod tests {
             error_code: None,
             detail: "all hashes match".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&check).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: VerificationCheckResult = serde_json::from_str(&json).unwrap();
         assert!(back.passed);
         assert!(back.error_code.is_none());

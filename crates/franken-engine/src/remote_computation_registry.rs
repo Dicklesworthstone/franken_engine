@@ -2036,6 +2036,8 @@ mod tests {
         if let RegistryError::ClosureRejected { reason: r } = &err {
             assert_eq!(r, reason);
         } else {
+            // SAFETY: Test-only panic to validate closure rejection error handling
+            // expects specific ComputationError::ClosureRejected from test scenario
             panic!("expected ClosureRejected");
         }
     }

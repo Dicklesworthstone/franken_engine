@@ -930,6 +930,8 @@ mod tests {
     }
 
     fn build_genesis(keys: &[SigningKey], zone: &str) -> PolicyCheckpoint {
+        // SAFETY: Test helper uses valid parameters and non-empty key set.
+        // CheckpointBuilder::build only fails on invalid signatures or empty keys (both impossible here).
         CheckpointBuilder::genesis(SecurityEpoch::GENESIS, DeterministicTimestamp(100), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
             .build(keys)

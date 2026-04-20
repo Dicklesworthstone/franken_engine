@@ -2312,7 +2312,9 @@ mod tests {
             RegistryEventType::RevocationPropagated,
         ];
         for t in &types {
+            // SAFETY: RegistryEventType derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).unwrap();
+            // SAFETY: JSON was just produced by valid RegistryEventType serialization
             let restored: RegistryEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(&restored, t);
         }

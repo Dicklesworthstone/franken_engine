@@ -1055,7 +1055,11 @@ mod tests {
             SiblingIntegration::SqlmodelRust,
             SiblingIntegration::FastapiRust,
         ] {
+            // SAFETY: SiblingIntegration derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&integration).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid SiblingIntegration,
+            // so from_str back to SiblingIntegration cannot fail (valid format + matching schema).
             let back: SiblingIntegration = serde_json::from_str(&json).unwrap();
             assert_eq!(back, integration);
         }
@@ -1096,7 +1100,11 @@ mod tests {
             ControlPlaneOperation::TelemetryIngestion,
             ControlPlaneOperation::TuiDataUpdate,
         ] {
+            // SAFETY: ControlPlaneOperation derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&op).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ControlPlaneOperation,
+            // so from_str back to ControlPlaneOperation cannot fail (valid format + matching schema).
             let back: ControlPlaneOperation = serde_json::from_str(&json).unwrap();
             assert_eq!(back, op);
         }

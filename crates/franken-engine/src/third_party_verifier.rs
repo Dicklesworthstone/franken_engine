@@ -2163,6 +2163,7 @@ mod tests {
     fn attestation_digest_deterministic() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let a1 = generate_attestation(&input).unwrap();
         let a2 = generate_attestation(&input).unwrap();
         assert_eq!(a1.report_digest_hex, a2.report_digest_hex);

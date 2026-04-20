@@ -2107,6 +2107,7 @@ mod tests {
                 ));
                 assert!(matches!(el.children[2], JsxChild::Element(_)));
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

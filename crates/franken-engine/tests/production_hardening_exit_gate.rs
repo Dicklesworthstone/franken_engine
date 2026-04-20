@@ -20,6 +20,11 @@
 use frankenengine_engine::production_hardening_exit_gate::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn new_gate(gate_id: impl Into<String>) -> ProductionHardeningGateExecution {
+    ProductionHardeningGateExecution::new(gate_id.into())
+        .expect("test gate construction should have a valid system timestamp")
+}
+
 #[test]
 fn test_production_hardening_gate_e2e() {
     let gate_id = format!(
@@ -30,7 +35,7 @@ fn test_production_hardening_gate_e2e() {
             .as_secs()
     );
 
-    let mut gate = ProductionHardeningGateExecution::new(gate_id.clone());
+    let mut gate = new_gate(gate_id.clone());
 
     // Execute the production hardening gate (with stubbed implementations)
     let result = gate.execute_production_hardening_gate();
@@ -87,7 +92,7 @@ fn test_production_hardening_gate_e2e() {
 #[test]
 fn test_security_matrix_attack_simulation() {
     let gate_id = "security-test-001".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify security matrix covers critical attack vectors
     let attack_vectors: Vec<_> = gate
@@ -136,7 +141,7 @@ fn test_security_matrix_attack_simulation() {
 #[test]
 fn test_fuzz_campaign_comprehensive_coverage() {
     let gate_id = "fuzz-test-002".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify fuzz target coverage and thresholds
     let targets: Vec<_> = gate.fuzz_campaigns.iter().map(|c| &c.target).collect();
@@ -215,7 +220,7 @@ fn test_fuzz_campaign_comprehensive_coverage() {
 #[test]
 fn test_fault_injection_autonomous_recovery() {
     let gate_id = "fault-test-003".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify fault injection coverage
     let fault_types: Vec<_> = gate
@@ -276,7 +281,7 @@ fn test_fault_injection_autonomous_recovery() {
 #[test]
 fn test_quarantine_fleet_wide_containment() {
     let gate_id = "quarantine-test-004".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify quarantine drill scenarios
     let extension_types: Vec<_> = gate
@@ -340,7 +345,7 @@ fn test_quarantine_fleet_wide_containment() {
 #[test]
 fn test_replay_audit_deterministic_incidents() {
     let gate_id = "replay-test-005".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify replay audit coverage
     let mut canary_audits = 0;
@@ -393,7 +398,7 @@ fn test_replay_audit_deterministic_incidents() {
 #[test]
 fn test_rollout_ladder_progressive_validation() {
     let gate_id = "rollout-test-006".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify rollout progression thresholds
     let shadow = gate
@@ -472,7 +477,7 @@ fn test_rollout_ladder_progressive_validation() {
 #[test]
 fn test_property_based_invariant_validation() {
     let gate_id = "property-test-007".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify critical property coverage
     let mut parser_invariants = false;
@@ -525,7 +530,7 @@ fn test_property_based_invariant_validation() {
 #[test]
 fn test_metamorphic_semantic_preservation() {
     let gate_id = "metamorphic-test-008".to_string();
-    let gate = ProductionHardeningGateExecution::new(gate_id);
+    let gate = new_gate(gate_id);
 
     // Verify metamorphic test coverage
     let transformations: Vec<_> = gate
@@ -579,7 +584,7 @@ fn test_metamorphic_semantic_preservation() {
 #[test]
 fn test_evidence_artifact_comprehensive_collection() {
     let gate_id = "evidence-test-009".to_string();
-    let mut gate = ProductionHardeningGateExecution::new(gate_id);
+    let mut gate = new_gate(gate_id);
 
     // Simulate evidence collection during gate execution
     gate.evidence_artifacts.insert(
@@ -700,7 +705,7 @@ fn test_containment_slo_enforcement() {
     // fails against 100ms SLO for memory-corruption attack vector
 
     let gate_id = "slo-test".to_string();
-    let mut gate = ProductionHardeningGateExecution::new(gate_id);
+    let mut gate = new_gate(gate_id);
 
     // The default security matrix includes memory-corruption with 100ms SLO,
     // but validate_attack_containment returns 150ms, which should fail

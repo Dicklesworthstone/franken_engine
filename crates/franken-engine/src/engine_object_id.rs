@@ -538,6 +538,8 @@ mod tests {
 
         let ids: Vec<EngineObjectId> = ObjectDomain::ALL
             .iter()
+            // SAFETY: Test uses valid parameters from ALL domain variants with test helpers.
+            // derive_id only fails on invalid domain or malformed inputs (both impossible here).
             .map(|d| derive_id(*d, zone, &schema, &content).unwrap())
             .collect();
 

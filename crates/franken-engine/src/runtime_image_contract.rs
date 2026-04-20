@@ -659,7 +659,11 @@ mod tests {
     #[test]
     fn image_kind_serde_roundtrip() {
         for kind in ImageKind::ALL {
+            // SAFETY: ImageKind derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(kind).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid ImageKind,
+            // so from_str back to ImageKind cannot fail (valid format + matching schema).
             let back: ImageKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, back);
         }

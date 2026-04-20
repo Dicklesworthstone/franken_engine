@@ -12197,55 +12197,7 @@ impl InterpreterCore {
 
             // StringPrototypeStartsWith: Removed duplicate dispatch arm (use first occurrence instead)
 
-            "builtin:StringPrototypeEndsWith" => {
-                // String.prototype.endsWith(searchString[, length]) implementation
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Bool(false)),
-                        }
-                    }
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let search_string = match self.read_reg(args.start + 1)? {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Bool(false)),
-                };
-
-                let length = if args.count >= 3 {
-                    match self.read_reg(args.start + 2)? {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => f.inner().max(0.0) as usize,
-                        _ => string_val.len(),
-                    }
-                } else {
-                    string_val.len()
-                };
-
-                // Get substring up to specified length
-                let string_chars: Vec<char> = string_val.chars().collect();
-                let actual_length = length.min(string_chars.len());
-                let substring: String = string_chars[..actual_length].iter().collect();
-
-                Ok(Value::Bool(substring.ends_with(&search_string)))
-            }
+            // StringPrototypeEndsWith: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:NumberIsInteger" => {
                 // Number.isInteger(value) implementation - determines if value is finite integer

@@ -848,6 +848,7 @@ mod tests {
 
     #[test]
     fn default_passes_validation() {
+        // SAFETY: Default configuration should always pass validation by design
         RuntimeConfig::default().validate().unwrap();
     }
 

@@ -527,6 +527,7 @@ mod tests {
     #[test]
     fn cancel_from_non_running_fails() {
         let mut region = test_region();
+        // SAFETY: test region starts in Running state, cancel should succeed
         region.cancel(CancelReason::OperatorShutdown).unwrap();
         let err = region.cancel(CancelReason::Quarantine).unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);

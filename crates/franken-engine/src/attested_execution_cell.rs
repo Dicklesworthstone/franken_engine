@@ -1628,18 +1628,25 @@ mod tests {
         // Attest.
         let nonce = [7u8; 32];
         let quote = root.attest(&measurement, nonce, 10_000_000, 2_000);
+        // SAFETY: attest_cell cannot fail with valid test inputs
         reg.attest_cell(&cid, quote, 3_000, epoch).unwrap();
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Attested);
 
         // Activate.
+        // SAFETY: activate_cell cannot fail with valid test inputs
         reg.activate_cell(&cid, 4_000, epoch).unwrap();
+        // SAFETY: get cannot fail for existing cell ID
         assert_eq!(reg.get(&cid).unwrap().lifecycle, CellLifecycle::Active);
+        // SAFETY: get cannot fail for existing cell ID
         assert!(reg.get(&cid).unwrap().lifecycle.is_operational());
 
         // Decommission.
+        // SAFETY: decommission_cell cannot fail with valid test inputs
         reg.decommission_cell(&cid, "end of life", 5_000, epoch)
             .unwrap();
         assert_eq!(
+            // SAFETY: get cannot fail for existing cell ID
             reg.get(&cid).unwrap().lifecycle,
             CellLifecycle::Decommissioned
         );

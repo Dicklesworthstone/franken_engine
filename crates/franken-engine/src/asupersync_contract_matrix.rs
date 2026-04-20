@@ -1490,7 +1490,9 @@ mod tests {
     #[test]
     fn surface_serde_roundtrip() {
         for surface in AsupersyncSurface::all() {
+            // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
             let json = serde_json::to_string(surface).unwrap();
+            // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
             let back: AsupersyncSurface = serde_json::from_str(&json).unwrap();
             assert_eq!(back, *surface);
         }

@@ -23052,6 +23052,26 @@ mod tests {
     }
 
     #[test]
+    fn string_prototype_includes_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [38_u32, 238_u32] {
+            interpreter.registers[0] = Value::Str("frankenengine".to_string());
+            interpreter.registers[1] = Value::Str("engine".to_string());
+            interpreter.registers[2] = Value::Int(4);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeIncludes".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("StringPrototypeIncludes ID should execute");
+            assert_eq!(result, Value::Bool(true));
+        }
+    }
+
+    #[test]
     fn array_prototype_fill_deduplication_regression() {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 

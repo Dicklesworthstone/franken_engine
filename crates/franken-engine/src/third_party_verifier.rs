@@ -1816,6 +1816,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let mut input = make_attestation_input(report, None);
         input.scope_limitations = vec!["no-crypto-audit".to_string(), "sandbox-only".to_string()];
+        // SAFETY: Test uses valid attestation input from helper with additional scope limitations.
+        // generate_attestation only fails on malformed inputs (impossible here).
         let attestation = generate_attestation(&input).unwrap();
         assert!(attestation.statement.contains("no-crypto-audit"));
         assert!(attestation.statement.contains("sandbox-only"));

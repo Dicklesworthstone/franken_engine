@@ -846,7 +846,11 @@ mod tests {
             },
         ];
         for v in &variants {
+            // SAFETY: AllocDomainError derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid AllocDomainError,
+            // so from_str back to AllocDomainError cannot fail (valid format + matching schema).
             let restored: AllocDomainError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
@@ -855,8 +859,13 @@ mod tests {
     #[test]
     fn domain_budget_serde_roundtrip() {
         let mut budget = DomainBudget::new(1024);
+        // SAFETY: Test reserving 256 bytes within 1024-byte budget should succeed
         budget.try_reserve(256).unwrap();
+        // SAFETY: DomainBudget derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&budget).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DomainBudget,
+        // so from_str back to DomainBudget cannot fail (valid format + matching schema).
         let restored: DomainBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(budget, restored);
     }
@@ -868,7 +877,11 @@ mod tests {
             lifetime: LifetimeClass::SessionScoped,
             budget: DomainBudget::new(512),
         };
+        // SAFETY: DomainConfig derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DomainConfig,
+        // so from_str back to DomainConfig cannot fail (valid format + matching schema).
         let restored: DomainConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
@@ -888,6 +901,7 @@ mod tests {
     #[test]
     fn budget_overflow_on_checked_add() {
         let mut b = DomainBudget::new(u64::MAX);
+        // SAFETY: Test reserving u64::MAX from u64::MAX budget should succeed (exact fit)
         b.try_reserve(u64::MAX).unwrap();
         let err = b.try_reserve(1).unwrap_err();
         assert!(matches!(err, AllocDomainError::BudgetOverflow));
@@ -896,6 +910,7 @@ mod tests {
     #[test]
     fn budget_try_reserve_exact_limit() {
         let mut b = DomainBudget::new(100);
+        // SAFETY: Test reserving exactly 100 bytes from 100-byte budget should succeed (exact fit)
         b.try_reserve(100).unwrap();
         assert_eq!(b.used_bytes, 100);
         assert_eq!(b.remaining(), 0);
@@ -904,6 +919,7 @@ mod tests {
     #[test]
     fn budget_try_reserve_zero_bytes() {
         let mut b = DomainBudget::new(100);
+        // SAFETY: Test reserving 0 bytes from any budget should always succeed (no-op)
         b.try_reserve(0).unwrap();
         assert_eq!(b.used_bytes, 0);
     }

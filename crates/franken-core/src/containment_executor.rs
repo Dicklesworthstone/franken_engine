@@ -942,6 +942,7 @@ mod tests {
     fn cannot_transition_from_terminated() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (terminate action) cannot fail under normal test conditions.
         executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
             .unwrap();
@@ -955,6 +956,7 @@ mod tests {
     fn cannot_sandbox_from_suspended() {
         let mut executor = setup_executor();
         let ctx = test_context();
+        // SAFETY: execute() with valid test inputs (suspend action) cannot fail under normal test conditions.
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
             .unwrap();

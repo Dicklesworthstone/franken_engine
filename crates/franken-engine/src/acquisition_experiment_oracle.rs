@@ -1580,6 +1580,7 @@ mod tests {
             150_000,
         );
         let w = default_weights();
+        // SAFETY: Test-only unwrap for select_experiments with valid proposals and sufficient budget
         let plan = select_experiments(vec![p1, p2], MILLIONTHS, &w).unwrap();
         let errors = validate_plan(&plan);
         assert!(errors.is_empty(), "validation errors: {errors:?}");

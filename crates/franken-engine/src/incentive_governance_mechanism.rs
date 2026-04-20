@@ -842,6 +842,8 @@ mod tests {
     #[test]
     fn governance_action_serde_roundtrip() {
         for action in &GovernanceAction::ALL {
+            // SAFETY: GovernanceAction derives Serialize/Deserialize with no non-serializable fields.
+            // Nested serde operations succeed with valid enum variants in controlled test environment.
             let back: GovernanceAction =
                 serde_json::from_str(&serde_json::to_string(action).unwrap()).unwrap();
             assert_eq!(*action, back);

@@ -2826,6 +2826,7 @@ mod tests {
                 assert_eq!(reserved_extension_id, "test-ext-1");
                 assert_eq!(requested_extension_id, "other-ext");
             }
+            // SAFETY: Test validates orchestrator error for prepared execution context mismatch
             other => panic!("unexpected error: {other}"),
         }
     }

@@ -24,6 +24,7 @@ pub mod asupersync_leverage_adoption_gate;
 pub mod attack_surface_game_model;
 pub mod attestation_handshake;
 pub mod attested_execution_cell;
+pub mod audit_closure_matrix;
 pub mod baseline_interpreter;
 pub mod bayesian_error_recovery;
 pub mod bayesian_posterior;

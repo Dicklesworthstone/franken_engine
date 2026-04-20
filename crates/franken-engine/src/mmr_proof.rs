@@ -885,18 +885,24 @@ mod tests {
     #[test]
     fn consistency_proof_same_length() {
         let mmr = build_mmr(8);
+        // SAFETY: MMR with 8 elements has valid structure, root_hash should succeed
         let old_root = mmr.root_hash().unwrap();
+        // SAFETY: MMR consistency proof for same length should succeed
         let proof = mmr.consistency_proof(8).unwrap();
+        // SAFETY: Valid proof from consistency_proof, verify_consistency should succeed
         verify_consistency(&old_root, &proof).unwrap();
     }
 
     #[test]
     fn consistency_proof_prefix() {
         let old_mmr = build_mmr(4);
+        // SAFETY: MMR with 4 elements has valid structure, root_hash should succeed
         let old_root = old_mmr.root_hash().unwrap();
 
         let new_mmr = build_mmr(8);
+        // SAFETY: MMR with 8 elements has valid prefix of 4, consistency_proof should succeed
         let proof = new_mmr.consistency_proof(4).unwrap();
+        // SAFETY: Valid proof from consistency_proof, verify_consistency should succeed
         verify_consistency(&old_root, &proof).unwrap();
     }
 

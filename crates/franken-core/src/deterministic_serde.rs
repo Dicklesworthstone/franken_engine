@@ -1023,7 +1023,11 @@ mod tests {
             },
         ];
         for err in &errors {
+            // SAFETY: SerdeError derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(err).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid SerdeError,
+            // so from_str back to SerdeError cannot fail (valid format + matching schema).
             let restored: SerdeError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }

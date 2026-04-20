@@ -16280,13 +16280,7 @@ impl InterpreterCore {
                 })
             }
 
-            "builtin:DateNow" => {
-                // Date.now() implementation - returns deterministic timestamp in milliseconds
-                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
-                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
-
-                Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
-            }
+            // Removed duplicate DateNow - implementation at line ~8728 is identical
 
             "builtin:ArrayPrototypeConcat" => {
                 // Array.prototype.concat() implementation - concatenates arrays

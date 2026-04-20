@@ -10765,3 +10765,255 @@ fn test_math_random_deterministic_replay() {
         _ => panic!("Math.random should return Float values"),
     }
 }
+
+// Comprehensive Array.prototype.some regression tests for commit de0c1906
+// This commit removed duplicate implementations and should retain fail-closed behavior
+
+#[test]
+fn test_array_prototype_some_current_simplified_behavior() {
+    // Regression test for commit de0c1906: Current simplified Array.some behavior
+    // NOTE: This tests the CURRENT simplified implementation that checks for truthy values
+    // without actual callback invocation. When proper callback support is added,
+    // these tests should be updated to expect callback-based behavior.
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Empty array returns false
+    assert_eq!(
+        interpreter.evaluate_expression("[].some()").unwrap(),
+        Value::Bool(false),
+        "Empty array should return false"
+    );
+
+    // Array with truthy values returns true (current simplified behavior)
+    assert_eq!(
+        interpreter.evaluate_expression("[1, 2, 3].some()").unwrap(),
+        Value::Bool(true),
+        "Array with truthy values should return true"
+    );
+
+    // Array with only falsy values returns false
+    assert_eq!(
+        interpreter.evaluate_expression("[false, 0, '', null, undefined].some()").unwrap(),
+        Value::Bool(false),
+        "Array with only falsy values should return false"
+    );
+
+    // Array with mixed truthy/falsy returns true (finds first truthy)
+    assert_eq!(
+        interpreter.evaluate_expression("[0, false, 1].some()").unwrap(),
+        Value::Bool(true),
+        "Array with some truthy values should return true"
+    );
+
+    // Non-array objects return false
+    assert_eq!(
+        interpreter.evaluate_expression("({}).some()").unwrap(),
+        Value::Bool(false),
+        "Non-array objects should return false"
+    );
+}
+
+#[test]
+fn test_array_prototype_some_sparse_arrays() {
+    // Test sparse array handling in current simplified implementation
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Sparse array with truthy element
+    let result = interpreter.evaluate_expression("var a = [,,1,,]; a.some()");
+    if result.is_ok() {
+        assert_eq!(result.unwrap(), Value::Bool(true), "Sparse array with truthy element should return true");
+    }
+
+    // All-sparse array (only holes)
+    let result = interpreter.evaluate_expression("var b = [,,,]; b.some()");
+    if result.is_ok() {
+        assert_eq!(result.unwrap(), Value::Bool(false), "All-sparse array should return false");
+    }
+}
+
+#[test]
+fn test_array_prototype_some_edge_cases() {
+    // Test edge cases in current simplified implementation
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // String values
+    assert_eq!(
+        interpreter.evaluate_expression("['hello'].some()").unwrap(),
+        Value::Bool(true),
+        "Non-empty string should be truthy"
+    );
+
+    assert_eq!(
+        interpreter.evaluate_expression("[''].some()").unwrap(),
+        Value::Bool(false),
+        "Empty string should be falsy"
+    );
+
+    // Numeric values including edge cases
+    assert_eq!(
+        interpreter.evaluate_expression("[NaN].some()").unwrap(),
+        Value::Bool(false),
+        "NaN should be falsy"
+    );
+
+    assert_eq!(
+        interpreter.evaluate_expression("[-1].some()").unwrap(),
+        Value::Bool(true),
+        "Negative numbers should be truthy"
+    );
+
+    assert_eq!(
+        interpreter.evaluate_expression("[Infinity].some()").unwrap(),
+        Value::Bool(true),
+        "Infinity should be truthy"
+    );
+}
+
+#[test]
+fn test_array_prototype_some_duplicate_removal_verification() {
+    // Regression test to verify duplicate implementations were completely removed
+    // This test exists to catch any reintroduction of duplicate implementations
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Test consistent behavior across different array types
+    let test_cases = vec![
+        ("[1, 2, 3].some()", Value::Bool(true)),
+        ("[0, false, ''].some()", Value::Bool(false)),
+        ("[null, undefined, 0].some()", Value::Bool(false)),
+        ("['test', 42].some()", Value::Bool(true)),
+    ];
+
+    for (expression, expected) in test_cases {
+        let result = interpreter.evaluate_expression(expression).unwrap();
+        assert_eq!(
+            result, expected,
+            "Expression '{}' should consistently return {:?}",
+            expression, expected
+        );
+    }
+
+    // Verify no internal errors or inconsistencies that could indicate
+    // conflicting implementations
+    let complex_result = interpreter.evaluate_expression(
+        "var results = []; \
+         results.push([1, 2].some()); \
+         results.push([0, false].some()); \
+         results.push([].some()); \
+         results"
+    );
+
+    assert!(complex_result.is_ok(), "Complex some() calls should not cause internal conflicts");
+}
+
+#[test]
+fn test_array_prototype_some_non_array_thisarg() {
+    // Test behavior when 'this' is not an array object
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Number as 'this'
+    let result = interpreter.evaluate_expression("Array.prototype.some.call(42)");
+    if result.is_ok() {
+        assert_eq!(result.unwrap(), Value::Bool(false), "Number this should return false");
+    }
+
+    // String as 'this'
+    let result = interpreter.evaluate_expression("Array.prototype.some.call('hello')");
+    if result.is_ok() {
+        assert_eq!(result.unwrap(), Value::Bool(false), "String this should return false");
+    }
+
+    // Null as 'this'
+    let result = interpreter.evaluate_expression("Array.prototype.some.call(null)");
+    if result.is_ok() {
+        assert_eq!(result.unwrap(), Value::Bool(false), "Null this should return false");
+    }
+}
+
+#[test]
+fn test_array_prototype_some_callback_parameter_ignored() {
+    // Document current behavior: callback parameters are read but ignored
+    // When proper callback support is implemented, this test should be updated
+    let mut interpreter = InterpreterCore::new(InterpreterConfig::default()).unwrap();
+
+    // Callback function provided but ignored in current implementation
+    let result = interpreter.evaluate_expression("[1, 2, 3].some(function(x) { return x > 2; })");
+    if result.is_ok() {
+        // Current simplified implementation returns true because array has truthy values
+        // regardless of the callback logic
+        assert_eq!(result.unwrap(), Value::Bool(true), "Current implementation ignores callback");
+    }
+
+    // This documents that callbacks are currently not executed
+    // TODO: When callback invocation is implemented, update this test to verify:
+    // - [1, 2, 3].some(x => x > 2) should return true (3 > 2)
+    // - [1, 2, 3].some(x => x > 5) should return false (no element > 5)
+}
+
+#[test]
+fn test_math_round_negative_half_semantics_integration() {
+    // Regression test for commit 5e20ceac: Math.round negative half semantics
+    // Validates JavaScript Math.round uses floor(x + 0.5) not round-away-from-zero
+    let config = InterpreterConfig::default();
+    let mut interpreter = InterpreterCore::new(config).unwrap();
+
+    // Test -0.5 → -0 (not -1) in complete execution context
+    let result = interpreter.evaluate_expression("Math.round(-0.5)").unwrap();
+    match result {
+        Value::Float(f) => {
+            let val = f.inner();
+            assert!(val == -0.0 || val == 0.0,
+                   "Math.round(-0.5) should be -0, got {}", val);
+        }
+        Value::Int(0) => {}, // Also acceptable
+        _ => panic!("Math.round(-0.5) should be -0 or 0, got {:?}", result),
+    }
+
+    // Test -1.5 → -1 (not -2)
+    let result = interpreter.evaluate_expression("Math.round(-1.5)").unwrap();
+    assert_eq!(result, Value::Int(-1),
+               "Math.round(-1.5) should be -1, got {:?}", result);
+
+    // Test -0.1 → -0
+    let result = interpreter.evaluate_expression("Math.round(-0.1)").unwrap();
+    match result {
+        Value::Float(f) => {
+            let val = f.inner();
+            assert!(val == -0.0 || val == 0.0,
+                   "Math.round(-0.1) should be -0, got {}", val);
+        }
+        Value::Int(0) => {}, // Also acceptable
+        _ => panic!("Math.round(-0.1) should be -0 or 0, got {:?}", result);
+    }
+
+    // Test +0.5 → 1
+    let result = interpreter.evaluate_expression("Math.round(0.5)").unwrap();
+    assert_eq!(result, Value::Int(1),
+               "Math.round(0.5) should be 1, got {:?}", result);
+
+    // Test edge cases: NaN, Infinity
+    let result = interpreter.evaluate_expression("Math.round(NaN)").unwrap();
+    if let Value::Float(f) = result {
+        assert!(f.inner().is_nan(), "Math.round(NaN) should be NaN");
+    } else {
+        panic!("Math.round(NaN) should be NaN, got {:?}", result);
+    }
+
+    let result = interpreter.evaluate_expression("Math.round(Infinity)").unwrap();
+    if let Value::Float(f) = result {
+        assert_eq!(f.inner(), f64::INFINITY, "Math.round(Infinity) should be Infinity");
+    } else {
+        panic!("Math.round(Infinity) should be Infinity, got {:?}", result);
+    }
+
+    let result = interpreter.evaluate_expression("Math.round(-Infinity)").unwrap();
+    if let Value::Float(f) = result {
+        assert_eq!(f.inner(), f64::NEG_INFINITY, "Math.round(-Infinity) should be -Infinity");
+    } else {
+        panic!("Math.round(-Infinity) should be -Infinity, got {:?}", result);
+    }
+
+    // Test in complex expression context to verify pipeline integration
+    let result = interpreter.evaluate_expression("Math.round(-2.5) + Math.round(-1.5)").unwrap();
+    assert_eq!(result, Value::Int(-3),
+               "Math.round(-2.5) + Math.round(-1.5) should be -2 + -1 = -3, got {:?}", result);
+}

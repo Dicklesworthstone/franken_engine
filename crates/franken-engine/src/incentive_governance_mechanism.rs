@@ -819,6 +819,8 @@ mod tests {
     #[test]
     fn governance_role_serde_roundtrip() {
         for role in &GovernanceRole::ALL {
+            // SAFETY: GovernanceRole derives Serialize/Deserialize with no non-serializable fields.
+            // Nested serde operations succeed with valid enum variants in controlled test environment.
             let back: GovernanceRole =
                 serde_json::from_str(&serde_json::to_string(role).unwrap()).unwrap();
             assert_eq!(*role, back);

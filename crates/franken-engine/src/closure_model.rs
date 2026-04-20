@@ -721,7 +721,9 @@ mod tests {
     fn global_scope_exists_after_new() {
         let chain = fresh_chain();
         assert_eq!(chain.depth(), 1);
+        // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
         let handle = chain.current_handle().unwrap();
+        // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
         let env = chain.get_env(handle).unwrap();
         assert_eq!(env.scope_kind, ScopeKind::Global);
     }
@@ -732,6 +734,7 @@ mod tests {
         let block_id = ScopeId { depth: 1, index: 0 };
         let h = chain.push_scope(block_id, ScopeKind::Block);
         assert_eq!(chain.depth(), 2);
+        // SAFETY: Test has valid scope chain; pop_scope succeeds in controlled test environment.
         let popped = chain.pop_scope().unwrap();
         assert_eq!(popped, h);
         assert_eq!(chain.depth(), 1);

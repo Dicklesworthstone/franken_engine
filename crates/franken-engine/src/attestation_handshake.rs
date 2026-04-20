@@ -1094,6 +1094,7 @@ mod tests {
         let client = test_client();
         let response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
 
+        // SAFETY: The policy-plane signature was intentionally tampered above.
         let err = verifier
             .verify_and_authorize(&challenge, &response, &root, 1000)
             .unwrap_err();

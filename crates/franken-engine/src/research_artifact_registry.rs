@@ -286,6 +286,26 @@ impl ResearchArtifactRegistry {
         registry
     }
 
+    /// Construct a registry containing the mutation testing manifest entry.
+    pub fn with_mutation_testing_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "mutation-testing-manifest-0001".to_string(),
+            title: "Mutation Testing Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Quality Team".to_string()],
+            abstract_text: "Mutation testing manifest defining operator catalogs, survivor analysis, equivalent-mutant filtering, score baselines, and CI gate thresholds."
+                .to_string(),
+            bundle_path: "docs/MUTATION_TESTING_MANIFEST.md".to_string(),
+            artifact_type: "mutation_testing".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
     /// Construct a registry containing the lean proof feedback manifest entry.
     pub fn with_lean_proof_feedback_entry() -> Self {
         let mut registry = Self::new();
@@ -299,6 +319,66 @@ impl ResearchArtifactRegistry {
                 .to_string(),
             bundle_path: "docs/LEAN_PROOF_FEEDBACK_MANIFEST.md".to_string(),
             artifact_type: "verification_framework".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the stateful fuzzing manifest entry.
+    pub fn with_stateful_fuzzing_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "stateful-fuzzing-manifest-0001".to_string(),
+            title: "Stateful Fuzzing Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Testing Team".to_string()],
+            abstract_text: "Stateful fuzzing manifest defining transition models, transition coverage obligations, invariant monitors, crash taxonomy, and replay bundle contents."
+                .to_string(),
+            bundle_path: "docs/STATEFUL_FUZZING_MANIFEST.md".to_string(),
+            artifact_type: "stateful_fuzzing".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the metamorphic testing manifest entry.
+    pub fn with_metamorphic_testing_manifest_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "metamorphic-testing-manifest-0001".to_string(),
+            title: "Metamorphic Testing Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Testing Team".to_string()],
+            abstract_text: "Oracle-free metamorphic testing manifest covering relation catalogs, deterministic input transformations, output invariants, seed schedules, and property coverage."
+                .to_string(),
+            bundle_path: "docs/METAMORPHIC_TESTING_MANIFEST.md".to_string(),
+            artifact_type: "metamorphic_testing".to_string(),
+        };
+
+        registry.register_artifact(artifact);
+
+        registry
+    }
+
+    /// Construct a registry containing the chaos engineering manifest entry.
+    pub fn with_chaos_engineering_entry() -> Self {
+        let mut registry = Self::new();
+
+        let artifact = ArtifactMetadata {
+            artifact_id: "chaos-engineering-manifest-0001".to_string(),
+            title: "Chaos Engineering Manifest".to_string(),
+            publication_date: "2026-04-20".to_string(),
+            authors: vec!["FrankenEngine Resilience Team".to_string()],
+            abstract_text: "Systematic fault injection and resilience coverage manifest defining fault modes catalog, injection points, steady-state metrics, blast radius analysis, and automated rollback procedures."
+                .to_string(),
+            bundle_path: "docs/CHAOS_ENGINEERING_MANIFEST.md".to_string(),
+            artifact_type: "chaos_engineering".to_string(),
         };
 
         registry.register_artifact(artifact);
@@ -451,6 +531,22 @@ mod tests {
     }
 
     #[test]
+    fn test_stateful_fuzzing_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_stateful_fuzzing_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("stateful-fuzzing-manifest-0001")
+            .expect("expected stateful fuzzing manifest artifact");
+        assert_eq!(artifact.artifact_type, "stateful_fuzzing");
+        assert_eq!(artifact.title, "Stateful Fuzzing Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("STATEFUL_FUZZING_MANIFEST.md")
+        );
+    }
+
+    #[test]
     fn test_data_provenance_bundle_entry() {
         let registry = ResearchArtifactRegistry::with_data_provenance_bundle_entry();
 
@@ -487,7 +583,11 @@ mod tests {
             .expect("expected golden artifact test bundle");
         assert_eq!(artifact.artifact_type, "testing_framework");
         assert_eq!(artifact.title, "Golden Artifact Test Bundle");
-        assert!(artifact.bundle_path.ends_with("GOLDEN_ARTIFACT_TEST_BUNDLE.md"));
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("GOLDEN_ARTIFACT_TEST_BUNDLE.md")
+        );
     }
 
     #[test]
@@ -507,6 +607,18 @@ mod tests {
     }
 
     #[test]
+    fn test_mutation_testing_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_mutation_testing_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("mutation-testing-manifest-0001")
+            .expect("expected mutation testing manifest artifact");
+        assert_eq!(artifact.artifact_type, "mutation_testing");
+        assert_eq!(artifact.title, "Mutation Testing Manifest");
+        assert!(artifact.bundle_path.ends_with("MUTATION_TESTING_MANIFEST.md"));
+    }
+
+    #[test]
     fn test_lean_proof_feedback_entry() {
         let registry = ResearchArtifactRegistry::with_lean_proof_feedback_entry();
 
@@ -515,6 +627,45 @@ mod tests {
             .expect("expected lean proof feedback manifest");
         assert_eq!(artifact.artifact_type, "verification_framework");
         assert_eq!(artifact.title, "Lean Proof Feedback Manifest");
-        assert!(artifact.bundle_path.ends_with("LEAN_PROOF_FEEDBACK_MANIFEST.md"));
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("LEAN_PROOF_FEEDBACK_MANIFEST.md")
+        );
+    }
+
+    #[test]
+    fn test_metamorphic_testing_manifest_entry() {
+        let registry = ResearchArtifactRegistry::with_metamorphic_testing_manifest_entry();
+
+        let artifact = registry
+            .get_artifact("metamorphic-testing-manifest-0001")
+            .expect("expected metamorphic testing manifest artifact");
+        assert_eq!(artifact.artifact_type, "metamorphic_testing");
+        assert_eq!(artifact.title, "Metamorphic Testing Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("METAMORPHIC_TESTING_MANIFEST.md")
+        );
+
+        let manifests = registry.get_artifacts_by_type("metamorphic_testing");
+        assert_eq!(manifests.len(), 1);
+    }
+
+    #[test]
+    fn test_chaos_engineering_entry() {
+        let registry = ResearchArtifactRegistry::with_chaos_engineering_entry();
+
+        let artifact = registry
+            .get_artifact("chaos-engineering-manifest-0001")
+            .expect("expected chaos engineering manifest");
+        assert_eq!(artifact.artifact_type, "chaos_engineering");
+        assert_eq!(artifact.title, "Chaos Engineering Manifest");
+        assert!(
+            artifact
+                .bundle_path
+                .ends_with("CHAOS_ENGINEERING_MANIFEST.md")
+        );
     }
 }

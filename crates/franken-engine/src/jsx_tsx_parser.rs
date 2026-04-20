@@ -1761,6 +1761,7 @@ mod tests {
                 assert_eq!(el.name.to_string_repr(), "Ctx.Provider");
                 assert!(el.name.is_component());
             }
+            // SAFETY: Test-only panic to validate JSX parse result type matches expected Element
             _ => panic!("expected element"),
         }
     }

@@ -1116,6 +1116,7 @@ mod tests {
         assert_eq!(alloc_stats.committed, 1);
         assert_eq!(alloc_stats.aborted, 1);
 
+        // SAFETY: Test scenario verifying category that was used in operations above
         let perm_stats = stats.get(&TwoPhaseCategory::PermissionGrant).unwrap();
         assert_eq!(perm_stats.started, 1);
         assert_eq!(perm_stats.committed, 0);

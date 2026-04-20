@@ -1166,6 +1166,7 @@ mod tests {
         assert_eq!(gain_ranking.len(), 3);
 
         assert_eq!(gain_ranking[0], "alpha", "alpha had most improvement");
+        // SAFETY: test verified gain_ranking.len() == 3; last() returns Some for non-empty vec
         assert_eq!(*gain_ranking.last().unwrap(), "gamma", "gamma regressed");
         assert!(!selected.is_empty());
 

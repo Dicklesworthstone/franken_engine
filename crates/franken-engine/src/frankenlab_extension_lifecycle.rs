@@ -887,6 +887,7 @@ mod tests {
         let json = serde_json::to_string(&suite).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["verdict"], "Pass");
+        // SAFETY: test suite JSON has total_assertions field as u64; as_u64() returns Some
         assert!(parsed["total_assertions"].as_u64().unwrap() > 0);
         assert_eq!(parsed["total_assertions"], parsed["passed_assertions"]);
     }

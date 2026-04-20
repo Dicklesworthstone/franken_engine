@@ -2640,6 +2640,7 @@ mod tests {
         let attestation = generate_attestation(&input).unwrap();
         let decoded = hex::decode(&attestation.report_digest_hex);
         assert!(decoded.is_ok(), "digest should be valid hex");
+        // SAFETY: test just verified decoded.is_ok() above; unwrap cannot panic
         assert!(!decoded.unwrap().is_empty());
     }
 

@@ -1214,6 +1214,7 @@ mod tests {
         }];
         let h = store.create_closure("add".into(), 2, true, captures, EnvironmentHandle(0));
         assert_eq!(store.len(), 1);
+        // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
         let closure = store.get(h).unwrap();
         assert_eq!(closure.name, "add");
         assert_eq!(closure.arity, 2);
@@ -1240,6 +1241,7 @@ mod tests {
             },
         ];
         let h = store.create_closure("f".into(), 0, false, captures, EnvironmentHandle(0));
+        // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
         let closure = store.get(h).unwrap();
         assert_eq!(closure.max_capture_label, Label::Secret);
     }

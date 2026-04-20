@@ -996,6 +996,7 @@ mod tests {
         assert!(validator.has_violations());
         match result.unwrap_err() {
             BudgetPropagationError::ParentExhausted { .. } => {}
+            // SAFETY: Test-only panic to validate BudgetPropagationError matches expected ParentExhausted variant
             other => panic!("expected ParentExhausted, got {:?}", other),
         }
     }

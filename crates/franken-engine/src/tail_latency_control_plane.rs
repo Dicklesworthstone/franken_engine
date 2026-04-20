@@ -1858,6 +1858,7 @@ mod tests {
 
     #[test]
     fn decomposition_p999_exceeds_p99_for_queue() {
+        // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 77)
                 .unwrap();

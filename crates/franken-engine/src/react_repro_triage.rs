@@ -852,7 +852,9 @@ mod tests {
     #[test]
     fn triage_entry_serde_roundtrip() {
         let entry = sample_entry();
+        // SAFETY: TriageEntry derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&entry).unwrap();
+        // SAFETY: JSON was just produced by valid TriageEntry serialization.
         let parsed: TriageEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, parsed);
     }
@@ -1102,7 +1104,9 @@ mod tests {
     #[test]
     fn catalog_serde_roundtrip() {
         let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
+        // SAFETY: ReproCatalog derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string_pretty(&catalog).unwrap();
+        // SAFETY: JSON was just produced by valid ReproCatalog serialization.
         let parsed: ReproCatalog = serde_json::from_str(&json).unwrap();
         assert_eq!(catalog, parsed);
     }

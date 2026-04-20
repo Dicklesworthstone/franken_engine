@@ -2090,7 +2090,9 @@ mod tests {
     #[test]
     fn third_party_verification_report_serde() {
         let report = make_report(VerificationVerdict::Failed);
+        // SAFETY: ThirdPartyVerificationReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: JSON was just produced by valid ThirdPartyVerificationReport serialization
         let back: ThirdPartyVerificationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back, report);
     }

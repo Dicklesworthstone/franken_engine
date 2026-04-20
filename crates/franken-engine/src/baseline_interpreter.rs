@@ -13090,23 +13090,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:StringPrototypeTrimStart" => {
-                // String.prototype.trimStart() implementation (ES2019)
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Trim whitespace from the start (left side)
-                let trimmed = str_text.trim_start().to_string();
-                Ok(Value::Str(trimmed))
-            }
+            // StringPrototypeTrimStart: Removed duplicate dispatch arm (use first occurrence instead)
 
             // Removed duplicate MathImul - implementation at line ~11636 has correct argument handling
 

@@ -1973,6 +1973,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "attestation_required_fields")
+            // SAFETY: Test-only unwrap expecting attestation_required_fields check to be present in verification
             .unwrap();
         assert!(!failed.passed);
     }

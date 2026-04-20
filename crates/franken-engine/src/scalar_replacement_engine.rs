@@ -1866,6 +1866,7 @@ mod tests {
             layout_sealed: true,
         };
         let config = default_config();
+        // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
         let plan = build_scalar_plan(&cert, &layout, &config).unwrap();
         assert!(plan.fully_register_safe);
         assert_eq!(plan.register_slots, 2);

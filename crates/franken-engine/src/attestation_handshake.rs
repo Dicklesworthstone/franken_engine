@@ -1110,6 +1110,7 @@ mod tests {
         let measurement = test_measurement(&root);
         let client = test_client();
 
+        // SAFETY: No measurement is approved in this test, so the handshake must fail closed.
         let err = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap_err();
         assert!(matches!(err, HandshakeError::MeasurementNotApproved { .. }));
     }

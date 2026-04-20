@@ -835,35 +835,57 @@ impl StaticAnalysisGraph {
     }
 
     /// Get outgoing edge IDs for a node.
-    pub fn outgoing_edges(&self, node_id: &AnalysisNodeId) -> Vec<AnalysisEdgeId> {
+    ///
+    /// Returns an error if the node ID is not registered in the graph.
+    pub fn outgoing_edges(
+        &self,
+        node_id: &AnalysisNodeId,
+    ) -> Result<Vec<AnalysisEdgeId>, AnalysisError> {
         self.forward_adj
             .get(&node_id.0)
             .map(|ids| ids.iter().map(|s| AnalysisEdgeId(s.clone())).collect())
-            .unwrap()
+            .ok_or_else(|| AnalysisError::UnknownNode(node_id.clone()))
     }
 
     /// Get incoming edge IDs for a node.
-    pub fn incoming_edges(&self, node_id: &AnalysisNodeId) -> Vec<AnalysisEdgeId> {
+    ///
+    /// Returns an error if the node ID is not registered in the graph.
+    pub fn incoming_edges(
+        &self,
+        node_id: &AnalysisNodeId,
+    ) -> Result<Vec<AnalysisEdgeId>, AnalysisError> {
         self.reverse_adj
             .get(&node_id.0)
             .map(|ids| ids.iter().map(|s| AnalysisEdgeId(s.clone())).collect())
-            .unwrap()
+            .ok_or_else(|| AnalysisError::UnknownNode(node_id.clone()))
     }
 
     /// Get direct dependencies for a node (nodes this node depends on).
-    pub fn dependencies(&self, node_id: &AnalysisNodeId) -> Vec<AnalysisNodeId> {
-        self.outgoing_edges(node_id)
+    ///
+    /// Returns an error if the node ID is not registered in the graph.
+    pub fn dependencies(
+        &self,
+        node_id: &AnalysisNodeId,
+    ) -> Result<Vec<AnalysisNodeId>, AnalysisError> {
+        let edges = self.outgoing_edges(node_id)?;
+        Ok(edges
             .iter()
             .filter_map(|eid| self.edges.get(&eid.0).map(|e| e.target.clone()))
-            .collect()
+            .collect())
     }
 
     /// Get direct dependents for a node (nodes that depend on this node).
-    pub fn dependents(&self, node_id: &AnalysisNodeId) -> Vec<AnalysisNodeId> {
-        self.incoming_edges(node_id)
+    ///
+    /// Returns an error if the node ID is not registered in the graph.
+    pub fn dependents(
+        &self,
+        node_id: &AnalysisNodeId,
+    ) -> Result<Vec<AnalysisNodeId>, AnalysisError> {
+        let edges = self.incoming_edges(node_id)?;
+        Ok(edges
             .iter()
             .filter_map(|eid| self.edges.get(&eid.0).map(|e| e.source.clone()))
-            .collect()
+            .collect())
     }
 
     /// Get all component IDs.
@@ -1251,7 +1273,12 @@ impl StaticAnalysisGraph {
     }
 
     /// Compute the subgraph reachable from a given node (forward).
-    pub fn reachable_from(&self, start: &AnalysisNodeId) -> BTreeSet<AnalysisNodeId> {
+    ///
+    /// Returns an error if any node in the traversal is not registered in the graph.
+    pub fn reachable_from(
+        &self,
+        start: &AnalysisNodeId,
+    ) -> Result<BTreeSet<AnalysisNodeId>, AnalysisError> {
         let mut visited: BTreeSet<AnalysisNodeId> = BTreeSet::new();
         let mut queue: Vec<AnalysisNodeId> = vec![start.clone()];
 
@@ -1260,13 +1287,13 @@ impl StaticAnalysisGraph {
                 continue;
             }
             visited.insert(current.clone());
-            for dep in self.dependencies(&current) {
+            for dep in self.dependencies(&current)? {
                 if !visited.contains(&dep) {
                     queue.push(dep);
                 }
             }
         }
-        visited
+        Ok(visited)
     }
 
     // -- Internal --
@@ -1925,7 +1952,7 @@ mod tests {
             .unwrap();
         g.add_edge(make_edge("e2", "n1", "n3", EdgeKind::PropFlow))
             .unwrap();
-        let out = g.outgoing_edges(&AnalysisNodeId::new("n1"));
+        let out = g.outgoing_edges(&AnalysisNodeId::new("n1")).unwrap();
         assert_eq!(out.len(), 2);
     }
 
@@ -1939,7 +1966,7 @@ mod tests {
             .unwrap();
         g.add_edge(make_edge("e2", "n2", "n3", EdgeKind::PropFlow))
             .unwrap();
-        let inc = g.incoming_edges(&AnalysisNodeId::new("n3"));
+        let inc = g.incoming_edges(&AnalysisNodeId::new("n3")).unwrap();
         assert_eq!(inc.len(), 2);
     }
 
@@ -1950,7 +1977,7 @@ mod tests {
         g.add_node(make_node("n2", NodeKind::Component)).unwrap();
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
             .unwrap();
-        let deps = g.dependencies(&AnalysisNodeId::new("n1"));
+        let deps = g.dependencies(&AnalysisNodeId::new("n1")).unwrap();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0], AnalysisNodeId::new("n2"));
     }
@@ -1962,7 +1989,7 @@ mod tests {
         g.add_node(make_node("n2", NodeKind::Component)).unwrap();
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
             .unwrap();
-        let deps = g.dependents(&AnalysisNodeId::new("n2"));
+        let deps = g.dependents(&AnalysisNodeId::new("n2")).unwrap();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0], AnalysisNodeId::new("n1"));
     }
@@ -2185,7 +2212,7 @@ mod tests {
     fn graph_reachable_from_single() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component)).unwrap();
-        let reachable = g.reachable_from(&AnalysisNodeId::new("n1"));
+        let reachable = g.reachable_from(&AnalysisNodeId::new("n1")).unwrap();
         assert_eq!(reachable.len(), 1);
     }
 
@@ -2199,7 +2226,7 @@ mod tests {
             .unwrap();
         g.add_edge(make_edge("e2", "n2", "n3", EdgeKind::RendersChild))
             .unwrap();
-        let reachable = g.reachable_from(&AnalysisNodeId::new("n1"));
+        let reachable = g.reachable_from(&AnalysisNodeId::new("n1")).unwrap();
         assert_eq!(reachable.len(), 3);
     }
 
@@ -2649,7 +2676,7 @@ mod tests {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("isolated", NodeKind::Component))
             .unwrap();
-        let out = g.outgoing_edges(&AnalysisNodeId::new("isolated"));
+        let out = g.outgoing_edges(&AnalysisNodeId::new("isolated")).unwrap();
         assert!(out.is_empty());
     }
 
@@ -2658,7 +2685,7 @@ mod tests {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("isolated", NodeKind::Component))
             .unwrap();
-        let inc = g.incoming_edges(&AnalysisNodeId::new("isolated"));
+        let inc = g.incoming_edges(&AnalysisNodeId::new("isolated")).unwrap();
         assert!(inc.is_empty());
     }
 

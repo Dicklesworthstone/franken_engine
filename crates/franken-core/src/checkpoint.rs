@@ -762,7 +762,9 @@ mod tests {
             CheckpointReason::Explicit,
         ];
         for reason in &reasons {
+            // SAFETY: CheckpointReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(reason).unwrap();
+            // SAFETY: JSON was just produced by valid CheckpointReason serialization
             let restored: CheckpointReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
@@ -780,7 +782,9 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 42,
         };
+        // SAFETY: CheckpointEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by valid CheckpointEvent serialization
         let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
@@ -788,7 +792,9 @@ mod tests {
     #[test]
     fn density_config_serialization_round_trip() {
         let config = DensityConfig::default();
+        // SAFETY: DensityConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).unwrap();
+        // SAFETY: JSON was just produced by valid DensityConfig serialization
         let restored: DensityConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
@@ -801,7 +807,9 @@ mod tests {
             LoopSite::Custom("x".to_string()),
         ];
         for site in &sites {
+            // SAFETY: LoopSite derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(site).unwrap();
+            // SAFETY: JSON was just produced by valid LoopSite serialization
             let restored: LoopSite = serde_json::from_str(&json).unwrap();
             assert_eq!(*site, restored);
         }

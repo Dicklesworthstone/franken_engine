@@ -628,10 +628,18 @@ impl WorkloadCorpus {
 
     /// Specimens filtered by family.
     pub fn specimens_by_family(&self, family: WorkloadFamily) -> Vec<&WorkloadSpecimen> {
+        self.try_specimens_by_family(family).unwrap_or_default()
+    }
+
+    /// Specimens filtered by family, failing explicitly when coverage is absent.
+    pub fn try_specimens_by_family(
+        &self,
+        family: WorkloadFamily,
+    ) -> Result<Vec<&WorkloadSpecimen>, GateError> {
         self.family_coverage
             .get(&family)
             .map(|ids| ids.iter().filter_map(|id| self.specimens.get(id)).collect())
-            .unwrap()
+            .ok_or(GateError::MissingFamilyCoverage { family })
     }
 
     /// All specimens with unpublishable licenses.
@@ -1040,7 +1048,11 @@ impl WorkloadCorpusGate {
     fn compute_family_summaries(&self, corpus: &WorkloadCorpus) -> Vec<FamilySummary> {
         let mut summaries = Vec::new();
         for family in WorkloadFamily::ALL {
-            let specimen_ids = corpus.family_coverage.get(family).cloned().unwrap();
+            let specimen_ids = corpus
+                .family_coverage
+                .get(family)
+                .cloned()
+                .unwrap_or_default();
             let specimen_count = specimen_ids.len();
 
             let family_results: Vec<&EquivalenceResult> = corpus
@@ -1096,6 +1108,8 @@ pub enum GateError {
         max: usize,
         attempted: usize,
     },
+    /// Family coverage is absent from the corpus.
+    MissingFamilyCoverage { family: WorkloadFamily },
 }
 
 impl fmt::Display for GateError {
@@ -1113,6 +1127,9 @@ impl fmt::Display for GateError {
                 attempted,
             } => {
                 write!(f, "family {family} overflow: {attempted} > {max}")
+            }
+            Self::MissingFamilyCoverage { family } => {
+                write!(f, "missing family coverage: {family}")
             }
         }
     }
@@ -1821,6 +1838,69 @@ mod tests {
         assert_eq!(parse_summary.equivalence_count, 1);
         assert_eq!(parse_summary.acceptable_count, 1);
         assert_eq!(parse_summary.equivalence_rate_millionths, 1_000_000);
+    }
+
+    #[test]
+    fn missing_family_lookup_returns_error() {
+        let mut corpus = WorkloadCorpus::new();
+        corpus
+            .add_specimen(make_specimen(
+                "s1",
+                WorkloadFamily::ParseHeavy,
+                InputLanguage::JavaScript,
+            ))
+            .unwrap();
+
+        let err = corpus
+            .try_specimens_by_family(WorkloadFamily::AsyncHeavy)
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            GateError::MissingFamilyCoverage {
+                family: WorkloadFamily::AsyncHeavy
+            }
+        );
+        assert!(
+            corpus
+                .specimens_by_family(WorkloadFamily::AsyncHeavy)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn sparse_corpus_reports_missing_family_without_panic() {
+        let mut corpus = WorkloadCorpus::new();
+        corpus
+            .add_specimen(make_specimen(
+                "s1",
+                WorkloadFamily::ParseHeavy,
+                InputLanguage::JavaScript,
+            ))
+            .unwrap();
+        corpus.record_equivalence(make_equivalence(
+            "s1",
+            BaselineRuntime::NodeJs,
+            DivergenceClass::Identical,
+        ));
+
+        let gate = WorkloadCorpusGate::with_defaults();
+        let report = gate.evaluate(&corpus);
+        let async_summary = report
+            .family_summaries
+            .iter()
+            .find(|summary| summary.family == WorkloadFamily::AsyncHeavy)
+            .unwrap();
+
+        assert!(!report.verdict.permits_publication());
+        assert!(
+            report
+                .missing_families
+                .contains(&WorkloadFamily::AsyncHeavy)
+        );
+        assert_eq!(async_summary.specimen_count, 0);
+        assert_eq!(async_summary.equivalence_count, 0);
+        assert!(!async_summary.meets_coverage);
     }
 
     #[test]

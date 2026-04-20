@@ -1011,6 +1011,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
+        // SAFETY: Test setup uses an approved measurement and valid client/root inputs.
         let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
         assert!(auth.authorizes("sign_receipts"));

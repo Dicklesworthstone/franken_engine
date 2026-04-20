@@ -12567,7 +12567,6 @@ impl InterpreterCore {
             }
 
             // Removed duplicate ArrayPrototypeFill - implementation at line ~11593 has better JS semantics
-            }
 
             "builtin:ObjectPrototypePropertyIsEnumerable" => {
                 // Object.prototype.propertyIsEnumerable(prop) implementation

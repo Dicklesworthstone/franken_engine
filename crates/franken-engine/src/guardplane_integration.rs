@@ -640,6 +640,7 @@ mod tests {
             extension_id: Some("test-extension".to_string()),
         };
 
+        // SAFETY: Test setup with valid context should allow pre_property_access to succeed
         let action = adapter.pre_property_access(&context).unwrap();
         assert_ne!(action, HookAction::Allow); // Should be challenged or sandboxed
         assert!(
@@ -672,7 +673,9 @@ mod tests {
             extension_id: None,
         });
 
+        // SAFETY: Test setup with valid context should allow assess_risk to succeed
         let delete_risk = adapter.assess_risk(&delete_ctx).unwrap();
+        // SAFETY: Test setup with valid context should allow assess_risk to succeed
         let get_risk = adapter.assess_risk(&get_ctx).unwrap();
 
         assert!(delete_risk.risk_score > get_risk.risk_score);
@@ -745,6 +748,7 @@ mod tests {
             policy_violations: Vec::new(),
         };
 
+        // SAFETY: Test setup with valid context, risk, and action should allow generate_evidence to succeed
         let evidence = adapter
             .generate_evidence(&context, &risk, HookAction::Sandbox)
             .unwrap();

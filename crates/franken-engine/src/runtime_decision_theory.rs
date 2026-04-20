@@ -2722,7 +2722,9 @@ mod tests {
             compute_consumed_us: 9999,
             memory_consumed_bytes: 512_000,
         };
+        // SAFETY: BudgetEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by valid BudgetEvent serialization
         let back: BudgetEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);
     }

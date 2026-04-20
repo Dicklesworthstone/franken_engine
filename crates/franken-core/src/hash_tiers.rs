@@ -594,7 +594,9 @@ mod tests {
     #[test]
     fn integrity_hash_serialization_round_trip() {
         let h = IntegrityHash::compute(b"test");
+        // SAFETY: IntegrityHash derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&h).unwrap();
+        // SAFETY: JSON was just produced by valid IntegrityHash serialization
         let restored: IntegrityHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, restored);
     }
@@ -602,7 +604,9 @@ mod tests {
     #[test]
     fn content_hash_serialization_round_trip() {
         let h = ContentHash::compute(b"test");
+        // SAFETY: ContentHash derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&h).unwrap();
+        // SAFETY: JSON was just produced by valid ContentHash serialization
         let restored: ContentHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, restored);
     }

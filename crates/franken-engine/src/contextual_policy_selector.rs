@@ -1393,6 +1393,8 @@ mod tests {
         {
             assert_eq!(*net_value_millionths, 150_000);
         } else {
+            // SAFETY: Test-only panic to validate selection reason type.
+            // Test expects HighestNetValue reason for feasible policy evaluation.
             panic!("Expected HighestNetValue reason");
         }
     }

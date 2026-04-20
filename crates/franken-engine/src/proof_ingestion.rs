@@ -1674,6 +1674,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"fake",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let errors = vec![
@@ -1711,6 +1712,7 @@ mod tests {
             &SchemaId::from_definition(b"fake"),
             b"fake",
         )
+        // SAFETY: Test ID derivation with valid parameters should succeed
         .unwrap();
 
         let statuses = vec![
@@ -1754,7 +1756,9 @@ mod tests {
     #[test]
     fn proof_input_serde_roundtrip() {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Serialization of valid ProofInput should succeed
         let json = serde_json::to_string(&proof).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: ProofInput = serde_json::from_str(&json).unwrap();
         assert_eq!(proof, restored);
     }
@@ -1763,9 +1767,12 @@ mod tests {
     fn hypothesis_serde_roundtrip() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
+        // SAFETY: Serialization of valid OptimizerHypothesis should succeed
         let json = serde_json::to_string(&hypotheses[0]).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: OptimizerHypothesis = serde_json::from_str(&json).unwrap();
         assert_eq!(hypotheses[0], restored);
     }
@@ -1774,6 +1781,7 @@ mod tests {
     fn receipt_serde_roundtrip() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
+        // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
 
         let receipt = engine
@@ -1785,9 +1793,12 @@ mod tests {
                 ActivationStageLocal::Canary,
                 2000,
             )
+            // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
             .unwrap();
 
+        // SAFETY: Serialization of valid SpecializationReceipt should succeed
         let json = serde_json::to_string(&receipt).unwrap();
+        // SAFETY: Deserialization of valid JSON should succeed
         let restored: SpecializationReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, restored);
     }
@@ -1796,6 +1807,7 @@ mod tests {
     fn ingestion_event_serde_roundtrip() {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        // SAFETY: Test with default valid proof should successfully ingest
         engine.ingest_proof(proof, 1000).unwrap();
 
         let event = &engine.events()[0];

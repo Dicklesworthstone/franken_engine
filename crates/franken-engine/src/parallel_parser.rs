@@ -3061,7 +3061,9 @@ mod tests {
         };
         let input2 = make_input(&source, &config2);
         let input4 = make_input(&source, &config4);
+        // SAFETY: Test scenario with valid generated source code; parsing should succeed
         let o2 = parse(&input2).unwrap();
+        // SAFETY: Test scenario with valid generated source code; parsing should succeed
         let o4 = parse(&input4).unwrap();
         assert_eq!(o2.token_count, o4.token_count);
     }

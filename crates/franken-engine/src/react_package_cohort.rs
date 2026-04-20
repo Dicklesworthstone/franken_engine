@@ -2329,6 +2329,8 @@ mod tests {
                 assert_eq!(*expected, ModuleFormat::Esm);
                 assert_eq!(*actual, ModuleFormat::Cjs);
             }
+            // SAFETY: Test-only panic to catch unexpected CohortError variants
+            // in format compatibility validation. Expected error is FormatIncompatible only.
             other => panic!("unexpected error: {other}"),
         }
     }

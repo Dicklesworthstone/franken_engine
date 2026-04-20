@@ -13173,59 +13173,7 @@ impl InterpreterCore {
 
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
 
-            "builtin:ObjectGetOwnPropertyNames" => {
-                // Object.getOwnPropertyNames(obj) implementation
-                if args.count < 2 {
-                    // Create empty array for missing argument
-                    let empty_array_id = self.alloc_object_with_prototype(None)?;
-                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-                    return Ok(Value::Object(empty_array_id));
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                // Create result array with property names
-                let result_array_id = self.alloc_object_with_prototype(None)?;
-
-                if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                    let mut property_names: Vec<String> = obj.properties.keys().cloned().collect();
-                    property_names.sort(); // Deterministic ordering
-
-                    // Set array elements
-                    for (i, prop_name) in property_names.iter().enumerate() {
-                        self.set_object_property(
-                            result_array_id,
-                            i.to_string(),
-                            Value::Str(prop_name.clone()),
-                        )?;
-                    }
-
-                    // Set length
-                    self.set_object_property(
-                        result_array_id,
-                        "length".to_string(),
-                        Value::Int(property_names.len() as i64),
-                    )?;
-                } else {
-                    // Object not found, return empty array
-                    self.set_object_property(result_array_id, "length".to_string(), Value::Int(0))?;
-                }
-
-                Ok(Value::Object(result_array_id))
-            }
+            // Removed duplicate ObjectGetOwnPropertyNames - implementation at line ~10883 is more complete
 
             "builtin:StringPrototypeNormalize" => {
                 // String.prototype.normalize([form]) implementation (simplified)

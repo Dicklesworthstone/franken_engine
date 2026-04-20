@@ -1448,6 +1448,7 @@ mod tests {
 
     #[test]
     fn balanced_profile_stays_out_of_fallback() {
+        // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 21).unwrap();
         assert!(!report.guardrails.fallback_activated);
         assert_ne!(report.guardrails.state, GuardrailState::FallbackEngaged);

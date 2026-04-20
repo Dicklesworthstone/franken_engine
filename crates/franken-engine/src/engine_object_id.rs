@@ -1506,6 +1506,7 @@ mod tests {
                 assert_eq!(expected, OBJECT_ID_LEN * 2);
                 assert_eq!(actual, 4);
             }
+            // SAFETY: Test validates engine object ID error for invalid hex length
             other => panic!("expected InvalidHexLength, got {other:?}"),
         }
     }

@@ -3638,6 +3638,7 @@ mod tests {
             ..default_config()
         };
         let input = make_input(&source, &config);
+        // SAFETY: Test scenario with valid generated source code; parsing should succeed
         let output = parse(&input).unwrap();
         assert!(output.token_count > 0);
         if let Some(ref plan) = output.chunk_plan {

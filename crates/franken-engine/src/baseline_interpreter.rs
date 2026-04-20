@@ -22996,6 +22996,42 @@ mod tests {
     }
 
     #[test]
+    fn object_define_property_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [7_u32, 280_u32] {
+            let object_id = interpreter
+                .alloc_object_with_prototype(None)
+                .expect("test object allocation should succeed");
+            let descriptor_id = interpreter
+                .alloc_object_with_prototype(None)
+                .expect("test descriptor allocation should succeed");
+            interpreter
+                .set_object_property(descriptor_id, "value".to_string(), Value::Int(42))
+                .expect("test descriptor value write should succeed");
+
+            interpreter.registers[0] = Value::Object(object_id);
+            interpreter.registers[1] = Value::Str("answer".to_string());
+            interpreter.registers[2] = Value::Object(descriptor_id);
+
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:ObjectDefineProperty".to_string())
+            );
+            let result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
+                .expect("ObjectDefineProperty ID should execute");
+            assert_eq!(result, Value::Object(object_id));
+
+            let object = interpreter
+                .heap
+                .get(object_id.0 as usize)
+                .expect("defined test object should remain allocated");
+            assert_eq!(object.properties.get("answer"), Some(&Value::Int(42)));
+        }
+    }
+
+    #[test]
     fn array_prototype_fill_deduplication_regression() {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 

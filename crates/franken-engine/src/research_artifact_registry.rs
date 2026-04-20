@@ -544,6 +544,7 @@ mod tests {
                 .bundle_path
                 .ends_with("STATEFUL_FUZZING_MANIFEST.md")
         );
+        assert_eq!(registry.get_artifacts_by_type("stateful_fuzzing").len(), 1);
     }
 
     #[test]

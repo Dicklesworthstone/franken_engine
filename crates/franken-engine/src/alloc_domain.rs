@@ -973,14 +973,17 @@ mod tests {
     #[test]
     fn standard_domains_lifetime_classes() {
         let reg = DomainRegistry::with_standard_domains(1024);
+        // SAFETY: ExtensionHeap is pre-registered in with_standard_domains, get() succeeds
         let ext = reg.get(&AllocationDomain::ExtensionHeap).unwrap();
         assert_eq!(ext.lifetime, LifetimeClass::SessionScoped);
         assert_eq!(ext.budget.max_bytes, 1024);
 
+        // SAFETY: RuntimeHeap is pre-registered in with_standard_domains, get() succeeds
         let rt = reg.get(&AllocationDomain::RuntimeHeap).unwrap();
         assert_eq!(rt.lifetime, LifetimeClass::Global);
         assert_eq!(rt.budget.max_bytes, u64::MAX);
 
+        // SAFETY: IrArena is pre-registered in with_standard_domains, get() succeeds
         let ir = reg.get(&AllocationDomain::IrArena).unwrap();
         assert_eq!(ir.lifetime, LifetimeClass::Arena);
         assert_eq!(ir.budget.max_bytes, 512 * 1024 * 1024);

@@ -2301,6 +2301,7 @@ mod tests {
                 assert!(!detail.contains("--obligation"));
                 assert!(detail.contains("replay linkage does not match trace trace-block"));
             }
+            // SAFETY: Test validates orchestrator error for replay linkage mismatch
             other => panic!("unexpected error: {other}"),
         }
 

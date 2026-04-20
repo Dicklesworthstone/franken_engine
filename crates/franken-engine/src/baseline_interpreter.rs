@@ -14320,58 +14320,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayPrototypeValues" => {
-                // Array.prototype.values() implementation (ES2015 iterator method - simplified)
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => {
-                        // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        return Ok(Value::Object(empty_array_id));
-                    }
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Simplified implementation: return array of values (instead of iterator)
-                let values_array_id = self.alloc_object_with_prototype(None)?;
-
-                // Snapshot elements under an immutable borrow, then write
-                // them back under &mut self without aliasing.
-                let elements: Vec<Value> = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    (0..length)
-                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let value_index = elements.len();
-                for (i, element) in elements.into_iter().enumerate() {
-                    self.set_object_property(values_array_id, i.to_string(), element)?;
-                }
-                self.set_object_property(
-                    values_array_id,
-                    "length".to_string(),
-                    Value::Int(value_index as i64),
-                )?;
-
-                Ok(Value::Object(values_array_id))
-            }
+            // Removed duplicate ArrayPrototypeValues - implementation at line ~11973 uses proper iterator semantics
 
             "builtin:ObjectIsSealed" => {
                 // Object.isSealed(obj) implementation (simplified)

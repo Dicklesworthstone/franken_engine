@@ -508,6 +508,7 @@ impl WasmFlushResult {
             self.updates_consumed,
             self.signals_evaluated,
             self.dom_ops_emitted,
+            // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
             serde_json::to_string(&self.mode_after).unwrap(),
         );
         derive_id(

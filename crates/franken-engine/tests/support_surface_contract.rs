@@ -1288,6 +1288,91 @@ fn rgc_911b_operator_verification_commands_reference_correct_contract() {
     );
 }
 
+#[test]
+fn rgc_911b_handoff_bundle_emission_handles_missing_support_contract_gracefully() {
+    // Explicit null-behavior invariants for bd-1lsy.5.10.3.1:
+    // Support surface contract emission must handle missing artifacts gracefully
+    // in both handoff and final run manifests.
+    let handoff_script =
+        read_to_string(&repo_root().join("scripts/run_rgc_franken_node_handoff_bundle.sh"));
+
+    // Verify null-safe emission patterns in handoff bundle runner
+    // Both handoff and final manifests must use the same null-safe conditional
+    let null_conditional = "support_surface_contract: (if ($support_contract_path | length) > 0 then $support_contract_path else null end)";
+
+    // Count occurrences - should appear in both handoff manifest (~line 858) and final run manifest (~line 998)
+    let occurrence_count = handoff_script.matches(null_conditional).count();
+    assert!(
+        occurrence_count >= 2,
+        "null conditional should appear in both handoff and final manifests, found {} occurrences",
+        occurrence_count
+    );
+
+    // Verify the fail-safe artifact resolution that enables null fallback
+    assert!(
+        handoff_script.contains("latest_complete_support_contract_artifact || true"),
+        "handoff runner must use fail-safe artifact resolution to enable null emission"
+    );
+
+    // Verify fallback to docs contract when artifact missing
+    assert!(
+        handoff_script
+            .contains("printf '%s\\n' \"${root_dir}/docs/support_surface_contract.json\""),
+        "handoff runner must fallback to docs contract when artifact unavailable"
+    );
+
+    // Verify the emission semantics are contract-pinned (documented behavior)
+    assert!(
+        handoff_script.contains("support_contract_artifact_path empty"),
+        "script should document the empty artifact path initialization behavior"
+    );
+}
+
+#[test]
+fn rgc_911b_support_surface_contract_null_emission_invariants() {
+    // Contract-pinned null-behavior invariants for support_surface_contract emission:
+    // When support contract artifact is missing, both manifests must emit null.
+    let handoff_script =
+        read_to_string(&repo_root().join("scripts/run_rgc_franken_node_handoff_bundle.sh"));
+
+    // Null emission must be based on path length check, not file existence
+    // This ensures consistent behavior across environments
+    let length_check_pattern = "($support_contract_path | length) > 0";
+    assert!(
+        handoff_script.contains(length_check_pattern),
+        "null emission must be based on path length, not file existence for deterministic behavior"
+    );
+
+    // Verify null emission happens in both contexts
+    // 1. Handoff manifest input resolution
+    let handoff_context = handoff_script
+        .find("inputs: {")
+        .expect("handoff manifest should have inputs block");
+    let handoff_section = &handoff_script[handoff_context..handoff_context + 500];
+    assert!(
+        handoff_section.contains("support_surface_contract: (if"),
+        "handoff manifest inputs must include null-safe support_surface_contract"
+    );
+
+    // 2. Final run manifest artifacts
+    let final_context = handoff_script
+        .find("artifacts: {")
+        .expect("final run manifest should have artifacts block");
+    let final_section = &handoff_script[final_context..final_context + 1000];
+    assert!(
+        final_section.contains("support_surface_contract: (if"),
+        "final run manifest artifacts must include null-safe support_surface_contract"
+    );
+
+    // Verify emission semantics are documented in failure messages
+    assert!(
+        handoff_script.contains("missing engine-product blocker ledger input")
+            || handoff_script.contains("support contract")
+            || handoff_script.contains("blocker ledger unavailable"),
+        "script should document missing input scenarios that trigger null emission"
+    );
+}
+
 // ===== PearlTower enrichment =====
 
 #[test]

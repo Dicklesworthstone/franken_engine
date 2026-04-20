@@ -498,6 +498,58 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
 }
 
 #[test]
+fn rgc_408c_final_run_manifest_pins_support_surface_contract_null_behavior() {
+    // Regression test for bd-1lsy.5.10.3.1: pin support_surface_contract null behavior
+    // in the final run manifest emission path specifically (not just handoff manifest).
+    // This addresses the issue that the broad test would pass even if the final run
+    // manifest regressed while handoff manifest stayed fixed.
+    let script = load_runner_script();
+
+    // Find the final run manifest emission section (around line 998)
+    let final_manifest_start = script
+        .find("artifacts: {")
+        .expect("script should contain final run manifest artifacts block");
+
+    // Extract the artifacts block section from the final run manifest
+    let artifacts_section = &script[final_manifest_start..];
+    let artifacts_end = artifacts_section
+        .find("operator_verification: [")
+        .expect("artifacts block should end before operator_verification");
+    let artifacts_block = &artifacts_section[..artifacts_end];
+
+    // Verify the final run manifest specifically contains the null conditional
+    // for support_surface_contract (not just that it appears somewhere in the script)
+    assert!(
+        artifacts_block.contains(
+            "support_surface_contract: (if ($support_contract_path | length) > 0 then $support_contract_path else null end)"
+        ),
+        "final run manifest artifacts block must emit support_surface_contract as null when artifact missing"
+    );
+
+    // Ensure this is the final run manifest context, not handoff manifest
+    // (final run manifest has these keys that handoff manifest doesn't)
+    assert!(
+        artifacts_block.contains("franken_node_handoff_manifest: $handoff_manifest"),
+        "artifacts block should be from final run manifest (contains handoff_manifest key)"
+    );
+    assert!(
+        artifacts_block.contains("sibling_smoke_verification: $smoke_verification"),
+        "artifacts block should be from final run manifest (contains smoke_verification key)"
+    );
+
+    // Verify this null behavior is contract-pinned by checking the failure path
+    // The script should handle missing support contract gracefully
+    assert!(
+        script.contains("latest_complete_support_contract_artifact || true"),
+        "script should have fail-safe support contract artifact resolution"
+    );
+    assert!(
+        script.contains("printf '%s\\n' \"${root_dir}/docs/support_surface_contract.json\""),
+        "script should fallback to docs/support_surface_contract.json when artifact missing"
+    );
+}
+
+#[test]
 fn readme_references_handoff_bundle_gate_and_replay() {
     let readme = load_readme();
 

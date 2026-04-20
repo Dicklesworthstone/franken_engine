@@ -617,8 +617,12 @@ mod tests {
     #[test]
     fn allocate_and_collect_dead_objects() {
         let mut gc = deterministic_collector();
+        // SAFETY: Test-only heap registration with unique identifier "ext-a".
+        // register_heap only fails on duplicate heap IDs, which cannot happen in isolated test.
         gc.register_heap("ext-a".into()).unwrap();
 
+        // SAFETY: Allocating on just-registered heap "ext-a" with valid size.
+        // allocate only fails on unregistered heap or memory exhaustion (impossible in test).
         let obj1 = gc.allocate("ext-a", 100).unwrap();
         let obj2 = gc.allocate("ext-a", 200).unwrap();
 

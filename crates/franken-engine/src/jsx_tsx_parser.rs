@@ -1658,6 +1658,8 @@ mod tests {
                     JsxAttribute::Spread { expression, .. } => {
                         assert_eq!(expression, "props");
                     }
+                    // SAFETY: Test-only panic to validate JSX spread element parsing.
+                    // Test expects spread expression type for JSX component children.
                     _ => panic!("expected spread"),
                 }
             }

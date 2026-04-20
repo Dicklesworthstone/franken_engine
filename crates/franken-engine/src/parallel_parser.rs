@@ -3663,6 +3663,7 @@ mod tests {
             ..default_config()
         };
         let input = make_input(source, &config);
+        // SAFETY: Test scenario with valid newline-only source; parsing should succeed
         let output = parse(&input).unwrap();
         assert_eq!(output.token_count, 0);
     }

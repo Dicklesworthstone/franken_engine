@@ -800,7 +800,9 @@ mod tests {
     #[test]
     fn phase_serde_roundtrip() {
         for phase in SynthesisPhase::ALL {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&phase).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: SynthesisPhase = serde_json::from_str(&json).unwrap();
             assert_eq!(phase, restored);
         }
@@ -822,7 +824,9 @@ mod tests {
             BudgetDimension::Compute,
             BudgetDimension::Depth,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&dim).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: BudgetDimension = serde_json::from_str(&json).unwrap();
             assert_eq!(dim, restored);
         }

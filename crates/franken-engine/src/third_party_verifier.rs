@@ -2111,6 +2111,7 @@ mod tests {
     fn containment_claim_bundle_serde() {
         let result = make_gate_result(vec![make_scenario("s1", true, 100)]);
         let bundle = make_containment_bundle(result);
+        // SAFETY: ContainmentClaimBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).unwrap();
         let back: ContainmentClaimBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(back, bundle);

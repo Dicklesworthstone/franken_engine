@@ -670,6 +670,7 @@ mod tests {
         fast_path.seed_if_uninitialized(7_u64);
 
         let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: Test-only panic to intentionally test panic recovery in publish hook
             fast_path.publish_with_hook(11_u64, || panic!("boom"));
         }));
         assert!(panic_result.is_err());

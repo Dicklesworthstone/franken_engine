@@ -1490,7 +1490,9 @@ mod tests {
             ScopeError::EmptyScopeChain,
         ];
         for v in &variants {
+            // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(v).unwrap();
+            // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
             let back: ScopeError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
@@ -1536,7 +1538,9 @@ mod tests {
         let h2 = store.create_closure("f2".into(), 2, false, vec![], EnvironmentHandle(0));
         assert_eq!(store.len(), 2);
         assert_ne!(h1, h2);
+        // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
         assert_eq!(store.get(h1).unwrap().name, "f1");
+        // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
         assert_eq!(store.get(h2).unwrap().name, "f2");
     }
 
@@ -1548,7 +1552,9 @@ mod tests {
             ScopeKind::Global,
             EnvironmentKind::Declarative,
         );
+        // SAFETY: Test serializes known-valid EnvironmentRecord; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&env).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: EnvironmentRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(env.scope_kind, back.scope_kind);
         assert_eq!(env.env_kind, back.env_kind);
@@ -1564,7 +1570,9 @@ mod tests {
     #[test]
     fn closure_handle_serde_roundtrip() {
         let h = ClosureHandle(42);
+        // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).unwrap();
+        // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let back: ClosureHandle = serde_json::from_str(&json).unwrap();
         assert_eq!(h, back);
     }
@@ -1639,6 +1647,7 @@ mod tests {
             EnvValue::Number(500_000),
             Label::Internal,
         );
+        // SAFETY: Test serializes known-valid BindingSlot; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&slot).unwrap();
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"binding_id\""));
@@ -1659,6 +1668,7 @@ mod tests {
         );
         env.this_binding = Some(EnvValue::ObjectRef(77));
         env.arguments_handle = Some(88);
+        // SAFETY: Test serializes known-valid EnvironmentRecord; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("\"handle\""));
         assert!(json.contains("\"scope_id\""));
@@ -1681,6 +1691,7 @@ mod tests {
             max_capture_label: Label::Public,
             creation_env: EnvironmentHandle(1),
         };
+        // SAFETY: Test serializes known-valid Closure; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&c).unwrap();
         assert!(json.contains("\"handle\""));
         assert!(json.contains("\"name\""));

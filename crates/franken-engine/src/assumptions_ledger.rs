@@ -1041,7 +1041,11 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_assumption() {
         let a = make_assumption("a1", ViolationSeverity::Warning);
+        // SAFETY: Assumption derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&a).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid Assumption,
+        // so from_str back to Assumption cannot fail (valid format + matching schema).
         let back: Assumption = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
@@ -1049,7 +1053,11 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_monitor() {
         let m = make_monitor("m1", "a1");
+        // SAFETY: FalsificationMonitor derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&m).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FalsificationMonitor,
+        // so from_str back to FalsificationMonitor cannot fail (valid format + matching schema).
         let back: FalsificationMonitor = serde_json::from_str(&json).unwrap();
         assert_eq!(m, back);
     }
@@ -1066,7 +1074,11 @@ mod tests {
             explanation: "test".into(),
             evidence_hash: "abc".into(),
         };
+        // SAFETY: FalsificationEvidence derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ev).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FalsificationEvidence,
+        // so from_str back to FalsificationEvidence cannot fail (valid format + matching schema).
         let back: FalsificationEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
     }
@@ -1092,7 +1104,11 @@ mod tests {
             epoch: 1,
             severity: ViolationSeverity::Critical,
         };
+        // SAFETY: DemotionRecord derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&record).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid DemotionRecord,
+        // so from_str back to DemotionRecord cannot fail (valid format + matching schema).
         let back: DemotionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, back);
     }
@@ -1103,7 +1119,11 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: AssumptionLedger derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&ledger).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid AssumptionLedger,
+        // so from_str back to AssumptionLedger cannot fail (valid format + matching schema).
         let back: AssumptionLedger = serde_json::from_str(&json).unwrap();
         assert_eq!(ledger, back);
     }

@@ -1079,6 +1079,8 @@ mod tests {
     #[test]
     fn test_catalog_lookup() {
         let cat = MorselKernelCatalog::with_defaults();
+        // SAFETY: Test lookup of TypedArrayFill from default catalog is guaranteed to succeed.
+        // lookup only fails on missing builtin families (impossible with known BuiltinFamily variants).
         let k = cat.lookup(BuiltinFamily::TypedArrayFill).unwrap();
         assert_eq!(k.family, BuiltinFamily::TypedArrayFill);
         assert_eq!(k.lane_width, LaneWidth::Lane16);

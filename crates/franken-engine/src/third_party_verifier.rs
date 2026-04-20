@@ -2052,6 +2052,7 @@ mod tests {
     #[test]
     fn render_attestation_summary_signed() {
         let report = make_report(VerificationVerdict::Verified);
+        // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
         let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).unwrap();
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));

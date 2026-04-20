@@ -882,7 +882,9 @@ mod tests {
             remediation_playbook_id: "playbook.interference.merge-order".to_string(),
             replay_command: "franken-engine parallel-parse --workers 4 --seed 42".to_string(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&incident).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: InterferenceIncident = serde_json::from_str(&json).unwrap();
         assert_eq!(incident, back);
     }

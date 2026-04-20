@@ -21712,9 +21712,12 @@ mod tests {
     fn string_prototype_char_code_at_type_coercion() {
         // Test charCodeAt with non-string values (should coerce to string)
         let mut core = BaselineInterpreter::new();
+        // SAFETY: Register 0 is a valid test register and Value::Int needs no heap allocation.
         core.set_register(0, Value::Int(123)).unwrap(); // should become "123"
+        // SAFETY: Register 1 is a valid test register and the index value is immediate.
         core.set_register(1, Value::Int(1)).unwrap(); // index 1
 
+        // SAFETY: The inline module only calls a registered builtin with initialized registers.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 184, // StringPrototypeCharCodeAt
@@ -21725,6 +21728,7 @@ mod tests {
         ])).unwrap();
 
         // "123"[1] = '2' = 50
+        // SAFETY: The builtin writes destination register 2 before the halt instruction.
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Int(50), "charCodeAt on number should coerce to string");
     }

@@ -864,6 +864,7 @@ mod tests {
         if let TaxonomyValidationError::MissingRequiredField { field } = &err {
             assert!(field.contains("fixture_path"));
         } else {
+            // SAFETY: Test validates taxonomy error for fixture_path field validation
             panic!("expected MissingRequiredField");
         }
     }

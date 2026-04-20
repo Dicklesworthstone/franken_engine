@@ -1613,7 +1613,9 @@ mod tests {
             CompatibilityDisposition::MissingCapability,
             CompatibilityDisposition::BridgeIncompatible,
         ] {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&disp).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CompatibilityDisposition = serde_json::from_str(&json).unwrap();
             assert_eq!(back, disp);
         }
@@ -1698,7 +1700,9 @@ mod tests {
     #[test]
     fn failure_code_serde_roundtrip() {
         for code in ContractFailureCode::all() {
+            // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(code).unwrap();
+            // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: ContractFailureCode = serde_json::from_str(&json).unwrap();
             assert_eq!(back, *code);
         }

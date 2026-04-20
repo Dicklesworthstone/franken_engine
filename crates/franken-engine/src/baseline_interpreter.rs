@@ -16626,61 +16626,6 @@ impl InterpreterCore {
 
 
 
-            "builtin:ArrayPrototypeFilter" => {
-                // Array.prototype.filter() implementation - simplified version
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects return undefined
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Undefined); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Undefined); // Callback is not a function
-                }
-
-                let filtered_array_id = self.alloc_object_with_prototype(None)?;
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    let mut filtered_index = 0;
-                    // Simplified implementation: include all existing elements
-                    // (Full implementation would require callback execution)
-                    let elements: Vec<_> = (0..length)
-                        .filter_map(|i| obj.properties.get(&i.to_string()).cloned())
-                        .collect();
-
-                    for element in elements {
-                        self.set_object_property(
-                            filtered_array_id,
-                            filtered_index.to_string(),
-                            element,
-                        )?;
-                        filtered_index += 1;
-                    }
-
-                    self.set_object_property(
-                        filtered_array_id,
-                        "length".to_string(),
-                        Value::Int(filtered_index as i64),
-                    )?;
-                }
-
-                Ok(Value::Object(filtered_array_id))
-            }
 
 
 
@@ -16806,11 +16751,6 @@ impl InterpreterCore {
                     expected: "supported Array.prototype.map implementation".to_string(),
                     got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args and thisArg handling".to_string(),
                 })
-            }
-
-            "builtin:MathRandom" => {
-                // Math.random implementation - deterministic with proper [0,1) range
-                self.math_random_impl()
             }
 
             "builtin:DateNow" => {

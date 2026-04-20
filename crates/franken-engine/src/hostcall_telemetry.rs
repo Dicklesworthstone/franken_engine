@@ -738,7 +738,11 @@ mod tests {
             HostcallType::IpcSend,
             HostcallType::IpcRecv,
         ] {
+            // SAFETY: HostcallType derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&htype).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid HostcallType,
+            // so from_str back to HostcallType cannot fail (valid format + matching schema).
             let restored: HostcallType = serde_json::from_str(&json).unwrap();
             assert_eq!(htype, restored);
         }
@@ -772,7 +776,11 @@ mod tests {
             HostcallResult::Error { code: 99 },
             HostcallResult::Timeout,
         ] {
+            // SAFETY: HostcallResult derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&result).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid HostcallResult,
+            // so from_str back to HostcallResult cannot fail (valid format + matching schema).
             let restored: HostcallResult = serde_json::from_str(&json).unwrap();
             assert_eq!(result, restored);
         }
@@ -791,7 +799,11 @@ mod tests {
     #[test]
     fn flow_label_serde_roundtrip() {
         let fl = FlowLabel::new("public", "public");
+        // SAFETY: FlowLabel derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&fl).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid FlowLabel,
+        // so from_str back to FlowLabel cannot fail (valid format + matching schema).
         let restored: FlowLabel = serde_json::from_str(&json).unwrap();
         assert_eq!(fl, restored);
     }

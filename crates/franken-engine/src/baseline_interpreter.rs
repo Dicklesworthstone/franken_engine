@@ -22210,9 +22210,12 @@ mod tests {
     fn string_prototype_char_at_negative_index() {
         // Test charAt with negative index (should treat as 0)
         let mut core = BaselineInterpreter::new();
+        // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(0, Value::Str("Test".to_string())).unwrap();
+        // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(1, Value::Int(-1)).unwrap(); // negative index
 
+        // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -22223,6 +22226,7 @@ mod tests {
         ])).unwrap();
 
         // Should return first character 'T'
+        // SAFETY: the executed module writes its result to register 2.
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Str("T".to_string()), "Negative index should be treated as 0");
     }

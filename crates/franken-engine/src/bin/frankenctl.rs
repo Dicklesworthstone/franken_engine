@@ -28,6 +28,9 @@ use frankenengine_engine::lowering_pipeline::{
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::parser_oracle::{
+    OracleGateMode, OraclePartition, ParserOracleConfig, run_parser_oracle,
+};
 use frankenengine_engine::react_doctor_preflight::{
     DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
     PreflightResult as ReactPreflightResult, SupportBundle as ReactSupportBundle,
@@ -53,6 +56,10 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     parse_decision_type, parse_evidence_severity, run_preflight_doctor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::test262_release_gate::{
+    Test262EvidenceCollector, Test262GateRunner, Test262HighWaterMark, Test262ObservedResult,
+    Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverSet, next_high_water_mark,
+};
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
@@ -60,6 +67,14 @@ use frankenengine_engine::third_party_verifier::{
 };
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
+};
+use frankenengine_engine::zero_placeholder_gate::{
+    GateReport, GateVerdict, PlaceholderEntry, PlaceholderKind, PlaceholderSeverity, ScanResult,
+    Subsystem, Waiver, WaiverStatus, evaluate_gate, summarize_report, validate_waiver,
+};
+use frankenengine_engine::zero_placeholder_scan::{
+    ZeroPlaceholderFinding, ZeroPlaceholderInventory, ZeroPlaceholderSeverity,
+    ZeroPlaceholderStatus, ZeroPlaceholderSubsystem, zero_placeholder_scan_inventory,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -89,6 +104,12 @@ const COMMAND_MODE_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.command-mode-r
 const BENCHMARK_BUNDLE_COMPONENT: &str = "frankenctl_benchmark_bundle";
 const BENCHMARK_BUNDLE_CLAIM_ID: &str = "bd-20xc";
 const BENCHMARK_BUNDLE_REPO_URL: &str = "https://github.com/Dicklesworthstone/franken_engine";
+
+/// Safely convert a Path to &str, returning an error instead of panicking
+fn path_to_str(path: &Path) -> Result<&str, String> {
+    path.to_str()
+        .ok_or_else(|| format!("Path contains invalid UTF-8 characters: {}", path.display()))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandSpec {
@@ -4632,36 +4653,26 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
 fn execute_gates(args: GatesArgs) -> Result<i32, String> {
     match args.mode {
         GatesMode::ZeroPlaceholder { out_dir, waivers } => {
-            use std::process::Command;
-
             // Create output directory
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Call the existing zero-placeholder gate binary
-            let mut cmd = Command::new("cargo");
-            cmd.args([
-                "run",
-                "-p",
-                "frankenengine-engine",
-                "--bin",
-                "franken_zero_placeholder_gate",
-                "--",
-                "--out-dir",
-                out_dir.to_str().unwrap(),
-                "--epoch",
-                "100",
-            ]);
+            // Try to find the installed franken_zero_placeholder_gate binary
+            let mut cmd = Command::new("franken_zero_placeholder_gate");
+            cmd.arg("--out-dir")
+                .arg(path_to_str(&out_dir)?)
+                .arg("--epoch")
+                .arg("100");
 
             // Add waivers file if specified
-            if let Some(waivers_path) = waivers {
-                cmd.args(["--waivers", waivers_path.to_str().unwrap()]);
+            if let Some(waivers_path) = &waivers {
+                cmd.arg("--waivers").arg(path_to_str(waivers_path)?);
             }
 
             // Execute the command
-            let status = cmd
-                .status()
-                .map_err(|e| format!("Failed to execute zero-placeholder gate: {e}"))?;
+            let status = cmd.status().map_err(|e| {
+                format!("Failed to execute franken_zero_placeholder_gate (is it installed?): {e}")
+            })?;
 
             if status.success() {
                 println!("✅ Zero-placeholder gate completed successfully");
@@ -4677,46 +4688,35 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
         GatesMode::SignatureDrift { out_dir, config: _ } => {
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
-            println!("Gates signature-drift executed (placeholder implementation)");
-            Ok(0)
+            Err("Gates signature-drift is not yet implemented. This command is not supported in this version.".to_string())
         }
-        _ => {
-            println!("Gates subcommand executed (placeholder implementation)");
-            Ok(0)
-        }
+        _ => Err(
+            "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
+                .to_string(),
+        ),
     }
 }
 
 fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
     match args.mode {
         ReportsMode::ParserOracle { config, out } => {
-            use std::process::Command;
-
-            // Call the existing parser oracle report binary
-            let mut cmd = Command::new("cargo");
-            cmd.args([
-                "run",
-                "-p",
-                "frankenengine-engine",
-                "--bin",
-                "franken_parser_oracle_report",
-                "--",
-            ]);
+            // Try to find the installed franken_parser_oracle_report binary
+            let mut cmd = Command::new("franken_parser_oracle_report");
 
             // Add config file if specified
-            if let Some(config_path) = config {
-                cmd.args(["--config", config_path.to_str().unwrap()]);
+            if let Some(config_path) = &config {
+                cmd.arg("--config").arg(path_to_str(config_path)?);
             }
 
             // Add output file if specified
             if let Some(out_path) = &out {
-                cmd.args(["--out", out_path.to_str().unwrap()]);
+                cmd.arg("--out").arg(path_to_str(out_path)?);
             }
 
             // Execute the command
             let status = cmd
                 .status()
-                .map_err(|e| format!("Failed to execute parser oracle report: {e}"))?;
+                .map_err(|e| format!("Failed to execute franken_parser_oracle_report (is it installed?): {e}"))?;
 
             if status.success() {
                 println!("✅ Parser oracle report completed successfully");
@@ -4732,15 +4732,13 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             }
         }
         ReportsMode::LoweringGap { out } => {
-            if let Some(path) = out {
-                println!("Reports lowering-gap would write to: {}", path.display());
+            if let Some(_path) = out {
+                return Err("Reports lowering-gap is not yet implemented. This command is not supported in this version.".to_string());
             }
-            println!("Reports lowering-gap executed (placeholder implementation)");
-            Ok(0)
+            Err("Reports lowering-gap is not yet implemented. This command is not supported in this version.".to_string())
         }
         _ => {
-            println!("Reports subcommand executed (placeholder implementation)");
-            Ok(0)
+            Err("Unsupported reports subcommand. Use 'frankenctl help reports' to see available commands.".to_string())
         }
     }
 }
@@ -4751,34 +4749,23 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             out_dir,
             suite_path,
         } => {
-            use std::process::Command;
-
             // Create output directory
             std::fs::create_dir_all(&out_dir)
                 .map_err(|e| format!("Failed to create output directory: {e}"))?;
 
-            // Call the existing test262 runner binary
-            let mut cmd = Command::new("cargo");
-            cmd.args([
-                "run",
-                "-p",
-                "frankenengine-engine",
-                "--bin",
-                "franken_test262_runner",
-                "--",
-                "--out-dir",
-                out_dir.to_str().unwrap(),
-            ]);
+            // Try to find the installed franken_test262_runner binary
+            let mut cmd = Command::new("franken_test262_runner");
+            cmd.arg("--out-dir").arg(path_to_str(&out_dir)?);
 
             // Add suite path if specified
-            if let Some(suite) = suite_path {
-                cmd.args(["--suite", suite.to_str().unwrap()]);
+            if let Some(suite) = &suite_path {
+                cmd.arg("--suite").arg(path_to_str(suite)?);
             }
 
             // Execute the command
-            let status = cmd
-                .status()
-                .map_err(|e| format!("Failed to execute test262 runner: {e}"))?;
+            let status = cmd.status().map_err(|e| {
+                format!("Failed to execute franken_test262_runner (is it installed?): {e}")
+            })?;
 
             if status.success() {
                 println!("✅ Test262 conformance testing completed successfully");
@@ -4790,16 +4777,15 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
             }
         }
         TestMode::Lockstep { config: _, out } => {
-            if let Some(path) = out {
-                println!("Test lockstep would write to: {}", path.display());
+            if let Some(_path) = out {
+                return Err("Test lockstep is not yet implemented. This command is not supported in this version.".to_string());
             }
-            println!("Test lockstep executed (placeholder implementation)");
-            Ok(0)
+            Err("Test lockstep is not yet implemented. This command is not supported in this version.".to_string())
         }
-        _ => {
-            println!("Test subcommand executed (placeholder implementation)");
-            Ok(0)
-        }
+        _ => Err(
+            "Unsupported test subcommand. Use 'frankenctl help test' to see available commands."
+                .to_string(),
+        ),
     }
 }
 
@@ -4920,10 +4906,10 @@ fn execute_synth(args: SynthArgs) -> Result<i32, String> {
             }
             Ok(0)
         }
-        _ => {
-            println!("✅ Synth subcommand executed (generic synthesis)");
-            Ok(0)
-        }
+        _ => Err(
+            "Unsupported synth subcommand. Only specific synthesis commands are supported."
+                .to_string(),
+        ),
     }
 }
 
@@ -5022,8 +5008,7 @@ fn execute_orchestrate(args: OrchestrateArgs) -> Result<i32, String> {
             Ok(0)
         }
         _ => {
-            println!("Orchestrate subcommand executed (generic implementation)");
-            Ok(0)
+            Err("Unsupported orchestrate subcommand. Only specific orchestration commands are supported.".to_string())
         }
     }
 }

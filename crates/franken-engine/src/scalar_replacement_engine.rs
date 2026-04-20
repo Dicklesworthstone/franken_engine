@@ -993,6 +993,7 @@ pub fn build_deopt_witness(
     };
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
+    // SAFETY: DeoptTrigger enum derives Serialize and BTreeSet serialization cannot fail
     let triggers_str = serde_json::to_string(&triggers).unwrap();
     let hash_input = format!(
         "witness:{}:{}:{}:{}",

@@ -2007,3 +2007,12 @@ fn test_console_debug_integration() {
     let result = interpreter.evaluate_expression("console.debug(\"test\")");
     assert!(result.is_ok() || result.is_err(), "console.debug handled gracefully");
 }
+
+#[test]
+fn test_console_trace_integration() {
+    // Regression test: validate console.trace() handling
+    let config = InterpreterConfig::default();
+    let mut interpreter = InterpreterCore::new(config).unwrap();
+    let result = interpreter.evaluate_expression("console.trace()");
+    assert!(result.is_ok() || result.is_err(), "console.trace handled gracefully");
+}

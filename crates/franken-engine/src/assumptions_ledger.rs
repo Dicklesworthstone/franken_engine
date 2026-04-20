@@ -854,9 +854,11 @@ mod tests {
     #[test]
     fn test_demotion_records() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .unwrap();
+        // SAFETY: Test helper with valid monitor data for existing assumption should succeed
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(ledger.demotion_records().len(), 1);
@@ -866,11 +868,14 @@ mod tests {
     #[test]
     fn test_retire_assumption() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: Test just recorded assumption "a1", so retire should succeed
         ledger.retire_assumption("a1").unwrap();
         assert_eq!(
+            // SAFETY: Test just retired assumption "a1", so lookup should succeed
             ledger.assumption("a1").unwrap().status,
             AssumptionStatus::Retired
         );

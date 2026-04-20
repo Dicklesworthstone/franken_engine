@@ -1222,6 +1222,7 @@ mod tests {
         let mut acc = EvidenceAccumulator::new();
         let packet = test_evidence("node-1", "ext-1", 1, 500_000);
 
+        // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&packet).unwrap();
         assert_eq!(acc.posterior_delta("ext-1"), 500_000);
         assert_eq!(acc.evidence_count("ext-1"), 1);

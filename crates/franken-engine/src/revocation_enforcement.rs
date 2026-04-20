@@ -1147,7 +1147,11 @@ mod tests {
             EnforcementPoint::ExtensionActivation,
         ];
         for p in &points {
+            // SAFETY: EnforcementPoint derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(p).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid EnforcementPoint,
+            // so from_str back to EnforcementPoint cannot fail (valid format + matching schema).
             let restored: EnforcementPoint = serde_json::from_str(&json).unwrap();
             assert_eq!(*p, restored);
         }
@@ -1163,7 +1167,11 @@ mod tests {
             HighRiskCategory::ExtensionLifecycleChange,
         ];
         for c in &cats {
+            // SAFETY: HighRiskCategory derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(c).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid HighRiskCategory,
+            // so from_str back to HighRiskCategory cannot fail (valid format + matching schema).
             let restored: HighRiskCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(*c, restored);
         }

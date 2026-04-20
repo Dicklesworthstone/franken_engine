@@ -14545,24 +14545,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:IsNaN" => {
-                // isNaN() implementation - checks if value is NaN (with coercion)
-                if args.count == 0 {
-                    return Ok(Value::Bool(true)); // isNaN() with no args returns true
-                }
-
-                let value = self.read_reg(args.start)?;
-                let num = match value {
-                    Value::Int(_) => return Ok(Value::Bool(false)), // Integers are never NaN
-                    Value::Float(f) => f.inner(),
-                    _ => {
-                        // Coerce to number first
-                        Self::coerce_to_float(&value).unwrap_or(f64::NAN)
-                    }
-                };
-
-                Ok(Value::Bool(num.is_nan()))
-            }
+            // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
             "builtin:IsFinite" => {
                 // isFinite() implementation - checks if value is finite (with coercion)

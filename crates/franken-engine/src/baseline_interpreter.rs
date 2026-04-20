@@ -21854,8 +21854,10 @@ mod tests {
     fn string_prototype_char_at_no_index() {
         // Test charAt with no index argument (should default to 0)
         let mut core = BaselineInterpreter::new();
+        // SAFETY: test setup writes to a valid register in a fresh interpreter.
         core.set_register(0, Value::Str("ABC".to_string())).unwrap();
 
+        // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -21866,6 +21868,7 @@ mod tests {
         ])).unwrap();
 
         // Should return first character 'A'
+        // SAFETY: the executed module writes its result to register 1.
         let result = core.read_register(1).unwrap();
         assert_eq!(result, Value::Str("A".to_string()), "No index should default to 0");
     }

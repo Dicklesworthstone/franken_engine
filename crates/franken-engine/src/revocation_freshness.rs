@@ -905,6 +905,8 @@ mod tests {
             FreshnessDecision::OverrideGranted { operator_id, .. } => {
                 assert_eq!(operator_id, "ops-admin-01");
             }
+            // SAFETY: Test-only panic to validate freshness override evaluation
+            // expects specific RevocationFreshnessResult::OverrideGranted from test scenario
             other => panic!("expected OverrideGranted, got {other:?}"),
         }
     }

@@ -3155,6 +3155,7 @@ mod tests {
             let mut orch = ExecutionOrchestrator::new(cfg);
             let result = orch
                 .execute(&simple_package())
+                // SAFETY: Test validates all preset configurations execute successfully
                 .unwrap_or_else(|e| panic!("{preset:?} failed: {e}"));
             assert!(result.posterior.is_valid(), "{preset:?} posterior invalid");
             assert!(

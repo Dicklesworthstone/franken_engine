@@ -1955,6 +1955,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "statement_matches_canonical_template")
+            // SAFETY: Test-only unwrap expecting statement_matches_canonical_template check to be present
             .unwrap();
         assert!(!failed.passed);
     }

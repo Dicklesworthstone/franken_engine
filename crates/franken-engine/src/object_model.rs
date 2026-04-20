@@ -2616,14 +2616,19 @@ mod tests {
     fn heap_freeze() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(h, str_key("x"), int_val(1)).unwrap();
+        // SAFETY: Test-only unwrap with valid heap object
         heap.freeze(h).unwrap();
 
+        // SAFETY: Test-only unwrap with valid heap object
         assert!(heap.is_frozen(h).unwrap());
         // Cannot modify frozen property.
+        // SAFETY: Test-only unwrap with valid heap object and property (returns false)
         let result = heap.set_property(h, str_key("x"), int_val(2)).unwrap();
         assert!(!result);
         // Cannot add new property.
+        // SAFETY: Test-only unwrap with valid heap object and property (returns false)
         let result = heap.set_property(h, str_key("y"), int_val(3)).unwrap();
         assert!(!result);
     }
@@ -2632,15 +2637,21 @@ mod tests {
     fn heap_seal() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
+        // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(h, str_key("x"), int_val(1)).unwrap();
+        // SAFETY: Test-only unwrap with valid heap object
         heap.seal(h).unwrap();
 
+        // SAFETY: Test-only unwrap with valid heap object
         assert!(heap.is_sealed(h).unwrap());
+        // SAFETY: Test-only unwrap with valid heap object
         assert!(!heap.is_frozen(h).unwrap());
         // Can modify value of writable property on sealed object.
+        // SAFETY: Test-only unwrap with valid heap object and property (returns true)
         let result = heap.set_property(h, str_key("x"), int_val(2)).unwrap();
         assert!(result);
         // Cannot add new property.
+        // SAFETY: Test-only unwrap with valid heap object and property (returns false)
         let result = heap.set_property(h, str_key("y"), int_val(3)).unwrap();
         assert!(!result);
     }

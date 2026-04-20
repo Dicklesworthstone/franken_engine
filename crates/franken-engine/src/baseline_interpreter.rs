@@ -13512,52 +13512,6 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(num.log10())))
             }
 
-            "builtin:ArrayPrototypeSome" => {
-                // Array.prototype.some(callback[, thisArg]) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Bool(false)); // Empty test defaults to false
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects default to false
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                // Simplified implementation: check if any element is truthy
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            let is_truthy = match element {
-                                Value::Bool(false) => false,
-                                Value::Int(0) => false,
-                                Value::Float(f) if f.inner() == 0.0 => false,
-                                Value::Str(s) if s.is_empty() => false,
-                                Value::Null | Value::Undefined => false,
-                                _ => true,
-                            };
-                            if is_truthy {
-                                return Ok(Value::Bool(true));
-                            }
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(false))
-            }
 
             "builtin:ObjectPrototypeValueOf" => {
                 // Object.prototype.valueOf() implementation
@@ -16456,47 +16410,6 @@ impl InterpreterCore {
                 Ok(Value::Str(result))
             }
 
-            "builtin:ArrayPrototypeSome" => {
-                // Array.prototype.some() implementation - tests if any element passes callback
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-objects return false
-                };
-
-                if args.count < 2 {
-                    return Ok(Value::Bool(false)); // No callback provided
-                }
-
-                let callback_val = self.read_reg(args.start + 1)?;
-                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
-                    return Ok(Value::Bool(false)); // Callback is not a function
-                }
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    let length_prop = obj
-                        .properties
-                        .get("length")
-                        .cloned()
-                        .unwrap_or(Value::Int(0));
-                    let length = match length_prop {
-                        Value::Int(n) => n.max(0) as usize,
-                        _ => 0,
-                    };
-
-                    // Simplified implementation: check if any elements exist
-                    // (Full implementation would require callback execution)
-                    for i in 0..length {
-                        if obj.properties.contains_key(&i.to_string()) {
-                            // In real implementation, would call callback and check result
-                            // For now, return true if any element exists
-                            return Ok(Value::Bool(true));
-                        }
-                    }
-                }
-
-                Ok(Value::Bool(false)) // No elements or callback returned false for all
-            }
 
             "builtin:ArrayPrototypeEvery" => {
                 // Array.prototype.every() implementation
@@ -19542,6 +19455,29 @@ mod tests {
             )
             .unwrap();
         assert_string_split_result(result, vec!["hello"], &mut core);
+    }
+
+    #[test]
+    fn string_split_omitted_and_undefined_separator_handle_non_ascii() {
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Str("a🙂b".to_string());
+
+        let result = core
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 1 },
+            )
+            .unwrap();
+        assert_string_split_result(result, vec!["a🙂b"], &mut core);
+
+        core.registers[1] = Value::Undefined;
+        let result = core
+            .call_builtin(
+                "builtin:StringPrototypeSplit",
+                RegRange { start: 0, count: 2 },
+            )
+            .unwrap();
+        assert_string_split_result(result, vec!["a🙂b"], &mut core);
     }
 
     #[test]

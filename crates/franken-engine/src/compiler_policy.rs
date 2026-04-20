@@ -1727,7 +1727,9 @@ mod tests {
             SpecializationOutcome::InvalidatedByEpochChange,
         ];
         for o in &outcomes {
+            // SAFETY: SpecializationOutcome derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(o).unwrap();
+            // SAFETY: JSON was just generated from SpecializationOutcome, deserialization guaranteed to succeed
             let back: SpecializationOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(*o, back);
         }
@@ -1804,7 +1806,9 @@ mod tests {
             OptimizationClass::SuperinstructionFusion,
         ];
         for c in &classes {
+            // SAFETY: OptimizationClass derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(c).unwrap();
+            // SAFETY: JSON was just generated from OptimizationClass, deserialization guaranteed to succeed
             let back: OptimizationClass = serde_json::from_str(&json).unwrap();
             assert_eq!(*c, back);
         }
@@ -1821,7 +1825,9 @@ mod tests {
             outcome: "OK".to_string(),
             error_code: None,
         };
+        // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
         let back: CompilerPolicyEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }

@@ -1889,6 +1889,7 @@ mod tests {
         let enc = make_encryption_private(&seed, epoch);
         let iss = make_issuance_key(&seed, epoch);
 
+        // SAFETY: Test scenario with valid keys and epoch; bundle creation should succeed
         let bundle = OwnerKeyBundle::create_signed(
             &sk,
             sk.verification_key(),
@@ -1899,7 +1900,9 @@ mod tests {
         )
         .unwrap();
 
+        // SAFETY: OwnerKeyBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).unwrap();
+        // SAFETY: JSON was just produced by valid OwnerKeyBundle serialization
         let back: OwnerKeyBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle.sequence, back.sequence);
         assert_eq!(bundle.epoch, back.epoch);

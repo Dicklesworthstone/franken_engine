@@ -449,7 +449,11 @@ mod tests {
     #[test]
     fn wave_id_serde_roundtrip() {
         for wave in [WaveId::Wave0, WaveId::Wave1, WaveId::Wave2, WaveId::Wave3] {
+            // SAFETY: WaveId derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&wave).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid WaveId,
+            // so from_str back to WaveId cannot fail (valid format + matching schema).
             let back: WaveId = serde_json::from_str(&json).unwrap();
             assert_eq!(wave, back);
         }
@@ -457,6 +461,8 @@ mod tests {
 
     #[test]
     fn wave_id_serde_uses_snake_case() {
+        // SAFETY: WaveId derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&WaveId::Wave0).unwrap();
         assert_eq!(json, "\"wave0\"");
     }
@@ -470,7 +476,11 @@ mod tests {
             RequiredBeadStatus::InProgress,
             RequiredBeadStatus::Closed,
         ] {
+            // SAFETY: RequiredBeadStatus derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(&status).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid RequiredBeadStatus,
+            // so from_str back to RequiredBeadStatus cannot fail (valid format + matching schema).
             let back: RequiredBeadStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, back);
         }
@@ -493,7 +503,11 @@ mod tests {
             required_artifact: "artifacts/test.json".to_string(),
             mandatory: true,
         };
+        // SAFETY: WaveCriterion derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&c).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid WaveCriterion,
+        // so from_str back to WaveCriterion cannot fail (valid format + matching schema).
         let back: WaveCriterion = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
     }
@@ -540,7 +554,11 @@ mod tests {
     #[test]
     fn wave_transition_contract_serde_roundtrip() {
         let contract = WaveTransitionContract::baseline(WaveId::Wave3);
+        // SAFETY: WaveTransitionContract derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&contract).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid WaveTransitionContract,
+        // so from_str back to WaveTransitionContract cannot fail (valid format + matching schema).
         let back: WaveTransitionContract = serde_json::from_str(&json).unwrap();
         assert_eq!(contract, back);
     }

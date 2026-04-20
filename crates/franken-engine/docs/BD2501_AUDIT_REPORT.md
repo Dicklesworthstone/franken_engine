@@ -89,3 +89,10 @@ All bd-2501 manifests follow consistent section structure:
 BD-2501 research artifact registry demonstrates strong structural consistency with 100% registry-to-file mapping success. Primary concern is incomplete content (TBD placeholders) rather than structural inconsistencies. No critical registry mismatches found.
 
 **Overall Assessment**: Good structural foundation with moderate content completion gaps requiring targeted remediation.
+
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run this audit by regenerating this report from the same source data in the same order.
+- **Validation**: Verify registry mappings, missing references, and section checks match this report before sharing.

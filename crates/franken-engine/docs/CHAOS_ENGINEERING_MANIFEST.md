@@ -386,6 +386,13 @@ rollback_procedures:
 - Measurable improvement in system reliability metrics
 - Team confidence increase in system resilience and failure handling
 
+## Replication Instructions
+
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Procedure**: Re-run the fault-injection campaign and recovery exercise from the same base commit.
+- **Validation**: Compare manifests, logs, and recovery timelines against thresholds and archive reproducibility evidence.
+
 ---
 
 **Manifest Version**: 1.0  

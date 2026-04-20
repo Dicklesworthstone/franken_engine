@@ -38,11 +38,12 @@
   - preserve raw logs and minimised inputs for future triage.
 - New failures discovered during this cycle are added as entries and linked from the artifact registry for traceability.
 
-## Replication instructions
+## Replication Instructions
 
-- **Prerequisites**:
-  - record exact `rustc`, dependency lockfile, and runtime environment;
-  - verify checkout is at the target commit.
+- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
+- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
+- **Locking**: record exact `rustc`, dependency lockfile, and runtime environment; verify checkout is at the target commit.
+- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
 - **Execution**:
   - run the red-team generators in deterministic mode;
   - execute the academic protocol script bundle end-to-end;
@@ -50,15 +51,5 @@
 - **Verification**:
   - compare collected metrics to the published expected ranges;
   - confirm all required artifacts (traces, reports, and manifest hashes) exist.
-- **Failure handling**:
-  - if outputs drift, capture provenance and stop changes;
-  - annotate drift causes before declaring success.
-- **Artifact package**:
-  - store manifests, traces, scripts, and environment metadata under a versioned bundle path so others can replicate exactly.
-
-## Replication Instructions
-
-- **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.
-- **Reproducibility settings**: pin `CARGO_TARGET_DIR` and run with `CARGO_INCREMENTAL=0`.
-- **Procedure**: Re-run the artifact generation and verification workflow from the same commit, capturing command output and logs.
-- **Validation**: Compare generated artifacts to listed expectations and note environment drift with mitigation notes.
+- **Failure handling**: if outputs drift, capture provenance and mitigation notes before declaring success.
+- **Artifact package**: store manifests, traces, scripts, and environment metadata under a versioned bundle path so others can replicate exactly.

@@ -1104,10 +1104,13 @@ mod tests {
             .begin_operation(&mut cell, "perm-1", TwoPhaseCategory::PermissionGrant, "p1")
             .unwrap();
 
+        // SAFETY: Test scenario with valid operation ID that was previously begun
         tracker.commit_operation(&mut cell, "alloc-1").unwrap();
+        // SAFETY: Test scenario with valid operation ID that was previously begun
         tracker.abort_operation(&mut cell, "alloc-2").unwrap();
 
         let stats = tracker.category_stats();
+        // SAFETY: Test scenario verifying category that was used in operations above
         let alloc_stats = stats.get(&TwoPhaseCategory::ResourceAlloc).unwrap();
         assert_eq!(alloc_stats.started, 2);
         assert_eq!(alloc_stats.committed, 1);

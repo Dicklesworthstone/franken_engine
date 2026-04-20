@@ -706,6 +706,7 @@ mod tests {
     #[test]
     fn test_observe_no_violation() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
@@ -837,9 +838,11 @@ mod tests {
     #[test]
     fn test_falsification_history_recorded() {
         let mut ledger = default_ledger();
+        // SAFETY: Test helper with valid assumption data should succeed
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .unwrap();
+        // SAFETY: Test helper with valid monitor data for existing assumption should succeed
         ledger.register_monitor(make_monitor("m1", "a1")).unwrap();
         ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(ledger.falsification_history().len(), 1);

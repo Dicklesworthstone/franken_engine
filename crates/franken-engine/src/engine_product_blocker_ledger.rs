@@ -932,7 +932,11 @@ mod tests {
     #[test]
     fn surface_serde_roundtrip() {
         for s in BlockerSurface::ALL {
+            // SAFETY: BlockerSurface derives Serialize and has no non-serializable fields.
+            // to_string on derived Serialize types only fails on writer errors (impossible with String).
             let json = serde_json::to_string(s).unwrap();
+            // SAFETY: JSON was just produced by to_string of a valid BlockerSurface,
+            // so from_str back to BlockerSurface cannot fail (valid format + matching schema).
             let back: BlockerSurface = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, back);
         }
@@ -962,7 +966,11 @@ mod tests {
     #[test]
     fn severity_serde_roundtrip() {
         let s = BlockerSeverity::Degraded;
+        // SAFETY: BlockerSeverity derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid BlockerSeverity,
+        // so from_str back to BlockerSeverity cannot fail (valid format + matching schema).
         let back: BlockerSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -979,7 +987,11 @@ mod tests {
     #[test]
     fn remediation_serde_roundtrip() {
         let r = RemediationStatus::FixLanded;
+        // SAFETY: RemediationStatus derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&r).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RemediationStatus,
+        // so from_str back to RemediationStatus cannot fail (valid format + matching schema).
         let back: RemediationStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }

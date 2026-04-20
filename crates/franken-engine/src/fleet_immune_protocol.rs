@@ -1113,6 +1113,7 @@ mod tests {
         let mut tracker = NodeSequenceTracker::new();
         let node = NodeId::new("node-1");
 
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&node, 3).unwrap();
         let err = tracker.accept(&node, 2).unwrap_err();
         assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
@@ -1123,6 +1124,7 @@ mod tests {
         let mut tracker = NodeSequenceTracker::new();
         let node = NodeId::new("node-1");
 
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&node, 1).unwrap();
         let err = tracker.accept(&node, 1).unwrap_err();
         assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
@@ -1134,7 +1136,9 @@ mod tests {
         let a = NodeId::new("node-a");
         let b = NodeId::new("node-b");
 
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&a, 5).unwrap();
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&b, 1).unwrap(); // independent
         assert_eq!(tracker.last_sequence(&a), 5);
         assert_eq!(tracker.last_sequence(&b), 1);
@@ -1143,7 +1147,9 @@ mod tests {
     #[test]
     fn sequence_tracker_known_nodes() {
         let mut tracker = NodeSequenceTracker::new();
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&NodeId::new("a"), 1).unwrap();
+        // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker.accept(&NodeId::new("b"), 1).unwrap();
         let nodes = tracker.known_nodes();
         assert_eq!(nodes.len(), 2);
@@ -1194,6 +1200,7 @@ mod tests {
             test_intent("node-c", "ext-1", ContainmentAction::Suspend, 1, 1),
         ];
 
+        // SAFETY: Test creates valid intents; resolve_all succeeds in controlled test environment.
         let winner = DeterministicPrecedence::resolve_all(&intents).unwrap();
         assert_eq!(winner.proposed_action, ContainmentAction::Quarantine);
     }

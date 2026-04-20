@@ -1371,6 +1371,7 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(3);
         }
+        // SAFETY: Test helper with fixed 32-byte array should produce valid SigningKey
         SigningKey::from_bytes(bytes).unwrap()
     }
 
@@ -1383,6 +1384,7 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(13).wrapping_add(17);
         }
+        // SAFETY: Test helper with fixed 32-byte array should produce valid SigningKey
         SigningKey::from_bytes(bytes).unwrap()
     }
 
@@ -1460,7 +1462,9 @@ mod tests {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(100));
         let sk = test_signing_key();
         let vk = test_verification_key_from(&sk);
+        // SAFETY: Test setup with valid organization name and verification key should succeed
         let pub_id = reg.register_publisher("TestOrg", vk.clone()).unwrap();
+        // SAFETY: Test setup with valid publisher ID and scope should succeed
         reg.claim_scope(pub_id.clone(), "testorg").unwrap();
         (reg, pub_id, sk, vk)
     }
@@ -1486,6 +1490,7 @@ mod tests {
         let vk = test_verification_key_from(&sk);
         let result = reg.register_publisher("MyPublisher", vk);
         assert!(result.is_ok());
+        // SAFETY: Just verified result.is_ok() above
         let pub_id = result.unwrap();
         assert!(reg.is_publisher_active(&pub_id));
         assert_eq!(reg.publisher_count(), 1);

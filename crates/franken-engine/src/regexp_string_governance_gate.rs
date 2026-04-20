@@ -1756,7 +1756,9 @@ mod tests {
     #[test]
     fn serde_string_surface_roundtrip() {
         let s = StringSurface::Concat;
+        // SAFETY: StringSurface derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by valid StringSurface serialization.
         let back: StringSurface = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }
@@ -1764,7 +1766,9 @@ mod tests {
     #[test]
     fn serde_regexp_surface_roundtrip() {
         let s = RegExpSurface::Lookahead;
+        // SAFETY: RegExpSurface derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&s).unwrap();
+        // SAFETY: JSON was just produced by valid RegExpSurface serialization.
         let back: RegExpSurface = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
     }

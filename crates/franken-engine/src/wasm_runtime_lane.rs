@@ -707,6 +707,7 @@ impl WasmRuntimeLane {
         let canonical = format!(
             "wasm_lane:signals={}:mode={}:flushes={}",
             self.graph.active_count(),
+            // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
             serde_json::to_string(&self.mode).unwrap(),
             self.flush_count,
         );
@@ -759,7 +760,9 @@ mod tests {
     #[test]
     fn bounded_queue_full() {
         let mut q = BoundedQueue::new(2);
+        // SAFETY: Queue capacity is 2, pushing 1st element cannot exceed capacity
         q.push(1).unwrap();
+        // SAFETY: Queue capacity is 2, pushing 2nd element cannot exceed capacity
         q.push(2).unwrap();
         assert!(q.is_full());
         assert!(matches!(q.push(3), Err(QueueError::Full { capacity: 2 })));

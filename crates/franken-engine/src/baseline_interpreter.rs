@@ -12649,50 +12649,7 @@ impl InterpreterCore {
                 Ok(Value::Object(result_array_id))
             }
 
-            "builtin:ObjectDefineProperty" => {
-                // Object.defineProperty(obj, prop, descriptor) implementation (simplified)
-                if args.count < 4 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Can only define properties on objects
-                };
-
-                let prop_val = self.read_reg(args.start + 2)?;
-                let prop_key = match prop_val {
-                    Value::Str(s) => s,
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    _ => return Ok(Value::Undefined),
-                };
-
-                let descriptor_val = self.read_reg(args.start + 3)?;
-
-                // Simplified implementation: extract value from descriptor
-                let value = if let Value::Object(desc_id) = descriptor_val {
-                    if let Some(desc_obj) = self.heap.get(desc_id.0 as usize) {
-                        desc_obj
-                            .properties
-                            .get("value")
-                            .cloned()
-                            .unwrap_or(Value::Undefined)
-                    } else {
-                        Value::Undefined
-                    }
-                } else {
-                    descriptor_val
-                };
-
-                // Set the property
-                if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                    obj.properties.insert(prop_key, value);
-                }
-
-                Ok(obj_val) // Return the modified object
-            }
+            // ObjectDefineProperty: Removed duplicate dispatch arm (use first occurrence instead)
 
             "builtin:StringPrototypeAt" => {
                 // String.prototype.at(index) implementation (ES2022)
@@ -14284,27 +14241,7 @@ impl InterpreterCore {
             }
 
 
-            "builtin:NumberPrototypeToString" => {
-                // Number.prototype.toString() implementation - unified spec-consistent version
-                let this_val = self.read_reg(args.start)?;
-
-                let number_val = match this_val {
-                    Value::Int(n) => n as f64,
-                    Value::Float(f) => f.inner(),
-                    _ => return Ok(Value::Str("NaN".to_string())),
-                };
-
-                let radix = if args.count >= 2 {
-                    Self::coerce_finite_radix_or_default(self.read_reg(args.start + 1)?, 10)
-                } else {
-                    10
-                };
-
-                match self.number_to_string_impl(number_val, radix) {
-                    Ok(result) => Ok(Value::Str(result)),
-                    Err(_) => Ok(Value::Str("RangeError".to_string())),
-                }
-            }
+            // Removed duplicate NumberPrototypeToString - implementation at line ~11219 is identical
 
 
             "builtin:StringPrototypeSubstring" => {

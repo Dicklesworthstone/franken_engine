@@ -1883,20 +1883,25 @@ mod tests {
     #[test]
     fn registry_reset_then_reuse_enrichment() {
         let mut reg = DomainRegistry::new();
+        // SAFETY: Registering a fresh EvidenceArena domain with a positive budget is valid.
         reg.register(
             AllocationDomain::EvidenceArena,
             LifetimeClass::SessionScoped,
             500,
         )
         .unwrap();
+        // SAFETY: Allocating exactly the registered 500-byte EvidenceArena budget is valid.
         reg.allocate(AllocationDomain::EvidenceArena, 500).unwrap();
         // Full — cannot allocate more
         assert!(reg.allocate(AllocationDomain::EvidenceArena, 1).is_err());
         // Reset and reallocate
+        // SAFETY: EvidenceArena was registered above and can be reset.
         reg.reset_domain(AllocationDomain::EvidenceArena).unwrap();
+        // SAFETY: Reallocating 250 bytes after reset is within the 500-byte budget.
         reg.allocate(AllocationDomain::EvidenceArena, 250).unwrap();
         assert_eq!(
             reg.get(&AllocationDomain::EvidenceArena)
+                // SAFETY: EvidenceArena was registered before the reset/reuse sequence.
                 .unwrap()
                 .budget
                 .used_bytes,

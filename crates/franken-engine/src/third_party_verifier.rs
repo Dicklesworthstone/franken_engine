@@ -2174,6 +2174,7 @@ mod tests {
     fn attestation_digest_changes_with_report() {
         let report1 = make_report(VerificationVerdict::Verified);
         let report2 = make_report(VerificationVerdict::Failed);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let a1 = generate_attestation(&make_attestation_input(report1, None)).unwrap();
         let a2 = generate_attestation(&make_attestation_input(report2, None)).unwrap();
         assert_ne!(a1.report_digest_hex, a2.report_digest_hex);

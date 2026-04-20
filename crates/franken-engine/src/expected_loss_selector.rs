@@ -2453,7 +2453,11 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
+        // SAFETY: RuntimeDecisionScoreEvent derives Serialize and has no non-serializable fields.
+        // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoreEvent,
+        // so from_str back to RuntimeDecisionScoreEvent cannot fail (valid format + matching schema).
         let back: RuntimeDecisionScoreEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }

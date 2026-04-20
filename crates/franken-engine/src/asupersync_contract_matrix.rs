@@ -1843,7 +1843,9 @@ mod tests {
             manifest_hash: "abc123".to_string(),
             dependency_versions: BTreeMap::new(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&release).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: UpstreamReleaseIdentifier = serde_json::from_str(&json).unwrap();
         assert_eq!(back.surface, AsupersyncSurface::KernelContext);
         assert_eq!(back.package_name, "franken-kernel");

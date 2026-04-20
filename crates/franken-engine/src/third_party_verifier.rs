@@ -1881,6 +1881,7 @@ mod tests {
     fn verify_attestation_mismatched_claim_type() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
+        // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
         let mut attestation = generate_attestation(&input).unwrap();
         attestation.claim_type = "wrong_type".to_string();
         let verification = verify_attestation(&attestation);

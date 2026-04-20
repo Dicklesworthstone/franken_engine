@@ -1195,7 +1195,7 @@ mod tests {
     #[test]
     fn derive_output_len_one_succeeds() {
         let deriver = DeterministicTestDeriver;
-        // SAFETY: test deriver with valid parameters should succeed
+        // SAFETY: Test deriver with valid parameters should succeed
         let key = deriver
             .derive(&DerivationRequest {
                 master_key: test_master_key(),
@@ -1264,7 +1264,7 @@ mod tests {
             })
             .unwrap();
 
-        // SAFETY: test deriver with valid parameters should succeed
+        // SAFETY: Test deriver with valid parameters should succeed
         let key_b = deriver
             .derive(&DerivationRequest {
                 master_key: b"master-key-bravo-32-bytes-long!!".to_vec(),
@@ -1281,6 +1281,7 @@ mod tests {
     #[test]
     fn single_byte_master_key_works() {
         let deriver = DeterministicTestDeriver;
+        // SAFETY: Test deriver with valid parameters should succeed
         let key = deriver
             .derive(&DerivationRequest {
                 master_key: vec![0xff],
@@ -1337,11 +1338,13 @@ mod tests {
         let ctx = DerivationContext::empty();
 
         for epoch in 1..=5u64 {
+            // SAFETY: Cache operation with test deriver should succeed
             cache
                 .get_or_derive(KeyDomain::Symbol, &ctx, &format!("t{epoch}"))
                 .unwrap();
             assert_eq!(cache.cached_count(), 1);
             if epoch < 5 {
+                // SAFETY: Cache epoch advance with valid epoch should succeed
                 cache
                     .advance_epoch(SecurityEpoch::from_raw(epoch + 1))
                     .unwrap();
@@ -1359,6 +1362,7 @@ mod tests {
         let mk = test_master_key();
         let ctx = DerivationContext::with("ext", "test");
 
+        // SAFETY: Test deriver with valid parameters should succeed
         let key1 = deriver
             .derive(&DerivationRequest {
                 master_key: mk.clone(),
@@ -1369,6 +1373,7 @@ mod tests {
             })
             .unwrap();
 
+        // SAFETY: Test deriver with valid parameters should succeed
         let key2 = deriver
             .derive(&DerivationRequest {
                 master_key: mk,
@@ -1387,6 +1392,7 @@ mod tests {
         let deriver = DeterministicTestDeriver;
         let mk = test_master_key();
 
+        // SAFETY: Test deriver with valid parameters should succeed
         let key1 = deriver
             .derive(&DerivationRequest {
                 master_key: mk.clone(),
@@ -1397,6 +1403,7 @@ mod tests {
             })
             .unwrap();
 
+        // SAFETY: Test deriver with valid parameters should succeed
         let key2 = deriver
             .derive(&DerivationRequest {
                 master_key: mk,

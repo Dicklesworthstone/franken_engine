@@ -1786,7 +1786,9 @@ mod tests {
     fn test_selector_serde_roundtrip() {
         let policy = OverridePolicy::permissive();
         let selector = SubstrateSelector::new(policy, test_epoch());
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&selector).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateSelector = serde_json::from_str(&json).unwrap();
         assert_eq!(selector, back);
     }
@@ -1821,7 +1823,9 @@ mod tests {
     #[test]
     fn test_default_assignments_serde_roundtrip() {
         let inventory = default_optimized_assignments(test_epoch());
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&inventory).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inventory, back);
     }
@@ -1884,7 +1888,9 @@ mod tests {
         let mut instance = SubstrateInstance::from_contract(&contract, receipt);
         instance.activate();
         let check = SubstrateHealthCheck::check(&instance, test_epoch());
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&check).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateHealthCheck = serde_json::from_str(&json).unwrap();
         assert_eq!(check, back);
     }
@@ -1951,7 +1957,9 @@ mod tests {
             test_epoch(),
             "decommissioned",
         );
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateTransitionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }
@@ -2006,7 +2014,9 @@ mod tests {
             structure_kind: MetadataStructureKind::ShapeTable,
             reason: OverrideReason::MemoryPressure,
         };
+        // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&err).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SubstrateSelectionError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, back);
     }
@@ -2040,7 +2050,9 @@ mod tests {
             coverage_millionths: 500_000,
             epoch: test_epoch(),
         };
+        // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&report).unwrap();
+        // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: SelectorSummaryReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }
@@ -2056,6 +2068,7 @@ mod tests {
         selector.instantiate_all(&inventory);
 
         // Activate shape table
+        // SAFETY: test setup guarantees instance exists for ShapeTable
         let instance = selector
             .instance_for_mut(MetadataStructureKind::ShapeTable)
             .unwrap();
@@ -2088,6 +2101,7 @@ mod tests {
             "target lacks SIMD for Swiss table",
         );
         assert!(result.is_ok());
+        // SAFETY: result verified to be Ok above
         let mut instance = result.unwrap();
         instance.activate();
         instance.fallback(OverrideReason::CorruptionDetected);

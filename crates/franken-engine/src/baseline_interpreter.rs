@@ -16229,11 +16229,14 @@ fn format_requested_hook_action(action: &str, reason: Option<&str>) -> String {
 fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Option<HookAction> {
     match action {
         "challenge" => Some(HookAction::Challenge(ChallengeToken {
+            // SAFETY: challenge action requires reason, validated by caller
             token: reason.unwrap(),
         })),
         "sandbox" => Some(HookAction::Sandbox),
         "suspend" => Some(HookAction::Suspend),
+        // SAFETY: terminate action requires reason, validated by caller
         "terminate" => Some(HookAction::Terminate(reason.unwrap())),
+        // SAFETY: quarantine action requires reason, validated by caller
         "quarantine" => Some(HookAction::Quarantine(reason.unwrap())),
         _ => None,
     }

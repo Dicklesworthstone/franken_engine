@@ -1677,6 +1677,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "recovery_verified:s1")
+            // SAFETY: Test-only unwrap expecting recovery_verified:s1 check to be present in verification report
             .unwrap();
         assert!(!recovery_check.passed);
     }

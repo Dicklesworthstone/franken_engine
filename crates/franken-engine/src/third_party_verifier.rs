@@ -2459,8 +2459,11 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let mut input = make_attestation_input(report, None);
         input.scope_limitations = vec!["limited-to-unit-tests".to_string()];
+        // SAFETY: Test scenario with valid attestation input; generation should succeed
         let attestation = generate_attestation(&input).unwrap();
+        // SAFETY: VerificationAttestation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&attestation).unwrap();
+        // SAFETY: JSON was just produced by valid VerificationAttestation serialization
         let back: VerificationAttestation = serde_json::from_str(&json).unwrap();
         assert_eq!(
             back.scope_limitations,

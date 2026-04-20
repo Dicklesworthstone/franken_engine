@@ -291,8 +291,11 @@ fn scenario_normal_shutdown<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
     let mut mgr = ExtensionHostLifecycleManager::new();
 
     // Load and create sessions.
+    // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
     mgr.load_extension("ext-ns-1", cx).unwrap();
+    // SAFETY: Extension just loaded successfully, session creation should succeed.
     mgr.create_session("ext-ns-1", "sess-1", cx).unwrap();
+    // SAFETY: Extension loaded, first session created, second session creation should succeed.
     mgr.create_session("ext-ns-1", "sess-2", cx).unwrap();
     result.assert_eq("session count is 2", mgr.session_count("ext-ns-1"), 2);
 
@@ -343,7 +346,9 @@ fn scenario_forced_cancel<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioR
     let mut mgr = ExtensionHostLifecycleManager::new();
 
     // Load extension and session.
+    // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
     mgr.load_extension("ext-fc-1", cx).unwrap();
+    // SAFETY: Extension just loaded successfully, session creation should succeed.
     mgr.create_session("ext-fc-1", "sess-1", cx).unwrap();
 
     // Force-cancel with Terminate (zero drain budget).

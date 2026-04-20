@@ -10139,7 +10139,7 @@ fn console_output_bounded_by_config_builtin_methods() {
                 pool_index: 0,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10148,7 +10148,7 @@ fn console_output_bounded_by_config_builtin_methods() {
                 pool_index: 1,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10157,7 +10157,7 @@ fn console_output_bounded_by_config_builtin_methods() {
                 pool_index: 2,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10166,7 +10166,7 @@ fn console_output_bounded_by_config_builtin_methods() {
                 pool_index: 3,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10175,7 +10175,7 @@ fn console_output_bounded_by_config_builtin_methods() {
                 pool_index: 4,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10228,7 +10228,7 @@ fn console_output_bounded_by_config_mixed_levels() {
                 pool_index: 0,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10238,7 +10238,7 @@ fn console_output_bounded_by_config_mixed_levels() {
                 pool_index: 1,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleError".to_string(),
+                capability: CapabilityTag("builtin:ConsoleError".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10248,7 +10248,7 @@ fn console_output_bounded_by_config_mixed_levels() {
                 pool_index: 2,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleWarn".to_string(),
+                capability: CapabilityTag("builtin:ConsoleWarn".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10258,7 +10258,7 @@ fn console_output_bounded_by_config_mixed_levels() {
                 pool_index: 3,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10303,7 +10303,7 @@ fn console_output_zero_limit_prevents_all_output() {
                 pool_index: 0,
             },
             Ir3Instruction::HostCall {
-                capability: "builtin:ConsoleLog".to_string(),
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10339,7 +10339,7 @@ fn console_output_hostcall_bounds_capability_based() {
                 pool_index: 0,
             },
             Ir3Instruction::HostCall {
-                capability: "console:log".to_string(),
+                capability: CapabilityTag("console:log".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10348,7 +10348,7 @@ fn console_output_hostcall_bounds_capability_based() {
                 pool_index: 1,
             },
             Ir3Instruction::HostCall {
-                capability: "console:error".to_string(),
+                capability: CapabilityTag("console:error".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10357,7 +10357,7 @@ fn console_output_hostcall_bounds_capability_based() {
                 pool_index: 2,
             },
             Ir3Instruction::HostCall {
-                capability: "console:warn".to_string(),
+                capability: CapabilityTag("console:warn".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10366,7 +10366,7 @@ fn console_output_hostcall_bounds_capability_based() {
                 pool_index: 3,
             },
             Ir3Instruction::HostCall {
-                capability: "console:log".to_string(),
+                capability: CapabilityTag("console:log".to_string()),
                 args: RegRange { start: 0, count: 1 },
                 dst: 0,
             },
@@ -10382,17 +10382,13 @@ fn console_output_hostcall_bounds_capability_based() {
 
     // Grant console capabilities
     module.required_capabilities = vec![
-        CapabilityTag::new("console:log").unwrap(),
-        CapabilityTag::new("console:error").unwrap(),
-        CapabilityTag::new("console:warn").unwrap(),
+        CapabilityTag("console:log".to_string()),
+        CapabilityTag("console:error".to_string()),
+        CapabilityTag("console:warn".to_string()),
     ];
 
     let mut config = InterpreterConfig::quickjs_defaults();
     config.max_console_entries = 3;
-    config.granted_capabilities = BTreeSet::from([
-        RuntimeCapability::Console,
-        RuntimeCapability::ConsoleDiagnostics,
-    ]);
     let mut core = InterpreterCore::new(config, "console-hostcall-bounds");
 
     let result = core.execute(&module).expect("execution should succeed");

@@ -1814,6 +1814,11 @@ impl InterpreterCore {
         self.hook = None;
     }
 
+    /// Get the captured console output entries.
+    pub fn console_output(&self) -> &[ConsoleEntry] {
+        &self.console_output
+    }
+
     fn take_execution_result(
         &mut self,
         value: Value,

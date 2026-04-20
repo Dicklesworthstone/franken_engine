@@ -6809,6 +6809,7 @@ impl InterpreterCore {
                     ConsoleLevel::Log => "log",
                     ConsoleLevel::Error => "error",
                     ConsoleLevel::Warn => "warn",
+                    ConsoleLevel::Info => "info",
                 }
             )),
         );
@@ -12981,62 +12982,6 @@ impl InterpreterCore {
 
                 Ok(Value::Bool(is_nan))
             }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let initial_value = if args.count >= 3 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get array length
-                let length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => 0,
-                    }
-                } else {
-                    0
-                };
-
-                if length == 0 && initial_value.is_none() {
-                    return Ok(Value::Undefined); // TypeError equivalent
-                }
-
-                // Simplified implementation: sum all numeric values
-                let mut accumulator = initial_value.unwrap_or(Value::Int(0));
-
-                if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    for i in 0..length {
-                        if let Some(element) = obj.properties.get(&i.to_string()) {
-                            // Simple reduction: add numbers together
-                            accumulator = match (&accumulator, element) {
-                                (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-                                (Value::Int(a), Value::Float(b)) => {
-                                    Value::Float((*a as f64 + b.inner()).into())
-                                }
-                                (Value::Float(a), Value::Int(b)) => {
-                                    Value::Float((a.inner() + *b as f64).into())
-                                }
-                                (Value::Float(a), Value::Float(b)) => {
-                                    Value::Float((a.inner() + b.inner()).into())
-                                }
-                                _ => accumulator, // Keep accumulator unchanged for non-numeric
-                            };
-                        }
-                    }
-                }
-
-                Ok(accumulator)
-            }
-
 
             "builtin:ArrayPrototypeReverse" => {
                 // Array.prototype.reverse() implementation - reverses array in place
@@ -24397,5 +24342,138 @@ mod tests {
         // "456"[2] = '6'
         let result = core.read_register(2).unwrap();
         assert_eq!(result, Value::Str("6".to_string()), "charAt on number should coerce to string");
+    }
+
+    #[test]
+    fn math_round_negative_half_semantics() {
+        // Test JavaScript Math.round negative half semantics
+        // JavaScript uses floor(x + 0.5), not Rust's round away from zero
+        let mut core = BaselineInterpreter::new();
+
+        // Test -0.5 → -0 (not -1)
+        core.set_register(0, Value::Float(Float64::new(-0.5))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        match result {
+            Value::Float(f) => {
+                let val = f.inner();
+                assert!(val == -0.0 || val == 0.0, "Math.round(-0.5) should be -0, got {}", val);
+            }
+            Value::Int(0) => {}, // Also acceptable
+            _ => panic!("Math.round(-0.5) should be -0, got {:?}", result),
+        }
+
+        // Test -1.5 → -1 (not -2)
+        core.set_register(0, Value::Float(Float64::new(-1.5))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        assert_eq!(result, Value::Int(-1), "Math.round(-1.5) should be -1, got {:?}", result);
+    }
+
+    #[test]
+    fn math_round_edge_cases() {
+        let mut core = BaselineInterpreter::new();
+
+        // Test -0.1 → -0
+        core.set_register(0, Value::Float(Float64::new(-0.1))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        match result {
+            Value::Float(f) => {
+                let val = f.inner();
+                assert!(val == -0.0 || val == 0.0, "Math.round(-0.1) should be -0, got {}", val);
+            }
+            Value::Int(0) => {}, // Also acceptable
+            _ => panic!("Math.round(-0.1) should be -0, got {:?}", result),
+        }
+
+        // Test +0.5 → 1
+        core.set_register(0, Value::Float(Float64::new(0.5))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        assert_eq!(result, Value::Int(1), "Math.round(0.5) should be 1, got {:?}", result);
+
+        // Test NaN → NaN
+        core.set_register(0, Value::Float(Float64::new(f64::NAN))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        match result {
+            Value::Float(f) => assert!(f.inner().is_nan(), "Math.round(NaN) should be NaN"),
+            _ => panic!("Math.round(NaN) should be NaN, got {:?}", result),
+        }
+
+        // Test +Infinity → +Infinity
+        core.set_register(0, Value::Float(Float64::new(f64::INFINITY))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        match result {
+            Value::Float(f) => assert_eq!(f.inner(), f64::INFINITY, "Math.round(+Infinity) should be +Infinity"),
+            _ => panic!("Math.round(+Infinity) should be +Infinity, got {:?}", result),
+        }
+
+        // Test -Infinity → -Infinity
+        core.set_register(0, Value::Float(Float64::new(f64::NEG_INFINITY))).unwrap();
+        core.execute_module(test_module(vec![
+            Ir3Instruction::CallBuiltinId {
+                id: 53, // MathRound
+                args: RegRange { start: 0, count: 1 },
+                dest: 1,
+            },
+            Ir3Instruction::Halt,
+        ])).unwrap();
+
+        let result = core.read_register(1).unwrap();
+        match result {
+            Value::Float(f) => assert_eq!(f.inner(), f64::NEG_INFINITY, "Math.round(-Infinity) should be -Infinity"),
+            _ => panic!("Math.round(-Infinity) should be -Infinity, got {:?}", result),
+        }
     }
 }

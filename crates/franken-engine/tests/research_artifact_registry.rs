@@ -14,6 +14,13 @@ type SeededEntry = (
     fn() -> ResearchArtifactRegistry,
 );
 
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate manifest dir should be under workspace crates/")
+}
+
 #[test]
 fn test_research_artifact_registry_integration() {
     // Create registry with multiple artifacts
@@ -263,7 +270,7 @@ fn test_seeded_research_artifact_entries_have_coverage() {
             artifact.bundle_path
         );
 
-        let bundle_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&artifact.bundle_path);
+        let bundle_path = repo_root().join(&artifact.bundle_path);
         assert!(
             bundle_path.is_file(),
             "registered artifact bundle does not exist for {artifact_id}: {}",

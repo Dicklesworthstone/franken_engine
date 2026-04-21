@@ -1406,6 +1406,11 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::Cell(_)
         | OrchestratorError::Containment(_)
         | OrchestratorError::IfcRuntimeGuardBlocked { .. }
+        | OrchestratorError::ScheduleCostGraph { .. }
+        | OrchestratorError::ScheduleCostOptimization { .. }
+        | OrchestratorError::EvidenceCompressionCoder { .. }
+        | OrchestratorError::EvidenceCompressionEncode { .. }
+        | OrchestratorError::EvidenceCompressionKraft { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
     }

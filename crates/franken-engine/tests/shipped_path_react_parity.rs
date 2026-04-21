@@ -23,6 +23,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::hash_tiers::ContentHash;
+use serde_json::Value;
 
 fn temp_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -76,6 +77,11 @@ fn compute_output_hash(output: &[u8]) -> ContentHash {
     ContentHash::compute(output)
 }
 
+fn read_json_output(path: &Path) -> Value {
+    let bytes = fs::read(path).expect("json output should be readable");
+    serde_json::from_slice(&bytes).expect("json output should parse")
+}
+
 // ---------------------------------------------------------------------------
 // Baseline manifest for parity comparison
 // ---------------------------------------------------------------------------
@@ -119,10 +125,10 @@ fn shipped_path_react_compile_run_parity_hello_world() {
             "compile",
             "--input",
             app_path.to_str().expect("path should be utf8"),
-            "--output",
+            "--out",
             compile_out.to_str().expect("path should be utf8"),
-            "--format",
-            "js",
+            "--goal",
+            "module",
         ])
         .output()
         .expect("frankenctl compile should execute");
@@ -143,11 +149,13 @@ fn shipped_path_react_compile_run_parity_hello_world() {
         .args([
             "run",
             "--input",
-            compile_out.to_str().expect("path should be utf8"),
-            "--output",
+            app_path.to_str().expect("path should be utf8"),
+            "--extension-id",
+            "react-parity-hello",
+            "--out",
             run_out.to_str().expect("path should be utf8"),
-            "--runtime",
-            "node",
+            "--goal",
+            "module",
         ])
         .output()
         .expect("frankenctl run should execute");
@@ -243,19 +251,16 @@ root.render(React.createElement(App));
             "compile",
             "--input",
             client_path.to_str().expect("path should be utf8"),
-            "--output",
+            "--out",
             output_path.to_str().expect("path should be utf8"),
-            "--format",
-            "js",
-            "--react-ecosystem",
-            "client",
+            "--goal",
+            "module",
         ])
         .output()
         .expect("frankenctl should execute");
 
-    // Should succeed with react-dom/client compatibility
     assert!(
-        output.status.success() || output.stderr.is_empty(),
+        output.status.success(),
         "React ecosystem compile should handle react-dom/client: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -293,42 +298,48 @@ fn react_compile_run_determinism_through_shipped_path() {
         "compile",
         "--input",
         app_path.to_str().expect("path should be utf8"),
-        "--format",
-        "js",
+        "--goal",
+        "module",
     ];
 
     let output1 = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args(&cmd_args)
-        .arg("--output")
+        .arg("--out")
         .arg(compile_out1.to_str().expect("path should be utf8"))
         .output()
         .expect("first compile should execute");
 
     let output2 = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args(&cmd_args)
-        .arg("--output")
+        .arg("--out")
         .arg(compile_out2.to_str().expect("path should be utf8"))
         .output()
         .expect("second compile should execute");
 
-    if output1.status.success()
-        && output2.status.success()
-        && compile_out1.exists()
-        && compile_out2.exists()
-    {
-        let content1 = fs::read(&compile_out1).expect("first output should be readable");
-        let content2 = fs::read(&compile_out2).expect("second output should be readable");
+    assert!(
+        output1.status.success(),
+        "first compile should succeed: stderr={}",
+        String::from_utf8_lossy(&output1.stderr)
+    );
+    assert!(
+        output2.status.success(),
+        "second compile should succeed: stderr={}",
+        String::from_utf8_lossy(&output2.stderr)
+    );
+    assert!(compile_out1.exists(), "first compile output should exist");
+    assert!(compile_out2.exists(), "second compile output should exist");
 
-        let hash1 = compute_output_hash(&content1);
-        let hash2 = compute_output_hash(&content2);
+    let artifact1 = read_json_output(&compile_out1);
+    let artifact2 = read_json_output(&compile_out2);
 
-        // Deterministic compilation should produce identical hashes
-        assert_eq!(
-            hash1.as_bytes(),
-            hash2.as_bytes(),
-            "deterministic React compilation should produce identical output hashes"
-        );
-    }
+    assert_eq!(
+        artifact1["parse_goal"], artifact2["parse_goal"],
+        "deterministic React compilation should preserve parse goal"
+    );
+    assert_eq!(
+        artifact1["hashes"], artifact2["hashes"],
+        "deterministic React compilation should produce identical stable artifact hashes"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -362,10 +373,8 @@ function BrokenApp() {
             "compile",
             "--input",
             broken_path.to_str().expect("path should be utf8"),
-            "--output",
+            "--out",
             error_out.to_str().expect("path should be utf8"),
-            "--format",
-            "js",
         ])
         .output()
         .expect("frankenctl should execute");

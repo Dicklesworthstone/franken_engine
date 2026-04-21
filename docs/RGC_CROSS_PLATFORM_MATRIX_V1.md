@@ -17,7 +17,7 @@ The matrix is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cross-platform-matrix.v1`
-- `contract_version`: `1.1.2`
+- `contract_version`: `1.1.3`
 - `policy_id`: `policy-rgc-cross-platform-matrix-v1`
 
 ## Matrix Dimensions
@@ -47,6 +47,8 @@ Deterministic classes:
 - `missing_baseline_input` (`critical`): baseline manifest missing.
 
 Strict mode fails closed when required-target critical drift remains unresolved.
+`ci` and `matrix` modes always run strict matrix evaluation so the advertised
+support matrix is blocking in normal automation.
 
 ## Structured Logging Contract
 
@@ -77,8 +79,12 @@ Modes:
 
 Strict matrix evaluation is active when:
 
+- mode is `ci`,
 - mode is `matrix`, or
-- `RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1`
+- `RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1` is set by a custom wrapper.
+
+The `check`, `test`, and `clippy` modes validate the local contract/test
+surfaces only. They do not evaluate target manifest completeness.
 
 Manifest inputs are provided by environment variables:
 

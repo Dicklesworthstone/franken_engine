@@ -1104,7 +1104,7 @@ write_manifest() {
   echo "rgc cross-platform matrix summary: ${matrix_summary_path}"
 }
 
-if [[ "$mode" == "matrix" || "$require_matrix" == "1" ]]; then
+if [[ "$mode" == "ci" || "$mode" == "matrix" || "$require_matrix" == "1" ]]; then
   strict_matrix=true
 fi
 

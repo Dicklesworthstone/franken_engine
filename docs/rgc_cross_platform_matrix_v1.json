@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-cross-platform-matrix.v1",
-  "contract_version": "1.1.2",
+  "contract_version": "1.1.3",
   "bead_id": "bd-1lsy.11.13",
   "policy_id": "policy-rgc-cross-platform-matrix-v1",
   "required_log_keys": [
@@ -140,7 +140,7 @@
   "gate_runner": {
     "script": "scripts/run_rgc_cross_platform_matrix_gate.sh",
     "replay_wrapper": "scripts/e2e/rgc_cross_platform_matrix_replay.sh",
-    "strict_mode": "mode=matrix or RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1",
+    "strict_mode": "mode=ci or mode=matrix; RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1 remains accepted for explicit strict requests",
     "manifest_schema_version": "franken-engine.rgc-cross-platform-matrix.run-manifest.v1",
     "manifest_set_root_env": "RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT",
     "auto_discover_toggle_env": "RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS",

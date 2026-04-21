@@ -1966,8 +1966,9 @@ includes:
 
 `bd-1lsy.11.13` validates runtime and CLI workflow manifests across
 Linux/macOS/Windows and x64/arm64 targets, classifies drift with stable
-severity codes, and fails closed when strict matrix evaluation sees unresolved
-critical deltas. The gate can consume explicit per-target manifest env vars or
+severity codes, and fails closed in `ci` and `matrix` modes when required target
+manifests are missing or strict matrix evaluation sees unresolved critical
+deltas. The gate can consume explicit per-target manifest env vars or
 auto-discover the latest complete manifest set under
 `artifacts/rgc_cross_platform_matrix_inputs`.
 

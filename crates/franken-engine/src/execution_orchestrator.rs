@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    ExecutionResult, HookAction, InterpreterConfig, InterpreterError, InterpreterHook, LaneChoice,
-    LaneReason, LaneRouter, RoutedResult,
+    ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig, InterpreterError,
+    InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
 };
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
@@ -212,6 +212,7 @@ pub struct OrchestratorResult {
     pub lane: LaneChoice,
     pub lane_reason: LaneReason,
     pub execution_value: String,
+    pub console_output: Vec<ConsoleEntry>,
     pub instructions_executed: u64,
     pub adaptive_router_summary: Option<RouterSummary>,
     pub ir3_schedule_cost: Option<TropicalWeight>,
@@ -600,6 +601,7 @@ impl ExecutionOrchestrator {
         let lane_reason = routed.reason;
         let exec_result = routed.result;
         let execution_value = format!("{}", exec_result.value);
+        let console_output = exec_result.console_output.clone();
         let instructions_executed = exec_result.instructions_executed;
         let adaptive_router_summary = self.update_adaptive_router(lane, &exec_result);
 
@@ -681,6 +683,7 @@ impl ExecutionOrchestrator {
             lane,
             lane_reason,
             execution_value,
+            console_output,
             instructions_executed,
             adaptive_router_summary,
             ir3_schedule_cost,

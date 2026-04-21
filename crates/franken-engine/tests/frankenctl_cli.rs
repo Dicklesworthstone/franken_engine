@@ -2646,7 +2646,7 @@ fn frankenctl_compile_output_schema_version_is_v1() {
 #[test]
 fn frankenctl_run_output_has_execution_fields() {
     let source_path = temp_path("frankenctl_run_fields", "js");
-    write_source(&source_path, "let b = 2 * 3;\n");
+    write_source(&source_path, "console.log('sync'); let b = 2 * 3;\n");
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -2665,6 +2665,12 @@ fn frankenctl_run_output_has_execution_fields() {
     assert!(json["containment_action"].as_str().is_some());
     assert!(json["instructions_executed"].as_u64().is_some());
     assert!(json["evidence_entries"].as_u64().is_some());
+    let console_output = json["console_output"]
+        .as_array()
+        .expect("console_output should be an array");
+    assert_eq!(console_output.len(), 1);
+    assert_eq!(console_output[0]["level"].as_str(), Some("Log"));
+    assert_eq!(console_output[0]["message"].as_str(), Some("sync"));
 
     let _ = fs::remove_file(source_path);
 }

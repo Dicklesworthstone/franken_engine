@@ -437,7 +437,7 @@ impl TranslationValidationReceipt {
         }
         let preimage = self.signing_preimage();
         let expected = AuthenticityHash::compute_keyed(key, &preimage);
-        self.signature == expected
+        self.signature.constant_time_eq(&expected)
     }
 
     /// Whether this receipt permits the rewrite to be activated.

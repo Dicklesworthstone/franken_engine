@@ -31,6 +31,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 sha2 = "0.10"
+subtle = "2.6"
 hmac = "0.12"
 ed25519-dalek = "2.0"
 rand = "0.8"

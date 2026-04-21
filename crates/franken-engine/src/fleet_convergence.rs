@@ -259,7 +259,7 @@ impl ContainmentReceipt {
     /// Verify the receipt signature against a key.
     pub fn verify_signature(&self, key: &[u8]) -> bool {
         let expected = AuthenticityHash::compute_keyed(key, &self.signing_preimage());
-        self.signature == expected
+        self.signature.constant_time_eq(&expected)
     }
 }
 

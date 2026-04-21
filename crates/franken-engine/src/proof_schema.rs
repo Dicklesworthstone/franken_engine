@@ -478,7 +478,7 @@ impl OptReceipt {
     pub fn verify_signature(&self, key: &[u8]) -> bool {
         let preimage = self.signing_preimage();
         let expected = AuthenticityHash::compute_keyed(key, &preimage);
-        self.signature == expected
+        self.signature.constant_time_eq(&expected)
     }
 
     /// Derive the `EngineObjectId` for this receipt.
@@ -553,7 +553,7 @@ impl RollbackToken {
     pub fn verify_signature(&self, key: &[u8]) -> bool {
         let preimage = self.signing_preimage();
         let expected = AuthenticityHash::compute_keyed(key, &preimage);
-        self.issuer_signature == expected
+        self.issuer_signature.constant_time_eq(&expected)
     }
 
     /// Check if this token has expired relative to the given epoch.

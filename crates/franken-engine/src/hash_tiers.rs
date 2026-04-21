@@ -17,6 +17,7 @@ use std::fmt;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 // ---------------------------------------------------------------------------
 // Tier 1 — IntegrityHash (hot-path, non-cryptographic)
@@ -137,11 +138,7 @@ impl AuthenticityHash {
 
     /// Constant-time comparison for verification (no early exit).
     pub fn constant_time_eq(&self, other: &Self) -> bool {
-        let mut diff: u8 = 0;
-        for i in 0..32 {
-            diff |= self.0[i] ^ other.0[i];
-        }
-        diff == 0
+        self.0.ct_eq(&other.0).into()
     }
 }
 
@@ -496,6 +493,33 @@ mod tests {
         let a = AuthenticityHash::compute_keyed(b"key-1", b"data");
         let b = AuthenticityHash::compute_keyed(b"key-2", b"data");
         assert!(!a.constant_time_eq(&b));
+    }
+
+    #[test]
+    fn authenticity_hash_signature_verifiers_do_not_use_partial_eq() {
+        let checked_sources = [
+            ("fleet_convergence.rs", include_str!("fleet_convergence.rs")),
+            (
+                "translation_validation.rs",
+                include_str!("translation_validation.rs"),
+            ),
+            ("proof_schema.rs", include_str!("proof_schema.rs")),
+            (
+                "translation_validation_receipt.rs",
+                include_str!("translation_validation_receipt.rs"),
+            ),
+        ];
+
+        for (name, source) in checked_sources {
+            assert!(
+                !source.contains("signature == expected"),
+                "{name} must use AuthenticityHash::constant_time_eq for signature checks"
+            );
+            assert!(
+                !source.contains("issuer_signature == expected"),
+                "{name} must use AuthenticityHash::constant_time_eq for issuer signature checks"
+            );
+        }
     }
 
     #[test]

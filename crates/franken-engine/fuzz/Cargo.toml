@@ -1,0 +1,44 @@
+[package]
+name = "frankenengine-engine-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+frankenengine-engine = { path = "..", default-features = false }
+libfuzzer-sys = "0.4"
+serde_json = "1.0"
+tempfile = "3"
+
+[[bin]]
+name = "architecture_inventory"
+path = "fuzz_targets/architecture_inventory.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "baseline_object_to_string"
+path = "fuzz_targets/baseline_object_to_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "eval_route_classifier"
+path = "fuzz_targets/eval_route_classifier.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "revocation_check_event"
+path = "fuzz_targets/revocation_check_event.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

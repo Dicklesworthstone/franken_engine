@@ -1168,20 +1168,8 @@ fn normalize_source(source: &str) -> EvalResult<&str> {
 }
 
 fn route_reason_for_source(source: &str) -> RouteReason {
-    let mut saw_await = false;
     let mut scanner = EvalRouteKeywordScanner::new(source);
-    while let Some(keyword) = scanner.next_code_keyword() {
-        match keyword {
-            EvalRouteKeyword::Import => return RouteReason::ContainsImportKeyword,
-            EvalRouteKeyword::Await => saw_await = true,
-        }
-    }
-
-    if saw_await {
-        RouteReason::ContainsAwaitKeyword
-    } else {
-        RouteReason::DefaultQuickJsPath
-    }
+    scanner.classify_route()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1195,12 +1183,37 @@ struct EvalRouteKeywordScanner<'a> {
     index: usize,
 }
 
+enum EvalRouteScan {
+    End,
+    TemplateExpressionEnd,
+    Keyword(EvalRouteKeyword),
+}
+
 impl<'a> EvalRouteKeywordScanner<'a> {
     const fn new(source: &'a str) -> Self {
         Self { source, index: 0 }
     }
 
-    fn next_code_keyword(&mut self) -> Option<EvalRouteKeyword> {
+    fn classify_route(&mut self) -> RouteReason {
+        let mut saw_await = false;
+        while let EvalRouteScan::Keyword(keyword) = self.scan_code(false) {
+            match keyword {
+                EvalRouteKeyword::Import => return RouteReason::ContainsImportKeyword,
+                EvalRouteKeyword::Await => saw_await = true,
+            }
+        }
+
+        if saw_await {
+            RouteReason::ContainsAwaitKeyword
+        } else {
+            RouteReason::DefaultQuickJsPath
+        }
+    }
+
+    fn scan_code(&mut self, stop_at_template_expression: bool) -> EvalRouteScan {
+        let mut brace_depth = 0_u32;
+        let mut can_start_regex = true;
+
         while self.index < self.source.len() {
             let rest = &self.source[self.index..];
             if rest.starts_with("//") {
@@ -1212,24 +1225,69 @@ impl<'a> EvalRouteKeywordScanner<'a> {
                 continue;
             }
 
-            let ch = self.current_char()?;
-            if matches!(ch, '\'' | '"' | '`') {
+            let Some(ch) = self.current_char() else {
+                return EvalRouteScan::End;
+            };
+            if stop_at_template_expression && ch == '}' && brace_depth == 0 {
+                self.advance_char();
+                return EvalRouteScan::TemplateExpressionEnd;
+            }
+            if matches!(ch, '\'' | '"') {
                 self.skip_quoted_literal(ch);
+                can_start_regex = false;
+                continue;
+            }
+            if ch == '`' {
+                match self.scan_template_literal() {
+                    EvalRouteScan::Keyword(keyword) => return EvalRouteScan::Keyword(keyword),
+                    EvalRouteScan::End | EvalRouteScan::TemplateExpressionEnd => {}
+                }
+                can_start_regex = false;
+                continue;
+            }
+            if ch == '/' {
+                if can_start_regex {
+                    self.skip_regex_literal();
+                    can_start_regex = false;
+                } else {
+                    self.advance_char();
+                    can_start_regex = true;
+                }
                 continue;
             }
             if is_eval_route_identifier_start(ch) {
                 let identifier = self.consume_identifier();
                 match identifier {
-                    "import" => return Some(EvalRouteKeyword::Import),
-                    "await" => return Some(EvalRouteKeyword::Await),
-                    _ => continue,
+                    "import" => return EvalRouteScan::Keyword(EvalRouteKeyword::Import),
+                    "await" => return EvalRouteScan::Keyword(EvalRouteKeyword::Await),
+                    _ => {
+                        can_start_regex = false;
+                        continue;
+                    }
                 }
+            }
+            if ch.is_ascii_digit() {
+                self.consume_number_like();
+                can_start_regex = false;
+                continue;
             }
 
             self.advance_char();
+            match ch {
+                '{' => {
+                    brace_depth = brace_depth.saturating_add(1);
+                    can_start_regex = true;
+                }
+                '}' => {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    can_start_regex = false;
+                }
+                ')' | ']' => can_start_regex = false,
+                _ => can_start_regex = true,
+            }
         }
 
-        None
+        EvalRouteScan::End
     }
 
     fn current_char(&self) -> Option<char> {
@@ -1280,6 +1338,71 @@ impl<'a> EvalRouteKeywordScanner<'a> {
         }
     }
 
+    fn scan_template_literal(&mut self) -> EvalRouteScan {
+        self.advance_char();
+        let mut escaped = false;
+        while self.index < self.source.len() {
+            let rest = &self.source[self.index..];
+            if escaped {
+                self.advance_char();
+                escaped = false;
+                continue;
+            }
+            if rest.starts_with("${") {
+                self.index += 2;
+                match self.scan_code(true) {
+                    EvalRouteScan::Keyword(keyword) => return EvalRouteScan::Keyword(keyword),
+                    EvalRouteScan::TemplateExpressionEnd => continue,
+                    EvalRouteScan::End => return EvalRouteScan::End,
+                }
+            }
+
+            let Some(ch) = self.current_char() else {
+                break;
+            };
+            self.advance_char();
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == '`' {
+                break;
+            }
+        }
+
+        EvalRouteScan::End
+    }
+
+    fn skip_regex_literal(&mut self) {
+        self.advance_char();
+        let mut escaped = false;
+        let mut in_character_class = false;
+        while self.index < self.source.len() {
+            let Some(ch) = self.current_char() else {
+                break;
+            };
+            self.advance_char();
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '[' => in_character_class = true,
+                ']' => in_character_class = false,
+                '/' if !in_character_class => {
+                    while self
+                        .current_char()
+                        .is_some_and(is_eval_route_identifier_continue)
+                    {
+                        self.advance_char();
+                    }
+                    break;
+                }
+                '\n' | '\r' => break,
+                _ => {}
+            }
+        }
+    }
+
     fn consume_identifier(&mut self) -> &'a str {
         let start = self.index;
         self.advance_char();
@@ -1293,6 +1416,19 @@ impl<'a> EvalRouteKeywordScanner<'a> {
             self.advance_char();
         }
         &self.source[start..self.index]
+    }
+
+    fn consume_number_like(&mut self) {
+        self.advance_char();
+        while self.index < self.source.len() {
+            let Some(ch) = self.current_char() else {
+                break;
+            };
+            if !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.')) {
+                break;
+            }
+            self.advance_char();
+        }
     }
 }
 

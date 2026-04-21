@@ -380,6 +380,22 @@ fn hybrid_route_classifier_ignores_comment_and_literal_keywords_conformance() {
             expected: RouteReason::DefaultQuickJsPath,
         },
         Case {
+            source: "`literal ${await job()} tail`;",
+            expected: RouteReason::ContainsAwaitKeyword,
+        },
+        Case {
+            source: "`literal ${import(\"pkg\")} tail`;",
+            expected: RouteReason::ContainsImportKeyword,
+        },
+        Case {
+            source: "`literal ${1} import await tail`;",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "/import await/.test(source);",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
             source: "// import x from \"pkg\"\n'route';",
             expected: RouteReason::DefaultQuickJsPath,
         },

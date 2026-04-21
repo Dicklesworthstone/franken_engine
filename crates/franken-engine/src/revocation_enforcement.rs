@@ -2218,15 +2218,21 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    #[ignore = "API drift: VerificationKey::from_bytes([0; 32]) now returns Err (all-zero rejected)"]
-    fn enrichment_key_id_from_all_zeros() {
-        unimplemented!("all-zero VerificationKey construction is now rejected");
+    fn enrichment_key_id_from_zero_seed_signing_key_is_deterministic() {
+        let key = test_vk(0);
+        let key_id_a = key_id_from_verification_key(&key);
+        let key_id_b = key_id_from_verification_key(&key);
+
+        assert_eq!(key_id_a, key_id_b);
+        assert_ne!(key_id_a, EngineObjectId([0; 32]));
     }
 
     #[test]
-    #[ignore = "API drift: VerificationKey::from_bytes([0xFF; 32]) is not a valid Ed25519 point"]
-    fn enrichment_key_id_from_all_ones() {
-        unimplemented!("needs rewrite against valid Ed25519 byte patterns");
+    fn enrichment_key_id_from_distinct_valid_keys_is_distinct() {
+        let key_id_a = key_id_from_verification_key(&test_vk(0));
+        let key_id_b = key_id_from_verification_key(&test_vk(0xFF));
+
+        assert_ne!(key_id_a, key_id_b);
     }
 
     // ---------------------------------------------------------------

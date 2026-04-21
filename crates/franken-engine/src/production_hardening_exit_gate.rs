@@ -27,6 +27,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Errors that can occur during production hardening gate execution
@@ -188,6 +189,29 @@ impl FaultType {
             Self::DiskFull => "disk_full",
             Self::MemoryPressure => "memory_pressure",
             Self::CPUStarvation => "cpu_starvation",
+        }
+    }
+}
+
+impl PropertyType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ParserInvariants => "parser_invariants",
+            Self::IRInvariants => "ir_invariants",
+            Self::ExecutionInvariants => "execution_invariants",
+            Self::PolicyMonotonicity => "policy_monotonicity",
+            Self::EvidenceDeterminism => "evidence_determinism",
+        }
+    }
+}
+
+impl RolloutStage {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Canary => "canary",
+            Self::Ramp => "ramp",
+            Self::Default => "default",
         }
     }
 }
@@ -456,7 +480,8 @@ impl ProductionHardeningGateExecution {
             entry.validation_status = ValidationStatus::InProgress;
 
             // Validate attack vector containment
-            let containment_result = Self::validate_attack_containment(&entry.attack_vector)?;
+            let containment_result =
+                Self::validate_attack_containment(&self.evidence_artifacts, &entry.attack_vector)?;
 
             // Check actual containment time against SLO threshold, not just stub boolean
             if containment_result.actual_containment_ms <= entry.slo_threshold_ms {
@@ -502,7 +527,8 @@ impl ProductionHardeningGateExecution {
         for campaign in &mut self.fuzz_campaigns {
             campaign.completion_status = ValidationStatus::InProgress;
 
-            let fuzz_result = Self::execute_fuzz_target(&campaign.target, campaign.min_cpu_hours)?;
+            let fuzz_result =
+                Self::execute_fuzz_target(&self.evidence_artifacts, &campaign.target)?;
 
             if fuzz_result.cpu_hours >= campaign.min_cpu_hours
                 && fuzz_result.coverage_pct >= campaign.coverage_threshold_pct
@@ -544,7 +570,11 @@ impl ProductionHardeningGateExecution {
         for test in &mut self.property_tests {
             test.validation_status = ValidationStatus::InProgress;
 
-            let property_result = Self::validate_property(&test.component, &test.property_type)?;
+            let property_result = Self::validate_property(
+                &self.evidence_artifacts,
+                &test.component,
+                &test.property_type,
+            )?;
 
             if property_result.test_cases >= test.test_cases_threshold
                 && property_result.success_rate_pct >= test.success_rate_threshold_pct
@@ -586,7 +616,10 @@ impl ProductionHardeningGateExecution {
         for test in &mut self.metamorphic_tests {
             test.validation_status = ValidationStatus::InProgress;
 
-            let metamorphic_result = Self::validate_metamorphic_property(&test.transformation)?;
+            let metamorphic_result = Self::validate_metamorphic_property(
+                &self.evidence_artifacts,
+                &test.transformation,
+            )?;
 
             if metamorphic_result.test_cases >= test.test_cases_threshold
                 && metamorphic_result.preservation_validated
@@ -630,7 +663,8 @@ impl ProductionHardeningGateExecution {
         for stage in &mut self.rollout_validation {
             stage.validation_status = ValidationStatus::InProgress;
 
-            let rollout_result = Self::validate_rollout_stage(&stage.stage)?;
+            let rollout_result =
+                Self::validate_rollout_stage(&self.evidence_artifacts, &stage.stage)?;
 
             if rollout_result.error_rate_pct <= stage.error_rate_threshold_pct
                 && rollout_result.latency_p99_ms <= stage.latency_threshold_p99_ms
@@ -674,7 +708,8 @@ impl ProductionHardeningGateExecution {
         for drill in &mut self.fault_injection_drills {
             drill.validation_status = ValidationStatus::InProgress;
 
-            let drill_result = Self::execute_fault_injection_drill(&drill.fault_type)?;
+            let drill_result =
+                Self::execute_fault_injection_drill(&self.evidence_artifacts, &drill.fault_type)?;
 
             if drill_result.recovery_time_mins <= drill.recovery_slo_mins
                 && drill_result.system_recovered
@@ -726,8 +761,10 @@ impl ProductionHardeningGateExecution {
         for drill in &mut self.quarantine_drills {
             drill.validation_status = ValidationStatus::InProgress;
 
-            let quarantine_result =
-                Self::execute_quarantine_drill(&drill.malicious_extension_type)?;
+            let quarantine_result = Self::execute_quarantine_drill(
+                &self.evidence_artifacts,
+                &drill.malicious_extension_type,
+            )?;
 
             if quarantine_result.containment_time_mins <= drill.containment_slo_mins
                 && quarantine_result.convergence_time_mins <= drill.convergence_slo_mins
@@ -781,8 +818,11 @@ impl ProductionHardeningGateExecution {
         for audit in &mut self.replay_audits {
             audit.validation_status = ValidationStatus::InProgress;
 
-            let replay_result =
-                Self::execute_incident_replay(&audit.incident_severity, &audit.environment)?;
+            let replay_result = Self::execute_incident_replay(
+                &self.evidence_artifacts,
+                &audit.incident_severity,
+                &audit.environment,
+            )?;
 
             if replay_result.success_rate_pct >= audit.replay_success_threshold_pct {
                 audit.validation_status = ValidationStatus::Passed;
@@ -831,7 +871,7 @@ impl ProductionHardeningGateExecution {
 
         self.e2e_deployment_status = ValidationStatus::InProgress;
 
-        let deployment_result = self.execute_e2e_deployment_scenario()?;
+        let deployment_result = Self::execute_e2e_deployment_scenario(&self.evidence_artifacts)?;
 
         if deployment_result.deployment_successful
             && deployment_result.fault_injection_recovery
@@ -1116,84 +1156,126 @@ impl ProductionHardeningGateExecution {
         })
     }
 
-    // Helper methods for validation execution (stubbed for compilation)
+    // Helper methods for validation execution.
 
     fn validate_attack_containment(
-        _attack_vector: &str,
+        evidence_artifacts: &BTreeMap<String, String>,
+        attack_vector: &str,
     ) -> Result<AttackContainmentResult, String> {
-        // PLACEHOLDER: This stub returns hardcoded values that will fail SLO validation.
-        // The 150ms result exceeds most default SLO thresholds (100ms, 50ms) and should
-        // cause production readiness validation to fail until real measurement is implemented.
+        let key = format!("security:{attack_vector}");
+        let artifact = required_evidence(evidence_artifacts, &key)?;
         Ok(AttackContainmentResult {
-            actual_containment_ms: 150,
-            evidence_file: "containment_evidence.json".to_string(),
+            actual_containment_ms: parse_evidence_field(artifact, "actual_containment_ms")?,
+            evidence_file: evidence_field(artifact, "evidence_file")
+                .unwrap_or(key.as_str())
+                .to_string(),
         })
     }
 
-    fn execute_fuzz_target(_target: &str, _min_hours: u32) -> Result<FuzzResult, String> {
+    fn execute_fuzz_target(
+        evidence_artifacts: &BTreeMap<String, String>,
+        target: &str,
+    ) -> Result<FuzzResult, String> {
+        let artifact = required_evidence(evidence_artifacts, &format!("fuzz:{target}"))?;
         Ok(FuzzResult {
-            cpu_hours: 25,
-            coverage_pct: 85.0,
-            crash_count: 0,
+            cpu_hours: parse_evidence_field(artifact, "cpu_hours")?,
+            coverage_pct: parse_evidence_field(artifact, "coverage_pct")?,
+            crash_count: parse_evidence_field(artifact, "crash_count")?,
         })
     }
 
     fn validate_property(
-        _component: &str,
-        _property_type: &PropertyType,
+        evidence_artifacts: &BTreeMap<String, String>,
+        component: &str,
+        property_type: &PropertyType,
     ) -> Result<PropertyResult, String> {
+        let artifact = required_evidence(
+            evidence_artifacts,
+            &format!("property:{component}:{}", property_type.as_str()),
+        )?;
         Ok(PropertyResult {
-            test_cases: 1000,
-            success_rate_pct: 99.9,
+            test_cases: parse_evidence_field(artifact, "test_cases")?,
+            success_rate_pct: parse_evidence_field(artifact, "success_rate_pct")?,
         })
     }
 
-    fn validate_metamorphic_property(_transformation: &str) -> Result<MetamorphicResult, String> {
+    fn validate_metamorphic_property(
+        evidence_artifacts: &BTreeMap<String, String>,
+        transformation: &str,
+    ) -> Result<MetamorphicResult, String> {
+        let artifact =
+            required_evidence(evidence_artifacts, &format!("metamorphic:{transformation}"))?;
         Ok(MetamorphicResult {
-            test_cases: 500,
-            preservation_validated: true,
+            test_cases: parse_evidence_field(artifact, "test_cases")?,
+            preservation_validated: parse_bool_evidence_field(artifact, "preservation_validated")?,
         })
     }
 
-    fn validate_rollout_stage(_stage: &RolloutStage) -> Result<RolloutResult, String> {
+    fn validate_rollout_stage(
+        evidence_artifacts: &BTreeMap<String, String>,
+        stage: &RolloutStage,
+    ) -> Result<RolloutResult, String> {
+        let artifact =
+            required_evidence(evidence_artifacts, &format!("rollout:{}", stage.as_str()))?;
         Ok(RolloutResult {
-            error_rate_pct: 0.1,
-            latency_p99_ms: 200,
+            error_rate_pct: parse_evidence_field(artifact, "error_rate_pct")?,
+            latency_p99_ms: parse_evidence_field(artifact, "latency_p99_ms")?,
         })
     }
 
     fn execute_fault_injection_drill(
-        _fault_type: &FaultType,
+        evidence_artifacts: &BTreeMap<String, String>,
+        fault_type: &FaultType,
     ) -> Result<FaultInjectionResult, String> {
+        let artifact = required_evidence(
+            evidence_artifacts,
+            &format!("fault:{}", fault_type.as_str()),
+        )?;
         Ok(FaultInjectionResult {
-            recovery_time_mins: 3,
-            system_recovered: true,
+            recovery_time_mins: parse_evidence_field(artifact, "recovery_time_mins")?,
+            system_recovered: parse_bool_evidence_field(artifact, "system_recovered")?,
         })
     }
 
-    fn execute_quarantine_drill(_extension_type: &str) -> Result<QuarantineResult, String> {
+    fn execute_quarantine_drill(
+        evidence_artifacts: &BTreeMap<String, String>,
+        extension_type: &str,
+    ) -> Result<QuarantineResult, String> {
+        let artifact =
+            required_evidence(evidence_artifacts, &format!("quarantine:{extension_type}"))?;
         Ok(QuarantineResult {
-            containment_time_mins: 2,
-            convergence_time_mins: 5,
-            fleet_contained: true,
+            containment_time_mins: parse_evidence_field(artifact, "containment_time_mins")?,
+            convergence_time_mins: parse_evidence_field(artifact, "convergence_time_mins")?,
+            fleet_contained: parse_bool_evidence_field(artifact, "fleet_contained")?,
         })
     }
 
     fn execute_incident_replay(
-        _severity: &str,
-        _environment: &str,
+        evidence_artifacts: &BTreeMap<String, String>,
+        severity: &str,
+        environment: &str,
     ) -> Result<ReplayResult, String> {
+        let artifact = required_evidence(
+            evidence_artifacts,
+            &format!("replay:{severity}:{environment}"),
+        )?;
         Ok(ReplayResult {
-            success_rate_pct: 100.0,
+            success_rate_pct: parse_evidence_field(artifact, "success_rate_pct")?,
         })
     }
 
-    fn execute_e2e_deployment_scenario(&self) -> Result<E2EDeploymentResult, String> {
+    fn execute_e2e_deployment_scenario(
+        evidence_artifacts: &BTreeMap<String, String>,
+    ) -> Result<E2EDeploymentResult, String> {
+        let artifact = required_evidence(evidence_artifacts, "e2e:deployment")?;
         Ok(E2EDeploymentResult {
-            deployment_successful: true,
-            fault_injection_recovery: true,
-            containment_validated: true,
-            evidence_audit_passed: true,
+            deployment_successful: parse_bool_evidence_field(artifact, "deployment_successful")?,
+            fault_injection_recovery: parse_bool_evidence_field(
+                artifact,
+                "fault_injection_recovery",
+            )?,
+            containment_validated: parse_bool_evidence_field(artifact, "containment_validated")?,
+            evidence_audit_passed: parse_bool_evidence_field(artifact, "evidence_audit_passed")?,
         })
     }
 
@@ -1415,6 +1497,52 @@ impl ProductionHardeningGateExecution {
         }
 
         failures
+    }
+}
+
+fn required_evidence<'a>(
+    evidence_artifacts: &'a BTreeMap<String, String>,
+    key: &str,
+) -> Result<&'a str, String> {
+    evidence_artifacts
+        .get(key)
+        .map(String::as_str)
+        .ok_or_else(|| format!("missing production hardening evidence artifact `{key}`"))
+}
+
+fn evidence_field<'a>(artifact: &'a str, field: &str) -> Option<&'a str> {
+    artifact
+        .split([';', '\n', ','])
+        .filter_map(|part| part.split_once('='))
+        .find_map(|(name, value)| {
+            if name.trim() == field {
+                Some(value.trim())
+            } else {
+                None
+            }
+        })
+}
+
+fn parse_evidence_field<T>(artifact: &str, field: &str) -> Result<T, String>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    let value = evidence_field(artifact, field)
+        .ok_or_else(|| format!("missing evidence field `{field}`"))?;
+    value
+        .parse::<T>()
+        .map_err(|err| format!("invalid evidence field `{field}` value `{value}`: {err}"))
+}
+
+fn parse_bool_evidence_field(artifact: &str, field: &str) -> Result<bool, String> {
+    match evidence_field(artifact, field) {
+        Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(value) => Err(format!(
+            "invalid evidence field `{field}` value `{value}`: expected true or false"
+        )),
+        None => Err(format!("missing evidence field `{field}`")),
     }
 }
 
@@ -1822,6 +1950,37 @@ mod tests {
         assert!(!gate.security_matrix.is_empty());
         assert!(!gate.fuzz_campaigns.is_empty());
         assert!(!gate.property_tests.is_empty());
+    }
+
+    #[test]
+    fn validation_helpers_fail_closed_without_evidence() {
+        let evidence_artifacts = BTreeMap::new();
+
+        let err = ProductionHardeningGateExecution::validate_attack_containment(
+            &evidence_artifacts,
+            "memory-corruption",
+        )
+        .unwrap_err();
+        assert!(err.contains("security:memory-corruption"));
+
+        let err =
+            ProductionHardeningGateExecution::execute_fuzz_target(&evidence_artifacts, "parser")
+                .unwrap_err();
+        assert!(err.contains("fuzz:parser"));
+    }
+
+    #[test]
+    fn production_gate_cannot_pass_from_hardcoded_helper_outputs() {
+        let mut gate =
+            ProductionHardeningGateExecution::new("test-gate-missing-evidence".to_string())
+                .unwrap();
+
+        let err = gate.execute_production_hardening_gate().unwrap_err();
+        assert!(err.contains("missing production hardening evidence artifact"));
+        assert!(!matches!(
+            gate.status,
+            ProductionReadinessStatus::ProductionReady
+        ));
     }
 
     #[test]

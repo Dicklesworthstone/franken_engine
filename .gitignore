@@ -37,6 +37,7 @@ storage.sqlite3
 # Additional build target directories (alternate targets, remote compilation helper)
 /target2/
 /target_rch_*/
+/target_cod_*/
 .rch_cargo_home_*/
 .rch_*/
 
@@ -96,6 +97,8 @@ __pycache__/
 # Additional stray alternate build-target roots (rch / checkout)
 /target_standalone/
 crates/*/target_standalone/
+crates/*/target/
+crates/*/target_cod_*/
 
 # Ephemeral one-off refactoring scripts (agent-generated)
 apply_fix.py

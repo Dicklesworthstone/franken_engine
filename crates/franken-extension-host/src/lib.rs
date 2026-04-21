@@ -2476,6 +2476,15 @@ impl fmt::Display for CapabilityEscrowError {
 
 impl std::error::Error for CapabilityEscrowError {}
 
+impl From<PolicySignError> for CapabilityEscrowError {
+    fn from(value: PolicySignError) -> Self {
+        Self::ReceiptEmissionFailed {
+            request_id: value.request_id().to_string(),
+            detail: value.to_string(),
+        }
+    }
+}
+
 pub struct CapabilityEscrowEvaluationContext {
     pub open_requests_for_extension: usize,
 }

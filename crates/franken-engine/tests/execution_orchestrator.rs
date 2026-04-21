@@ -689,6 +689,41 @@ fn result_ir3_schedule_cost_is_some_and_non_negative() {
 }
 
 #[test]
+fn loop_control_flow_executes_without_schedule_cost_failure() {
+    let cases = [
+        (
+            "ext-loop-for-break-continue",
+            "for (; false;) { continue; } 42;",
+            "42",
+        ),
+        (
+            "ext-loop-while-break-continue",
+            "while (false) { break; } 42;",
+            "42",
+        ),
+        (
+            "ext-loop-do-while-break-continue",
+            "do { continue; } while (false); 42;",
+            "42",
+        ),
+        (
+            "ext-loop-labeled-break",
+            "for (; false;) { outer: { break outer; } } 42;",
+            "42",
+        ),
+    ];
+
+    for (id, source, expected) in cases {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = simple_package(id, source);
+        let result = orch
+            .execute(&pkg)
+            .unwrap_or_else(|err| panic!("{id} should execute valid loop control flow: {err}"));
+        assert_eq!(result.execution_value, expected, "{id}");
+    }
+}
+
+#[test]
 fn result_adaptive_router_summary_present() {
     let mut orch = ExecutionOrchestrator::with_defaults();
     let pkg = simple_package("ext-ars", "42");

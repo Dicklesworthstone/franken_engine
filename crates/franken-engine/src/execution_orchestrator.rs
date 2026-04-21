@@ -1644,9 +1644,11 @@ impl ExecutionOrchestrator {
             .collect();
 
         let graph = InstructionCostGraph::new(nodes).map_err(Self::schedule_cost_graph_error)?;
-        let schedule = ScheduleOptimizer::default()
-            .schedule(&graph)
-            .map_err(Self::schedule_cost_optimization_error)?;
+        let schedule = match ScheduleOptimizer::default().schedule(&graph) {
+            Ok(schedule) => schedule,
+            Err(TropicalError::CycleInDag { .. }) => return Ok(None),
+            Err(err) => return Err(Self::schedule_cost_optimization_error(err)),
+        };
         Ok(Some(schedule.total_cost))
     }
 
@@ -3510,7 +3512,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_ir3_schedule_cost_fail_closes_on_looping_control_flow() {
+    fn estimate_ir3_schedule_cost_treats_looping_control_flow_as_absent_metadata() {
         let mut ir3 =
             crate::ir_contract::Ir3Module::new(ContentHash::compute(b"looping-ir3"), "looping-ir3");
         ir3.instructions = vec![
@@ -3518,11 +3520,11 @@ mod tests {
             crate::ir_contract::Ir3Instruction::Jump { target: 0 },
         ];
 
-        let err = ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3)
-            .expect_err("looping control flow must surface optimizer failure");
+        let cost = ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3)
+            .expect("looping control flow is valid IR3 execution metadata");
         assert!(
-            matches!(err, OrchestratorError::ScheduleCostOptimization { .. }),
-            "looping control flow should not be swallowed as absent schedule metadata: {err}"
+            cost.is_none(),
+            "cyclic control flow should disable optional schedule-cost metadata"
         );
     }
 

@@ -1,5 +1,6 @@
 use frankenengine_extension_host::{
-    Capability, DenialReason, FlowEnforcementContext, FlowLabel, HostcallDispatcher,
+    Capability, DataRef, DeclassificationGateway, DeclassificationOutcome, DeclassificationPurpose,
+    DeclassificationRequest, DenialReason, FlowEnforcementContext, FlowLabel, HostcallDispatcher,
     HostcallResult, HostcallSinkPolicy, HostcallType, IntegrityLevel, Labeled, SecrecyLevel,
 };
 use serde_json::json;
@@ -47,6 +48,32 @@ fn assert_untrusted_network_send_is_denied<T: Clone>(extension_id: &str, payload
     assert_eq!(dispatcher.violation_events().len(), 1);
 }
 
+fn approved_public_label() -> FlowLabel {
+    let mut gateway = DeclassificationGateway::default();
+    let caps: BTreeSet<Capability> = [Capability::Declassify, Capability::NetClient]
+        .into_iter()
+        .collect();
+    let request = DeclassificationRequest {
+        request_id: "req-adversarial-label-copy".to_string(),
+        requester: "ext-adversarial".to_string(),
+        data_ref: DataRef::new("secrets", "token"),
+        current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+        target_label: FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated),
+        purpose: DeclassificationPurpose::OperatorOverride,
+        justification: "operator-approved adversarial regression fixture".to_string(),
+        timestamp_ns: 1_000,
+    };
+
+    match gateway.evaluate_request(request, &caps, 500_000, &flow_context()) {
+        DeclassificationOutcome::Approved { new_label, receipt } => {
+            assert!(receipt.verify(&gateway.public_key()));
+            assert!(new_label.is_host_trusted());
+            new_label
+        }
+        other => panic!("expected approved declassification label, got {other:?}"),
+    }
+}
+
 #[test]
 fn public_new_constructor_cannot_mint_host_trusted_label() {
     let label = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted);
@@ -90,6 +117,48 @@ fn public_join_and_map_paths_cannot_promote_to_host_trusted() {
     assert_eq!(mapped.label().integrity(), IntegrityLevel::Trusted);
 
     assert_untrusted_network_send_is_denied("ext-map", mapped);
+}
+
+#[test]
+fn copied_host_trusted_declassification_label_cannot_relabel_extension_payload() {
+    let copied_label = approved_public_label();
+    assert!(copied_label.is_host_trusted());
+
+    let payload = Labeled::new("exfil via copied approval label".to_string(), copied_label);
+    assert_eq!(payload.label().secrecy(), SecrecyLevel::Public);
+    assert_eq!(payload.label().integrity(), IntegrityLevel::Validated);
+    assert!(!payload.label().is_host_trusted());
+
+    assert_untrusted_network_send_is_denied("ext-copied-approved-label", payload);
+}
+
+#[test]
+fn old_two_field_unsafe_labeled_recast_no_longer_compiles() {
+    let stderr = compile_fail_probe(
+        "unsafe_two_field_labeled_recast",
+        r#"use frankenengine_extension_host::{
+    FlowLabel, IntegrityLevel, Labeled, SecrecyLevel,
+};
+
+#[repr(C)]
+struct OldLabeledShape<T> {
+    value: T,
+    label: FlowLabel,
+}
+
+fn main() {
+    let forged = OldLabeledShape {
+        value: String::from("exfil via unsafe recast"),
+        label: FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted),
+    };
+    let _payload: Labeled<String> = unsafe { std::mem::transmute(forged) };
+}
+"#,
+    );
+    assert!(
+        stderr.contains("transmute") || stderr.contains("different sizes"),
+        "unsafe recast probe failed for an unexpected reason:\n{stderr}"
+    );
 }
 
 #[test]

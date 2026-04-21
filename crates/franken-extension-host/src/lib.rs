@@ -6,6 +6,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CURRENT_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_NAME_LEN: usize = 128;
@@ -1583,16 +1585,103 @@ impl IntegrityLevel {
     }
 }
 
+type AuthorityTag = [u8; 32];
+
+const FLOW_LABEL_AUTHORITY_DOMAIN: &[u8] = b"franken-extension-host.flow-label-authority.v1";
+const LABELED_AUTHORITY_DOMAIN: &[u8] = b"franken-extension-host.labeled-authority.v1";
+
+fn host_authority_secret() -> AuthorityTag {
+    static SECRET: OnceLock<AuthorityTag> = OnceLock::new();
+    *SECRET.get_or_init(|| {
+        let mut hasher = Sha256::new();
+        hasher.update(b"franken-extension-host.host-authority-secret.v1");
+        hasher.update(std::process::id().to_be_bytes());
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        hasher.update(nanos.to_be_bytes());
+        let marker = 0u8;
+        hasher.update((&marker as *const u8 as usize).to_be_bytes());
+        let digest = hasher.finalize();
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&digest);
+        secret
+    })
+}
+
+fn authority_tag(domain: &[u8], secrecy: SecrecyLevel, integrity: IntegrityLevel) -> AuthorityTag {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(host_authority_secret());
+    hasher.update([secrecy.rank(), integrity.rank()]);
+    let digest = hasher.finalize();
+    let mut tag = [0u8; 32];
+    tag.copy_from_slice(&digest);
+    tag
+}
+
+fn authority_tag_eq(left: &AuthorityTag, right: &AuthorityTag) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LabelAuthority {
     #[default]
     UntrustedIngress,
-    HostTrusted,
+    HostTrusted {
+        tag: AuthorityTag,
+    },
 }
 
 impl LabelAuthority {
-    const fn is_host_trusted(self) -> bool {
-        matches!(self, Self::HostTrusted)
+    fn host_trusted(secrecy: SecrecyLevel, integrity: IntegrityLevel) -> Self {
+        Self::HostTrusted {
+            tag: authority_tag(FLOW_LABEL_AUTHORITY_DOMAIN, secrecy, integrity),
+        }
+    }
+
+    fn is_host_trusted(self, secrecy: SecrecyLevel, integrity: IntegrityLevel) -> bool {
+        match self {
+            Self::UntrustedIngress => false,
+            Self::HostTrusted { tag } => authority_tag_eq(
+                &tag,
+                &authority_tag(FLOW_LABEL_AUTHORITY_DOMAIN, secrecy, integrity),
+            ),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum LabeledAuthority {
+    #[default]
+    UntrustedIngress,
+    HostTrusted {
+        tag: AuthorityTag,
+    },
+}
+
+impl LabeledAuthority {
+    fn host_trusted(label: FlowLabel) -> Self {
+        Self::HostTrusted {
+            tag: authority_tag(LABELED_AUTHORITY_DOMAIN, label.secrecy(), label.integrity()),
+        }
+    }
+
+    fn is_host_trusted(self, label: FlowLabel) -> bool {
+        if !label.is_host_trusted() {
+            return false;
+        }
+        match self {
+            Self::UntrustedIngress => false,
+            Self::HostTrusted { tag } => authority_tag_eq(
+                &tag,
+                &authority_tag(LABELED_AUTHORITY_DOMAIN, label.secrecy(), label.integrity()),
+            ),
+        }
     }
 }
 
@@ -1614,11 +1703,19 @@ impl FlowLabel {
         }
     }
 
-    pub(crate) const fn host_trusted(secrecy: SecrecyLevel, integrity: IntegrityLevel) -> Self {
+    pub(crate) fn host_trusted(secrecy: SecrecyLevel, integrity: IntegrityLevel) -> Self {
         Self {
             secrecy,
             integrity,
-            authority: LabelAuthority::HostTrusted,
+            authority: LabelAuthority::host_trusted(secrecy, integrity),
+        }
+    }
+
+    const fn untrusted_ingress(self) -> Self {
+        Self {
+            secrecy: self.secrecy,
+            integrity: self.integrity,
+            authority: LabelAuthority::UntrustedIngress,
         }
     }
 
@@ -1635,15 +1732,10 @@ impl FlowLabel {
         } else {
             other.integrity
         };
-        let authority = if self.authority.is_host_trusted() && other.authority.is_host_trusted() {
-            LabelAuthority::HostTrusted
+        if self.is_host_trusted() && other.is_host_trusted() {
+            Self::host_trusted(secrecy, integrity)
         } else {
-            LabelAuthority::UntrustedIngress
-        };
-        Self {
-            secrecy,
-            integrity,
-            authority,
+            Self::new(secrecy, integrity)
         }
     }
 
@@ -1655,12 +1747,12 @@ impl FlowLabel {
         self.integrity
     }
 
-    pub const fn is_host_trusted(self) -> bool {
-        self.authority.is_host_trusted()
+    pub fn is_host_trusted(self) -> bool {
+        self.authority.is_host_trusted(self.secrecy, self.integrity)
     }
 
-    const fn enforcement_label(self) -> Self {
-        if self.authority.is_host_trusted() {
+    fn enforcement_label(self) -> Self {
+        if self.is_host_trusted() {
             self
         } else {
             Self::new(SecrecyLevel::TopSecret, IntegrityLevel::Untrusted)
@@ -1712,22 +1804,38 @@ impl FlowLabelLattice {
 pub struct Labeled<T> {
     value: T,
     label: FlowLabel,
+    #[serde(skip)]
+    authority: LabeledAuthority,
 }
 
 impl<T> Labeled<T> {
     pub const fn new(value: T, label: FlowLabel) -> Self {
-        Self { value, label }
+        Self {
+            value,
+            label: label.untrusted_ingress(),
+            authority: LabeledAuthority::UntrustedIngress,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn host_generated(value: T, label: FlowLabel) -> Self {
+        Self {
+            value,
+            label,
+            authority: LabeledAuthority::host_trusted(label),
+        }
     }
 
     pub fn system_generated(value: T) -> Self {
         Self {
             value,
             label: FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted),
+            authority: LabeledAuthority::UntrustedIngress,
         }
     }
 
     pub const fn label(&self) -> FlowLabel {
-        self.label
+        self.label.untrusted_ingress()
     }
 
     pub const fn value(&self) -> &T {
@@ -1741,7 +1849,16 @@ impl<T> Labeled<T> {
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Labeled<U> {
         Labeled {
             value: f(self.value),
-            label: self.label,
+            label: self.label.untrusted_ingress(),
+            authority: LabeledAuthority::UntrustedIngress,
+        }
+    }
+
+    fn enforcement_label(&self) -> FlowLabel {
+        if self.authority.is_host_trusted(self.label) {
+            self.label.enforcement_label()
+        } else {
+            FlowLabel::default()
         }
     }
 }
@@ -1751,6 +1868,7 @@ impl<T> From<T> for Labeled<T> {
         Self {
             value,
             label: FlowLabel::default(),
+            authority: LabeledAuthority::UntrustedIngress,
         }
     }
 }
@@ -3563,7 +3681,7 @@ impl HostcallDispatcher {
             };
         }
 
-        let source_label = argument.label.enforcement_label();
+        let source_label = argument.enforcement_label();
         if let Some(clearance) = self.sink_policy.clearance_for(hostcall_type)
             && !FlowLabelLattice::can_flow_to_sink(&source_label, &clearance)
         {
@@ -7111,7 +7229,7 @@ mod flow_label_tests {
     #[test]
     fn sink_clearance_allows_public_to_secret_sink() {
         let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
-        let payload = Labeled::new(
+        let payload = Labeled::host_generated(
             "log-line".to_string(),
             FlowLabel::host_trusted(SecrecyLevel::Public, IntegrityLevel::Trusted),
         );
@@ -7155,7 +7273,7 @@ mod flow_label_tests {
     #[test]
     fn ipc_propagation_preserves_labels_and_blocks_follow_on_exfiltration() {
         let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
-        let ipc_payload = Labeled::new(
+        let ipc_payload = Labeled::host_generated(
             vec![1u8, 2, 3],
             FlowLabel::host_trusted(SecrecyLevel::Confidential, IntegrityLevel::Validated),
         );
@@ -7171,7 +7289,7 @@ mod flow_label_tests {
         assert_eq!(ipc_outcome.result, HostcallResult::Success);
         let inherited = ipc_outcome.output.expect("ipc output");
         assert_eq!(
-            inherited.label(),
+            inherited.enforcement_label(),
             FlowLabel::host_trusted(SecrecyLevel::Confidential, IntegrityLevel::Validated)
         );
 
@@ -7619,7 +7737,7 @@ mod declassification_tests {
         };
         assert!(receipt.verify(&gateway.public_key()));
 
-        let relabeled_payload = Labeled::new(secret_payload.into_inner(), new_label);
+        let relabeled_payload = Labeled::host_generated(secret_payload.into_inner(), new_label);
         let allowed = dispatcher.dispatch(
             "ext-a",
             HostcallType::NetworkSend,
@@ -11268,7 +11386,7 @@ mod enrichment_tests {
         let caps: BTreeSet<Capability> = [Capability::FsRead, Capability::FsWrite]
             .into_iter()
             .collect();
-        let internal_data = Labeled::new(
+        let internal_data = Labeled::host_generated(
             "log".to_string(),
             FlowLabel::host_trusted(SecrecyLevel::Public, IntegrityLevel::Validated),
         );

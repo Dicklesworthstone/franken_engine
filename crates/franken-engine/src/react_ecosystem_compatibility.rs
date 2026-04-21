@@ -615,11 +615,35 @@ pub struct EcosystemCompatibilityReport {
 struct EcosystemCompatibilityReportHashView<'a> {
     schema_version: &'a str,
     security_epoch: SecurityEpoch,
-    test_results: &'a [CompatibilityTestResult],
+    test_results: Vec<CompatibilityTestResultHashView<'a>>,
     overall_metrics: &'a CompatibilityMetrics,
     gate_passed: bool,
     compatibility_threshold_millionths: u64,
-    total_execution_time_ms: u64,
+}
+
+#[derive(Serialize)]
+struct CompatibilityTestResultHashView<'a> {
+    pattern: &'a EcosystemPattern,
+    passed: bool,
+    metrics: &'a CompatibilityMetrics,
+    errors: &'a [String],
+    unresolved_failures: &'a [CompatibilityFailureTriage],
+    diagnostics: &'a [String],
+    input_hash: ContentHash,
+}
+
+impl<'a> From<&'a CompatibilityTestResult> for CompatibilityTestResultHashView<'a> {
+    fn from(result: &'a CompatibilityTestResult) -> Self {
+        Self {
+            pattern: &result.pattern,
+            passed: result.passed,
+            metrics: &result.metrics,
+            errors: &result.errors,
+            unresolved_failures: &result.unresolved_failures,
+            diagnostics: &result.diagnostics,
+            input_hash: result.input_hash,
+        }
+    }
 }
 
 impl EcosystemCompatibilityReport {
@@ -697,14 +721,18 @@ impl EcosystemCompatibilityReport {
 
     /// Computes a deterministic hash of the report.
     pub fn compute_hash(&self) -> ContentHash {
+        let test_results = self
+            .test_results
+            .iter()
+            .map(CompatibilityTestResultHashView::from)
+            .collect();
         let hash_view = EcosystemCompatibilityReportHashView {
             schema_version: &self.schema_version,
             security_epoch: self.security_epoch,
-            test_results: &self.test_results,
+            test_results,
             overall_metrics: &self.overall_metrics,
             gate_passed: self.gate_passed,
             compatibility_threshold_millionths: self.compatibility_threshold_millionths,
-            total_execution_time_ms: self.total_execution_time_ms,
         };
 
         let encoded = serde_json::to_vec(&hash_view)
@@ -1628,6 +1656,51 @@ mod tests {
         assert!(report.finalize().is_ok());
         assert_eq!(report.test_results.len(), 1);
         assert!(report.gate_passed); // Single passing test should pass gate
+    }
+
+    #[test]
+    fn test_ecosystem_compatibility_report_hash_excludes_wall_clock_timing() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let pattern = EcosystemPattern::new(
+            "timing_stable".to_string(),
+            "Timing-stable report hash".to_string(),
+            EcosystemMode::ClientSideRendering,
+            CompileMode::Automatic,
+        )
+        .with_package(ReactPackage::React)
+        .with_entry_point("react".to_string());
+
+        let metrics = CompatibilityMetrics {
+            packages_resolved: 1,
+            compatibility_score_millionths: MILLIONTHS,
+            ..Default::default()
+        };
+
+        let mut fast_report = EcosystemCompatibilityReport::new(epoch);
+        fast_report.add_test_result(
+            CompatibilityTestResult::new(pattern.clone(), true)
+                .with_metrics(metrics.clone())
+                .with_execution_time(1),
+        );
+        fast_report.finalize().unwrap();
+
+        let mut slow_report = EcosystemCompatibilityReport::new(epoch);
+        slow_report.add_test_result(
+            CompatibilityTestResult::new(pattern, true)
+                .with_metrics(metrics)
+                .with_execution_time(10_000),
+        );
+        slow_report.finalize().unwrap();
+
+        assert_ne!(
+            fast_report.total_execution_time_ms,
+            slow_report.total_execution_time_ms
+        );
+        assert_ne!(
+            fast_report.test_results[0].execution_time_ms,
+            slow_report.test_results[0].execution_time_ms
+        );
+        assert_eq!(fast_report.report_hash, slow_report.report_hash);
     }
 
     #[test]

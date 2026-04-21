@@ -3,7 +3,19 @@ use frankenengine_engine::test262_conformance_runner::{
     BEAD_ID, COMPONENT, ConformanceReport, DEFAULT_TEST262_URL, MILLIONTHS, RunnerConfig,
     SCHEMA_VERSION, Test262Runner, TestCategory, TestRecord, TestResult, TestStatistics,
 };
+use std::fs;
 use std::path::PathBuf;
+use tempfile::TempDir;
+
+fn fixture_test262_root(files: &[(&str, &str)]) -> TempDir {
+    let root = tempfile::tempdir().unwrap();
+    for (relative_path, source) in files {
+        let path = root.path().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, source).unwrap();
+    }
+    root
+}
 
 #[test]
 fn test_schema_version_format() {
@@ -295,13 +307,18 @@ fn test_runner_config_custom() {
 
 #[test]
 fn test_runner_creation() {
-    let config = RunnerConfig::default();
+    let root = fixture_test262_root(&[("test/language/literal.js", "42")]);
+    let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
+        max_tests: 1,
+        ..RunnerConfig::default()
+    };
     let runner = Test262Runner::new(config);
     let report = runner
         .run_conformance(SecurityEpoch::from_raw(1))
         .expect("runner should produce a conformance report");
-    assert_eq!(report.total_discovered, 10_000);
-    assert!(report.is_sample);
+    assert_eq!(report.total_discovered, 1);
+    assert!(!report.is_sample);
 }
 
 #[test]
@@ -431,8 +448,23 @@ fn test_conformance_report_categories() {
 }
 
 #[test]
-fn test_runner_mock_execution() {
+fn test_runner_real_fixture_execution() {
+    let root = fixture_test262_root(&[
+        ("test/language/literal-00.js", "0"),
+        ("test/language/literal-01.js", "1"),
+        ("test/language/literal-02.js", "2"),
+        ("test/language/literal-03.js", "3"),
+        ("test/language/literal-04.js", "4"),
+        ("test/language/literal-05.js", "5"),
+        ("test/language/literal-06.js", "6"),
+        ("test/language/literal-07.js", "7"),
+        ("test/language/literal-08.js", "8"),
+        ("test/language/literal-09.js", "9"),
+        ("test/language/literal-10.js", "10"),
+        ("test/language/literal-11.js", "11"),
+    ]);
     let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
         max_tests: 10,
         ..RunnerConfig::default()
     };
@@ -445,9 +477,10 @@ fn test_runner_mock_execution() {
     let report = result.unwrap();
     assert_eq!(report.security_epoch, epoch);
     assert_eq!(report.overall.total_tests, 10);
-    assert!(report.total_discovered >= report.overall.total_tests);
+    assert_eq!(report.total_discovered, 12);
     assert!(report.is_sample);
     assert!(!report.test262_commit.is_empty());
+    assert_ne!(report.test262_commit, "mock-commit-hash");
 
     // Check that we have some distribution of results
     assert!(
@@ -464,8 +497,16 @@ fn test_runner_mock_execution() {
 }
 
 #[test]
-fn test_runner_deterministic_simulation() {
+fn test_runner_deterministic_real_fixture_execution() {
+    let root = fixture_test262_root(&[
+        ("test/language/literal-0.js", "0"),
+        ("test/language/literal-1.js", "1"),
+        ("test/language/literal-2.js", "2"),
+        ("test/language/literal-3.js", "3"),
+        ("test/language/literal-4.js", "4"),
+    ]);
     let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
         max_tests: 5,
         ..RunnerConfig::default()
     };
@@ -492,7 +533,12 @@ fn test_runner_deterministic_simulation() {
 
 #[test]
 fn test_runner_unlimited_tests() {
+    let root = fixture_test262_root(&[
+        ("test/language/literal-a.js", "1"),
+        ("test/built-ins/Object/literal-b.js", "2"),
+    ]);
     let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
         max_tests: 0, // Unlimited
         ..RunnerConfig::default()
     };

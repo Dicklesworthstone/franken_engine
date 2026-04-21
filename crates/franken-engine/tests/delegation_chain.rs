@@ -70,6 +70,10 @@ fn make_ctx(root_sk: &SigningKey) -> DelegationVerificationContext {
         current_tick: 500,
         verifier_checkpoint_seq: 10,
         verifier_revocation_seq: 10,
+        accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+        accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+            .into_iter()
+            .collect(),
         max_chain_depth: 8,
         authorized_roots: roots,
         required_zone: Some("zone-a".to_string()),
@@ -1162,6 +1166,10 @@ fn enrichment_chain_hash_changes_with_different_root() {
         current_tick: 500,
         verifier_checkpoint_seq: 10,
         verifier_revocation_seq: 10,
+        accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+        accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+            .into_iter()
+            .collect(),
         max_chain_depth: 8,
         authorized_roots: roots,
         required_zone: Some("zone-a".to_string()),
@@ -1967,6 +1975,10 @@ fn enrichment_multiple_roots_accept_first() {
         current_tick: 500,
         verifier_checkpoint_seq: 10,
         verifier_revocation_seq: 10,
+        accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+        accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+            .into_iter()
+            .collect(),
         max_chain_depth: 8,
         authorized_roots: roots,
         required_zone: Some("zone-a".to_string()),
@@ -1998,6 +2010,10 @@ fn enrichment_multiple_roots_accept_second() {
         current_tick: 500,
         verifier_checkpoint_seq: 10,
         verifier_revocation_seq: 10,
+        accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+        accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+            .into_iter()
+            .collect(),
         max_chain_depth: 8,
         authorized_roots: roots,
         required_zone: Some("zone-a".to_string()),
@@ -2024,6 +2040,10 @@ fn enrichment_no_authorized_roots_rejects_everything() {
         current_tick: 500,
         verifier_checkpoint_seq: 10,
         verifier_revocation_seq: 10,
+        accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+        accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+            .into_iter()
+            .collect(),
         max_chain_depth: 8,
         authorized_roots: BTreeSet::new(),
         required_zone: Some("zone-a".to_string()),

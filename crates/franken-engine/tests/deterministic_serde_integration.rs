@@ -227,6 +227,35 @@ fn encoding_deterministic_across_10_runs() {
     }
 }
 
+#[test]
+fn golden_nested_canonical_encoding_bytes_are_stable() {
+    let value = CanonicalValue::Map({
+        let mut map = BTreeMap::new();
+        map.insert(
+            "alpha".to_string(),
+            CanonicalValue::Array(vec![
+                CanonicalValue::U64(7),
+                CanonicalValue::String("ok".to_string()),
+            ]),
+        );
+        map.insert("beta".to_string(), CanonicalValue::Bool(false));
+        map
+    });
+
+    let encoded = encode_value(&value);
+    let expected: &[u8] = &[
+        0x07, 0x00, 0x00, 0x00, 0x02, // map, 2 entries
+        0x00, 0x00, 0x00, 0x05, b'a', b'l', b'p', b'h', b'a', 0x06, 0x00, 0x00, 0x00,
+        0x02, // array, 2 items
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, // u64 7
+        0x05, 0x00, 0x00, 0x00, 0x02, b'o', b'k', // string "ok"
+        0x00, 0x00, 0x00, 0x04, b'b', b'e', b't', b'a', 0x03, 0x00, // bool false
+    ];
+
+    assert_eq!(encoded, expected);
+    assert_eq!(decode_value(expected).unwrap(), value);
+}
+
 proptest! {
     #[test]
     fn mr_map_canonical_encoding_is_insertion_order_invariant(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
@@ -244,9 +273,13 @@ proptest! {
 
         let forward_bytes = encode_value(&forward_value);
         let reverse_bytes = encode_value(&reverse_value);
+        let schema = test_schema();
 
         prop_assert_eq!(&forward_bytes, &reverse_bytes);
-        prop_assert_eq!(canonical_hash(&forward_value), canonical_hash(&reverse_value));
+        prop_assert_eq!(
+            canonical_hash(&schema, &forward_value),
+            canonical_hash(&schema, &reverse_value)
+        );
         prop_assert_eq!(decode_value(&forward_bytes).unwrap(), forward_value);
         prop_assert_eq!(decode_value(&reverse_bytes).unwrap(), reverse_value);
     }

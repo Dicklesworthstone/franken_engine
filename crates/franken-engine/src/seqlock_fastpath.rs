@@ -79,6 +79,44 @@ struct SequencePublishGuard<'a> {
     final_sequence: u64,
 }
 
+std::thread_local! {
+    static ACTIVE_SNAPSHOT_PUBLISHES: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct ReentrantPublishGuard {
+    key: usize,
+}
+
+impl ReentrantPublishGuard {
+    fn enter<T>(fast_path: &SnapshotFastPath<T>) -> Self {
+        let key = fast_path as *const SnapshotFastPath<T> as usize;
+        ACTIVE_SNAPSHOT_PUBLISHES.with(|active_publishes| {
+            let mut active_publishes = active_publishes.borrow_mut();
+            assert!(
+                !active_publishes.contains(&key),
+                "SnapshotFastPath publish hook must not re-enter publish on the same fast path"
+            );
+            active_publishes.push(key);
+        });
+        Self { key }
+    }
+}
+
+impl Drop for ReentrantPublishGuard {
+    fn drop(&mut self) {
+        ACTIVE_SNAPSHOT_PUBLISHES.with(|active_publishes| {
+            let mut active_publishes = active_publishes.borrow_mut();
+            if let Some(index) = active_publishes
+                .iter()
+                .rposition(|active_key| *active_key == self.key)
+            {
+                active_publishes.remove(index);
+            }
+        });
+    }
+}
+
 impl Drop for SequencePublishGuard<'_> {
     fn drop(&mut self) {
         self.sequence.store(self.final_sequence, Ordering::Release);
@@ -155,6 +193,7 @@ impl<T> SnapshotFastPath<T> {
     where
         F: FnOnce(),
     {
+        let _reentrant_guard = ReentrantPublishGuard::enter(self);
         let _writer_guard = self.lock_writer_gate();
         let start = self.sequence.load(Ordering::Acquire);
         // Treat any observed odd value as a stale in-progress marker and restart
@@ -701,6 +740,31 @@ mod tests {
 
         let after_recovery = fast_path.read_clone_or_else(|| 0);
         assert_eq!(after_recovery.value, 13);
+        assert_eq!(after_recovery.source, FastPathReadSource::FastPath);
+        assert_eq!(fast_path.telemetry().writes, 1);
+    }
+
+    #[test]
+    fn reentrant_publish_hook_panics_without_self_deadlocking() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+        fast_path.seed_if_uninitialized(7_u64);
+
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            fast_path.publish_with_hook(11_u64, || {
+                fast_path.publish(13_u64);
+            });
+        }));
+        assert!(panic_result.is_err());
+        assert_eq!(fast_path.sequence.load(Ordering::Acquire), 2);
+
+        let after_reentrant_attempt = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(after_reentrant_attempt.value, 7);
+        assert_eq!(after_reentrant_attempt.source, FastPathReadSource::FastPath);
+
+        fast_path.publish(17_u64);
+
+        let after_recovery = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(after_recovery.value, 17);
         assert_eq!(after_recovery.source, FastPathReadSource::FastPath);
         assert_eq!(fast_path.telemetry().writes, 1);
     }

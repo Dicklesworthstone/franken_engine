@@ -1,0 +1,23 @@
+[package]
+name = "frankenengine-extension-host-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = "1.4"
+frankenengine-extension-host = { path = ".." }
+libfuzzer-sys = "0.4"
+serde_json = "1.0"
+
+[[bin]]
+name = "flow_label_authority_gate"
+path = "fuzz_targets/flow_label_authority_gate.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

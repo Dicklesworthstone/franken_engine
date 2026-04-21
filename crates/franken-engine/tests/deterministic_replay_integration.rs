@@ -61,7 +61,7 @@ fn make_trace() -> NondeterminismTrace {
 
 #[test]
 fn source_all_variants() {
-    assert_eq!(NondeterminismSource::ALL.len(), 6);
+    assert_eq!(NondeterminismSource::ALL.len(), 7);
     for source in &NondeterminismSource::ALL {
         assert!(!source.as_str().is_empty());
     }
@@ -247,18 +247,20 @@ fn replay_strict_critical_divergence() {
 }
 
 #[test]
-fn replay_strict_benign_divergence_continues() {
-    // TimerRead divergence is Benign
+fn replay_strict_timer_divergence_rejects_for_bit_stability() {
     let mut trace = NondeterminismTrace::new("s1");
     trace.capture(NondeterminismSource::TimerRead, vec![1], 100, "c");
     trace.finalise(200);
 
     let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
-    let v = engine
-        .replay_next(NondeterminismSource::TimerRead, &[99])
-        .unwrap();
-    // In strict mode, returns traced value (not live)
-    assert_eq!(v, vec![1]);
+    let result = engine.replay_next(NondeterminismSource::TimerRead, &[99]);
+    assert!(matches!(
+        result,
+        Err(ReplayError::CriticalDivergence {
+            sequence: 0,
+            source: NondeterminismSource::TimerRead
+        })
+    ));
     assert_eq!(engine.divergence_count(), 1);
 }
 
@@ -1203,7 +1205,7 @@ fn source_as_str_all_unique() {
         .iter()
         .map(|s| s.as_str())
         .collect();
-    assert_eq!(strs.len(), 6);
+    assert_eq!(strs.len(), 7);
 }
 
 #[test]
@@ -1223,6 +1225,10 @@ fn source_as_str_remaining_variants() {
     assert_eq!(
         NondeterminismSource::UserInteractionTiming.as_str(),
         "user_interaction_timing"
+    );
+    assert_eq!(
+        NondeterminismSource::FloatingPointResult.as_str(),
+        "floating_point_result"
     );
 }
 

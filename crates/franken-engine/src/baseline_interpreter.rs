@@ -15753,7 +15753,7 @@ pub struct QuickJsLane {
 impl Default for QuickJsLane {
     fn default() -> Self {
         Self {
-            config: InterpreterConfig::quickjs_defaults(),
+            config: execution_profile_config(InterpreterConfig::quickjs_defaults()),
         }
     }
 }
@@ -15806,9 +15806,17 @@ pub struct V8Lane {
 impl Default for V8Lane {
     fn default() -> Self {
         Self {
-            config: InterpreterConfig::v8_defaults(),
+            config: execution_profile_config(InterpreterConfig::v8_defaults()),
         }
     }
+}
+
+fn execution_profile_config(mut config: InterpreterConfig) -> InterpreterConfig {
+    config.granted_capabilities.extend([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    config
 }
 
 impl V8Lane {

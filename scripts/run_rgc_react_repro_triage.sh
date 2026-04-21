@@ -222,81 +222,12 @@ write_trace_ids() {
 EOF_TRACE
 }
 
-write_catalog_artifact() {
-  cat >"${catalog_path}" <<EOF_CATALOG
-{
-  "schema_version": "franken-engine.react-repro-catalog-artifact.v1",
-  "bead_id": "bd-1lsy.5.7.3",
-  "policy_id": "RGC-405C",
-  "component": "react_repro_triage",
-  "generated_at_utc": "${timestamp}",
-  "catalog_schema_version": "franken-engine.react-repro-triage.v1",
-  "extraction_schema_version": "franken-engine.minimized-repro-extraction.v1",
-  "epoch": 7,
-  "entries": [
-    {
-      "entry_id": "triage-transform_bug-repro-aaaaaaaaaa",
-      "failure_class": "transform_bug",
-      "severity": "critical",
-      "owner_bead": "bd-1lsy.3.6.1",
-      "owner_team": "jsx-transform",
-      "advisory": "The JSX/TSX transform produces different output than expected. This is an engine-side bug in the compilation pipeline. This blocks a core React workflow. Fix is in progress.",
-      "repro_id": "repro-transform-critical",
-      "replay_command": "./scripts/e2e/rgc_react_repro_triage_replay.sh ci",
-      "react_versions": ["18.2.0"]
-    },
-    {
-      "entry_id": "triage-hydration_mismatch-repro-bbbbbbbbbb",
-      "failure_class": "hydration_mismatch",
-      "severity": "high",
-      "owner_bead": "bd-1lsy.5.7.2",
-      "owner_team": "ssr-hydration",
-      "advisory": "Server-rendered HTML does not match client hydration. This is an engine-side React compatibility bug. This impacts common workflows. A fix or workaround is planned.",
-      "repro_id": "repro-hydration-high",
-      "replay_command": "./scripts/e2e/rgc_react_repro_triage_replay.sh ci",
-      "react_versions": ["18.2.0"]
-    },
-    {
-      "entry_id": "triage-package_misuse-repro-cccccccccc",
-      "failure_class": "package_misuse",
-      "severity": "low",
-      "owner_bead": "bd-1lsy.5.7.3",
-      "owner_team": "docs-triage",
-      "advisory": "React package versions or configuration are incompatible. This is not an engine bug; check supported versions and setup guidance. This is a minor or edge-case difference.",
-      "repro_id": "repro-package-low",
-      "replay_command": "./scripts/e2e/rgc_react_repro_triage_replay.sh ci",
-      "react_versions": ["18.2.0"]
-    }
-  ],
-  "summary": {
-    "total_entries": 3,
-    "by_class": {
-      "hydration_mismatch": 1,
-      "package_misuse": 1,
-      "transform_bug": 1
-    },
-    "by_severity": {
-      "critical": 1,
-      "high": 1,
-      "low": 1
-    },
-    "unresolved_count": 3,
-    "engine_bug_count": 2,
-    "distinct_owners": 3,
-    "severity_weighted_score": 11
-  },
-  "extraction_summary": {
-    "verdict": "complete",
-    "avg_reduction_ratio_millionths": 800000,
-    "findings_count": 3,
-    "owners": [
-      "parser_compiler",
-      "react_integration",
-      "build_tooling"
-    ]
-  }
-}
-EOF_CATALOG
+emit_catalog_artifact() {
+  run_step \
+    "env RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH=${catalog_path} cargo test -p frankenengine-engine --test rgc_react_repro_triage rgc_405c_emit_catalog_artifact_for_runner -- --exact --nocapture" \
+    0 \
+    env "RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH=${catalog_path}" \
+    cargo test -p frankenengine-engine --test rgc_react_repro_triage rgc_405c_emit_catalog_artifact_for_runner -- --exact --nocapture
 }
 
 write_manifest() {
@@ -390,7 +321,7 @@ write_manifest() {
 
 write_trace_ids
 cp "${contract_json}" "${contract_copy_path}"
-write_catalog_artifact
+emit_catalog_artifact
 
 set +e
 run_mode

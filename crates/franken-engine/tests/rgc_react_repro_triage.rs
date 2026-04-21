@@ -321,6 +321,28 @@ fn build_catalog_artifact() -> Value {
     })
 }
 
+fn maybe_emit_catalog_artifact_from_env() {
+    let Ok(output_path) = std::env::var("RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH") else {
+        return;
+    };
+    let output_path = PathBuf::from(output_path);
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|err| {
+            panic!("failed to create {}: {err}", parent.display())
+        });
+    }
+    let encoded = serde_json::to_string_pretty(&build_catalog_artifact())
+        .expect("catalog artifact should encode");
+    fs::write(&output_path, encoded).unwrap_or_else(|err| {
+        panic!("failed to write {}: {err}", output_path.display())
+    });
+}
+
+#[test]
+fn rgc_405c_emit_catalog_artifact_for_runner() {
+    maybe_emit_catalog_artifact_from_env();
+}
+
 #[test]
 fn rgc_405c_contract_json_parses_and_matches_live_constants() {
     let contract = parse_contract();
@@ -526,6 +548,8 @@ fn rgc_405c_runner_script_pins_repo_local_target_dir_and_targets() {
     assert!(runner.contains("rgc_react_repro_triage_v1.json"));
     assert!(runner.contains("rch-local-fallback-detected"));
     assert!(runner.contains("policy-rgc-react-repro-triage-v1"));
+    assert!(runner.contains("RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH"));
+    assert!(runner.contains("rgc_405c_emit_catalog_artifact_for_runner"));
     assert!(
         contract
             .operator_verification

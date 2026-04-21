@@ -32,7 +32,7 @@ use crate::containment_executor::{
 };
 use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 use crate::entropy_evidence_compressor::{
-    ArithmeticCoder, CompressionCertificate, EntropyEstimator,
+    ArithmeticCoder, CompressionCertificate, EntropyError, EntropyEstimator,
 };
 use crate::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEmitter, EvidenceEntry,
@@ -72,7 +72,7 @@ use crate::saga_orchestrator::{
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::VerificationKey;
 use crate::tropical_semiring::{
-    InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalWeight,
+    InstructionCostGraph, InstructionNode, ScheduleOptimizer, TropicalError, TropicalWeight,
 };
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
@@ -306,6 +306,21 @@ pub enum OrchestratorError {
     Cell(CellError),
     Containment(ContainmentError),
     TsNormalization(TsNormalizationError),
+    ScheduleCostGraph {
+        detail: String,
+    },
+    ScheduleCostOptimization {
+        detail: String,
+    },
+    EvidenceCompressionCoder {
+        detail: String,
+    },
+    EvidenceCompressionEncode {
+        detail: String,
+    },
+    EvidenceCompressionKraft {
+        detail: String,
+    },
     EmptySource,
     EmptyExtensionId,
     PreparedExecutionContextMismatch {
@@ -328,6 +343,21 @@ impl fmt::Display for OrchestratorError {
             Self::Cell(e) => write!(f, "cell: {e}"),
             Self::Containment(e) => write!(f, "containment: {e}"),
             Self::TsNormalization(e) => write!(f, "ts normalization: {e}"),
+            Self::ScheduleCostGraph { detail } => {
+                write!(f, "ir3 schedule cost graph: {detail}")
+            }
+            Self::ScheduleCostOptimization { detail } => {
+                write!(f, "ir3 schedule cost optimization: {detail}")
+            }
+            Self::EvidenceCompressionCoder { detail } => {
+                write!(f, "evidence compression coder: {detail}")
+            }
+            Self::EvidenceCompressionEncode { detail } => {
+                write!(f, "evidence compression encode: {detail}")
+            }
+            Self::EvidenceCompressionKraft { detail } => {
+                write!(f, "evidence compression Kraft verification: {detail}")
+            }
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
             Self::PreparedExecutionContextMismatch {
@@ -592,7 +622,7 @@ impl ExecutionOrchestrator {
         let lowering_events = lowering_output.events.clone();
         let lowering_witnesses = lowering_output.witnesses.clone();
         self.phase_enforce_runtime_flow_guards(&lowering_output.ir2_flow_proof_artifact)?;
-        let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
+        let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3)?;
 
         // Step 6: Execute IR3.
         let (routed, guardplane_report) =
@@ -1291,7 +1321,7 @@ impl ExecutionOrchestrator {
             adaptive_router_summary,
             optimal_stopping_certificate,
             ir3_schedule_cost,
-        );
+        )?;
         if let Some(cert) = &compression_certificate {
             builder = builder.meta(
                 "evidence_entropy_millibits".to_string(),
@@ -1569,10 +1599,12 @@ impl ExecutionOrchestrator {
         }
     }
 
-    fn estimate_ir3_schedule_cost(ir3: &Ir3Module) -> Option<TropicalWeight> {
+    fn estimate_ir3_schedule_cost(
+        ir3: &Ir3Module,
+    ) -> Result<Option<TropicalWeight>, OrchestratorError> {
         let n = ir3.instructions.len();
         if n == 0 {
-            return None;
+            return Ok(None);
         }
 
         let mut successors: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -1605,9 +1637,23 @@ impl ExecutionOrchestrator {
             })
             .collect();
 
-        let graph = InstructionCostGraph::new(nodes).ok()?;
-        let schedule = ScheduleOptimizer::default().schedule(&graph).ok()?;
-        Some(schedule.total_cost)
+        let graph = InstructionCostGraph::new(nodes).map_err(Self::schedule_cost_graph_error)?;
+        let schedule = ScheduleOptimizer::default()
+            .schedule(&graph)
+            .map_err(Self::schedule_cost_optimization_error)?;
+        Ok(Some(schedule.total_cost))
+    }
+
+    fn schedule_cost_graph_error(err: TropicalError) -> OrchestratorError {
+        OrchestratorError::ScheduleCostGraph {
+            detail: err.to_string(),
+        }
+    }
+
+    fn schedule_cost_optimization_error(err: TropicalError) -> OrchestratorError {
+        OrchestratorError::ScheduleCostOptimization {
+            detail: err.to_string(),
+        }
     }
 
     fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
@@ -1788,7 +1834,7 @@ impl ExecutionOrchestrator {
         adaptive_router_summary: Option<&RouterSummary>,
         optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
         ir3_schedule_cost: Option<TropicalWeight>,
-    ) -> Option<CompressionCertificate> {
+    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
         let symbols = Self::build_evidence_symbols(
             package,
             decision,
@@ -1799,22 +1845,51 @@ impl ExecutionOrchestrator {
             optimal_stopping_certificate,
             ir3_schedule_cost,
         );
+        Self::build_evidence_compression_certificate_from_symbols(symbols)
+    }
+
+    fn build_evidence_compression_certificate_from_symbols(
+        symbols: Vec<u32>,
+    ) -> Result<Option<CompressionCertificate>, OrchestratorError> {
         if symbols.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let mut estimator = EntropyEstimator::new();
         for &symbol in &symbols {
             estimator.observe(symbol);
         }
-        let coder = ArithmeticCoder::from_estimator(&estimator).ok()?;
-        let compressed = coder.encode(&symbols).ok()?;
-        let kraft_sum = coder.verify_kraft_inequality().ok()?;
-        Some(CompressionCertificate::build(
+        let coder = ArithmeticCoder::from_estimator(&estimator)
+            .map_err(Self::evidence_compression_coder_error)?;
+        let compressed = coder
+            .encode(&symbols)
+            .map_err(Self::evidence_compression_encode_error)?;
+        let kraft_sum = coder
+            .verify_kraft_inequality()
+            .map_err(Self::evidence_compression_kraft_error)?;
+        Ok(Some(CompressionCertificate::build(
             &estimator,
             &compressed,
             kraft_sum,
-        ))
+        )))
+    }
+
+    fn evidence_compression_coder_error(err: EntropyError) -> OrchestratorError {
+        OrchestratorError::EvidenceCompressionCoder {
+            detail: err.to_string(),
+        }
+    }
+
+    fn evidence_compression_encode_error(err: EntropyError) -> OrchestratorError {
+        OrchestratorError::EvidenceCompressionEncode {
+            detail: err.to_string(),
+        }
+    }
+
+    fn evidence_compression_kraft_error(err: EntropyError) -> OrchestratorError {
+        OrchestratorError::EvidenceCompressionKraft {
+            detail: err.to_string(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3421,10 +3496,82 @@ mod tests {
             crate::ir_contract::Ir3Instruction::Jump { target: 0 },
         ];
 
+        let err = ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3)
+            .expect_err("looping control flow must surface optimizer failure");
         assert!(
-            ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3).is_none(),
-            "looping control flow should not be flattened into an acyclic schedule cost"
+            matches!(err, OrchestratorError::ScheduleCostOptimization { .. }),
+            "looping control flow should not be swallowed as absent schedule metadata: {err}"
         );
+    }
+
+    #[test]
+    fn evidence_compression_certificate_surfaces_coder_failures() {
+        let mut package = simple_package();
+        let mut seen_symbols = BTreeSet::new();
+        let mut capabilities = Vec::new();
+        for index in 0..20_000 {
+            let capability = format!("capability-{index}");
+            let symbol = 1_000 + (ExecutionOrchestrator::stable_symbol(&capability) % 10_000);
+            if seen_symbols.insert(symbol) {
+                capabilities.push(capability);
+                if seen_symbols.len() == 257 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(seen_symbols.len(), 257);
+        package.capabilities = capabilities;
+
+        let posterior = Posterior::default_prior();
+        let decision = ActionDecision {
+            action: ContainmentAction::Allow,
+            expected_loss_millionths: 0,
+            runner_up_action: ContainmentAction::Challenge,
+            runner_up_loss_millionths: 1,
+            explanation: crate::expected_loss_selector::DecisionExplanation {
+                posterior_snapshot: posterior.clone(),
+                loss_matrix_id: "test-loss-matrix".to_string(),
+                all_expected_losses: BTreeMap::from([
+                    ("allow".to_string(), 0),
+                    ("challenge".to_string(), 1),
+                ]),
+                margin_millionths: 1,
+            },
+            epoch: SecurityEpoch::from_raw(1),
+        };
+        let exec = ExecutionResult {
+            value: crate::baseline_interpreter::Value::Null,
+            hostcall_decisions: Vec::new(),
+            instructions_executed: 1,
+            requested_hook_action: None,
+            witness_events: Vec::new(),
+            events: Vec::new(),
+            console_output: Vec::new(),
+        };
+        let update = UpdateResult {
+            posterior,
+            likelihoods: [500_000, 500_000, 500_000, 500_000],
+            cumulative_llr_millionths: 0,
+            update_count: 1,
+        };
+
+        let err = ExecutionOrchestrator::build_evidence_compression_certificate(
+            &package,
+            &decision,
+            decision.action,
+            &exec,
+            &update,
+            None,
+            None,
+            None,
+        )
+        .expect_err("large evidence alphabet must surface coder construction failure");
+
+        assert!(
+            matches!(err, OrchestratorError::EvidenceCompressionCoder { .. }),
+            "expected evidence compression coder error, got {err}"
+        );
+        assert!(err.to_string().contains("alphabet size"));
     }
 
     // -- Enrichment: stable_symbol determinism --

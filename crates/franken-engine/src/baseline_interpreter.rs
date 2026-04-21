@@ -7654,7 +7654,7 @@ impl InterpreterCore {
                 // Array.of implementation - creates new Array instance from arguments
 
                 // Create array object to hold the arguments
-                let array_id = self.alloc_object_with_prototype(None)?;
+                let array_id = self.alloc_array_with_prototype(None)?;
 
                 // Add each argument as an array element
                 for i in 0..args.count {
@@ -7676,7 +7676,7 @@ impl InterpreterCore {
                 // Array.from implementation - creates new Array instance from array-like or iterable object
                 if args.count == 0 {
                     // Array.from() with no arguments creates empty array
-                    let array_id = self.alloc_object_with_prototype(None)?;
+                    let array_id = self.alloc_array_with_prototype(None)?;
                     self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
                     return Ok(Value::Object(array_id));
                 }
@@ -7684,7 +7684,7 @@ impl InterpreterCore {
                 let first_arg = self.read_reg(args.start)?;
 
                 // Create new array object
-                let array_id = self.alloc_object_with_prototype(None)?;
+                let array_id = self.alloc_array_with_prototype(None)?;
 
                 match first_arg {
                     Value::Object(obj_id) => {
@@ -12759,7 +12759,7 @@ impl InterpreterCore {
                 // Array.fromAsync(arrayLike[, mapFn[, thisArg]]) implementation (simplified)
                 if args.count < 2 {
                     // Create empty array for missing argument
-                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                    let empty_array_id = self.alloc_array_with_prototype(None)?;
                     self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
                     return Ok(Value::Object(empty_array_id));
                 }
@@ -12781,7 +12781,7 @@ impl InterpreterCore {
                         };
 
                         // Create result array
-                        let result_array_id = self.alloc_object_with_prototype(None)?;
+                        let result_array_id = self.alloc_array_with_prototype(None)?;
 
                         // Copy elements without holding the source object borrow across writes.
                         let copied_elements = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
@@ -12810,7 +12810,7 @@ impl InterpreterCore {
                     }
                     _ => {
                         // Non-object, create empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -23493,6 +23493,62 @@ mod tests {
             "[object AsyncGenerator]",
         );
         run_to_string(&mut core, Value::Promise(10), "[object Promise]");
+    }
+
+    #[test]
+    fn array_constructors_preserve_array_object_tag_metadata() {
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults());
+
+        let object_tag = |core: &mut InterpreterCore, value: Value| {
+            core.registers[12] = value;
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectPrototypeToString",
+                RegRange {
+                    start: 12,
+                    count: 1,
+                },
+                None,
+            )
+            .expect("ObjectPrototypeToString should run successfully")
+        };
+
+        core.registers[0] = Value::Int(1);
+        core.registers[1] = Value::Int(2);
+        let array_of = core
+            .dispatch_builtin_hostcall("builtin:ArrayOf", RegRange { start: 0, count: 2 }, None)
+            .expect("Array.of should produce a value");
+        assert_eq!(
+            object_tag(&mut core, array_of),
+            Value::Str("[object Array]".to_string())
+        );
+
+        let array_like_id = core
+            .alloc_object_with_prototype(None)
+            .expect("array-like source should allocate");
+        core.set_object_property(array_like_id, "0".to_string(), Value::Str("x".to_string()))
+            .expect("array-like source should accept index 0");
+        core.set_object_property(array_like_id, "length".to_string(), Value::Int(1))
+            .expect("array-like source should accept length");
+        core.registers[0] = Value::Object(array_like_id);
+        let array_from = core
+            .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 1 }, None)
+            .expect("Array.from should produce a value");
+        assert_eq!(
+            object_tag(&mut core, array_from),
+            Value::Str("[object Array]".to_string())
+        );
+
+        let array_from_async = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayFromAsync",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .expect("Array.fromAsync should produce a value");
+        assert_eq!(
+            object_tag(&mut core, array_from_async),
+            Value::Str("[object Array]".to_string())
+        );
     }
 
     #[test]

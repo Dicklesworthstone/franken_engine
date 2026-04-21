@@ -10,6 +10,7 @@
     "outcome",
     "policy_id",
     "revocation_id",
+    "schema_version",
     "target_id",
     "target_type",
     "trace_id",

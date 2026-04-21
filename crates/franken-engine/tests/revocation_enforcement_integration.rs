@@ -21,6 +21,11 @@ use frankenengine_engine::signature_preimage::{
 const ZONE: &str = "test-zone";
 const REVOCATION_CHECK_EVENT_SCHEMA_GOLDEN: &str =
     include_str!("golden_vectors/revocation_check_event_schema.json");
+const REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN: &str =
+    include_str!("golden_vectors/revocation_check_event_v1_wire.json");
+const SIGNED_REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN: &str =
+    include_str!("golden_vectors/signed_revocation_check_event_v1_wire.json");
+const REVOCATION_CHECK_EVENT_TEST_AUTH_KEY: &[u8] = b"revocation-check-event-test-key";
 
 fn head_signing_key() -> SigningKey {
     SigningKey::from_bytes([
@@ -162,6 +167,30 @@ fn revocation_check_event_schema_snapshot() -> String {
         "{}\n",
         serde_json::to_string_pretty(&snapshot).expect("schema snapshot JSON")
     )
+}
+
+fn sample_revocation_check_event_v1_wire() -> RevocationCheckEvent {
+    RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
+        enforcement_point: EnforcementPoint::TokenAcceptance,
+        target_id: EngineObjectId([1; 32]),
+        target_type: RevocationTargetType::Token,
+        is_revoked: false,
+        transitive: false,
+        trace_id: "trace-wire-v1".to_string(),
+        decision_id: "decision-wire-v1".to_string(),
+        policy_id: "policy-wire-v1".to_string(),
+        frontier_head_seq: Some(9),
+        frontier_chain_hash: "chain-hash-wire-v1".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
+        checked_at: DeterministicTimestamp(4242),
+    }
+}
+
+fn sample_signed_revocation_check_event_v1_wire() -> SignedRevocationCheckEvent {
+    sample_revocation_check_event_v1_wire().sign(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY)
 }
 
 // ── EnforcementPoint display ─────────────────────────────────────────────
@@ -867,6 +896,73 @@ fn revocation_check_event_schema_matches_golden_snapshot() {
 }
 
 #[test]
+fn revocation_check_event_v1_wire_format_matches_golden_snapshot() {
+    let actual = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&sample_revocation_check_event_v1_wire())
+            .expect("serialize v1 wire event")
+    );
+    assert_eq!(
+        actual, REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN,
+        "actual v1 wire format:\n{actual}"
+    );
+}
+
+#[test]
+fn signed_revocation_check_event_v1_wire_format_matches_golden_snapshot() {
+    let actual = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&sample_signed_revocation_check_event_v1_wire())
+            .expect("serialize signed v1 wire event")
+    );
+    assert_eq!(
+        actual, SIGNED_REVOCATION_CHECK_EVENT_V1_WIRE_GOLDEN,
+        "actual signed v1 wire format:\n{actual}"
+    );
+
+    let decoded: SignedRevocationCheckEvent =
+        serde_json::from_str(&actual).expect("decode signed v1 wire event");
+    assert!(decoded.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+}
+
+#[test]
+fn signed_revocation_check_event_rejects_tampered_replay_fields() {
+    let signed = sample_signed_revocation_check_event_v1_wire();
+    assert!(signed.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+    assert!(!signed.verify(b"wrong-revocation-check-event-key"));
+
+    let mut tampered_outcome = signed.clone();
+    tampered_outcome.event.outcome = REVOCATION_AUDIT_OUTCOME_DENIED.to_string();
+    assert!(!tampered_outcome.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+
+    let mut tampered_error = signed.clone();
+    tampered_error.event.error_code = Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string());
+    assert!(!tampered_error.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+
+    let mut tampered_frontier = signed.clone();
+    tampered_frontier.event.frontier_chain_hash = "tampered-chain-hash".to_string();
+    assert!(!tampered_frontier.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+
+    let mut tampered_tag = signed.clone();
+    tampered_tag.authenticity_tag.0[0] ^= 0x01;
+    assert!(!tampered_tag.verify(REVOCATION_CHECK_EVENT_TEST_AUTH_KEY));
+}
+
+#[test]
+fn revocation_check_event_unknown_schema_version_fails_closed() {
+    let mut value =
+        serde_json::to_value(sample_revocation_check_event_v1_wire()).expect("serialize event");
+    value["schema_version"] = serde_json::json!(2);
+    value["future_only_field"] = serde_json::json!("must not be dropped");
+
+    let err = serde_json::from_value::<RevocationCheckEvent>(value)
+        .expect_err("unknown schema version must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("SchemaVersionUnsupported"), "{msg}");
+    assert!(msg.contains("2"), "{msg}");
+}
+
+#[test]
 fn multiple_checks_accumulate_audit_events() {
     let mut enforcer = make_enforcer();
     let vk = VerificationKey::from_bytes([2; 32]).unwrap();
@@ -1305,6 +1401,7 @@ fn enrichment_enforcement_result_cleared_checks_performed_zero() {
 #[test]
 fn enrichment_check_event_debug() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::TokenAcceptance,
         target_id: EngineObjectId([1; 32]),
         target_type: RevocationTargetType::Token,
@@ -1327,6 +1424,7 @@ fn enrichment_check_event_debug() {
 #[test]
 fn enrichment_check_event_clone_eq() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::HighRiskOperation,
         target_id: EngineObjectId([5; 32]),
         target_type: RevocationTargetType::Attestation,
@@ -1349,6 +1447,7 @@ fn enrichment_check_event_clone_eq() {
 #[test]
 fn enrichment_check_event_ne_different_revoked() {
     let e1 = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::TokenAcceptance,
         target_id: EngineObjectId([1; 32]),
         target_type: RevocationTargetType::Token,
@@ -1365,6 +1464,7 @@ fn enrichment_check_event_ne_different_revoked() {
         checked_at: DeterministicTimestamp(100),
     };
     let e2 = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::TokenAcceptance,
         target_id: EngineObjectId([1; 32]),
         target_type: RevocationTargetType::Token,
@@ -1386,6 +1486,7 @@ fn enrichment_check_event_ne_different_revoked() {
 #[test]
 fn enrichment_check_event_serde_roundtrip() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::ExtensionActivation,
         target_id: EngineObjectId([15; 32]),
         target_type: RevocationTargetType::Extension,
@@ -1409,6 +1510,7 @@ fn enrichment_check_event_serde_roundtrip() {
 #[test]
 fn enrichment_check_event_json_field_names_stable() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::TokenAcceptance,
         target_id: EngineObjectId([1; 32]),
         target_type: RevocationTargetType::Token,
@@ -1425,6 +1527,8 @@ fn enrichment_check_event_json_field_names_stable() {
         checked_at: DeterministicTimestamp(100),
     };
     let json = serde_json::to_string(&event).unwrap();
+    assert!(json.starts_with("{\"schema_version\":1,"));
+    assert!(json.contains("\"schema_version\""));
     assert!(json.contains("\"enforcement_point\""));
     assert!(json.contains("\"target_id\""));
     assert!(json.contains("\"target_type\""));

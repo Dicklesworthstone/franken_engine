@@ -27,7 +27,7 @@ use frankenengine_engine::revocation_chain::{
 use frankenengine_engine::revocation_enforcement::{
     EnforcementPoint, EnforcementResult, EnforcementStats, HighRiskCategory,
     REVOCATION_AUDIT_DIRECT_DENIAL_CODE, REVOCATION_AUDIT_OUTCOME_DENIED, RevocationCheckEvent,
-    RevocationDenial, RevocationEnforcer, key_id_from_verification_key,
+    RevocationDenial, RevocationEnforcer, SchemaVersion, key_id_from_verification_key,
 };
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
@@ -523,6 +523,7 @@ fn enrichment_enforcement_result_serde() {
 #[test]
 fn enrichment_check_event_serde() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::HighRiskOperation,
         target_id: EngineObjectId([5; 32]),
         target_type: RevocationTargetType::Attestation,

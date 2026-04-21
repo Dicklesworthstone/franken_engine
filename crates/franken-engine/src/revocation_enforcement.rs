@@ -16,10 +16,10 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::engine_object_id::EngineObjectId;
-use crate::hash_tiers::ContentHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::revocation_chain::{RevocationChain, RevocationTargetType};
 use crate::signature_preimage::VerificationKey;
@@ -135,9 +135,62 @@ impl fmt::Display for HighRiskCategory {
 // Audit events
 // ---------------------------------------------------------------------------
 
+/// Initial wire schema for [`RevocationCheckEvent`].
+pub const REVOCATION_CHECK_EVENT_SCHEMA_VERSION_V1: u16 = 1;
+pub const REVOCATION_CHECK_EVENT_AUTHENTICITY_DOMAIN: &[u8] =
+    b"FrankenEngine.RevocationCheckEvent.authenticity.v1";
+
+/// Supported revocation check audit event schema versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u16)]
+pub enum SchemaVersion {
+    /// Version 1 includes explicit event-level schema versioning.
+    V1 = REVOCATION_CHECK_EVENT_SCHEMA_VERSION_V1,
+}
+
+impl SchemaVersion {
+    /// Return the canonical integer carried in serialized events.
+    pub const fn as_u16(self) -> u16 {
+        self as u16
+    }
+
+    fn try_from_u16(version: u16) -> Result<Self, SchemaVersionError> {
+        match version {
+            REVOCATION_CHECK_EVENT_SCHEMA_VERSION_V1 => Ok(Self::V1),
+            _ => Err(SchemaVersionError::SchemaVersionUnsupported { version }),
+        }
+    }
+}
+
+/// Explicit schema-version errors for fail-closed event decoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaVersionError {
+    /// The event uses a schema version newer than this reader understands.
+    SchemaVersionUnsupported { version: u16 },
+}
+
+impl fmt::Display for SchemaVersionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SchemaVersionUnsupported { version } => write!(
+                f,
+                "SchemaVersionUnsupported: RevocationCheckEvent schema_version {version} is not supported"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SchemaVersionError {}
+
 /// Audit event emitted for every revocation check (pass or fail).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// This unsigned record is intended for local diagnostics. Persisted replay
+/// artifacts should carry [`SignedRevocationCheckEvent`] so event tampering can
+/// be detected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RevocationCheckEvent {
+    /// Event schema version. This is serialized first in canonical ordering.
+    pub schema_version: u16,
     /// Which enforcement point.
     pub enforcement_point: EnforcementPoint,
     /// The target ID that was checked.
@@ -166,6 +219,99 @@ pub struct RevocationCheckEvent {
     pub error_code: Option<String>,
     /// Timestamp of the check.
     pub checked_at: DeterministicTimestamp,
+}
+
+impl RevocationCheckEvent {
+    /// Domain-separated canonical bytes covered by the authenticity tag.
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let event_bytes = serde_json::to_vec(self)
+            .expect("RevocationCheckEvent canonical JSON serialization is infallible");
+        let mut bytes = Vec::with_capacity(
+            REVOCATION_CHECK_EVENT_AUTHENTICITY_DOMAIN.len() + 1 + 8 + event_bytes.len(),
+        );
+        bytes.extend_from_slice(REVOCATION_CHECK_EVENT_AUTHENTICITY_DOMAIN);
+        bytes.push(0);
+        bytes.extend_from_slice(&(event_bytes.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(&event_bytes);
+        bytes
+    }
+
+    /// Wrap this diagnostic event with a replay-verifiable authenticity tag.
+    pub fn sign(self, key: &[u8]) -> SignedRevocationCheckEvent {
+        SignedRevocationCheckEvent::sign(self, key)
+    }
+}
+
+/// Replay-safe wire wrapper for revocation check audit records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedRevocationCheckEvent {
+    /// Unsigned diagnostic payload covered by `authenticity_tag`.
+    pub event: RevocationCheckEvent,
+    /// HMAC-SHA256 authenticity tag over `event.canonical_bytes()`.
+    pub authenticity_tag: AuthenticityHash,
+}
+
+impl SignedRevocationCheckEvent {
+    /// Create a signed event wrapper using keyed authenticity hashing.
+    pub fn sign(event: RevocationCheckEvent, key: &[u8]) -> Self {
+        let authenticity_tag = AuthenticityHash::compute_keyed(key, &event.canonical_bytes());
+        Self {
+            event,
+            authenticity_tag,
+        }
+    }
+
+    /// Verify the event tag in constant time.
+    pub fn verify(&self, key: &[u8]) -> bool {
+        let expected = AuthenticityHash::compute_keyed(key, &self.event.canonical_bytes());
+        self.authenticity_tag.constant_time_eq(&expected)
+    }
+}
+
+#[derive(Deserialize)]
+struct RevocationCheckEventWire {
+    schema_version: u16,
+    enforcement_point: EnforcementPoint,
+    target_id: EngineObjectId,
+    target_type: RevocationTargetType,
+    is_revoked: bool,
+    transitive: bool,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    frontier_head_seq: Option<u64>,
+    frontier_chain_hash: String,
+    revocation_id: Option<EngineObjectId>,
+    outcome: String,
+    error_code: Option<String>,
+    checked_at: DeterministicTimestamp,
+}
+
+impl<'de> Deserialize<'de> for RevocationCheckEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RevocationCheckEventWire::deserialize(deserializer)?;
+        SchemaVersion::try_from_u16(wire.schema_version).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            enforcement_point: wire.enforcement_point,
+            target_id: wire.target_id,
+            target_type: wire.target_type,
+            is_revoked: wire.is_revoked,
+            transitive: wire.transitive,
+            trace_id: wire.trace_id,
+            decision_id: wire.decision_id,
+            policy_id: wire.policy_id,
+            frontier_head_seq: wire.frontier_head_seq,
+            frontier_chain_hash: wire.frontier_chain_hash,
+            revocation_id: wire.revocation_id,
+            outcome: wire.outcome,
+            error_code: wire.error_code,
+            checked_at: wire.checked_at,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +707,7 @@ impl RevocationEnforcer {
             .lookup_revocation(target_id)
             .map(|revocation| revocation.revocation_id.clone());
         self.audit_log.push(RevocationCheckEvent {
+            schema_version: SchemaVersion::V1.as_u16(),
             enforcement_point: point,
             target_id: target_id.clone(),
             target_type,
@@ -1286,6 +1433,7 @@ mod tests {
     #[test]
     fn check_event_serialization() {
         let event = RevocationCheckEvent {
+            schema_version: SchemaVersion::V1.as_u16(),
             enforcement_point: EnforcementPoint::HighRiskOperation,
             target_id: EngineObjectId([5; 32]),
             target_type: RevocationTargetType::Attestation,
@@ -2089,6 +2237,7 @@ mod tests {
     #[test]
     fn enrichment_revocation_check_event_json_field_names() {
         let event = RevocationCheckEvent {
+            schema_version: SchemaVersion::V1.as_u16(),
             enforcement_point: EnforcementPoint::TokenAcceptance,
             target_id: EngineObjectId([11; 32]),
             target_type: RevocationTargetType::Token,
@@ -2105,6 +2254,8 @@ mod tests {
             checked_at: DeterministicTimestamp(9999),
         };
         let json = serde_json::to_string(&event).unwrap();
+        assert!(json.starts_with("{\"schema_version\":1,"));
+        assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"enforcement_point\""));
         assert!(json.contains("\"target_id\""));
         assert!(json.contains("\"target_type\""));

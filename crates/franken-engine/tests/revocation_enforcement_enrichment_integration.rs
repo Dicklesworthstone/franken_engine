@@ -673,6 +673,7 @@ fn enrich_enforcement_stats_default() {
 #[test]
 fn enrich_revocation_check_event_serde() {
     let event = RevocationCheckEvent {
+        schema_version: SchemaVersion::V1.as_u16(),
         enforcement_point: EnforcementPoint::TokenAcceptance,
         target_id: EngineObjectId([1; 32]),
         target_type: RevocationTargetType::Token,

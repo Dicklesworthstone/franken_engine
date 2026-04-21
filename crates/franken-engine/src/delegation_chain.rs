@@ -21,6 +21,7 @@ use crate::capability_token::{
     CapabilityToken, PrincipalId, TokenError, TokenId,
     VerificationContext as TokenVerificationContext, verify_token,
 };
+use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::ContentHash;
 use crate::signature_preimage::VerificationKey;
 
@@ -69,6 +70,10 @@ pub struct DelegationVerificationContext {
     pub current_tick: u64,
     pub verifier_checkpoint_seq: u64,
     pub verifier_revocation_seq: u64,
+    #[serde(default)]
+    pub accepted_checkpoint_ids: BTreeSet<EngineObjectId>,
+    #[serde(default)]
+    pub accepted_revocation_head_hashes: BTreeSet<ContentHash>,
     pub max_chain_depth: usize,
     pub authorized_roots: BTreeSet<VerificationKey>,
     pub required_zone: Option<String>,
@@ -80,6 +85,8 @@ impl Default for DelegationVerificationContext {
             current_tick: 0,
             verifier_checkpoint_seq: 0,
             verifier_revocation_seq: 0,
+            accepted_checkpoint_ids: BTreeSet::new(),
+            accepted_revocation_head_hashes: BTreeSet::new(),
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
             authorized_roots: BTreeSet::new(),
             required_zone: None,
@@ -97,12 +104,30 @@ impl DelegationVerificationContext {
         }
     }
 
+    pub fn with_checkpoint_id(mut self, checkpoint_id: EngineObjectId) -> Self {
+        self.accepted_checkpoint_ids.insert(checkpoint_id);
+        self
+    }
+
+    pub fn with_revocation_head_hash(mut self, revocation_head_hash: ContentHash) -> Self {
+        self.accepted_revocation_head_hashes
+            .insert(revocation_head_hash);
+        self
+    }
+
     fn as_token_context(&self) -> TokenVerificationContext {
-        TokenVerificationContext::new(
+        let mut ctx = TokenVerificationContext::new(
             self.current_tick,
             self.verifier_checkpoint_seq,
             self.verifier_revocation_seq,
-        )
+        );
+        for checkpoint_id in &self.accepted_checkpoint_ids {
+            ctx = ctx.with_checkpoint_id(checkpoint_id.clone());
+        }
+        for revocation_head_hash in &self.accepted_revocation_head_hashes {
+            ctx = ctx.with_revocation_head_hash(*revocation_head_hash);
+        }
+        ctx
     }
 }
 
@@ -467,6 +492,10 @@ mod tests {
             current_tick: 500,
             verifier_checkpoint_seq: 10,
             verifier_revocation_seq: 10,
+            accepted_checkpoint_ids: [EngineObjectId([7; 32])].into_iter().collect(),
+            accepted_revocation_head_hashes: [ContentHash::compute(b"rev-head")]
+                .into_iter()
+                .collect(),
             max_chain_depth: DEFAULT_MAX_CHAIN_DEPTH,
             authorized_roots: roots,
             required_zone: Some("zone-a".to_string()),
@@ -499,6 +528,54 @@ mod tests {
         assert_eq!(proof.authorized_capability, RuntimeCapability::VmDispatch);
         assert_eq!(proof.chain_summary.len(), 3);
         assert_eq!(proof.leaf_delegate, leaf_delegate);
+    }
+
+    #[test]
+    fn delegation_context_rejects_unaccepted_checkpoint_identity() {
+        let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+        let mut ctx = make_ctx(&root_sk);
+        ctx.accepted_checkpoint_ids.clear();
+
+        let err = verify_chain(
+            &chain,
+            RuntimeCapability::VmDispatch,
+            &leaf_delegate,
+            &ctx,
+            &NoRevocationOracle,
+        )
+        .expect_err("checkpoint identity must be explicitly accepted");
+
+        match err {
+            ChainError::TokenVerificationFailed {
+                index: 0,
+                error: TokenError::CheckpointIdentityMismatch { .. },
+            } => {}
+            other => panic!("expected checkpoint identity mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delegation_context_rejects_unaccepted_revocation_head() {
+        let (chain, root_sk, leaf_delegate) = valid_chain_fixture();
+        let mut ctx = make_ctx(&root_sk);
+        ctx.accepted_revocation_head_hashes.clear();
+
+        let err = verify_chain(
+            &chain,
+            RuntimeCapability::VmDispatch,
+            &leaf_delegate,
+            &ctx,
+            &NoRevocationOracle,
+        )
+        .expect_err("revocation head identity must be explicitly accepted");
+
+        match err {
+            ChainError::TokenVerificationFailed {
+                index: 0,
+                error: TokenError::RevocationHeadMismatch { .. },
+            } => {}
+            other => panic!("expected revocation head mismatch, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1260,6 +1337,8 @@ mod tests {
             current_tick: 500,
             verifier_checkpoint_seq: 10,
             verifier_revocation_seq: 5,
+            accepted_checkpoint_ids: BTreeSet::new(),
+            accepted_revocation_head_hashes: BTreeSet::new(),
             max_chain_depth: 4,
             authorized_roots: {
                 let mut s = BTreeSet::new();
@@ -1515,6 +1594,8 @@ mod tests {
             current_tick: 1000,
             verifier_checkpoint_seq: 50,
             verifier_revocation_seq: 25,
+            accepted_checkpoint_ids: BTreeSet::new(),
+            accepted_revocation_head_hashes: BTreeSet::new(),
             max_chain_depth: 4,
             authorized_roots: roots,
             required_zone: None,

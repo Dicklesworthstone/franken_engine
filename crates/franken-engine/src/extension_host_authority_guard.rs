@@ -1,6 +1,10 @@
 //! Compile-time lint / CI guard rejecting ambient authority in extension-host
 //! control paths.
 //!
+//! This is a CI defense and review-time regression guard. It is intentionally
+//! not a runtime sandbox, capability boundary, or replacement for extension-host
+//! policy enforcement.
+//!
 //! Extends the base [`ambient_authority::SourceAuditor`] with extension-host-
 //! specific checks:
 //!
@@ -21,11 +25,13 @@
 //! Dependencies: bd-2ygl (Cx threading), bd-1za (ambient authority audit),
 //!               bd-23om (adapter layer).
 
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use syn::spanned::Spanned;
+use syn::visit::{self, Visit};
+use syn::{ItemExternCrate, ItemUse, Path, UseTree};
 
 use crate::ambient_authority::{AuditConfig, AuditFinding, ExemptionRegistry, SourceAuditor};
 
@@ -450,28 +456,28 @@ impl ExtensionHostGuard {
         source: &str,
         findings: &mut Vec<ExtensionHostFinding>,
     ) {
-        for (line_num_0, line) in source.lines().enumerate() {
-            let line_num = line_num_0 + 1;
-            let trimmed = line.trim();
+        let forbidden_roots = forbidden_crate_roots(&self.config.forbidden_imports);
 
-            // Skip comments
-            if trimmed.starts_with("//") {
-                continue;
+        match syn::parse_file(source) {
+            Ok(file) => {
+                let mut visitor = DirectImportVisitor::new(
+                    module_path,
+                    file_path,
+                    source,
+                    &forbidden_roots,
+                    findings,
+                );
+                visitor.collect_imports(&file);
+                visitor.collect_paths(&file);
             }
-
-            for (import_pattern, remediation) in &self.config.forbidden_imports {
-                if trimmed.contains(import_pattern.as_str()) {
-                    findings.push(ExtensionHostFinding {
-                        kind: ViolationKind::DirectUpstreamImport,
-                        module_path: module_path.to_string(),
-                        file_path: file_path.to_string(),
-                        line: line_num,
-                        source_line: trimmed.to_string(),
-                        description: format!("Direct upstream import: `{}`", import_pattern),
-                        remediation: remediation.clone(),
-                        exempted: false,
-                    });
-                }
+            Err(_) => {
+                check_direct_imports_without_syn(
+                    module_path,
+                    file_path,
+                    source,
+                    &forbidden_roots,
+                    findings,
+                );
             }
         }
     }
@@ -603,6 +609,416 @@ impl ExtensionHostGuard {
 // ---------------------------------------------------------------------------
 // Helper functions for source parsing
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectImportPass {
+    Imports,
+    Paths,
+}
+
+struct DirectImportVisitor<'a> {
+    module_path: &'a str,
+    file_path: &'a str,
+    source: &'a str,
+    forbidden_roots: &'a BTreeMap<String, String>,
+    findings: &'a mut Vec<ExtensionHostFinding>,
+    aliases: BTreeMap<String, String>,
+    seen: BTreeSet<(usize, String)>,
+    pass: DirectImportPass,
+}
+
+impl<'a> DirectImportVisitor<'a> {
+    fn new(
+        module_path: &'a str,
+        file_path: &'a str,
+        source: &'a str,
+        forbidden_roots: &'a BTreeMap<String, String>,
+        findings: &'a mut Vec<ExtensionHostFinding>,
+    ) -> Self {
+        Self {
+            module_path,
+            file_path,
+            source,
+            forbidden_roots,
+            findings,
+            aliases: BTreeMap::new(),
+            seen: BTreeSet::new(),
+            pass: DirectImportPass::Imports,
+        }
+    }
+
+    fn collect_imports(&mut self, file: &syn::File) {
+        self.pass = DirectImportPass::Imports;
+        self.visit_file(file);
+    }
+
+    fn collect_paths(&mut self, file: &syn::File) {
+        self.pass = DirectImportPass::Paths;
+        self.visit_file(file);
+    }
+
+    fn inspect_use_tree(&mut self, tree: &UseTree, inherited_root: Option<&str>, line: usize) {
+        match tree {
+            UseTree::Path(path) => {
+                let path_ident = path.ident.to_string();
+                let root = inherited_root.unwrap_or(path_ident.as_str());
+                self.push_import_if_forbidden(root, "use", line);
+                self.inspect_use_tree(&path.tree, Some(root), line);
+            }
+            UseTree::Name(name) => {
+                let ident = name.ident.to_string();
+                let root = inherited_root.unwrap_or(ident.as_str());
+                self.push_import_if_forbidden(root, "use", line);
+            }
+            UseTree::Rename(rename) => {
+                let ident = rename.ident.to_string();
+                let root = inherited_root.unwrap_or(ident.as_str());
+                if let Some(canonical) = self.canonical_for_root(root) {
+                    self.aliases
+                        .insert(rename.rename.to_string(), canonical.to_string());
+                    self.push_import_if_forbidden(root, "use", line);
+                }
+            }
+            UseTree::Glob(_) => {
+                if let Some(root) = inherited_root {
+                    self.push_import_if_forbidden(root, "use", line);
+                }
+            }
+            UseTree::Group(group) => {
+                for item in &group.items {
+                    self.inspect_use_tree(item, inherited_root, line);
+                }
+            }
+        }
+    }
+
+    fn push_import_if_forbidden(&mut self, root: &str, import_kind: &str, line: usize) {
+        if let Some(canonical) = self.canonical_for_root(root) {
+            let token = format!("{import_kind} {root}");
+            let description = format!("Direct upstream import: `{token}`");
+            let remediation = self
+                .forbidden_roots
+                .get(canonical)
+                .cloned()
+                .unwrap_or_else(|| "Use crate::control_plane adapter layer instead".to_string());
+            self.push_finding(line, description, remediation);
+        }
+    }
+
+    fn push_path_if_forbidden(&mut self, path: &Path) {
+        let Some(first) = path.segments.first() else {
+            return;
+        };
+        let root = first.ident.to_string();
+        let Some(canonical) = self.canonical_for_root(&root) else {
+            return;
+        };
+
+        let line = path.span().start().line;
+        let description = if root == canonical {
+            format!("Direct upstream path access: `{root}::...`")
+        } else {
+            format!("Direct upstream path access via alias `{root}` for `{canonical}`")
+        };
+        let remediation = self
+            .forbidden_roots
+            .get(canonical)
+            .cloned()
+            .unwrap_or_else(|| "Use crate::control_plane adapter layer instead".to_string());
+        self.push_finding(line, description, remediation);
+    }
+
+    fn canonical_for_root<'b>(&'b self, root: &'b str) -> Option<&'b str> {
+        if self.forbidden_roots.contains_key(root) {
+            Some(root)
+        } else {
+            self.aliases.get(root).map(String::as_str)
+        }
+    }
+
+    fn push_finding(&mut self, line: usize, description: String, remediation: String) {
+        if !self.seen.insert((line, description.clone())) {
+            return;
+        }
+
+        self.findings.push(ExtensionHostFinding {
+            kind: ViolationKind::DirectUpstreamImport,
+            module_path: self.module_path.to_string(),
+            file_path: self.file_path.to_string(),
+            line,
+            source_line: source_line(self.source, line),
+            description,
+            remediation,
+            exempted: false,
+        });
+    }
+}
+
+impl<'ast> Visit<'ast> for DirectImportVisitor<'_> {
+    fn visit_item_use(&mut self, item: &'ast ItemUse) {
+        if self.pass == DirectImportPass::Imports {
+            self.inspect_use_tree(&item.tree, None, item.span().start().line);
+            visit::visit_item_use(self, item);
+        }
+    }
+
+    fn visit_item_extern_crate(&mut self, item: &'ast ItemExternCrate) {
+        if self.pass == DirectImportPass::Imports {
+            let root = item.ident.to_string();
+            if let Some((_, alias)) = &item.rename
+                && let Some(canonical) = self.canonical_for_root(&root)
+            {
+                self.aliases
+                    .insert(alias.to_string(), canonical.to_string());
+            }
+            self.push_import_if_forbidden(&root, "extern crate", item.span().start().line);
+        }
+    }
+
+    fn visit_path(&mut self, path: &'ast Path) {
+        if self.pass == DirectImportPass::Paths {
+            self.push_path_if_forbidden(path);
+            visit::visit_path(self, path);
+        }
+    }
+}
+
+fn forbidden_crate_roots(patterns: &[(String, String)]) -> BTreeMap<String, String> {
+    let mut roots = BTreeMap::new();
+    for (pattern, remediation) in patterns {
+        if let Some(root) = import_pattern_root(pattern) {
+            roots.entry(root).or_insert_with(|| remediation.clone());
+        }
+    }
+    roots
+}
+
+fn import_pattern_root(pattern: &str) -> Option<String> {
+    let trimmed = pattern.trim().trim_end_matches(';').trim();
+    let rest = if let Some(rest) = trimmed.strip_prefix("use ") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("extern crate ") {
+        rest
+    } else {
+        return None;
+    };
+
+    first_ident(rest).map(str::to_string)
+}
+
+fn first_ident(text: &str) -> Option<&str> {
+    let trimmed = text.trim_start();
+    let mut chars = trimmed.char_indices();
+    let (_, first) = chars.next()?;
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return None;
+    }
+
+    let end = chars
+        .find_map(|(idx, ch)| {
+            if ch == '_' || ch.is_ascii_alphanumeric() {
+                None
+            } else {
+                Some(idx)
+            }
+        })
+        .unwrap_or(trimmed.len());
+    Some(&trimmed[..end])
+}
+
+fn check_direct_imports_without_syn(
+    module_path: &str,
+    file_path: &str,
+    source: &str,
+    forbidden_roots: &BTreeMap<String, String>,
+    findings: &mut Vec<ExtensionHostFinding>,
+) {
+    let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen: BTreeSet<(usize, String)> = BTreeSet::new();
+
+    for (line_num_0, line) in source.lines().enumerate() {
+        let line_num = line_num_0 + 1;
+        let sanitized = sanitize_rust_line_for_guard(line);
+        let trimmed = sanitized.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+
+        let import_root = use_statement_root(trimmed);
+        let extern_root = trimmed
+            .strip_prefix("extern crate ")
+            .and_then(first_ident)
+            .map(str::to_string);
+
+        if let Some(root) = import_root.as_deref().or(extern_root.as_deref()) {
+            if let Some(remediation) = forbidden_roots.get(root) {
+                let token = if extern_root.is_some() {
+                    format!("extern crate {root}")
+                } else {
+                    format!("use {root}")
+                };
+                push_direct_import_fallback(
+                    module_path,
+                    file_path,
+                    source,
+                    findings,
+                    &mut seen,
+                    line_num,
+                    format!("Direct upstream import: `{token}`"),
+                    remediation.clone(),
+                );
+            }
+        }
+
+        if let (Some(root), Some(alias)) = (
+            import_root.as_ref().or(extern_root.as_ref()),
+            import_alias(trimmed),
+        ) && forbidden_roots.contains_key(root)
+        {
+            aliases.insert(alias.to_string(), root.clone());
+        }
+    }
+
+    for (line_num_0, line) in source.lines().enumerate() {
+        let line_num = line_num_0 + 1;
+        let sanitized = sanitize_rust_line_for_guard(line);
+        let trimmed = sanitized.trim();
+        if use_statement_root(trimmed).is_some() || trimmed.starts_with("extern crate ") {
+            continue;
+        }
+
+        for (root, remediation) in forbidden_roots {
+            let needle = format!("{root}::");
+            if trimmed.contains(&needle) {
+                push_direct_import_fallback(
+                    module_path,
+                    file_path,
+                    source,
+                    findings,
+                    &mut seen,
+                    line_num,
+                    format!("Direct upstream path access: `{root}::...`"),
+                    remediation.clone(),
+                );
+            }
+        }
+
+        for (alias, canonical) in &aliases {
+            let needle = format!("{alias}::");
+            if trimmed.contains(&needle) {
+                let remediation = forbidden_roots.get(canonical).cloned().unwrap_or_else(|| {
+                    "Use crate::control_plane adapter layer instead".to_string()
+                });
+                push_direct_import_fallback(
+                    module_path,
+                    file_path,
+                    source,
+                    findings,
+                    &mut seen,
+                    line_num,
+                    format!("Direct upstream path access via alias `{alias}` for `{canonical}`"),
+                    remediation,
+                );
+            }
+        }
+    }
+}
+
+fn use_statement_root(trimmed: &str) -> Option<String> {
+    let use_pos = trimmed
+        .split_whitespace()
+        .position(|token| token == "use")?;
+    let after_use = trimmed
+        .split_whitespace()
+        .skip(use_pos + 1)
+        .collect::<Vec<_>>()
+        .join(" ");
+    first_ident(&after_use).map(str::to_string)
+}
+
+fn import_alias(trimmed: &str) -> Option<&str> {
+    let as_pos = trimmed.find(" as ")?;
+    first_ident(&trimmed[(as_pos + 4)..])
+}
+
+fn sanitize_rust_line_for_guard(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if !in_string && !in_char && ch == '/' && chars.peek() == Some(&'/') {
+            break;
+        }
+
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            out.push(' ');
+        } else if in_char {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '\'' {
+                in_char = false;
+            }
+            out.push(' ');
+        } else if ch == '"' {
+            in_string = true;
+            out.push(' ');
+        } else if ch == '\'' {
+            in_char = true;
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
+fn push_direct_import_fallback(
+    module_path: &str,
+    file_path: &str,
+    source: &str,
+    findings: &mut Vec<ExtensionHostFinding>,
+    seen: &mut BTreeSet<(usize, String)>,
+    line: usize,
+    description: String,
+    remediation: String,
+) {
+    if !seen.insert((line, description.clone())) {
+        return;
+    }
+
+    findings.push(ExtensionHostFinding {
+        kind: ViolationKind::DirectUpstreamImport,
+        module_path: module_path.to_string(),
+        file_path: file_path.to_string(),
+        line,
+        source_line: source_line(source, line),
+        description,
+        remediation,
+        exempted: false,
+    });
+}
+
+fn source_line(source: &str, line: usize) -> String {
+    source
+        .lines()
+        .nth(line.saturating_sub(1))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
 
 /// Extract the full function signature spanning potentially multiple lines.
 fn extract_fn_signature(first_line: &str, lines: &[&str], start_idx: usize) -> Option<String> {
@@ -915,6 +1331,75 @@ mod tests {
                 .iter()
                 .any(|f| f.kind == ViolationKind::DirectUpstreamImport)
         );
+    }
+
+    #[test]
+    fn detects_fully_qualified_upstream_path_access() {
+        let guard = standard_guard();
+        let source = r#"
+            fn bypass_adapter() {
+                let _ = franken_kernel::Cx::default();
+            }
+        "#;
+
+        let findings = guard.audit_source("ext_host::bridge", "src/bridge.rs", source);
+        assert!(findings.iter().any(|f| {
+            f.kind == ViolationKind::DirectUpstreamImport
+                && f.description
+                    .contains("Direct upstream path access: `franken_kernel::...`")
+        }));
+    }
+
+    #[test]
+    fn detects_upstream_alias_path_after_extern_crate_alias() {
+        let guard = standard_guard();
+        let source = r#"
+            extern crate franken_kernel as kernel_upstream;
+
+            fn bypass_adapter() {
+                let _ = kernel_upstream::Cx::default();
+            }
+        "#;
+
+        let findings = guard.audit_source("ext_host::bridge", "src/bridge.rs", source);
+        assert!(findings.iter().any(|f| {
+            f.kind == ViolationKind::DirectUpstreamImport
+                && f.description.contains(
+                    "Direct upstream path access via alias `kernel_upstream` for `franken_kernel`",
+                )
+        }));
+    }
+
+    #[test]
+    fn detects_pub_use_upstream_reexport() {
+        let guard = standard_guard();
+        let source = r#"
+            pub use franken_decision::{DecisionContract as Contract};
+        "#;
+
+        let findings = guard.audit_source("ext_host::policy", "src/policy.rs", source);
+        assert!(findings.iter().any(|f| {
+            f.kind == ViolationKind::DirectUpstreamImport
+                && f.description == "Direct upstream import: `use franken_decision`"
+        }));
+    }
+
+    #[test]
+    fn does_not_flag_upstream_names_in_strings_or_macro_arguments() {
+        let guard = standard_guard();
+        let source = r#"
+            fn diagnostic_text() {
+                let _message = "use franken_kernel::Cx";
+                tracing::debug!("franken_evidence::EvidenceLedger");
+            }
+        "#;
+
+        let findings = guard.audit_source("ext_host::diag", "src/diag.rs", source);
+        let import_violations: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == ViolationKind::DirectUpstreamImport)
+            .collect();
+        assert!(import_violations.is_empty());
     }
 
     #[test]

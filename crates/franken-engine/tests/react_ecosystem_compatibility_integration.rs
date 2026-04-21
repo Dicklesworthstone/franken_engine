@@ -17,7 +17,7 @@
 
 use frankenengine_engine::react_compile_verification::CompileMode;
 use frankenengine_engine::react_ecosystem_compatibility::*;
-use frankenengine_engine::react_package_cohort::ReactPackage;
+use frankenengine_engine::react_package_cohort::{ExportCondition, ReactPackage};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -899,6 +899,118 @@ fn ecosystem_compatibility_report_hash_consistency() {
     assert_eq!(report.report_hash, hash1);
 }
 
+fn failed_report_with_triage() -> EcosystemCompatibilityReport {
+    let epoch = SecurityEpoch::from_raw(67891);
+    let mut report = EcosystemCompatibilityReport::new(epoch);
+
+    let pattern = EcosystemPattern::new(
+        "hash_test_failed_report".to_string(),
+        "Hash test for failed report triage coverage".to_string(),
+        EcosystemMode::HybridRendering,
+        CompileMode::Automatic,
+    )
+    .with_package(ReactPackage::React)
+    .with_package(ReactPackage::ReactDom)
+    .with_package(ReactPackage::ReactDomServer)
+    .with_entry_point("react".to_string())
+    .with_entry_point("react-dom".to_string())
+    .with_entry_point("react-dom/server".to_string())
+    .with_entry_point("react-dom/client".to_string())
+    .with_subpath_import("react/jsx-runtime".to_string());
+
+    let triage = CompatibilityFailureTriage {
+        failure_kind: CompatibilityFailureKind::RuntimeOperation,
+        failure: "client hydration runtime missing".to_string(),
+        minimized_repro: MinimizedReactEcosystemRepro {
+            pattern_id: pattern.pattern_id.clone(),
+            mode: pattern.mode,
+            compile_mode: pattern.compile_mode,
+            resolution_strategy: pattern.resolution_strategy,
+            failing_specifier: Some("react-dom/client".to_string()),
+            required_packages: pattern.required_packages.clone(),
+            entry_points: pattern.entry_points.clone(),
+            subpath_imports: pattern.subpath_imports.clone(),
+        },
+        owner_route: ReactEcosystemOwnerRoute {
+            component: COMPONENT.to_string(),
+            route: "react-runtime-entrygraph".to_string(),
+            bead_id: "bd-1lsy.5.7.2".to_string(),
+            owner: "runtime".to_string(),
+        },
+        shipped_path_classification: ReactShippedPathClassification {
+            status: ReactShippedPathStatus::RuntimePrerequisite,
+            specifier: Some("react-dom/client".to_string()),
+            package: Some(ReactPackage::ReactDom),
+            subpath: Some("client".to_string()),
+            conditions: vec![ExportCondition::Import, ExportCondition::Default],
+            resolved_path: Some("react-dom/client".to_string()),
+            reason: "client hydration requires react-dom/client".to_string(),
+        },
+    };
+
+    let result = CompatibilityTestResult::new(pattern, false)
+        .with_error("Runtime operation failed".to_string())
+        .with_diagnostic("hydration prereq missing".to_string())
+        .with_unresolved_failure(triage)
+        .with_execution_time(2000);
+
+    report.add_test_result(result);
+    report.finalize().unwrap();
+    report
+}
+
+#[test]
+fn ecosystem_compatibility_report_hash_changes_with_unresolved_triage_payloads() {
+    let baseline = failed_report_with_triage();
+
+    let mut changed_failure_kind = baseline.clone();
+    changed_failure_kind.test_results[0].unresolved_failures[0].failure_kind =
+        CompatibilityFailureKind::Compilation;
+    changed_failure_kind.finalize().unwrap();
+    assert_ne!(baseline.report_hash, changed_failure_kind.report_hash);
+
+    let mut changed_specifier = baseline.clone();
+    changed_specifier.test_results[0].unresolved_failures[0]
+        .minimized_repro
+        .failing_specifier = Some("react/jsx-runtime".to_string());
+    changed_specifier.finalize().unwrap();
+    assert_ne!(baseline.report_hash, changed_specifier.report_hash);
+
+    let mut changed_owner_route = baseline.clone();
+    changed_owner_route.test_results[0].unresolved_failures[0]
+        .owner_route
+        .route = "react-compile-verification".to_string();
+    changed_owner_route.finalize().unwrap();
+    assert_ne!(baseline.report_hash, changed_owner_route.report_hash);
+
+    let mut changed_classification_status = baseline.clone();
+    changed_classification_status.test_results[0].unresolved_failures[0]
+        .shipped_path_classification
+        .status = ReactShippedPathStatus::UnrecognizedSpecifier;
+    changed_classification_status.finalize().unwrap();
+    assert_ne!(
+        baseline.report_hash,
+        changed_classification_status.report_hash
+    );
+
+    let mut changed_classification_reason = baseline.clone();
+    changed_classification_reason.test_results[0].unresolved_failures[0]
+        .shipped_path_classification
+        .reason = "specifier is outside the shipped React cohort".to_string();
+    changed_classification_reason.finalize().unwrap();
+    assert_ne!(
+        baseline.report_hash,
+        changed_classification_reason.report_hash
+    );
+
+    let mut changed_error = baseline.clone();
+    changed_error.test_results[0]
+        .errors
+        .push("secondary runtime detail".to_string());
+    changed_error.finalize().unwrap();
+    assert_ne!(baseline.report_hash, changed_error.report_hash);
+}
+
 // ---------------------------------------------------------------------------
 // Cohort-backed validator regressions
 // ---------------------------------------------------------------------------
@@ -913,12 +1025,10 @@ fn validator_accepts_standard_patterns_against_checked_in_react_cohort() {
 
     assert!(report.gate_passed);
     assert_eq!(report.test_results.len(), patterns.len());
-    assert!(
-        report
-            .test_results
-            .iter()
-            .all(|result| result.passed && result.errors.is_empty())
-    );
+    assert!(report
+        .test_results
+        .iter()
+        .all(|result| result.passed && result.errors.is_empty()));
     assert!(report.overall_metrics.packages_resolved >= patterns.len());
     assert!(report.overall_metrics.entry_points_loaded >= patterns.len());
     assert!(report.overall_metrics.subpaths_resolved >= 3);
@@ -943,12 +1053,10 @@ fn validator_fails_closed_on_unknown_react_entrypoint() {
     assert_eq!(report.test_results.len(), 1);
     let result = &report.test_results[0];
     assert!(!result.passed);
-    assert!(
-        result
-            .errors
-            .iter()
-            .any(|error| error.contains("Entry point loading failed"))
-    );
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("Entry point loading failed")));
     let triage = result
         .unresolved_failures
         .iter()
@@ -986,12 +1094,10 @@ fn automatic_compile_requires_declared_jsx_runtime_import() {
     assert!(!report.gate_passed);
     let result = &report.test_results[0];
     assert!(!result.passed);
-    assert!(
-        result
-            .errors
-            .iter()
-            .any(|error| error == "Compilation test failed")
-    );
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error == "Compilation test failed"));
     let triage = result
         .unresolved_failures
         .iter()

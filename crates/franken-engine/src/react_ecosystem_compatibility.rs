@@ -34,8 +34,8 @@ use sha2::{Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::react_compile_verification::CompileMode;
 use crate::react_package_cohort::{
-    ExportCondition, ReactPackage, detect_alias_loops, franken_engine_react_cohort_manifest,
-    resolve_subpath_with_fallbacks, verify_format_consistency,
+    detect_alias_loops, franken_engine_react_cohort_manifest, resolve_subpath_with_fallbacks,
+    verify_format_consistency, ExportCondition, ReactPackage,
 };
 use crate::security_epoch::SecurityEpoch;
 
@@ -611,6 +611,17 @@ pub struct EcosystemCompatibilityReport {
     pub report_hash: ContentHash,
 }
 
+#[derive(Serialize)]
+struct EcosystemCompatibilityReportHashView<'a> {
+    schema_version: &'a str,
+    security_epoch: SecurityEpoch,
+    test_results: &'a [CompatibilityTestResult],
+    overall_metrics: &'a CompatibilityMetrics,
+    gate_passed: bool,
+    compatibility_threshold_millionths: u64,
+    total_execution_time_ms: u64,
+}
+
 impl EcosystemCompatibilityReport {
     /// Creates a new ecosystem compatibility report.
     pub fn new(security_epoch: SecurityEpoch) -> Self {
@@ -686,24 +697,19 @@ impl EcosystemCompatibilityReport {
 
     /// Computes a deterministic hash of the report.
     pub fn compute_hash(&self) -> ContentHash {
-        let mut hasher = Sha256::new();
-        hasher.update(self.schema_version.as_bytes());
-        hasher.update(&self.security_epoch.as_u64().to_le_bytes());
+        let hash_view = EcosystemCompatibilityReportHashView {
+            schema_version: &self.schema_version,
+            security_epoch: self.security_epoch,
+            test_results: &self.test_results,
+            overall_metrics: &self.overall_metrics,
+            gate_passed: self.gate_passed,
+            compatibility_threshold_millionths: self.compatibility_threshold_millionths,
+            total_execution_time_ms: self.total_execution_time_ms,
+        };
 
-        for result in &self.test_results {
-            hasher.update(result.input_hash.as_bytes());
-            hasher.update(&[if result.passed { 1 } else { 0 }]);
-        }
-
-        hasher.update(
-            &self
-                .overall_metrics
-                .compatibility_score_millionths
-                .to_le_bytes(),
-        );
-        hasher.update(&[if self.gate_passed { 1 } else { 0 }]);
-
-        ContentHash::from_bytes(hasher.finalize().into())
+        let encoded = serde_json::to_vec(&hash_view)
+            .expect("ecosystem compatibility report hash view must serialize");
+        ContentHash::compute(&encoded)
     }
 
     /// Returns the percentage of tests that passed.

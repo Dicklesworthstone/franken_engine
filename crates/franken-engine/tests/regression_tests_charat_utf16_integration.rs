@@ -27,7 +27,10 @@ fn test_charat_utf16_out_of_bounds_regression() {
 #[test]
 fn test_charat_utf16_surrogate_pairs_regression() {
     let value = eval_value("'a🔥b'.charAt(1)");
-    assert!(!value.is_empty(), "charAt on surrogate pair should return a code unit");
+    assert!(
+        !value.is_empty(),
+        "charAt on surrogate pair should return a code unit"
+    );
 }
 
 #[test]

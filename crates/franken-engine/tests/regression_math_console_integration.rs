@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 //! Integration tests for `Math.round` and `ConsoleLevel::Info` regressions.
 
-use frankenengine_engine::baseline_interpreter::{ConsoleLevel, InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{
+    ConsoleLevel, InterpreterConfig, InterpreterCore,
+};
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
@@ -143,7 +145,10 @@ fn console_info_string_conversion_integration() {
             args: RegRange { start: 0, count: 1 },
             dst: 1,
         },
-        Ir3Instruction::LoadBool { dst: 0, value: true },
+        Ir3Instruction::LoadBool {
+            dst: 0,
+            value: true,
+        },
         Ir3Instruction::HostCall {
             capability: CapabilityTag("builtin:ConsoleInfo".to_string()),
             args: RegRange { start: 0, count: 1 },

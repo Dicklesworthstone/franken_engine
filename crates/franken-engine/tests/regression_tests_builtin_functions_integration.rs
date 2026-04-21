@@ -41,7 +41,11 @@ fn test_typeof_operator_regression() {
     ];
 
     for (expr, expected) in test_cases {
-        assert_eq!(eval_value(expr), expected, "{expr} should return {expected}");
+        assert_eq!(
+            eval_value(expr),
+            expected,
+            "{expr} should return {expected}"
+        );
     }
 }
 

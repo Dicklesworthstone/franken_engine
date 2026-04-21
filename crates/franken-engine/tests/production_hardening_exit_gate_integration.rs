@@ -63,7 +63,9 @@ fn test_production_hardening_source_tracks_evidence_and_status() {
     let source = production_hardening_source();
     assert!(source.contains("pub evidence_artifacts: BTreeMap<String, String>"));
     assert!(source.contains("pub status: ProductionReadinessStatus"));
-    assert!(source.contains("pub operational_readiness_report: Option<OperationalReadinessReport>"));
+    assert!(
+        source.contains("pub operational_readiness_report: Option<OperationalReadinessReport>")
+    );
     assert!(source.contains("pub e2e_deployment_status: ValidationStatus"));
 }
 

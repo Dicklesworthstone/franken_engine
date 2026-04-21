@@ -23,7 +23,12 @@ fn test_array_prototype_foreach_error_message_quality() {
 #[test]
 fn test_array_prototype_foreach_duplicate_removal_verification() {
     let source = baseline_interpreter_source();
-    assert_eq!(source.matches("\"builtin:ArrayPrototypeForEach\" => {").count(), 1);
+    assert_eq!(
+        source
+            .matches("\"builtin:ArrayPrototypeForEach\" => {")
+            .count(),
+        1
+    );
 }
 
 #[test]

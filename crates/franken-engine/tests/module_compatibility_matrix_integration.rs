@@ -4985,7 +4985,10 @@ fn test_array_map_fail_closed_behavior() {
 #[test]
 fn test_array_map_deduplication_regression() {
     let source = baseline_interpreter_source();
-    assert_eq!(source.matches("\"builtin:ArrayPrototypeMap\" => {").count(), 1);
+    assert_eq!(
+        source.matches("\"builtin:ArrayPrototypeMap\" => {").count(),
+        1
+    );
 }
 
 #[test]
@@ -5001,7 +5004,12 @@ fn test_array_for_each_callback_validation_regression() {
     let source = baseline_interpreter_source();
     assert!(source.contains("missing callback argument"));
     assert!(source.contains("expected: \"function\""));
-    assert_eq!(source.matches("\"builtin:ArrayPrototypeForEach\" => {").count(), 1);
+    assert_eq!(
+        source
+            .matches("\"builtin:ArrayPrototypeForEach\" => {")
+            .count(),
+        1
+    );
 }
 
 #[test]

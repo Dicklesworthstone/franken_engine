@@ -23,7 +23,12 @@ fn test_array_foreach_invalid_callback_behavior() {
 #[test]
 fn test_array_foreach_no_duplicate_implementations() {
     let source = baseline_interpreter_source();
-    assert_eq!(source.matches("\"builtin:ArrayPrototypeForEach\" => {").count(), 1);
+    assert_eq!(
+        source
+            .matches("\"builtin:ArrayPrototypeForEach\" => {")
+            .count(),
+        1
+    );
 }
 
 #[test]

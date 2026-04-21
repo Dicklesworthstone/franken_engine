@@ -1025,10 +1025,12 @@ fn validator_accepts_standard_patterns_against_checked_in_react_cohort() {
 
     assert!(report.gate_passed);
     assert_eq!(report.test_results.len(), patterns.len());
-    assert!(report
-        .test_results
-        .iter()
-        .all(|result| result.passed && result.errors.is_empty()));
+    assert!(
+        report
+            .test_results
+            .iter()
+            .all(|result| result.passed && result.errors.is_empty())
+    );
     assert!(report.overall_metrics.packages_resolved >= patterns.len());
     assert!(report.overall_metrics.entry_points_loaded >= patterns.len());
     assert!(report.overall_metrics.subpaths_resolved >= 3);
@@ -1053,10 +1055,12 @@ fn validator_fails_closed_on_unknown_react_entrypoint() {
     assert_eq!(report.test_results.len(), 1);
     let result = &report.test_results[0];
     assert!(!result.passed);
-    assert!(result
-        .errors
-        .iter()
-        .any(|error| error.contains("Entry point loading failed")));
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error.contains("Entry point loading failed"))
+    );
     let triage = result
         .unresolved_failures
         .iter()
@@ -1094,10 +1098,12 @@ fn automatic_compile_requires_declared_jsx_runtime_import() {
     assert!(!report.gate_passed);
     let result = &report.test_results[0];
     assert!(!result.passed);
-    assert!(result
-        .errors
-        .iter()
-        .any(|error| error == "Compilation test failed"));
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|error| error == "Compilation test failed")
+    );
     let triage = result
         .unresolved_failures
         .iter()

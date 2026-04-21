@@ -227,8 +227,7 @@ fn test_replication_checklist_structural_integrity() {
     let original_bundle = "test-bundle-preservation";
     let original_reviewer = "test-reviewer-preservation";
 
-    let checklist =
-        ReplicationChecklist::new(original_claim, original_bundle, original_reviewer);
+    let checklist = ReplicationChecklist::new(original_claim, original_bundle, original_reviewer);
 
     assert_eq!(
         checklist.claim_id, original_claim,

@@ -48,12 +48,7 @@ fn test_signing_key() -> SigningKey {
 }
 
 fn revocation_signing_key() -> SigningKey {
-    SigningKey::from_bytes([
-        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
-        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
-        0xBF, 0xC0,
-    ])
-    .unwrap()
+    test_signing_key()
 }
 
 fn make_revocation(
@@ -315,7 +310,14 @@ fn enrichment_rebuild_from_events_preserves_chain_hash() {
     }
     let events = chain.events().to_vec();
     let head = chain.head().cloned();
-    let rebuilt = RevocationChain::rebuild_from_events(TEST_ZONE, events, head).unwrap();
+    let rebuilt = RevocationChain::rebuild_from_events_verified(
+        TEST_ZONE,
+        events,
+        head,
+        [sk.verification_key()],
+        [sk.verification_key()],
+    )
+    .unwrap();
     assert_eq!(rebuilt.chain_hash(), chain.chain_hash());
 }
 

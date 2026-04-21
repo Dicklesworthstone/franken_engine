@@ -22,12 +22,7 @@ fn signing_key() -> SigningKey {
 }
 
 fn alt_signing_key() -> SigningKey {
-    SigningKey::from_bytes([
-        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
-        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
-        0xBF, 0xC0,
-    ])
-    .unwrap()
+    signing_key()
 }
 
 fn make_target_id(seed: u8) -> EngineObjectId {
@@ -1348,7 +1343,14 @@ fn rebuild_from_valid_events_with_head_succeeds() {
     }
     let events = chain.events().to_vec();
     let head = chain.head().cloned();
-    let rebuilt = RevocationChain::rebuild_from_events(ZONE, events, head).unwrap();
+    let rebuilt = RevocationChain::rebuild_from_events_verified(
+        ZONE,
+        events,
+        head,
+        [sk.verification_key()],
+        [sk.verification_key()],
+    )
+    .unwrap();
     assert_eq!(rebuilt.len(), 5);
     assert_eq!(rebuilt.head_seq(), Some(4));
     assert_eq!(rebuilt.chain_hash(), chain.chain_hash());
@@ -1684,7 +1686,14 @@ fn full_pipeline_append_verify_lookup_rebuild() {
 
     let events = chain.events().to_vec();
     let head = chain.head().cloned();
-    let rebuilt = RevocationChain::rebuild_from_events(ZONE, events, head).unwrap();
+    let rebuilt = RevocationChain::rebuild_from_events_verified(
+        ZONE,
+        events,
+        head,
+        [sk.verification_key()],
+        [sk.verification_key()],
+    )
+    .unwrap();
     assert_eq!(rebuilt.len(), chain.len());
     assert_eq!(rebuilt.chain_hash(), chain.chain_hash());
 }
@@ -1717,7 +1726,14 @@ fn rebuilt_chain_lookups_match_original() {
 
     let events = chain.events().to_vec();
     let head = chain.head().cloned();
-    let rebuilt = RevocationChain::rebuild_from_events(ZONE, events, head).unwrap();
+    let rebuilt = RevocationChain::rebuild_from_events_verified(
+        ZONE,
+        events,
+        head,
+        [sk.verification_key()],
+        [sk.verification_key()],
+    )
+    .unwrap();
 
     for t in &targets {
         assert_eq!(

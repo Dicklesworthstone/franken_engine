@@ -476,6 +476,10 @@ pub struct RevocationChain {
     events: Vec<RevocationEvent>,
     /// Current head (None if chain is empty).
     head: Option<RevocationHead>,
+    /// Authorized revocation issuers: principal id -> verification key.
+    authorized_revocation_keys: BTreeMap<PrincipalId, VerificationKey>,
+    /// Authorized head signers: principal id -> verification key.
+    authorized_head_keys: BTreeMap<PrincipalId, VerificationKey>,
     /// O(1) revocation lookup: target_id -> event_seq.
     revocation_index: BTreeMap<EngineObjectId, u64>,
     /// Rolling chain hash.
@@ -491,10 +495,43 @@ impl RevocationChain {
             zone: zone.to_string(),
             events: Vec::new(),
             head: None,
+            authorized_revocation_keys: BTreeMap::new(),
+            authorized_head_keys: BTreeMap::new(),
             revocation_index: BTreeMap::new(),
             chain_hash: ContentHash::compute(b"revocation-chain-genesis"),
             audit_events: Vec::new(),
         }
+    }
+
+    /// Authorize a verification key to issue revocations for this chain.
+    ///
+    /// The key is indexed by its deterministic `PrincipalId`; incoming
+    /// revocations must name that same principal and verify under this key.
+    pub fn authorize_revocation_key(&mut self, verification_key: VerificationKey) -> PrincipalId {
+        let principal = PrincipalId::from_verification_key(&verification_key);
+        self.authorized_revocation_keys
+            .insert(principal.clone(), verification_key);
+        principal
+    }
+
+    /// Authorize a verification key to sign chain heads for this chain.
+    pub fn authorize_head_key(&mut self, verification_key: VerificationKey) -> PrincipalId {
+        let principal = PrincipalId::from_verification_key(&verification_key);
+        self.authorized_head_keys
+            .insert(principal.clone(), verification_key);
+        principal
+    }
+
+    /// Builder-style revocation-key authorization.
+    pub fn with_authorized_revocation_key(mut self, verification_key: VerificationKey) -> Self {
+        self.authorize_revocation_key(verification_key);
+        self
+    }
+
+    /// Builder-style head-key authorization.
+    pub fn with_authorized_head_key(mut self, verification_key: VerificationKey) -> Self {
+        self.authorize_head_key(verification_key);
+        self
     }
 
     /// The zone this chain manages.
@@ -561,6 +598,19 @@ impl RevocationChain {
         head_signing_key: &SigningKey,
         trace_id: &str,
     ) -> Result<u64, ChainError> {
+        let head_verification_key = head_signing_key.verification_key();
+        let head_principal = PrincipalId::from_verification_key(&head_verification_key);
+        if revocation.issued_by == head_principal
+            && !self
+                .authorized_revocation_keys
+                .contains_key(&revocation.issued_by)
+        {
+            self.authorized_revocation_keys
+                .insert(head_principal.clone(), head_verification_key.clone());
+        }
+        self.authorized_head_keys
+            .insert(head_principal, head_verification_key);
+
         // Validate zone matches.
         if revocation.zone != self.zone {
             self.emit_reject(
@@ -588,6 +638,9 @@ impl RevocationChain {
                 target_id: revocation.target_id.clone(),
             });
         }
+
+        self.verify_revocation_signature(&revocation)
+            .inspect_err(|err| self.emit_reject(trace_id, err.to_string()))?;
 
         let event_seq = self.events.len() as u64;
         let prev_event = self.events.last().map(|e| e.event_id.clone());
@@ -690,6 +743,9 @@ impl RevocationChain {
             });
         }
 
+        self.verify_revocation_zone(&event.revocation)?;
+        self.verify_revocation_signature(&event.revocation)?;
+
         Ok(())
     }
 
@@ -728,6 +784,9 @@ impl RevocationChain {
                     actual_seq: event.event_seq,
                 });
             }
+
+            self.verify_revocation_zone(&event.revocation)?;
+            self.verify_revocation_signature(&event.revocation)?;
 
             // Verify hash link to previous event.
             if i == 0 {
@@ -774,6 +833,22 @@ impl RevocationChain {
                     ),
                 });
             }
+            let last_event_id = &self.events[last_seq as usize].event_id;
+            if &head.latest_event != last_event_id {
+                return Err(ChainError::ChainIntegrity {
+                    detail: "head latest_event does not match last event".to_string(),
+                });
+            }
+            if head.zone != self.zone {
+                return Err(ChainError::ChainIntegrity {
+                    detail: format!("head zone {} does not match chain {}", head.zone, self.zone),
+                });
+            }
+            self.verify_head_signature_with_authorized_keys(head)?;
+        } else {
+            return Err(ChainError::ChainIntegrity {
+                detail: "non-empty chain must have a head".to_string(),
+            });
         }
 
         Ok(())
@@ -847,8 +922,49 @@ impl RevocationChain {
     }
 
     /// Rebuild the chain from a list of events (e.g. after loading from
-    /// storage). Validates the chain during reconstruction.
+    /// storage).
+    ///
+    /// Non-empty imports must use `rebuild_from_events_verified` with trusted
+    /// revocation and head verification keys. This compatibility entry point
+    /// still performs structural validation before rejecting unauthenticated
+    /// non-empty imports.
     pub fn rebuild_from_events(
+        zone: &str,
+        events: Vec<RevocationEvent>,
+        head: Option<RevocationHead>,
+    ) -> Result<Self, ChainError> {
+        let chain = Self::rebuild_from_events_structural(zone, events, head)?;
+        if chain.events.is_empty() {
+            Ok(chain)
+        } else {
+            Err(ChainError::SignatureInvalid {
+                detail: "authenticated rebuild requires authorized revocation and head keys"
+                    .to_string(),
+            })
+        }
+    }
+
+    /// Rebuild a non-empty chain from storage and verify all revocation and
+    /// head signatures against authorized keys before returning it.
+    pub fn rebuild_from_events_verified(
+        zone: &str,
+        events: Vec<RevocationEvent>,
+        head: Option<RevocationHead>,
+        revocation_keys: impl IntoIterator<Item = VerificationKey>,
+        head_keys: impl IntoIterator<Item = VerificationKey>,
+    ) -> Result<Self, ChainError> {
+        let mut chain = Self::rebuild_from_events_structural(zone, events, head)?;
+        for key in revocation_keys {
+            chain.authorize_revocation_key(key);
+        }
+        for key in head_keys {
+            chain.authorize_head_key(key);
+        }
+        chain.verify_chain("rebuild-from-events")?;
+        Ok(chain)
+    }
+
+    fn rebuild_from_events_structural(
         zone: &str,
         events: Vec<RevocationEvent>,
         head: Option<RevocationHead>,
@@ -856,6 +972,8 @@ impl RevocationChain {
         let mut chain = Self::new(zone);
 
         for (i, event) in events.iter().enumerate() {
+            chain.verify_revocation_zone(&event.revocation)?;
+
             // Verify sequence.
             if event.event_seq != i as u64 {
                 return Err(ChainError::SequenceDiscontinuity {
@@ -935,6 +1053,67 @@ impl RevocationChain {
 
     // -- Internal helpers --
 
+    fn verify_revocation_zone(&self, revocation: &Revocation) -> Result<(), ChainError> {
+        if revocation.zone != self.zone {
+            return Err(ChainError::ChainIntegrity {
+                detail: format!(
+                    "zone mismatch: chain={}, revocation={}",
+                    self.zone, revocation.zone
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn verify_revocation_signature(&self, revocation: &Revocation) -> Result<(), ChainError> {
+        let verification_key = self
+            .authorized_revocation_keys
+            .get(&revocation.issued_by)
+            .ok_or_else(|| ChainError::SignatureInvalid {
+                detail: format!(
+                    "revocation issuer {} is not authorized",
+                    revocation.issued_by.to_hex()
+                ),
+            })?;
+        let derived_issuer = PrincipalId::from_verification_key(verification_key);
+        if derived_issuer != revocation.issued_by {
+            return Err(ChainError::SignatureInvalid {
+                detail: "authorized revocation key does not match issued_by principal".to_string(),
+            });
+        }
+        verify_signature(
+            verification_key,
+            &revocation.preimage_bytes(),
+            &revocation.signature,
+        )
+        .map_err(|e| ChainError::SignatureInvalid {
+            detail: format!("revocation signature invalid: {e}"),
+        })
+    }
+
+    fn verify_head_signature_with_authorized_keys(
+        &self,
+        head: &RevocationHead,
+    ) -> Result<(), ChainError> {
+        if self.authorized_head_keys.is_empty() {
+            return Err(ChainError::SignatureInvalid {
+                detail: "no authorized head verification key configured".to_string(),
+            });
+        }
+        let preimage = head.preimage_bytes();
+        if self
+            .authorized_head_keys
+            .values()
+            .any(|key| verify_signature(key, &preimage, &head.signature).is_ok())
+        {
+            Ok(())
+        } else {
+            Err(ChainError::SignatureInvalid {
+                detail: "head signature did not verify with any authorized key".to_string(),
+            })
+        }
+    }
+
     fn derive_event_id(
         &self,
         revocation: &Revocation,
@@ -1002,6 +1181,10 @@ mod tests {
     }
 
     fn test_revocation_key() -> SigningKey {
+        test_signing_key()
+    }
+
+    fn alternate_revocation_key() -> SigningKey {
         SigningKey::from_bytes([
             0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE,
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
@@ -1244,6 +1427,74 @@ mod tests {
 
         let err = chain.verify_chain("t-seq").unwrap_err();
         assert!(matches!(err, ChainError::SequenceDiscontinuity { .. }));
+    }
+
+    #[test]
+    fn append_rejects_unauthorized_revocation_issuer() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let head_sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [9; 32],
+            &alternate_revocation_key(),
+        );
+
+        let err = chain.append(rev, &head_sk, "t-unauthorized").unwrap_err();
+        assert!(matches!(err, ChainError::SignatureInvalid { .. }));
+    }
+
+    #[test]
+    fn append_accepts_authorized_distinct_revocation_issuer() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let head_sk = test_signing_key();
+        let revocation_sk = alternate_revocation_key();
+        chain.authorize_revocation_key(revocation_sk.verification_key());
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [10; 32],
+            &revocation_sk,
+        );
+
+        let seq = chain.append(rev, &head_sk, "t-authorized").unwrap();
+        assert_eq!(seq, 0);
+    }
+
+    #[test]
+    fn verify_chain_detects_tampered_revocation_signature() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [11; 32],
+            &test_revocation_key(),
+        );
+        chain.append(rev, &sk, "t-rev-sig").unwrap();
+
+        chain.events[0].revocation.reason = RevocationReason::Administrative;
+
+        let err = chain.verify_chain("t-rev-sig").unwrap_err();
+        assert!(matches!(err, ChainError::SignatureInvalid { .. }));
+    }
+
+    #[test]
+    fn verify_chain_detects_tampered_head_signature() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [12; 32],
+            &test_revocation_key(),
+        );
+        chain.append(rev, &sk, "t-head-sig").unwrap();
+
+        chain.head.as_mut().unwrap().signature = Signature::from_bytes([0xAA; 64]);
+
+        let err = chain.verify_chain("t-head-sig").unwrap_err();
+        assert!(matches!(err, ChainError::SignatureInvalid { .. }));
     }
 
     // -- Head signature verification --
@@ -1489,7 +1740,14 @@ mod tests {
         let events = chain.events().to_vec();
         let head = chain.head().cloned();
 
-        let rebuilt = RevocationChain::rebuild_from_events(TEST_ZONE, events, head).unwrap();
+        let rebuilt = RevocationChain::rebuild_from_events_verified(
+            TEST_ZONE,
+            events,
+            head,
+            [sk.verification_key()],
+            [sk.verification_key()],
+        )
+        .unwrap();
         assert_eq!(rebuilt.len(), 5);
         assert_eq!(rebuilt.head_seq(), Some(4));
         assert_eq!(rebuilt.chain_hash(), chain.chain_hash());

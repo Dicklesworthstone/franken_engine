@@ -10324,9 +10324,100 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "API drift: Statement::Variable, Expression::FunctionExpression, VariableDeclaration.declarators, and lower_ir1_to_ir3 have all been renamed/restructured"]
     fn function_declaration_with_body_emits_create_closure() {
-        unimplemented!("needs rewrite against new AST/IR surface");
+        let ir0 = stmt_ir0(vec![Statement::FunctionDeclaration(FunctionDeclaration {
+            name: Some("answer".into()),
+            params: vec![FunctionParam {
+                pattern: BindingPattern::Identifier("x".into()),
+                span: span(),
+            }],
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Identifier("x".into())),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+            span: span(),
+        })]);
+
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("function declaration should lower to IR1")
+            .module;
+        let (param_names, body_ops, free_vars, is_generator) = ir1
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::DeclareFunction {
+                    name,
+                    param_names,
+                    body_ops,
+                    free_vars,
+                    is_generator,
+                    ..
+                } if name == "answer" => Some((param_names, body_ops, free_vars, is_generator)),
+                _ => None,
+            })
+            .expect("IR1 should retain the lowered function body");
+        assert_eq!(param_names, &vec!["x".to_string()]);
+        assert!(
+            body_ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::LoadBinding { .. })),
+            "function body should load its parameter"
+        );
+        assert!(
+            body_ops.iter().any(|op| matches!(op, Ir1Op::Return)),
+            "function body should retain an explicit return"
+        );
+        assert!(free_vars.is_empty());
+        assert!(!*is_generator);
+
+        let ir2 = lower_ir1_to_ir2(&ir1)
+            .expect("function declaration should lower to IR2")
+            .module;
+        let ir3 = lower_ir2_to_ir3(&ir2)
+            .expect("function declaration should lower to IR3")
+            .module;
+
+        let (function_index, capture_count) = ir3
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Ir3Instruction::CreateClosure {
+                    function_index,
+                    capture_count,
+                    ..
+                } => Some((*function_index, *capture_count)),
+                _ => None,
+            })
+            .expect("IR3 should create a closure for the function declaration");
+        assert_eq!(function_index, 1);
+        assert_eq!(capture_count, 0);
+
+        let main_halt_index = ir3
+            .instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
+            .expect("main instruction stream should terminate with Halt");
+        let function_desc = ir3
+            .function_table
+            .get(function_index as usize)
+            .expect("function table should include the deferred body");
+        assert_eq!(function_desc.name.as_deref(), Some("answer"));
+        assert_eq!(function_desc.arity, 1);
+        assert!(
+            function_desc.entry as usize > main_halt_index,
+            "function body should be appended after the main instruction stream"
+        );
+        assert!(
+            ir3.instructions[function_desc.entry as usize..]
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::Return { .. })),
+            "deferred function body should lower to executable IR3"
+        );
     }
 
     // ================================================================

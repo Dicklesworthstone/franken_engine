@@ -297,6 +297,7 @@ pub enum Value {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinFunctionKind {
     Require,
+    IteratorNext,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -306,6 +307,8 @@ pub struct BuiltinFunction {
     pub kind: BuiltinFunctionKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub module_specifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iterator_handle: Option<u32>,
 }
 
 impl BuiltinFunction {
@@ -313,12 +316,22 @@ impl BuiltinFunction {
         Self {
             kind: BuiltinFunctionKind::Require,
             module_specifier: module_specifier.into(),
+            iterator_handle: None,
+        }
+    }
+
+    fn iterator_next(iterator_handle: u32) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::IteratorNext,
+            module_specifier: String::new(),
+            iterator_handle: Some(iterator_handle),
         }
     }
 
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::IteratorNext => "next",
         }
     }
 }
@@ -2497,6 +2510,17 @@ impl InterpreterCore {
                 self.current_module_specifier = previous_module_specifier;
                 result
             }
+            BuiltinFunctionKind::IteratorNext => {
+                let iterator_handle =
+                    builtin
+                        .iterator_handle
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "iterator-bound builtin".to_string(),
+                            got: "missing iterator handle".to_string(),
+                        })?;
+                let next_value = self.advance_for_of_iterator(Value::Iterator(iterator_handle))?;
+                self.alloc_iterator_result_object(next_value)
+            }
         }
     }
 
@@ -4025,6 +4049,10 @@ impl InterpreterCore {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
                             let prop = self.prototype_chain_get(oid, &key_str)?;
+                            self.write_reg(dst, prop)?;
+                        }
+                        Value::Iterator(iterator_handle) => {
+                            let prop = self.iterator_property_value(iterator_handle, &key_str);
                             self.write_reg(dst, prop)?;
                         }
                         _ => {
@@ -5582,6 +5610,27 @@ impl InterpreterCore {
         }
     }
 
+    fn alloc_iterator_result_object(
+        &mut self,
+        next_value: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let result_id = self.alloc_object_with_prototype(None)?;
+        let (value, done) = match next_value {
+            Some(value) => (value, false),
+            None => (Value::Undefined, true),
+        };
+        self.set_object_property(result_id, "value".to_string(), value)?;
+        self.set_object_property(result_id, "done".to_string(), Value::Bool(done))?;
+        Ok(Value::Object(result_id))
+    }
+
+    fn iterator_property_value(&self, iterator_handle: u32, key: &str) -> Value {
+        match key {
+            "next" => Value::BuiltinFunction(BuiltinFunction::iterator_next(iterator_handle)),
+            _ => Value::Undefined,
+        }
+    }
+
     fn close_iterator(
         &mut self,
         iterator: Value,
@@ -6940,15 +6989,17 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
+                    let key_string = Self::property_key(&key_value);
                     let value = match object_value {
                         Value::Object(object_id) => self
                             .heap
                             .get(object_id.0 as usize)
-                            .and_then(|object| {
-                                object.properties.get(&Self::property_key(&key_value))
-                            })
+                            .and_then(|object| object.properties.get(&key_string))
                             .cloned()
                             .unwrap_or(Value::Undefined),
+                        Value::Iterator(iterator_handle) => {
+                            self.iterator_property_value(iterator_handle, &key_string)
+                        }
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -16395,6 +16446,41 @@ mod tests {
         assert_eq!(properties.get("length"), Some(&Value::Int(2)));
     }
 
+    fn iterator_next_via_property(core: &mut InterpreterCore, iterator: Value) -> Value {
+        core.registers[0] = iterator;
+        core.registers[1] = Value::Str("next".to_string());
+        core.execute(&test_module(vec![
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 2,
+            },
+            Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 2,
+                args: RegRange { start: 8, count: 0 },
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ]))
+        .expect("iterator next property call should execute")
+        .value
+    }
+
+    fn assert_iterator_result(
+        core: &InterpreterCore,
+        result: Value,
+        expected_done: bool,
+        expected_value: Value,
+    ) {
+        let Value::Object(result_id) = result else {
+            panic!("expected iterator result object, got {result:?}");
+        };
+        let properties = &core.heap[result_id.0 as usize].properties;
+        assert_eq!(properties.get("done"), Some(&Value::Bool(expected_done)));
+        assert_eq!(properties.get("value"), Some(&expected_value));
+    }
+
     #[test]
     fn parseint_nan_radix_defaults_for_global_and_number_parseint_builtin_ids() {
         let mut interpreter = quickjs_test_core();
@@ -17816,6 +17902,105 @@ mod tests {
             Some(Value::Str("third".to_string()))
         );
         assert_eq!(core.advance_for_of_iterator(values).unwrap(), None);
+    }
+
+    #[test]
+    fn array_iterator_next_method_returns_public_iterator_results() {
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[
+                (0, Value::Str("first".to_string())),
+                (2, Value::Str("third".to_string())),
+            ],
+        );
+        core.registers[0] = Value::Object(array_id);
+
+        let entries = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let keys = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeKeys",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let values = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+
+        let entry_result = iterator_next_via_property(&mut core, entries);
+        let Value::Object(entry_result_id) = entry_result else {
+            panic!("expected iterator result object for entries");
+        };
+        let entry_properties = &core.heap[entry_result_id.0 as usize].properties;
+        assert_eq!(entry_properties.get("done"), Some(&Value::Bool(false)));
+        let pair_value = entry_properties
+            .get("value")
+            .cloned()
+            .expect("entries result should expose value");
+        assert_entry_pair(&core, pair_value, 0, Value::Str("first".to_string()));
+
+        let key_result = iterator_next_via_property(&mut core, keys);
+        assert_iterator_result(&core, key_result, false, Value::Int(0));
+
+        let value_result = iterator_next_via_property(&mut core, values.clone());
+        assert_iterator_result(&core, value_result, false, Value::Str("first".to_string()));
+
+        let hole_result = iterator_next_via_property(&mut core, values.clone());
+        assert_iterator_result(&core, hole_result, false, Value::Undefined);
+
+        let tail_result = iterator_next_via_property(&mut core, values.clone());
+        assert_iterator_result(&core, tail_result, false, Value::Str("third".to_string()));
+
+        let done_result = iterator_next_via_property(&mut core, values);
+        assert_iterator_result(&core, done_result, true, Value::Undefined);
+    }
+
+    #[test]
+    fn array_iterator_next_method_shares_progress_with_for_of_iteration() {
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(
+            &mut core,
+            3,
+            &[
+                (0, Value::Int(10)),
+                (1, Value::Int(20)),
+                (2, Value::Int(30)),
+            ],
+        );
+        core.registers[0] = Value::Object(array_id);
+
+        let iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+
+        let first_result = iterator_next_via_property(&mut core, iterator.clone());
+        assert_iterator_result(&core, first_result, false, Value::Int(10));
+
+        assert_eq!(
+            core.advance_for_of_iterator(iterator.clone()).unwrap(),
+            Some(Value::Int(20))
+        );
+
+        let third_result = iterator_next_via_property(&mut core, iterator.clone());
+        assert_iterator_result(&core, third_result, false, Value::Int(30));
+
+        assert_eq!(core.advance_for_of_iterator(iterator).unwrap(), None);
     }
 
     #[test]

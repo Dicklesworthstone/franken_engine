@@ -5,19 +5,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::minimized_repro_extraction::{
-    ExtractionConfig, ExtractionEngine, FailureCategory, MinimizationStrategy,
-    MinimizedRepro as ExtractionRepro, ReproInput, TriageFinding, TriageSeverity,
-    BEAD_ID as EXTRACTION_BEAD_ID, COMPONENT as EXTRACTION_COMPONENT,
-    POLICY_ID as EXTRACTION_POLICY_ID, SCHEMA_VERSION as EXTRACTION_SCHEMA_VERSION,
+    BEAD_ID as EXTRACTION_BEAD_ID, COMPONENT as EXTRACTION_COMPONENT, ExtractionConfig,
+    ExtractionEngine, FailureCategory, MinimizationStrategy, MinimizedRepro as ExtractionRepro,
+    POLICY_ID as EXTRACTION_POLICY_ID, ReproInput, SCHEMA_VERSION as EXTRACTION_SCHEMA_VERSION,
+    TriageFinding, TriageSeverity,
 };
 use frankenengine_engine::react_repro_triage::{
-    assign_severity, build_triage_event, classify_failure, default_owner_route, generate_advisory,
-    FailureClass, FailureSeverity, FailureSymptoms, MinimizedRepro, OwnerRoute, ReproCatalog,
-    TriageEntry, BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
+    BEAD_ID, COMPONENT, FailureClass, FailureSeverity, FailureSymptoms, MinimizedRepro, OwnerRoute,
+    POLICY_ID, ReproCatalog, SCHEMA_VERSION, TriageEntry, assign_severity, build_triage_event,
+    classify_failure, default_owner_route, generate_advisory,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_react_repro_triage_v1.json");
 const CATALOG_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.react-repro-catalog-artifact.v1";
@@ -183,8 +183,8 @@ fn extraction_finding(
     }
 }
 
-fn build_sample_extraction_report(
-) -> frankenengine_engine::minimized_repro_extraction::ExtractionReport {
+fn build_sample_extraction_report()
+-> frankenengine_engine::minimized_repro_extraction::ExtractionReport {
     let config = ExtractionConfig::default();
     let mut engine = ExtractionEngine::new(config);
 
@@ -548,14 +548,18 @@ fn rgc_405c_runner_script_pins_repo_local_target_dir_and_targets() {
     assert!(runner.contains("policy-rgc-react-repro-triage-v1"));
     assert!(runner.contains("RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH"));
     assert!(runner.contains("rgc_405c_emit_catalog_artifact_for_runner"));
-    assert!(contract
-        .operator_verification
-        .iter()
-        .any(|command| command.contains("scripts/run_rgc_react_repro_triage.sh")));
-    assert!(contract
-        .operator_verification
-        .iter()
-        .any(|command| command.contains("scripts/e2e/rgc_react_repro_triage_replay.sh")));
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|command| command.contains("scripts/run_rgc_react_repro_triage.sh"))
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|command| command.contains("scripts/e2e/rgc_react_repro_triage_replay.sh"))
+    );
 
     for target in &contract.required_test_targets {
         assert!(
@@ -563,6 +567,19 @@ fn rgc_405c_runner_script_pins_repo_local_target_dir_and_targets() {
             "runner should verify {target}"
         );
     }
+}
+
+#[test]
+fn rgc_405c_runner_script_avoids_inline_catalog_payloads() {
+    let runner = read_runner_script();
+
+    assert!(runner.contains("emit_catalog_artifact"));
+    assert!(!runner.contains("cat >\"${catalog_path}\""));
+    assert!(!runner.contains("<<EOF_CATALOG"));
+    assert!(
+        !runner.contains("\"schema_version\": \"franken-engine.react-repro-catalog-artifact.v1\"")
+    );
+    assert!(!runner.contains("\"entry_id\":"));
 }
 
 #[test]

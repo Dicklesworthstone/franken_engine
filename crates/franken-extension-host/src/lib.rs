@@ -4077,24 +4077,34 @@ pub enum PolicySignError {
         surface: PolicySignSurface,
         detail: String,
     },
+    OversizedPayload {
+        request_id: String,
+        surface: PolicySignSurface,
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
 }
 
 impl PolicySignError {
     pub const fn error_code(&self) -> &'static str {
         match self {
-            Self::FailClosed { surface, .. } => match surface {
-                PolicySignSurface::EmergencyGrant => ESCROW_RECEIPT_EMISSION_ERROR_CODE,
-                PolicySignSurface::DecisionSigningKey
-                | PolicySignSurface::DeclassificationReceipt => {
-                    DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE
+            Self::FailClosed { surface, .. } | Self::OversizedPayload { surface, .. } => {
+                match surface {
+                    PolicySignSurface::EmergencyGrant => ESCROW_RECEIPT_EMISSION_ERROR_CODE,
+                    PolicySignSurface::DecisionSigningKey
+                    | PolicySignSurface::DeclassificationReceipt => {
+                        DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE
+                    }
                 }
-            },
+            }
         }
     }
 
     pub fn request_id(&self) -> &str {
         match self {
-            Self::FailClosed { request_id, .. } => request_id,
+            Self::FailClosed { request_id, .. } | Self::OversizedPayload { request_id, .. } => {
+                request_id
+            }
         }
     }
 }
@@ -4109,6 +4119,15 @@ impl fmt::Display for PolicySignError {
             } => write!(
                 f,
                 "policy signing failed closed for {surface:?} {request_id}: {detail}"
+            ),
+            Self::OversizedPayload {
+                surface,
+                actual_bytes,
+                max_bytes,
+                ..
+            } => write!(
+                f,
+                "policy signing payload too large for {surface:?}: {actual_bytes} bytes exceeds {max_bytes}"
             ),
         }
     }
@@ -4136,15 +4155,12 @@ fn serialize_policy_signing_payload<T: Serialize + ?Sized>(
     let payload_bytes = serde_json::to_vec(payload)
         .map_err(|err| policy_sign_fail_closed(surface, request_id, err.to_string()))?;
     if payload_bytes.len() > MAX_POLICY_SIGNING_PAYLOAD_BYTES {
-        return Err(policy_sign_fail_closed(
+        return Err(PolicySignError::OversizedPayload {
+            request_id: request_id.to_string(),
             surface,
-            request_id,
-            format!(
-                "signing payload size {} exceeds {} bytes",
-                payload_bytes.len(),
-                MAX_POLICY_SIGNING_PAYLOAD_BYTES
-            ),
-        ));
+            actual_bytes: payload_bytes.len(),
+            max_bytes: MAX_POLICY_SIGNING_PAYLOAD_BYTES,
+        });
     }
     Ok(payload_bytes)
 }
@@ -4222,6 +4238,63 @@ impl CryptographicDecisionReceipt {
         self.signing_payload_bytes()
             .map(|payload| public_key.verify(&payload, &self.signature))
             .unwrap_or(false)
+    }
+}
+
+fn bounded_policy_sign_error_detail(error: &PolicySignError) -> String {
+    let detail = error.to_string();
+    if detail.len() <= MAX_POLICY_SIGN_ERROR_DETAIL_CHARS {
+        return detail;
+    }
+
+    let mut truncated: String = detail
+        .chars()
+        .take(MAX_POLICY_SIGN_ERROR_DETAIL_CHARS)
+        .collect();
+    truncated.push_str("...");
+    truncated
+}
+
+fn minimal_fail_closed_declassification_receipt(
+    timestamp_ns: u64,
+    signer: &DecisionSigningKey,
+    signing_error: PolicySignError,
+) -> CryptographicDecisionReceipt {
+    let request_id = "declassification-receipt-emission-failed";
+    let reason = DeclassificationDenialReason::ContractRejected {
+        contract_id: "receipt_signing".to_string(),
+        detail: bounded_policy_sign_error_detail(&signing_error),
+    };
+    let verdict = DecisionVerdict::Denied { reason };
+    let contract_chain = vec!["declassification_receipt_emission".to_string()];
+    let conditions = Vec::new();
+    let receipt_id = derive_receipt_id(request_id, timestamp_ns, "denied");
+    let payload = ReceiptSigningPayload {
+        receipt_id: &receipt_id,
+        request_id,
+        verdict: &verdict,
+        contract_chain: &contract_chain,
+        conditions: &conditions,
+        posterior_at_decision_micros: 0,
+        timestamp_ns,
+    };
+    let signature = serialize_policy_signing_payload(
+        PolicySignSurface::DeclassificationReceipt,
+        request_id,
+        &payload,
+    )
+    .map(|payload| signer.sign(&payload))
+    .unwrap_or_else(|_| signer.sign(b"declassification-receipt-emission-failed"));
+
+    CryptographicDecisionReceipt {
+        receipt_id,
+        request_id: request_id.to_string(),
+        verdict,
+        contract_chain,
+        conditions,
+        posterior_at_decision_micros: 0,
+        timestamp_ns,
+        signature,
     }
 }
 
@@ -4410,13 +4483,14 @@ impl DeclassificationGateway {
             Err(err) => {
                 let reason = DeclassificationDenialReason::ContractRejected {
                     contract_id: "receipt_signing".to_string(),
-                    detail: err.to_string(),
+                    detail: bounded_policy_sign_error_detail(&err),
                 };
                 verdict = DecisionVerdict::Denied {
                     reason: reason.clone(),
                 };
+                let fallback_request_id = fail_closed_receipt_request_id(&request.request_id);
                 CryptographicDecisionReceipt::new_signed(
-                    &request.request_id,
+                    &fallback_request_id,
                     DecisionVerdict::Denied { reason },
                     vec!["declassification_receipt_emission".to_string()],
                     Vec::new(),
@@ -4424,7 +4498,13 @@ impl DeclassificationGateway {
                     request.timestamp_ns,
                     &self.signing_key,
                 )
-                .expect("fail-closed declassification receipt should serialize")
+                .unwrap_or_else(|fallback_err| {
+                    minimal_fail_closed_declassification_receipt(
+                        request.timestamp_ns,
+                        &self.signing_key,
+                        fallback_err,
+                    )
+                })
             }
         };
         self.receipt_log.append(receipt.clone());
@@ -4712,6 +4792,17 @@ fn derive_receipt_id(request_id: &str, timestamp_ns: u64, outcome_tag: &str) -> 
     format!("dcr-{}", to_hex(&digest[..12]))
 }
 
+fn fail_closed_receipt_request_id(request_id: &str) -> String {
+    if request_id.len() <= MAX_FAIL_CLOSED_RECEIPT_REQUEST_ID_BYTES {
+        return request_id.to_string();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(request_id.as_bytes());
+    let digest = hasher.finalize();
+    format!("oversized-request-{}", to_hex(&digest[..16]))
+}
+
 fn to_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
@@ -4727,6 +4818,8 @@ pub const MAX_DELEGATE_CPU_BUDGET_NS: u64 = 60_000_000_000;
 pub const MAX_DELEGATE_MEMORY_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_DELEGATE_HOSTCALL_BUDGET: u64 = 100_000;
 pub const MAX_POLICY_SIGNING_PAYLOAD_BYTES: usize = 1024 * 1024;
+const MAX_FAIL_CLOSED_RECEIPT_REQUEST_ID_BYTES: usize = 128;
+const MAX_POLICY_SIGN_ERROR_DETAIL_CHARS: usize = 512;
 const DELEGATE_COMPONENT: &str = "delegate_cell_policy";
 
 /// Delegate-cell scope authorizing specific runtime-internal operations.
@@ -10444,6 +10537,123 @@ mod enrichment_tests {
         )
         .expect("receipt should sign");
         assert!(!receipt.verify(&key_b.public_key()));
+    }
+
+    fn approved_receipt_payload_len(request_id: &str) -> usize {
+        let verdict = DecisionVerdict::Approved { conditions: vec![] };
+        let contract_chain = Vec::new();
+        let conditions = Vec::new();
+        let receipt_id = derive_receipt_id(request_id, 4000, "approved");
+        let payload = ReceiptSigningPayload {
+            receipt_id: &receipt_id,
+            request_id,
+            verdict: &verdict,
+            contract_chain: &contract_chain,
+            conditions: &conditions,
+            posterior_at_decision_micros: 500_000,
+            timestamp_ns: 4000,
+        };
+        serde_json::to_vec(&payload)
+            .expect("test receipt payload should serialize")
+            .len()
+    }
+
+    fn request_id_for_approved_receipt_payload_len(target_len: usize) -> String {
+        let base_len = approved_receipt_payload_len("");
+        assert!(target_len >= base_len);
+        "r".repeat(target_len - base_len)
+    }
+
+    #[test]
+    fn cryptographic_decision_receipt_size_boundary_is_metamorphic() {
+        let key = DecisionSigningKey::new([0xC7; 32]);
+        let cases = [
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES - 1, true),
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES, true),
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1, false),
+        ];
+
+        for (target_len, should_sign) in cases {
+            let request_id = request_id_for_approved_receipt_payload_len(target_len);
+            assert_eq!(approved_receipt_payload_len(&request_id), target_len);
+
+            let result = CryptographicDecisionReceipt::new_signed(
+                &request_id,
+                DecisionVerdict::Approved { conditions: vec![] },
+                vec![],
+                vec![],
+                500_000,
+                4000,
+                &key,
+            );
+
+            if should_sign {
+                let receipt = result.expect("payload at or below max should sign");
+                assert!(receipt.verify(&key.public_key()));
+            } else {
+                match result {
+                    Err(PolicySignError::OversizedPayload {
+                        surface,
+                        actual_bytes,
+                        max_bytes,
+                        ..
+                    }) => {
+                        assert_eq!(surface, PolicySignSurface::DeclassificationReceipt);
+                        assert_eq!(actual_bytes, MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1);
+                        assert_eq!(max_bytes, MAX_POLICY_SIGNING_PAYLOAD_BYTES);
+                    }
+                    other => panic!("expected oversized payload failure, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn declassification_gateway_fails_closed_on_oversized_receipt_payload() {
+        let oversized_request_id =
+            request_id_for_approved_receipt_payload_len(MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1);
+        let mut gateway = DeclassificationGateway::default();
+        let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
+        let context = FlowEnforcementContext::new("trace-oversized", "decision-oversized", "p");
+
+        let outcome = gateway.evaluate_request(
+            DeclassificationRequest {
+                request_id: oversized_request_id.clone(),
+                requester: "ext-oversized".to_string(),
+                data_ref: DataRef::new("memory", "token"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::OperatorOverride,
+                justification: "operator approved".to_string(),
+                timestamp_ns: 5000,
+            },
+            &caps,
+            500_000,
+            &context,
+        );
+
+        match outcome {
+            DeclassificationOutcome::Denied { reason, receipt } => {
+                match reason {
+                    DeclassificationDenialReason::ContractRejected {
+                        contract_id,
+                        detail,
+                    } => {
+                        assert_eq!(contract_id, "receipt_signing");
+                        assert!(detail.contains("too large"));
+                    }
+                    other => panic!("expected receipt-signing denial, got {other:?}"),
+                }
+                assert!(receipt.request_id.starts_with("oversized-request-"));
+                assert!(receipt.verify(&gateway.public_key()));
+            }
+            other => panic!("expected fail-closed denial, got {other:?}"),
+        }
+
+        assert_eq!(gateway.receipt_log().receipts().len(), 1);
+        assert_eq!(gateway.events().len(), 1);
+        assert_eq!(gateway.events()[0].outcome, "denied");
+        assert_eq!(gateway.events()[0].request_id, oversized_request_id);
     }
 
     // ── LifecycleTransitionRecord ───────────────────────────────────────

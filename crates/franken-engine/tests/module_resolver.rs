@@ -11,14 +11,14 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
-    AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ImportStyle,
-    ModuleDefinition, ModuleDependency, ModuleRequest, ModuleResolver, ModuleSyntax,
-    ResolutionContext, ResolutionErrorCode,
+    AllowAllPolicy, CapabilityPolicyHook, DeterministicModuleResolver, ExternalPackageDefinition,
+    ExternalPackageExportTarget, ImportStyle, ModuleDefinition, ModuleDependency, ModuleRequest,
+    ModuleResolver, ModuleSyntax, ResolutionContext, ResolutionErrorCode,
 };
 
 fn context() -> ResolutionContext {
@@ -27,6 +27,315 @@ fn context() -> ResolutionContext {
         "decision-integration",
         "policy-integration",
     )
+}
+
+const NODE_CJS_REQUIRE_ALGORITHM: &str = "https://nodejs.org/api/modules.html#all-together";
+const NODE_CJS_CYCLES: &str = "https://nodejs.org/api/modules.html#cycles";
+const NODE_ESM_MANDATORY_EXTENSIONS: &str =
+    "https://nodejs.org/api/esm.html#mandatory-file-extensions";
+const NODE_PACKAGE_CONDITIONAL_EXPORTS: &str =
+    "https://nodejs.org/api/packages.html#conditional-exports";
+const NODE_PACKAGE_NO_PATH_TRAVERSAL: &str =
+    "https://nodejs.org/api/packages.html#no-path-traversal-or-invalid-segments";
+
+#[derive(Clone, Copy)]
+enum ResolverConformanceExpected {
+    Resolved {
+        canonical: &'static str,
+        syntax: ModuleSyntax,
+        probes: &'static [&'static str],
+    },
+    Error {
+        code: ResolutionErrorCode,
+        message_contains: &'static str,
+        probes: &'static [&'static str],
+    },
+    Chain {
+        canonicals: &'static [&'static str],
+    },
+}
+
+struct ResolverConformanceCase {
+    name: &'static str,
+    spec_anchor: &'static str,
+    specifier: &'static str,
+    style: ImportStyle,
+    referrer: Option<&'static str>,
+    expected: ResolverConformanceExpected,
+}
+
+fn spec_anchored_resolver() -> DeterministicModuleResolver {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+
+    resolver
+        .register_workspace_module(
+            "/app/main.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './dep.mjs';"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/main.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "require('./dep');"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/dep.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/dep.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/pkg/index.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 'index';"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/cycle-a.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "require('./cycle-b');")
+                .with_dependency(ModuleDependency::new("./cycle-b", ImportStyle::Require)),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/app/cycle-b.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "require('./cycle-a');")
+                .with_dependency(ModuleDependency::new("./cycle-a", ImportStyle::Require)),
+        )
+        .unwrap();
+
+    resolver
+        .register_external_module(
+            "dual/esm.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export const kind = 'esm';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "dual/cjs.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = { kind: 'cjs' };"),
+        )
+        .unwrap();
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("dual").with_export(
+            ".",
+            ExternalPackageExportTarget {
+                condition_targets: BTreeMap::from([
+                    ("import".to_string(), "./esm.mjs".to_string()),
+                    ("require".to_string(), "./cjs.cjs".to_string()),
+                ]),
+                fallback_target: None,
+            },
+        ))
+        .unwrap();
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("leaky").with_export(
+            ".",
+            ExternalPackageExportTarget {
+                condition_targets: BTreeMap::new(),
+                fallback_target: Some("../outside.mjs".to_string()),
+            },
+        ))
+        .unwrap();
+
+    resolver
+}
+
+#[test]
+fn module_resolver_spec_anchored_conformance_cases() {
+    let cases = [
+        ResolverConformanceCase {
+            name: "esm relative import must include the file extension",
+            spec_anchor: NODE_ESM_MANDATORY_EXTENSIONS,
+            specifier: "./dep",
+            style: ImportStyle::Import,
+            referrer: Some("/app/main.mjs"),
+            expected: ResolverConformanceExpected::Error {
+                code: ResolutionErrorCode::ModuleNotFound,
+                message_contains: "unable to resolve relative specifier",
+                probes: &["/app/dep"],
+            },
+        },
+        ResolverConformanceCase {
+            name: "commonjs require performs file extension probing",
+            spec_anchor: NODE_CJS_REQUIRE_ALGORITHM,
+            specifier: "./dep",
+            style: ImportStyle::Require,
+            referrer: Some("/app/main.cjs"),
+            expected: ResolverConformanceExpected::Resolved {
+                canonical: "/app/dep.cjs",
+                syntax: ModuleSyntax::CommonJs,
+                probes: &["/app/dep", "/app/dep.cjs"],
+            },
+        },
+        ResolverConformanceCase {
+            name: "commonjs require performs directory index probing",
+            spec_anchor: NODE_CJS_REQUIRE_ALGORITHM,
+            specifier: "./pkg",
+            style: ImportStyle::Require,
+            referrer: Some("/app/main.cjs"),
+            expected: ResolverConformanceExpected::Resolved {
+                canonical: "/app/pkg/index.cjs",
+                syntax: ModuleSyntax::CommonJs,
+                probes: &[
+                    "/app/pkg",
+                    "/app/pkg.cjs",
+                    "/app/pkg.js",
+                    "/app/pkg/index.cjs",
+                ],
+            },
+        },
+        ResolverConformanceCase {
+            name: "conditional exports select import target",
+            spec_anchor: NODE_PACKAGE_CONDITIONAL_EXPORTS,
+            specifier: "dual",
+            style: ImportStyle::Import,
+            referrer: None,
+            expected: ResolverConformanceExpected::Resolved {
+                canonical: "dual/esm.mjs",
+                syntax: ModuleSyntax::EsModule,
+                probes: &["dual", "dual/esm.mjs"],
+            },
+        },
+        ResolverConformanceCase {
+            name: "conditional exports select require target",
+            spec_anchor: NODE_PACKAGE_CONDITIONAL_EXPORTS,
+            specifier: "dual",
+            style: ImportStyle::Require,
+            referrer: None,
+            expected: ResolverConformanceExpected::Resolved {
+                canonical: "dual/cjs.cjs",
+                syntax: ModuleSyntax::CommonJs,
+                probes: &["dual", "dual/cjs.cjs"],
+            },
+        },
+        ResolverConformanceCase {
+            name: "package export target must not escape package root",
+            spec_anchor: NODE_PACKAGE_NO_PATH_TRAVERSAL,
+            specifier: "leaky",
+            style: ImportStyle::Import,
+            referrer: None,
+            expected: ResolverConformanceExpected::Error {
+                code: ResolutionErrorCode::UnsupportedSpecifier,
+                message_contains: "escapes the package root",
+                probes: &["leaky", "outside.mjs"],
+            },
+        },
+        ResolverConformanceCase {
+            name: "commonjs cycles terminate with one record per module",
+            spec_anchor: NODE_CJS_CYCLES,
+            specifier: "/app/cycle-a.cjs",
+            style: ImportStyle::Require,
+            referrer: None,
+            expected: ResolverConformanceExpected::Chain {
+                canonicals: &["/app/cycle-a.cjs", "/app/cycle-b.cjs"],
+            },
+        },
+    ];
+
+    for case in cases {
+        let resolver = spec_anchored_resolver();
+        let mut request = ModuleRequest::new(case.specifier, case.style);
+        if let Some(referrer) = case.referrer {
+            request = request.with_referrer(referrer);
+        }
+
+        match case.expected {
+            ResolverConformanceExpected::Resolved {
+                canonical,
+                syntax,
+                probes,
+            } => {
+                let outcome = resolver
+                    .resolve(&request, &context(), &AllowAllPolicy)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{} ({}) should resolve, got {error}",
+                            case.name, case.spec_anchor
+                        )
+                    });
+                assert_eq!(
+                    outcome.module.canonical_specifier, canonical,
+                    "{} ({}) canonical target drifted",
+                    case.name, case.spec_anchor
+                );
+                assert_eq!(
+                    outcome.module.record.syntax, syntax,
+                    "{} ({}) syntax drifted",
+                    case.name, case.spec_anchor
+                );
+                assert_eq!(
+                    outcome.module.probe_sequence,
+                    probes
+                        .iter()
+                        .map(|probe| (*probe).to_string())
+                        .collect::<Vec<_>>(),
+                    "{} ({}) probe sequence drifted",
+                    case.name,
+                    case.spec_anchor
+                );
+            }
+            ResolverConformanceExpected::Error {
+                code,
+                message_contains,
+                probes,
+            } => {
+                let error = resolver
+                    .resolve(&request, &context(), &AllowAllPolicy)
+                    .expect_err("case should reject");
+                assert_eq!(
+                    error.code, code,
+                    "{} ({}) error code drifted",
+                    case.name, case.spec_anchor
+                );
+                assert!(
+                    error.message.contains(message_contains),
+                    "{} ({}) error message '{}' did not contain '{}'",
+                    case.name,
+                    case.spec_anchor,
+                    error.message,
+                    message_contains
+                );
+                assert_eq!(
+                    error.probe_sequence,
+                    probes
+                        .iter()
+                        .map(|probe| (*probe).to_string())
+                        .collect::<Vec<_>>(),
+                    "{} ({}) probe sequence drifted",
+                    case.name,
+                    case.spec_anchor
+                );
+            }
+            ResolverConformanceExpected::Chain { canonicals } => {
+                let outcomes = resolver
+                    .resolve_chain(&request, &context(), &AllowAllPolicy)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{} ({}) should resolve, got {error}",
+                            case.name, case.spec_anchor
+                        )
+                    });
+                let actual = outcomes
+                    .iter()
+                    .map(|outcome| outcome.module.canonical_specifier.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual, canonicals,
+                    "{} ({}) chain resolution drifted",
+                    case.name, case.spec_anchor
+                );
+            }
+        }
+    }
 }
 
 #[test]

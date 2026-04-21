@@ -11,7 +11,7 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::ast::{ParseGoal, SourceSpan, SyntaxTree};
+use frankenengine_engine::ast::{BinaryOperator, ParseGoal, SourceSpan, SyntaxTree};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
@@ -26,6 +26,15 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 use frankenengine_engine::ts_normalization::{
     TsNormalizationConfig, normalize_typescript_to_es2020,
 };
+
+fn pure_ir2_op(inner: Ir1Op) -> Ir2Op {
+    Ir2Op {
+        inner,
+        effect: EffectBoundary::Pure,
+        required_capability: None,
+        flow: None,
+    }
+}
 
 #[test]
 fn module_source_lowers_across_all_passes() {
@@ -158,6 +167,47 @@ fn empty_ir0_tree_is_rejected() {
     let error = lower_ir0_to_ir3(&ir0, &context).expect_err("empty tree should fail");
 
     assert_eq!(error, LoweringPipelineError::EmptyIr0Body);
+}
+
+#[test]
+fn lower_ir2_to_ir3_rejects_main_value_stack_underflow_without_default_register() {
+    for (name, op) in [
+        ("pop", Ir1Op::Pop),
+        ("call", Ir1Op::Call { arg_count: 0 }),
+        (
+            "binary",
+            Ir1Op::BinaryOp {
+                operator: BinaryOperator::Add,
+            },
+        ),
+        ("throw", Ir1Op::Throw),
+    ] {
+        let mut ir2 = Ir2Module::new(ContentHash::compute(name.as_bytes()), name);
+        ir2.ops.push(pure_ir2_op(op));
+
+        let err = lower_ir2_to_ir3(&ir2)
+            .expect_err("empty value stack must fail closed instead of defaulting to r0");
+        assert_eq!(err, LoweringPipelineError::ValueStackUnderflow);
+    }
+}
+
+#[test]
+fn lower_ir2_to_ir3_rejects_deferred_function_value_stack_underflow() {
+    let mut ir2 = Ir2Module::new(
+        ContentHash::compute(b"function-underflow"),
+        "function_underflow.js",
+    );
+    ir2.ops.push(pure_ir2_op(Ir1Op::CreateFunction {
+        name: Some("underflow".to_string()),
+        param_names: Vec::new(),
+        body_ops: vec![Ir1Op::Return],
+        free_vars: Vec::new(),
+        is_generator: false,
+    }));
+
+    let err = lower_ir2_to_ir3(&ir2)
+        .expect_err("function body underflow must fail closed instead of defaulting to r0");
+    assert_eq!(err, LoweringPipelineError::ValueStackUnderflow);
 }
 
 // ────────────────────────────────────────────────────────────

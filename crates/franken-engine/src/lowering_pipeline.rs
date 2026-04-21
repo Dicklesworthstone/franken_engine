@@ -240,7 +240,6 @@ pub enum LoweringPipelineError {
     #[error("unsupported syntax rejected by fail-closed contract: {0}")]
     UnsupportedSyntax(Box<UnsupportedSyntaxDiagnostic>),
     #[error("Value stack underflow during lowering")]
-    #[allow(dead_code)]
     ValueStackUnderflow,
     #[error("Lowering preallocation budget exceeded: requested {requested} but limit is {limit}")]
     AllocationBudgetExceeded { requested: usize, limit: usize },
@@ -2694,6 +2693,26 @@ fn lower_assign_op_to_ir3(
     }
 }
 
+fn pop_lowering_value(stack: &mut Vec<Reg>) -> Result<Reg, LoweringPipelineError> {
+    stack
+        .pop()
+        .ok_or(LoweringPipelineError::ValueStackUnderflow)
+}
+
+fn peek_lowering_value(stack: &[Reg]) -> Result<Reg, LoweringPipelineError> {
+    stack
+        .last()
+        .copied()
+        .ok_or(LoweringPipelineError::ValueStackUnderflow)
+}
+
+fn ensure_lowering_values(stack: &[Reg], needed: usize) -> Result<(), LoweringPipelineError> {
+    if stack.len() < needed {
+        return Err(LoweringPipelineError::ValueStackUnderflow);
+    }
+    Ok(())
+}
+
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
@@ -2793,10 +2812,10 @@ pub fn lower_ir2_to_ir3(
                     let count = *arg_count;
                     let mut args = Vec::new();
                     for _ in 0..count {
-                        args.push(value_stack.pop().unwrap_or(0));
+                        args.push(pop_lowering_value(&mut value_stack)?);
                     }
                     args.reverse();
-                    let _callee = value_stack.pop().unwrap_or(0); // Pop callee, not used for HostCall cap
+                    let _callee = pop_lowering_value(&mut value_stack)?; // Pop callee, not used for HostCall cap
                     let start = register_cursor;
                     for arg_reg in args {
                         let dst = alloc_register(&mut register_cursor);
@@ -2809,7 +2828,7 @@ pub fn lower_ir2_to_ir3(
                     let count = *arg_count;
                     let mut args = Vec::new();
                     for _ in 0..count {
-                        args.push(value_stack.pop().unwrap_or(0));
+                        args.push(pop_lowering_value(&mut value_stack)?);
                     }
                     args.reverse();
                     let start = register_cursor;
@@ -2821,7 +2840,7 @@ pub fn lower_ir2_to_ir3(
                     (start, count)
                 }
                 _ => {
-                    let hostcall_arg = value_stack.pop().unwrap_or(0);
+                    let hostcall_arg = pop_lowering_value(&mut value_stack)?;
                     let start = alloc_register(&mut register_cursor);
                     ir3.instructions.push(Ir3Instruction::Move {
                         dst: start,
@@ -2889,7 +2908,7 @@ pub fn lower_ir2_to_ir3(
                 }
             }
             Ir1Op::StoreBinding { binding_id } => {
-                let src = value_stack.pop().unwrap_or(0);
+                let src = pop_lowering_value(&mut value_stack)?;
                 if cjs_binding_ids.contains(binding_id) {
                     let name = binding_id_to_name
                         .get(binding_id)
@@ -2911,17 +2930,13 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::Call { arg_count } => {
                 let count = *arg_count as usize;
-                if count > value_stack.len() {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in Call",
-                    });
-                }
+                ensure_lowering_values(&value_stack, count.saturating_add(1))?;
                 let mut args = Vec::with_capacity(count);
                 for _ in 0..count {
-                    args.push(value_stack.pop().unwrap_or(0));
+                    args.push(pop_lowering_value(&mut value_stack)?);
                 }
                 args.reverse();
-                let callee = value_stack.pop().unwrap_or(0);
+                let callee = pop_lowering_value(&mut value_stack)?;
 
                 let start_reg = register_cursor;
                 for arg_reg in args {
@@ -2945,13 +2960,14 @@ pub fn lower_ir2_to_ir3(
                 let count = *arg_count as usize;
                 // Stack layout: [..., callee, receiver, arg0, arg1, ...]
                 // Pop args first, then receiver, then callee.
+                ensure_lowering_values(&value_stack, count.saturating_add(2))?;
                 let mut args = Vec::with_capacity(count);
                 for _ in 0..count {
-                    args.push(value_stack.pop().unwrap_or(0));
+                    args.push(pop_lowering_value(&mut value_stack)?);
                 }
                 args.reverse();
-                let receiver = value_stack.pop().unwrap_or(0);
-                let callee = value_stack.pop().unwrap_or(0);
+                let receiver = pop_lowering_value(&mut value_stack)?;
+                let callee = pop_lowering_value(&mut value_stack)?;
 
                 let start_reg = register_cursor;
                 for arg_reg in args {
@@ -2987,7 +3003,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::ExportBinding { name, .. } => {
-                let src = value_stack.pop().unwrap_or(0);
+                let src = pop_lowering_value(&mut value_stack)?;
                 let pool_index = push_constant(&mut ir3.constant_pool, name);
                 ir3.instructions.push(Ir3Instruction::ExportBinding {
                     name_pool_index: pool_index,
@@ -2996,14 +3012,14 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(src);
             }
             Ir1Op::Await => {
-                let current = value_stack.pop().unwrap_or(0);
+                let current = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
                 value_stack.push(dst);
             }
             Ir1Op::Yield { delegate } => {
-                let value_reg = value_stack.pop().unwrap_or(0);
+                let value_reg = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Yield {
                     value: value_reg,
@@ -3023,7 +3039,7 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::Return { value: 0 });
             }
             Ir1Op::Nop | Ir1Op::Pop => {
-                let register = value_stack.pop().unwrap_or(0);
+                let register = pop_lowering_value(&mut value_stack)?;
                 if matches!(op.inner, Ir1Op::Pop) {
                     // Expression-statement completion: move the discarded
                     // value into register 0 so the interpreter returns it as
@@ -3074,8 +3090,8 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::EndFinally);
             }
             Ir1Op::BinaryOp { operator } => {
-                let rhs = value_stack.pop().unwrap_or(0);
-                let lhs = value_stack.pop().unwrap_or(0);
+                let rhs = pop_lowering_value(&mut value_stack)?;
+                let lhs = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
@@ -3112,7 +3128,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::UnaryOp { operator } => {
-                let src = value_stack.pop().unwrap_or(0);
+                let src = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 let instr = match operator {
                     UnaryOperator::Negate => Ir3Instruction::UnaryNeg { dst, src },
@@ -3137,7 +3153,7 @@ pub fn lower_ir2_to_ir3(
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let src = value_stack.pop().unwrap_or(0);
+                let src = pop_lowering_value(&mut value_stack)?;
                 match operator {
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -3272,7 +3288,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfFalsy { label_id } => {
-                let cond = value_stack.pop().unwrap_or(0);
+                let cond = pop_lowering_value(&mut value_stack)?;
                 let truthy_skip_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -3286,7 +3302,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(cond);
             }
             Ir1Op::JumpIfFalsyConsume { label_id } => {
-                let cond = value_stack.pop().unwrap_or(0);
+                let cond = pop_lowering_value(&mut value_stack)?;
                 let truthy_skip_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -3299,7 +3315,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfTruthy { label_id } => {
-                let cond = value_stack.pop().unwrap_or(0);
+                let cond = pop_lowering_value(&mut value_stack)?;
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -3309,7 +3325,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfNullish { label_id } => {
-                let cond = value_stack.pop().unwrap_or(0);
+                let cond = pop_lowering_value(&mut value_stack)?;
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
@@ -3321,7 +3337,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::GetProperty { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -3331,8 +3347,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack.pop().unwrap_or(0);
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = pop_lowering_value(&mut value_stack)?;
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         (obj, key_reg)
                     }
                 };
@@ -3345,10 +3361,10 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::SetProperty { key } => {
-                let val = value_stack.pop().unwrap_or(0);
+                let val = pop_lowering_value(&mut value_stack)?;
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -3358,8 +3374,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack.pop().unwrap_or(0);
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = pop_lowering_value(&mut value_stack)?;
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         (obj, key_reg)
                     }
                 };
@@ -3373,7 +3389,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -3383,8 +3399,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack.pop().unwrap_or(0);
-                        let obj = value_stack.pop().unwrap_or(0);
+                        let key_reg = pop_lowering_value(&mut value_stack)?;
+                        let obj = pop_lowering_value(&mut value_stack)?;
                         (obj, key_reg)
                     }
                 };
@@ -3398,14 +3414,10 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::NewArray { count } => {
                 let cnt = *count as usize;
-                if cnt > value_stack.len() {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in NewArray",
-                    });
-                }
+                ensure_lowering_values(&value_stack, cnt)?;
                 let mut elements = Vec::with_capacity(cnt);
                 for _ in 0..cnt {
-                    elements.push(value_stack.pop().unwrap_or(0));
+                    elements.push(pop_lowering_value(&mut value_stack)?);
                 }
                 elements.reverse();
 
@@ -3434,14 +3446,12 @@ pub fn lower_ir2_to_ir3(
                     .checked_mul(2)
                     .is_none_or(|needed| needed > value_stack.len())
                 {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in NewObject",
-                    });
+                    return Err(LoweringPipelineError::ValueStackUnderflow);
                 }
                 let mut properties = Vec::with_capacity(cnt);
                 for _ in 0..cnt {
-                    let val = value_stack.pop().unwrap_or(0);
-                    let key = value_stack.pop().unwrap_or(0);
+                    let val = pop_lowering_value(&mut value_stack)?;
+                    let key = pop_lowering_value(&mut value_stack)?;
                     properties.push((key, val));
                 }
                 properties.reverse();
@@ -3460,30 +3470,30 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ArrayPush => {
                 // Stack: [..., array, element] -> [..., array]
-                let element = value_stack.pop().unwrap_or(0);
-                let array = value_stack.pop().unwrap_or(0);
+                let element = pop_lowering_value(&mut value_stack)?;
+                let array = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions
                     .push(Ir3Instruction::ArrayPush { array, element });
                 value_stack.push(array);
             }
             Ir1Op::SpreadIntoArray => {
                 // Stack: [..., array, iterable] -> [..., array]
-                let iterable = value_stack.pop().unwrap_or(0);
-                let array = value_stack.pop().unwrap_or(0);
+                let iterable = pop_lowering_value(&mut value_stack)?;
+                let array = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions
                     .push(Ir3Instruction::SpreadIntoArray { array, iterable });
                 value_stack.push(array);
             }
             Ir1Op::SpreadIntoObject => {
                 // Stack: [..., target, source] -> [..., target]
-                let source = value_stack.pop().unwrap_or(0);
-                let target = value_stack.pop().unwrap_or(0);
+                let source = pop_lowering_value(&mut value_stack)?;
+                let target = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions
                     .push(Ir3Instruction::SpreadIntoObject { target, source });
                 value_stack.push(target);
             }
             Ir1Op::Throw => {
-                let value = value_stack.pop().unwrap_or(0);
+                let value = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions.push(Ir3Instruction::Throw { value });
             }
             Ir1Op::LoadThis => {
@@ -3612,33 +3622,21 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::ForInInit => {
-                let src = value_stack
-                    .pop()
-                    .ok_or(LoweringPipelineError::InvariantViolation {
-                        detail: "ForInInit requires an object register on the value stack",
-                    })?;
+                let src = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::ForInInit { src, dst });
                 value_stack.push(dst);
             }
             Ir1Op::ForOfInit => {
-                let src = value_stack
-                    .pop()
-                    .ok_or(LoweringPipelineError::InvariantViolation {
-                        detail: "ForOfInit requires an iterable register on the value stack",
-                    })?;
+                let src = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::ForOfInit { src, dst });
                 value_stack.push(dst);
             }
             Ir1Op::ForInNext { done_label } => {
-                let iterator = value_stack.last().copied().ok_or(
-                    LoweringPipelineError::InvariantViolation {
-                        detail: "ForInNext requires an active iterator register on the value stack",
-                    },
-                )?;
+                let iterator = peek_lowering_value(&value_stack)?;
                 let value_dst = alloc_register(&mut register_cursor);
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions.push(Ir3Instruction::ForInNext {
@@ -3656,11 +3654,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(value_dst);
             }
             Ir1Op::ForOfNext { done_label } => {
-                let iterator = value_stack.last().copied().ok_or(
-                    LoweringPipelineError::InvariantViolation {
-                        detail: "ForOfNext requires an active iterator register on the value stack",
-                    },
-                )?;
+                let iterator = peek_lowering_value(&value_stack)?;
                 let value_dst = alloc_register(&mut register_cursor);
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions.push(Ir3Instruction::ForOfNext {
@@ -3678,9 +3672,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(value_dst);
             }
             Ir1Op::IteratorClose { reason } => {
-                let iterator = value_stack.pop().ok_or(LoweringPipelineError::InvariantViolation {
-                    detail: "IteratorClose requires an active iterator register on the value stack",
-                })?;
+                let iterator = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions.push(Ir3Instruction::IteratorClose {
                     iterator,
                     reason: *reason,
@@ -3694,16 +3686,14 @@ pub fn lower_ir2_to_ir3(
                     .checked_add(1)
                     .is_none_or(|needed| needed > value_stack.len())
                 {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in Construct",
-                    });
+                    return Err(LoweringPipelineError::ValueStackUnderflow);
                 }
                 let mut arg_regs = Vec::with_capacity(count.min(1024));
                 for _ in 0..count {
-                    arg_regs.push(value_stack.pop().unwrap_or(0));
+                    arg_regs.push(pop_lowering_value(&mut value_stack)?);
                 }
                 arg_regs.reverse();
-                let callee = value_stack.pop().unwrap_or(0);
+                let callee = pop_lowering_value(&mut value_stack)?;
                 let dst = alloc_register(&mut register_cursor);
                 // Copy args into contiguous registers so RegRange is valid.
                 let args = if arg_regs.is_empty() {
@@ -3735,14 +3725,12 @@ pub fn lower_ir2_to_ir3(
                     (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
                 };
                 if total > value_stack.len() {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in TemplateLiteral",
-                    });
+                    return Err(LoweringPipelineError::ValueStackUnderflow);
                 }
                 // Pop part registers in reverse order and collect them.
                 let mut part_regs: Vec<u32> = Vec::with_capacity(total.min(1024));
                 for _ in 0..total {
-                    part_regs.push(value_stack.pop().unwrap_or(0));
+                    part_regs.push(pop_lowering_value(&mut value_stack)?);
                 }
                 part_regs.reverse();
                 let dst = alloc_register(&mut register_cursor);
@@ -3775,13 +3763,11 @@ pub fn lower_ir2_to_ir3(
             } => {
                 let count = *arg_count as usize;
                 if count > value_stack.len() {
-                    return Err(LoweringPipelineError::InvariantViolation {
-                        detail: "Value stack underflow in HostCall",
-                    });
+                    return Err(LoweringPipelineError::ValueStackUnderflow);
                 }
                 let mut args = Vec::with_capacity(count);
                 for _ in 0..count {
-                    args.push(value_stack.pop().unwrap_or(0));
+                    args.push(pop_lowering_value(&mut value_stack)?);
                 }
                 args.reverse();
                 let start_reg = register_cursor;
@@ -4138,7 +4124,7 @@ pub fn lower_ir2_to_ir3(
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
-                    let src = fn_value_stack.pop().unwrap_or(0);
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     // If this function has capturing children and this
                     // binding is being stored for the first time (i.e.,
@@ -4167,32 +4153,33 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::BinaryOp { operator } => {
-                    let rhs = fn_value_stack.pop().unwrap_or(0);
-                    let lhs = fn_value_stack.pop().unwrap_or(0);
+                    let rhs = pop_lowering_value(&mut fn_value_stack)?;
+                    let lhs = pop_lowering_value(&mut fn_value_stack)?;
                     let dst = alloc_register(&mut fn_reg);
                     let instr = lower_binary_op_to_ir3(*operator, dst, lhs, rhs);
                     ir3.instructions.push(instr);
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::UnaryOp { operator } => {
-                    let operand = fn_value_stack.pop().unwrap_or(0);
+                    let operand = pop_lowering_value(&mut fn_value_stack)?;
                     let dst = alloc_register(&mut fn_reg);
                     let instr = lower_unary_op_to_ir3(*operator, dst, operand);
                     ir3.instructions.push(instr);
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Return => {
-                    let value = fn_value_stack.pop().unwrap_or(0);
+                    let value = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Return { value });
                 }
                 Ir1Op::Call { arg_count } => {
                     let count = *arg_count as usize;
+                    ensure_lowering_values(&fn_value_stack, count.saturating_add(1))?;
                     let mut args = Vec::with_capacity(count);
                     for _ in 0..count {
-                        args.push(fn_value_stack.pop().unwrap_or(0));
+                        args.push(pop_lowering_value(&mut fn_value_stack)?);
                     }
                     args.reverse();
-                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let callee = pop_lowering_value(&mut fn_value_stack)?;
                     let start_reg = fn_reg;
                     for arg_reg in &args {
                         let dst = alloc_register(&mut fn_reg);
@@ -4212,13 +4199,14 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::CallMethod { arg_count } => {
                     let count = *arg_count as usize;
+                    ensure_lowering_values(&fn_value_stack, count.saturating_add(2))?;
                     let mut args = Vec::with_capacity(count);
                     for _ in 0..count {
-                        args.push(fn_value_stack.pop().unwrap_or(0));
+                        args.push(pop_lowering_value(&mut fn_value_stack)?);
                     }
                     args.reverse();
-                    let receiver = fn_value_stack.pop().unwrap_or(0);
-                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let receiver = pop_lowering_value(&mut fn_value_stack)?;
+                    let callee = pop_lowering_value(&mut fn_value_stack)?;
                     let start_reg = fn_reg;
                     for arg_reg in &args {
                         let dst = alloc_register(&mut fn_reg);
@@ -4250,7 +4238,7 @@ pub fn lower_ir2_to_ir3(
                     });
                 }
                 Ir1Op::JumpIfFalsy { label_id } | Ir1Op::JumpIfFalsyConsume { label_id } => {
-                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let cond = pop_lowering_value(&mut fn_value_stack)?;
                     let idx = ir3.instructions.len();
                     ir3.instructions
                         .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -4260,7 +4248,7 @@ pub fn lower_ir2_to_ir3(
                     });
                 }
                 Ir1Op::JumpIfTruthy { label_id } => {
-                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let cond = pop_lowering_value(&mut fn_value_stack)?;
                     let idx = ir3.instructions.len();
                     ir3.instructions
                         .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -4270,7 +4258,7 @@ pub fn lower_ir2_to_ir3(
                     });
                 }
                 Ir1Op::Pop | Ir1Op::Nop => {
-                    let reg = fn_value_stack.pop().unwrap_or(0);
+                    let reg = pop_lowering_value(&mut fn_value_stack)?;
                     if matches!(body_ir1, Ir1Op::Pop) {
                         ir3.instructions
                             .push(Ir3Instruction::Move { dst: 0, src: reg });
@@ -4280,7 +4268,7 @@ pub fn lower_ir2_to_ir3(
                     binding_id,
                     operator,
                 } => {
-                    let src = fn_value_stack.pop().unwrap_or(0);
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
@@ -4298,7 +4286,7 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::GetProperty { key } => {
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
-                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
                             let pool_index = push_constant(&mut ir3.constant_pool, k);
                             ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -4308,8 +4296,8 @@ pub fn lower_ir2_to_ir3(
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
-                            let kr = fn_value_stack.pop().unwrap_or(0);
-                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let kr = pop_lowering_value(&mut fn_value_stack)?;
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
                             (obj, kr)
                         }
                     };
@@ -4322,10 +4310,10 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::SetProperty { key } => {
-                    let value = fn_value_stack.pop().unwrap_or(0);
+                    let value = pop_lowering_value(&mut fn_value_stack)?;
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
-                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
                             let pool_index = push_constant(&mut ir3.constant_pool, k);
                             ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -4335,8 +4323,8 @@ pub fn lower_ir2_to_ir3(
                             (obj, kr)
                         }
                         Ir1PropertyKey::Dynamic => {
-                            let kr = fn_value_stack.pop().unwrap_or(0);
-                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let kr = pop_lowering_value(&mut fn_value_stack)?;
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
                             (obj, kr)
                         }
                     };
@@ -4359,9 +4347,10 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::NewArray { count } => {
                     let cnt = *count as usize;
+                    ensure_lowering_values(&fn_value_stack, cnt)?;
                     let mut elems = Vec::with_capacity(cnt);
                     for _ in 0..cnt {
-                        elems.push(fn_value_stack.pop().unwrap_or(0));
+                        elems.push(pop_lowering_value(&mut fn_value_stack)?);
                     }
                     elems.reverse();
                     let dst = alloc_register(&mut fn_reg);
@@ -4383,10 +4372,15 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::NewObject { count } => {
                     let cnt = *count as usize;
+                    ensure_lowering_values(
+                        &fn_value_stack,
+                        cnt.checked_mul(2)
+                            .ok_or(LoweringPipelineError::ValueStackUnderflow)?,
+                    )?;
                     let mut properties = Vec::with_capacity(cnt);
                     for _ in 0..cnt {
-                        let val = fn_value_stack.pop().unwrap_or(0);
-                        let key = fn_value_stack.pop().unwrap_or(0);
+                        let val = pop_lowering_value(&mut fn_value_stack)?;
+                        let key = pop_lowering_value(&mut fn_value_stack)?;
                         properties.push((key, val));
                     }
                     properties.reverse();
@@ -4403,30 +4397,30 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::ArrayPush => {
                     // Stack: [..., array, element] -> [..., array]
-                    let element = fn_value_stack.pop().unwrap_or(0);
-                    let array = fn_value_stack.pop().unwrap_or(0);
+                    let element = pop_lowering_value(&mut fn_value_stack)?;
+                    let array = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions
                         .push(Ir3Instruction::ArrayPush { array, element });
                     fn_value_stack.push(array);
                 }
                 Ir1Op::SpreadIntoArray => {
                     // Stack: [..., array, iterable] -> [..., array]
-                    let iterable = fn_value_stack.pop().unwrap_or(0);
-                    let array = fn_value_stack.pop().unwrap_or(0);
+                    let iterable = pop_lowering_value(&mut fn_value_stack)?;
+                    let array = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions
                         .push(Ir3Instruction::SpreadIntoArray { array, iterable });
                     fn_value_stack.push(array);
                 }
                 Ir1Op::SpreadIntoObject => {
                     // Stack: [..., target, source] -> [..., target]
-                    let source = fn_value_stack.pop().unwrap_or(0);
-                    let target = fn_value_stack.pop().unwrap_or(0);
+                    let source = pop_lowering_value(&mut fn_value_stack)?;
+                    let target = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions
                         .push(Ir3Instruction::SpreadIntoObject { target, source });
                     fn_value_stack.push(target);
                 }
                 Ir1Op::Throw => {
-                    let value = fn_value_stack.pop().unwrap_or(0);
+                    let value = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Throw { value });
                 }
                 // Nested function definitions inside function bodies.
@@ -4496,7 +4490,7 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Yield { delegate } => {
-                    let value_reg = fn_value_stack.pop().unwrap_or(0);
+                    let value_reg = pop_lowering_value(&mut fn_value_stack)?;
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::Yield {
                         value: value_reg,
@@ -4506,7 +4500,7 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Await => {
-                    let current = fn_value_stack.pop().unwrap_or(0);
+                    let current = pop_lowering_value(&mut fn_value_stack)?;
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: current });

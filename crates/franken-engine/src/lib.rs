@@ -17,6 +17,7 @@ pub mod anti_entropy;
 pub mod aot_entrygraph_compiler;
 pub mod array_fast_lane;
 pub mod artifact_compression_pipeline;
+pub mod architecture_inventory;
 pub mod assumptions_ledger;
 pub mod ast;
 pub mod asupersync_contract_matrix;
@@ -1134,10 +1135,14 @@ impl Default for HybridRouter {
 }
 
 impl HybridRouter {
+    pub fn classify_source_route(source: &str) -> RouteReason {
+        route_reason_for_source(source)
+    }
+
     #[allow(clippy::result_large_err)]
     pub fn eval(&mut self, source: &str) -> EvalResult<EvalOutcome> {
         let prepared = prepare_eval_source(source, "hybrid")?;
-        let route_reason = route_reason_for_source(prepared.prepared_source.as_str());
+        let route_reason = Self::classify_source_route(prepared.prepared_source.as_str());
         match route_reason {
             RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword => {
                 self.v8_lineage.eval_prepared(prepared, route_reason)
@@ -1163,13 +1168,140 @@ fn normalize_source(source: &str) -> EvalResult<&str> {
 }
 
 fn route_reason_for_source(source: &str) -> RouteReason {
-    if source.contains("import ") {
-        RouteReason::ContainsImportKeyword
-    } else if source.contains("await ") {
+    let mut saw_await = false;
+    let mut scanner = EvalRouteKeywordScanner::new(source);
+    while let Some(keyword) = scanner.next_code_keyword() {
+        match keyword {
+            EvalRouteKeyword::Import => return RouteReason::ContainsImportKeyword,
+            EvalRouteKeyword::Await => saw_await = true,
+        }
+    }
+
+    if saw_await {
         RouteReason::ContainsAwaitKeyword
     } else {
         RouteReason::DefaultQuickJsPath
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EvalRouteKeyword {
+    Import,
+    Await,
+}
+
+struct EvalRouteKeywordScanner<'a> {
+    source: &'a str,
+    index: usize,
+}
+
+impl<'a> EvalRouteKeywordScanner<'a> {
+    const fn new(source: &'a str) -> Self {
+        Self { source, index: 0 }
+    }
+
+    fn next_code_keyword(&mut self) -> Option<EvalRouteKeyword> {
+        while self.index < self.source.len() {
+            let rest = &self.source[self.index..];
+            if rest.starts_with("//") {
+                self.skip_line_comment();
+                continue;
+            }
+            if rest.starts_with("/*") {
+                self.skip_block_comment();
+                continue;
+            }
+
+            let ch = self.current_char()?;
+            if matches!(ch, '\'' | '"' | '`') {
+                self.skip_quoted_literal(ch);
+                continue;
+            }
+            if is_eval_route_identifier_start(ch) {
+                let identifier = self.consume_identifier();
+                match identifier {
+                    "import" => return Some(EvalRouteKeyword::Import),
+                    "await" => return Some(EvalRouteKeyword::Await),
+                    _ => continue,
+                }
+            }
+
+            self.advance_char();
+        }
+
+        None
+    }
+
+    fn current_char(&self) -> Option<char> {
+        self.source[self.index..].chars().next()
+    }
+
+    fn advance_char(&mut self) {
+        if let Some(ch) = self.current_char() {
+            self.index += ch.len_utf8();
+        } else {
+            self.index = self.source.len();
+        }
+    }
+
+    fn skip_line_comment(&mut self) {
+        let rest = &self.source[self.index..];
+        if let Some(offset) = rest.find('\n') {
+            self.index += offset + '\n'.len_utf8();
+        } else {
+            self.index = self.source.len();
+        }
+    }
+
+    fn skip_block_comment(&mut self) {
+        let rest = &self.source[self.index + 2..];
+        if let Some(offset) = rest.find("*/") {
+            self.index += 2 + offset + 2;
+        } else {
+            self.index = self.source.len();
+        }
+    }
+
+    fn skip_quoted_literal(&mut self, delimiter: char) {
+        self.advance_char();
+        let mut escaped = false;
+        while self.index < self.source.len() {
+            let Some(ch) = self.current_char() else {
+                break;
+            };
+            self.advance_char();
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                break;
+            }
+        }
+    }
+
+    fn consume_identifier(&mut self) -> &'a str {
+        let start = self.index;
+        self.advance_char();
+        while self.index < self.source.len() {
+            let Some(ch) = self.current_char() else {
+                break;
+            };
+            if !is_eval_route_identifier_continue(ch) {
+                break;
+            }
+            self.advance_char();
+        }
+        &self.source[start..self.index]
+    }
+}
+
+fn is_eval_route_identifier_start(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_alphabetic()
+}
+
+fn is_eval_route_identifier_continue(ch: char) -> bool {
+    is_eval_route_identifier_start(ch) || ch.is_alphanumeric()
 }
 
 fn infer_parse_goal(source: &str) -> ParseGoal {
@@ -1500,6 +1632,42 @@ mod tests {
         let route_reason = route_reason_for_source("await job()");
         assert_eq!(route_reason, RouteReason::ContainsAwaitKeyword);
         assert_eq!(infer_parse_goal("await job()"), ParseGoal::Module);
+    }
+
+    #[test]
+    fn hybrid_route_classifier_ignores_comment_and_literal_keywords_conformance() {
+        let cases = [
+            ("'import x from \"pkg\"';", RouteReason::DefaultQuickJsPath),
+            ("\"await job()\";", RouteReason::DefaultQuickJsPath),
+            (
+                "`import x from \"pkg\"; await job()`;",
+                RouteReason::DefaultQuickJsPath,
+            ),
+            (
+                "// import x from \"pkg\"\n1 + 1;",
+                RouteReason::DefaultQuickJsPath,
+            ),
+            (
+                "/* await job() */ 1 + 1;",
+                RouteReason::DefaultQuickJsPath,
+            ),
+            (
+                "// await ignored\nimport x from \"pkg\";",
+                RouteReason::ContainsImportKeyword,
+            ),
+            (
+                "/* import ignored */ await job();",
+                RouteReason::ContainsAwaitKeyword,
+            ),
+        ];
+
+        for (source, expected) in cases {
+            assert_eq!(
+                HybridRouter::classify_source_route(source),
+                expected,
+                "hybrid route classification diverged for {source:?}"
+            );
+        }
     }
 
     #[test]

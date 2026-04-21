@@ -349,24 +349,62 @@ fn async_and_hostcall_boundary_chain_preserves_parse_location() {
 
 #[test]
 fn hybrid_routes_import_keyword_to_v8() {
-    let _router = HybridRouter::default();
-    // The routing decision is based on keyword detection.
-    let route = if "import x from 'y'".contains("import ") {
-        RouteReason::ContainsImportKeyword
-    } else {
-        RouteReason::DefaultQuickJsPath
-    };
+    let route = HybridRouter::classify_source_route("import x from 'y'");
     assert_eq!(route, RouteReason::ContainsImportKeyword);
 }
 
 #[test]
 fn hybrid_routes_await_keyword_to_v8() {
-    let route = if "await job()".contains("await ") {
-        RouteReason::ContainsAwaitKeyword
-    } else {
-        RouteReason::DefaultQuickJsPath
-    };
+    let route = HybridRouter::classify_source_route("await job()");
     assert_eq!(route, RouteReason::ContainsAwaitKeyword);
+}
+
+#[test]
+fn hybrid_route_classifier_ignores_comment_and_literal_keywords_conformance() {
+    struct Case {
+        source: &'static str,
+        expected: RouteReason,
+    }
+
+    let cases = [
+        Case {
+            source: "'import x from \"pkg\"';",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "\"await job()\";",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "`import x from \"pkg\"; await job()`;",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "// import x from \"pkg\"\n'route';",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "/* await job() */ 'route';",
+            expected: RouteReason::DefaultQuickJsPath,
+        },
+        Case {
+            source: "// await ignored\nimport x from \"pkg\";",
+            expected: RouteReason::ContainsImportKeyword,
+        },
+        Case {
+            source: "/* import ignored */ await job();",
+            expected: RouteReason::ContainsAwaitKeyword,
+        },
+    ];
+
+    for case in cases {
+        assert_eq!(
+            HybridRouter::classify_source_route(case.source),
+            case.expected,
+            "hybrid route classifier must ignore comments and literal text: {:?}",
+            case.source
+        );
+    }
 }
 
 #[test]

@@ -1931,6 +1931,7 @@ const ESCROW_GRANT_EXPIRED_ERROR_CODE: &str = "FE-ESCROW-0007";
 const ESCROW_GRANT_EXHAUSTED_ERROR_CODE: &str = "FE-ESCROW-0008";
 const ESCROW_POST_REVIEW_ERROR_CODE: &str = "FE-ESCROW-0009";
 const ESCROW_RECEIPT_EMISSION_ERROR_CODE: &str = "FE-ESCROW-0010";
+const DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE: &str = "FE-ESCROW-0011";
 const DEFAULT_ESCROW_REQUEST_TTL_NS: u64 = 300_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2306,7 +2307,21 @@ impl EmergencyGrantArtifact {
         rollback_on_expiry: bool,
         issued_at_ns: u64,
         signer: &DecisionSigningKey,
-    ) -> Self {
+    ) -> Result<Self, PolicySignError> {
+        if max_invocation_count == 0 {
+            return Err(policy_sign_fail_closed(
+                PolicySignSurface::EmergencyGrant,
+                request_id,
+                "max_invocation_count must be greater than zero",
+            ));
+        }
+        if expiry_timestamp <= issued_at_ns {
+            return Err(policy_sign_fail_closed(
+                PolicySignSurface::EmergencyGrant,
+                request_id,
+                "expiry_timestamp must be greater than issued_at_ns",
+            ));
+        }
         let grant_id = derive_emergency_grant_id(request_id, &authorized_actor, issued_at_ns);
         let payload = EmergencyGrantSigningPayload {
             grant_id: &grant_id,
@@ -2321,9 +2336,13 @@ impl EmergencyGrantArtifact {
             rollback_on_expiry,
             issued_at_ns,
         };
-        let signature = signer
-            .sign(&serde_json::to_vec(&payload).expect("emergency grant payload should serialize"));
-        Self {
+        let payload_bytes = serialize_policy_signing_payload(
+            PolicySignSurface::EmergencyGrant,
+            request_id,
+            &payload,
+        )?;
+        let signature = signer.sign(&payload_bytes);
+        Ok(Self {
             grant_id,
             request_id: request_id.to_string(),
             extension_id: extension_id.to_string(),
@@ -2336,10 +2355,10 @@ impl EmergencyGrantArtifact {
             rollback_on_expiry,
             issued_at_ns,
             signature,
-        }
+        })
     }
 
-    fn signing_payload_bytes(&self) -> Vec<u8> {
+    fn signing_payload_bytes(&self) -> Result<Vec<u8>, PolicySignError> {
         let payload = EmergencyGrantSigningPayload {
             grant_id: &self.grant_id,
             request_id: &self.request_id,
@@ -2353,11 +2372,17 @@ impl EmergencyGrantArtifact {
             rollback_on_expiry: self.rollback_on_expiry,
             issued_at_ns: self.issued_at_ns,
         };
-        serde_json::to_vec(&payload).expect("emergency grant payload should serialize")
+        serialize_policy_signing_payload(
+            PolicySignSurface::EmergencyGrant,
+            &self.request_id,
+            &payload,
+        )
     }
 
     pub fn verify(&self, public_key: &DecisionPublicKey) -> bool {
-        public_key.verify(&self.signing_payload_bytes(), &self.signature)
+        self.signing_payload_bytes()
+            .map(|payload| public_key.verify(&payload, &self.signature))
+            .unwrap_or(false)
     }
 
     pub const fn is_expired(&self, timestamp_ns: u64) -> bool {
@@ -3093,7 +3118,11 @@ impl CapabilityEscrowGateway {
             rollback_on_expiry,
             timestamp_ns,
             &self.signing_key,
-        );
+        )
+        .map_err(|err| CapabilityEscrowError::ReceiptEmissionFailed {
+            request_id: request_id.to_string(),
+            detail: err.to_string(),
+        })?;
         let grant_id = artifact.grant_id.clone();
         self.emergency_grants.insert(
             grant_id.clone(),
@@ -3958,6 +3987,17 @@ impl DecisionSigningKey {
         Self { bytes }
     }
 
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, PolicySignError> {
+        let key_bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+            policy_sign_fail_closed(
+                PolicySignSurface::DecisionSigningKey,
+                "decision_signing_key",
+                format!("expected 32 signing key bytes, got {}", bytes.len()),
+            )
+        })?;
+        Ok(Self::new(key_bytes))
+    }
+
     pub const fn public_key(self) -> DecisionPublicKey {
         DecisionPublicKey { bytes: self.bytes }
     }
@@ -4013,6 +4053,93 @@ struct ReceiptSigningPayload<'a> {
     timestamp_ns: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicySignSurface {
+    DecisionSigningKey,
+    DeclassificationReceipt,
+    EmergencyGrant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PolicySignError {
+    FailClosed {
+        request_id: String,
+        surface: PolicySignSurface,
+        detail: String,
+    },
+}
+
+impl PolicySignError {
+    pub const fn error_code(&self) -> &'static str {
+        match self {
+            Self::FailClosed { surface, .. } => match surface {
+                PolicySignSurface::EmergencyGrant => ESCROW_RECEIPT_EMISSION_ERROR_CODE,
+                PolicySignSurface::DecisionSigningKey
+                | PolicySignSurface::DeclassificationReceipt => {
+                    DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE
+                }
+            },
+        }
+    }
+
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::FailClosed { request_id, .. } => request_id,
+        }
+    }
+}
+
+impl fmt::Display for PolicySignError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FailClosed {
+                request_id,
+                surface,
+                detail,
+            } => write!(
+                f,
+                "policy signing failed closed for {surface:?} {request_id}: {detail}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PolicySignError {}
+
+fn policy_sign_fail_closed(
+    surface: PolicySignSurface,
+    request_id: impl Into<String>,
+    detail: impl Into<String>,
+) -> PolicySignError {
+    PolicySignError::FailClosed {
+        request_id: request_id.into(),
+        surface,
+        detail: detail.into(),
+    }
+}
+
+fn serialize_policy_signing_payload<T: Serialize + ?Sized>(
+    surface: PolicySignSurface,
+    request_id: &str,
+    payload: &T,
+) -> Result<Vec<u8>, PolicySignError> {
+    let payload_bytes = serde_json::to_vec(payload)
+        .map_err(|err| policy_sign_fail_closed(surface, request_id, err.to_string()))?;
+    if payload_bytes.len() > MAX_POLICY_SIGNING_PAYLOAD_BYTES {
+        return Err(policy_sign_fail_closed(
+            surface,
+            request_id,
+            format!(
+                "signing payload size {} exceeds {} bytes",
+                payload_bytes.len(),
+                MAX_POLICY_SIGNING_PAYLOAD_BYTES
+            ),
+        ));
+    }
+    Ok(payload_bytes)
+}
+
 impl CryptographicDecisionReceipt {
     fn new_signed(
         request_id: &str,
@@ -4038,8 +4165,13 @@ impl CryptographicDecisionReceipt {
             posterior_at_decision_micros,
             timestamp_ns,
         };
-        let signature = signer
-            .sign(&serde_json::to_vec(&payload).expect("receipt signing payload should serialize"));
+        let payload_bytes = serialize_policy_signing_payload(
+            PolicySignSurface::DeclassificationReceipt,
+            request_id,
+            &payload,
+        )
+        .expect("receipt signing payload should serialize");
+        let signature = signer.sign(&payload_bytes);
         Self {
             receipt_id,
             request_id: request_id.to_string(),
@@ -4062,7 +4194,12 @@ impl CryptographicDecisionReceipt {
             posterior_at_decision_micros: self.posterior_at_decision_micros,
             timestamp_ns: self.timestamp_ns,
         };
-        serde_json::to_vec(&payload).expect("receipt signing payload should serialize")
+        serialize_policy_signing_payload(
+            PolicySignSurface::DeclassificationReceipt,
+            &self.request_id,
+            &payload,
+        )
+        .expect("receipt signing payload should serialize")
     }
 
     pub fn verify(&self, public_key: &DecisionPublicKey) -> bool {
@@ -4550,6 +4687,7 @@ pub const MAX_DELEGATE_LIFETIME_NS: u64 = 86_400_000_000_000;
 pub const MAX_DELEGATE_CPU_BUDGET_NS: u64 = 60_000_000_000;
 pub const MAX_DELEGATE_MEMORY_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_DELEGATE_HOSTCALL_BUDGET: u64 = 100_000;
+pub const MAX_POLICY_SIGNING_PAYLOAD_BYTES: usize = 1024 * 1024;
 const DELEGATE_COMPONENT: &str = "delegate_cell_policy";
 
 /// Delegate-cell scope authorizing specific runtime-internal operations.
@@ -4594,8 +4732,9 @@ pub struct DelegateCellManifest {
 }
 
 /// Configurable guardplane tuning for delegate-cell risk updates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DelegateCellPolicy {
+    pub schema_version: String,
     pub initial_posterior_micros: u64,
     pub capability_escalation_penalty_micros: u64,
     pub flow_violation_penalty_micros: u64,
@@ -4610,6 +4749,7 @@ const GUARDPLANE_SANDBOX_THRESHOLD_MICROS: u64 = 400_000;
 const GUARDPLANE_SUSPEND_THRESHOLD_MICROS: u64 = 550_000;
 const GUARDPLANE_TERMINATE_THRESHOLD_MICROS: u64 = 700_000;
 const GUARDPLANE_QUARANTINE_THRESHOLD_MICROS: u64 = 850_000;
+const DELEGATE_CELL_POLICY_SCHEMA_VERSION: &str = "franken-engine.delegate-cell-policy.v1";
 const GUARDPLANE_DECISION_LOG_SCHEMA_VERSION: &str = "franken-engine.guardplane-decision-log.v1";
 const CONTAINMENT_WORKFLOW_LOG_SCHEMA_VERSION: &str = "franken-engine.containment-workflow-log.v1";
 const DELEGATE_MESH_PROPAGATION_DEGRADED_ERROR_CODE: &str = "FE-DELEGATE-0008";
@@ -4617,6 +4757,7 @@ const DELEGATE_MESH_PROPAGATION_DEGRADED_ERROR_CODE: &str = "FE-DELEGATE-0008";
 impl Default for DelegateCellPolicy {
     fn default() -> Self {
         Self {
+            schema_version: DELEGATE_CELL_POLICY_SCHEMA_VERSION.to_string(),
             initial_posterior_micros: 200_000,
             capability_escalation_penalty_micros: 220_000,
             flow_violation_penalty_micros: 150_000,
@@ -4624,6 +4765,58 @@ impl Default for DelegateCellPolicy {
             false_positive_cost_micros: 400_000,
             false_negative_cost_micros: 850_000,
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for DelegateCellPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            schema_version: String,
+            initial_posterior_micros: u64,
+            capability_escalation_penalty_micros: u64,
+            flow_violation_penalty_micros: u64,
+            declassification_denial_penalty_micros: u64,
+            false_positive_cost_micros: u64,
+            false_negative_cost_micros: u64,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        validate_delegate_wire_schema_version::<D::Error>(
+            "DelegateCellPolicy",
+            &wire.schema_version,
+            DELEGATE_CELL_POLICY_SCHEMA_VERSION,
+        )?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            initial_posterior_micros: wire.initial_posterior_micros,
+            capability_escalation_penalty_micros: wire.capability_escalation_penalty_micros,
+            flow_violation_penalty_micros: wire.flow_violation_penalty_micros,
+            declassification_denial_penalty_micros: wire.declassification_denial_penalty_micros,
+            false_positive_cost_micros: wire.false_positive_cost_micros,
+            false_negative_cost_micros: wire.false_negative_cost_micros,
+        })
+    }
+}
+
+fn validate_delegate_wire_schema_version<E>(
+    wire_type: &str,
+    actual: &str,
+    expected: &str,
+) -> Result<(), E>
+where
+    E: serde::de::Error,
+{
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(E::custom(format!(
+            "unsupported {wire_type} schema_version `{actual}`; expected `{expected}`"
+        )))
     }
 }
 
@@ -4679,7 +4872,7 @@ impl fmt::Display for GuardplanePolicyAction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GuardplaneDecisionLogEntry {
     pub schema_version: String,
     pub trace_id: String,
@@ -4699,7 +4892,60 @@ pub struct GuardplaneDecisionLogEntry {
     pub resulting_state: ExtensionState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for GuardplaneDecisionLogEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            schema_version: String,
+            trace_id: String,
+            decision_id: String,
+            policy_id: String,
+            component: String,
+            event: String,
+            outcome: String,
+            error_code: Option<String>,
+            source_event: String,
+            delegate_id: String,
+            timestamp_ns: u64,
+            posterior_micros: u64,
+            action: GuardplanePolicyAction,
+            safe_mode_fallback: bool,
+            lifecycle_transition: Option<LifecycleTransition>,
+            resulting_state: ExtensionState,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        validate_delegate_wire_schema_version::<D::Error>(
+            "GuardplaneDecisionLogEntry",
+            &wire.schema_version,
+            GUARDPLANE_DECISION_LOG_SCHEMA_VERSION,
+        )?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            trace_id: wire.trace_id,
+            decision_id: wire.decision_id,
+            policy_id: wire.policy_id,
+            component: wire.component,
+            event: wire.event,
+            outcome: wire.outcome,
+            error_code: wire.error_code,
+            source_event: wire.source_event,
+            delegate_id: wire.delegate_id,
+            timestamp_ns: wire.timestamp_ns,
+            posterior_micros: wire.posterior_micros,
+            action: wire.action,
+            safe_mode_fallback: wire.safe_mode_fallback,
+            lifecycle_transition: wire.lifecycle_transition,
+            resulting_state: wire.resulting_state,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContainmentWorkflowLogEntry {
     pub schema_version: String,
     pub trace_id: String,
@@ -4719,6 +4965,63 @@ pub struct ContainmentWorkflowLogEntry {
     pub mesh_targets: Vec<String>,
     pub mesh_failed_targets: Vec<String>,
     pub mesh_propagated: bool,
+}
+
+impl<'de> Deserialize<'de> for ContainmentWorkflowLogEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            schema_version: String,
+            trace_id: String,
+            decision_id: String,
+            policy_id: String,
+            component: String,
+            event: String,
+            outcome: String,
+            error_code: Option<String>,
+            source_event: String,
+            delegate_id: String,
+            timestamp_ns: u64,
+            action: GuardplanePolicyAction,
+            lifecycle_transition: Option<LifecycleTransition>,
+            resulting_state: ExtensionState,
+            mesh_attempted_targets: Vec<String>,
+            mesh_targets: Vec<String>,
+            mesh_failed_targets: Vec<String>,
+            mesh_propagated: bool,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        validate_delegate_wire_schema_version::<D::Error>(
+            "ContainmentWorkflowLogEntry",
+            &wire.schema_version,
+            CONTAINMENT_WORKFLOW_LOG_SCHEMA_VERSION,
+        )?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            trace_id: wire.trace_id,
+            decision_id: wire.decision_id,
+            policy_id: wire.policy_id,
+            component: wire.component,
+            event: wire.event,
+            outcome: wire.outcome,
+            error_code: wire.error_code,
+            source_event: wire.source_event,
+            delegate_id: wire.delegate_id,
+            timestamp_ns: wire.timestamp_ns,
+            action: wire.action,
+            lifecycle_transition: wire.lifecycle_transition,
+            resulting_state: wire.resulting_state,
+            mesh_attempted_targets: wire.mesh_attempted_targets,
+            mesh_targets: wire.mesh_targets,
+            mesh_failed_targets: wire.mesh_failed_targets,
+            mesh_propagated: wire.mesh_propagated,
+        })
+    }
 }
 
 /// Stable structured event for delegate-cell operations.
@@ -10365,7 +10668,8 @@ mod enrichment_tests {
             false,
             500,
             &key,
-        );
+        )
+        .expect("valid emergency grant");
         assert!(!artifact.is_expired(999));
         assert!(artifact.is_expired(1000));
         assert!(artifact.is_expired(1001));
@@ -10386,7 +10690,8 @@ mod enrichment_tests {
             true,
             100,
             &key,
-        );
+        )
+        .expect("valid emergency grant");
         assert!(artifact.verify(&key.public_key()));
         let wrong_key = DecisionSigningKey::new([0xDD; 32]);
         assert!(!artifact.verify(&wrong_key.public_key()));
@@ -10638,6 +10943,7 @@ mod enrichment_batch2_tests {
     #[test]
     fn delegate_cell_policy_default_values() {
         let policy = DelegateCellPolicy::default();
+        assert_eq!(policy.schema_version, DELEGATE_CELL_POLICY_SCHEMA_VERSION);
         assert_eq!(policy.initial_posterior_micros, 200_000);
         assert_eq!(policy.capability_escalation_penalty_micros, 220_000);
         assert_eq!(policy.flow_violation_penalty_micros, 150_000);
@@ -10652,6 +10958,22 @@ mod enrichment_batch2_tests {
         let json = to_json(&policy);
         let back: DelegateCellPolicy = from_json(&json);
         assert_eq!(policy, back);
+    }
+
+    #[test]
+    fn delegate_cell_policy_serde_rejects_unknown_schema_version() {
+        let json = r#"{
+            "schema_version":"franken-engine.delegate-cell-policy.v2",
+            "initial_posterior_micros":200000,
+            "capability_escalation_penalty_micros":220000,
+            "flow_violation_penalty_micros":150000,
+            "declassification_denial_penalty_micros":110000,
+            "false_positive_cost_micros":400000,
+            "false_negative_cost_micros":850000
+        }"#;
+
+        let err = serde_json::from_str::<DelegateCellPolicy>(json).expect_err("unknown version");
+        assert!(err.to_string().contains("unsupported DelegateCellPolicy"));
     }
 
     // ── DelegateGuardplaneState ─────────────────────────────────────────

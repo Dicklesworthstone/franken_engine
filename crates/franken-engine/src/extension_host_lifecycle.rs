@@ -17,7 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::cancellation_lifecycle::{
-    CancellationEvent, CancellationManager, CancellationOutcome, LifecycleEvent,
+    CancellationError, CancellationEvent, CancellationManager, CancellationOutcome, LifecycleEvent,
 };
 use crate::control_plane::ContextAdapter;
 use crate::execution_cell::CellManager;
@@ -282,20 +282,9 @@ impl ExtensionHostLifecycleManager {
 
         let trace_id = cx.trace_id().to_string();
 
-        // Close all sessions first.
+        // Close all sessions first; fail closed if any tracked session cannot be cancelled.
         let session_ids: Vec<String> = record.sessions.iter().cloned().collect();
-        for session_id in &session_ids {
-            let session_cell_id = self.session_cell_id(extension_id, session_id);
-            if let Some(session_cell) = self.cell_manager.get_mut(&session_cell_id)
-                && session_cell.state() == RegionState::Running
-                && let Ok(outcome) =
-                    self.cancellation_manager
-                        .cancel_cell(session_cell, cx, LifecycleEvent::Unload)
-            {
-                self.cell_manager
-                    .archive_cell(&session_cell_id, outcome.finalize_result);
-            }
-        }
+        self.cancel_tracked_sessions(extension_id, &session_ids, cx, LifecycleEvent::Unload)?;
 
         // Cancel the extension cell.
         let cell = self.cell_manager.get_mut(extension_id).ok_or_else(|| {
@@ -506,20 +495,9 @@ impl ExtensionHostLifecycleManager {
 
         let trace_id = cx.trace_id().to_string();
 
-        // Cancel all sessions first.
+        // Cancel all sessions first; fail closed if any tracked session cannot be cancelled.
         let session_ids: Vec<String> = record.sessions.iter().cloned().collect();
-        for session_id in &session_ids {
-            let session_cell_id = self.session_cell_id(extension_id, session_id);
-            if let Some(session_cell) = self.cell_manager.get_mut(&session_cell_id)
-                && session_cell.state() == RegionState::Running
-                && let Ok(outcome) = self
-                    .cancellation_manager
-                    .cancel_cell(session_cell, cx, event)
-            {
-                self.cell_manager
-                    .archive_cell(&session_cell_id, outcome.finalize_result);
-            }
-        }
+        self.cancel_tracked_sessions(extension_id, &session_ids, cx, event)?;
 
         // Cancel the extension cell.
         let cell = self.cell_manager.get_mut(extension_id).ok_or_else(|| {
@@ -665,6 +643,40 @@ impl ExtensionHostLifecycleManager {
     /// Deterministic session cell ID: `{extension_id}::session::{session_id}`.
     fn session_cell_id(&self, extension_id: &str, session_id: &str) -> String {
         format!("{extension_id}::session::{session_id}")
+    }
+
+    fn cancel_tracked_sessions<C: ContextAdapter>(
+        &mut self,
+        extension_id: &str,
+        session_ids: &[String],
+        cx: &mut C,
+        event: LifecycleEvent,
+    ) -> Result<(), HostLifecycleError> {
+        for session_id in session_ids {
+            let session_cell_id = self.session_cell_id(extension_id, session_id);
+            self.cancellation_manager
+                .cancel_managed_cell(&mut self.cell_manager, &session_cell_id, cx, event)
+                .map_err(|err| Self::session_cancellation_error(extension_id, session_id, err))?;
+        }
+        Ok(())
+    }
+
+    fn session_cancellation_error(
+        extension_id: &str,
+        session_id: &str,
+        err: CancellationError,
+    ) -> HostLifecycleError {
+        match err {
+            CancellationError::CellNotFound { .. } => HostLifecycleError::SessionNotFound {
+                extension_id: extension_id.to_string(),
+                session_id: session_id.to_string(),
+            },
+            err => HostLifecycleError::CancellationError {
+                extension_id: extension_id.to_string(),
+                error_code: err.error_code().to_string(),
+                message: err.to_string(),
+            },
+        }
     }
 
     fn push_event(
@@ -924,6 +936,39 @@ mod tests {
         // Sessions should be gone from the record (extension is unloaded).
     }
 
+    #[test]
+    fn unload_extension_preserves_state_when_session_cell_missing() {
+        let mut mgr = ExtensionHostLifecycleManager::new();
+        let mut cx = mock_cx(10000);
+
+        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+
+        let session_cell_id = mgr.session_cell_id("ext-a", "s1");
+        mgr.cell_manager.archive_cell(
+            &session_cell_id,
+            crate::region_lifecycle::FinalizeResult {
+                region_id: session_cell_id.clone(),
+                success: true,
+                obligations_committed: 0,
+                obligations_aborted: 0,
+                drain_timeout_escalated: false,
+            },
+        );
+
+        let err = mgr.unload_extension("ext-a", &mut cx).unwrap_err();
+        assert_eq!(
+            err,
+            HostLifecycleError::SessionNotFound {
+                extension_id: "ext-a".to_string(),
+                session_id: "s1".to_string(),
+            }
+        );
+        assert!(mgr.is_extension_running("ext-a"));
+        assert_eq!(mgr.session_count("ext-a"), 1);
+        assert!(mgr.cell_manager().get("ext-a").is_some());
+    }
+
     // -----------------------------------------------------------------------
     // Cancellation (quarantine / terminate)
     // -----------------------------------------------------------------------
@@ -954,6 +999,28 @@ mod tests {
             .unwrap();
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
+    }
+
+    #[test]
+    fn cancel_extension_preserves_state_when_session_cancel_fails() {
+        let mut mgr = ExtensionHostLifecycleManager::new();
+        let mut setup_cx = mock_cx(10000);
+
+        mgr.load_extension("ext-a", &mut setup_cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut setup_cx).unwrap();
+
+        let session_cell_id = mgr.session_cell_id("ext-a", "s1");
+        let mut cancel_cx = mock_cx(0);
+        let err = mgr
+            .cancel_extension("ext-a", &mut cancel_cx, LifecycleEvent::Terminate)
+            .unwrap_err();
+
+        assert_eq!(err.error_code(), "host_cancellation_error");
+        assert!(format!("{err}").contains(&session_cell_id));
+        assert!(mgr.is_extension_running("ext-a"));
+        assert_eq!(mgr.session_count("ext-a"), 1);
+        assert!(mgr.cell_manager().get("ext-a").is_some());
+        assert!(mgr.cell_manager().get(&session_cell_id).is_some());
     }
 
     #[test]

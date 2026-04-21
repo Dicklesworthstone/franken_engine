@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::SourceSpan;
-use crate::hash_tiers::ContentHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,6 +31,9 @@ pub const GUARDPLANE_INTEGRATION_SCHEMA_VERSION: &str = "franken-engine.guardpla
 pub const GUARDPLANE_INTEGRATION_COMPONENT: &str = "guardplane_integration";
 /// Policy ID binding for this module.
 pub const GUARDPLANE_INTEGRATION_POLICY_ID: &str = "RC-4";
+/// Domain separator for guardplane evidence signatures.
+pub const GUARDPLANE_EVIDENCE_SIGNATURE_DOMAIN: &str =
+    "franken-engine.guardplane.decision-evidence.signature.v1";
 
 // ---------------------------------------------------------------------------
 // Interpreter Hook Trait
@@ -314,6 +317,77 @@ pub struct GuardplaneDecisionEvidence {
     pub signature: Option<Vec<u8>>,
 }
 
+impl GuardplaneDecisionEvidence {
+    /// Recompute the integrity hash over the unsigned decision evidence fields.
+    pub fn recompute_evidence_hash(&self) -> Result<ContentHash, GuardplaneError> {
+        compute_guardplane_evidence_hash(
+            &self.decision_id,
+            self.timestamp,
+            &self.operation_context,
+            &self.risk_assessment,
+            self.action,
+            &self.reason,
+        )
+    }
+
+    /// Verify the evidence hash and keyed signature using constant-time tag comparison.
+    pub fn verify_signature_with_key(&self, signing_key: &[u8]) -> Result<bool, GuardplaneError> {
+        let Some(signature) = self.signature.as_deref() else {
+            return Ok(false);
+        };
+        let Some(actual) = authenticity_hash_from_signature(signature) else {
+            return Ok(false);
+        };
+
+        let recomputed_hash = self.recompute_evidence_hash()?;
+        if !self.evidence_hash.constant_time_eq(&recomputed_hash) {
+            return Ok(false);
+        }
+
+        let expected = self.compute_signature(signing_key)?;
+        Ok(actual.constant_time_eq(&expected))
+    }
+
+    fn compute_signature(&self, signing_key: &[u8]) -> Result<AuthenticityHash, GuardplaneError> {
+        validate_guardplane_signing_key(signing_key)?;
+        let signature_bytes = serde_json::to_vec(&GuardplaneDecisionEvidenceSignaturePreimage {
+            schema_version: GUARDPLANE_INTEGRATION_SCHEMA_VERSION,
+            component: GUARDPLANE_INTEGRATION_COMPONENT,
+            policy_id: GUARDPLANE_INTEGRATION_POLICY_ID,
+            signature_domain: GUARDPLANE_EVIDENCE_SIGNATURE_DOMAIN,
+            evidence_hash: &self.evidence_hash,
+        })
+        .map_err(|err| GuardplaneError::EvidenceGenerationFailed(err.to_string()))?;
+
+        Ok(AuthenticityHash::compute_keyed(
+            signing_key,
+            &signature_bytes,
+        ))
+    }
+}
+
+#[derive(Serialize)]
+struct GuardplaneDecisionEvidenceHashPreimage<'a> {
+    schema_version: &'static str,
+    component: &'static str,
+    policy_id: &'static str,
+    decision_id: &'a str,
+    timestamp: u64,
+    operation_context: &'a OperationContext,
+    risk_assessment: &'a RiskAssessment,
+    action: HookAction,
+    reason: &'a str,
+}
+
+#[derive(Serialize)]
+struct GuardplaneDecisionEvidenceSignaturePreimage<'a> {
+    schema_version: &'static str,
+    component: &'static str,
+    policy_id: &'static str,
+    signature_domain: &'static str,
+    evidence_hash: &'a ContentHash,
+}
+
 /// Context of the operation that triggered guardplane consultation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "context")]
@@ -369,6 +443,10 @@ pub struct GuardplaneConfig {
     pub terminate_threshold: u32,
     /// Whether to emit evidence records.
     pub emit_evidence: bool,
+    /// Key used to produce authenticity signatures for decision evidence.
+    pub evidence_signing_key: Option<Vec<u8>>,
+    /// Whether evidence emission must fail closed when no signing key is configured.
+    pub require_evidence_signature: bool,
     /// Whether to use Bayesian learning.
     pub bayesian_learning: bool,
 }
@@ -381,6 +459,8 @@ impl Default for GuardplaneConfig {
             suspend_threshold: 600_000,   // 0.6
             terminate_threshold: 800_000, // 0.8
             emit_evidence: true,
+            evidence_signing_key: Some(default_guardplane_evidence_signing_key()),
+            require_evidence_signature: true,
             bayesian_learning: false, // Conservative default
         }
     }
@@ -489,20 +569,84 @@ impl BasicGuardplaneAdapter {
             self.config.challenge_threshold as f64 / 1_000_000.0,
             action
         );
+        let evidence_hash = compute_guardplane_evidence_hash(
+            &decision_id,
+            timestamp,
+            context,
+            risk,
+            action,
+            &reason,
+        )?;
 
-        let evidence = GuardplaneDecisionEvidence {
+        let mut evidence = GuardplaneDecisionEvidence {
             decision_id,
             timestamp,
             operation_context: context.clone(),
             risk_assessment: risk.clone(),
             action,
             reason,
-            evidence_hash: ContentHash::compute(b"placeholder"), // Would compute real hash
-            signature: None, // Would include cryptographic signature
+            evidence_hash,
+            signature: None,
         };
+
+        match self.config.evidence_signing_key.as_deref() {
+            Some(signing_key) => {
+                let signature = evidence.compute_signature(signing_key)?;
+                evidence.signature = Some(signature.as_bytes().to_vec());
+            }
+            None if self.config.require_evidence_signature => {
+                return Err(GuardplaneError::ConfigurationError(
+                    "guardplane evidence signing is required but no signing key is configured"
+                        .to_string(),
+                ));
+            }
+            None => {}
+        }
 
         Ok(evidence)
     }
+}
+
+fn compute_guardplane_evidence_hash(
+    decision_id: &str,
+    timestamp: u64,
+    operation_context: &OperationContext,
+    risk_assessment: &RiskAssessment,
+    action: HookAction,
+    reason: &str,
+) -> Result<ContentHash, GuardplaneError> {
+    let hash_preimage = GuardplaneDecisionEvidenceHashPreimage {
+        schema_version: GUARDPLANE_INTEGRATION_SCHEMA_VERSION,
+        component: GUARDPLANE_INTEGRATION_COMPONENT,
+        policy_id: GUARDPLANE_INTEGRATION_POLICY_ID,
+        decision_id,
+        timestamp,
+        operation_context,
+        risk_assessment,
+        action,
+        reason,
+    };
+    let hash_bytes = serde_json::to_vec(&hash_preimage)
+        .map_err(|err| GuardplaneError::EvidenceGenerationFailed(err.to_string()))?;
+    Ok(ContentHash::compute(&hash_bytes))
+}
+
+fn validate_guardplane_signing_key(signing_key: &[u8]) -> Result<(), GuardplaneError> {
+    if signing_key.is_empty() {
+        return Err(GuardplaneError::ConfigurationError(
+            "guardplane evidence signing key must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn authenticity_hash_from_signature(signature: &[u8]) -> Option<AuthenticityHash> {
+    let bytes: [u8; 32] = signature.try_into().ok()?;
+    Some(AuthenticityHash(bytes))
+}
+
+fn default_guardplane_evidence_signing_key() -> Vec<u8> {
+    b"franken-engine.guardplane.default-evidence-key.v1".to_vec()
 }
 
 impl InterpreterHook for BasicGuardplaneAdapter {
@@ -729,6 +873,10 @@ mod tests {
     #[test]
     fn test_evidence_generation() {
         let config = GuardplaneConfig::default();
+        let signing_key = config
+            .evidence_signing_key
+            .clone()
+            .expect("default config signs evidence");
         let adapter = BasicGuardplaneAdapter::new(config);
 
         let context = OperationContext::Call(CallContext {
@@ -757,5 +905,16 @@ mod tests {
         assert!(evidence.timestamp > 0);
         assert_eq!(evidence.action, HookAction::Sandbox);
         assert!(evidence.reason.contains("Risk score"));
+        assert!(
+            evidence
+                .signature
+                .as_ref()
+                .is_some_and(|sig| sig.len() == 32),
+            "decision evidence must carry a keyed authenticity signature"
+        );
+        assert!(
+            evidence.verify_signature_with_key(&signing_key).unwrap(),
+            "decision evidence signature must verify with the configured key"
+        );
     }
 }

@@ -5646,6 +5646,27 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Expression::Identifier(name) = callee.as_ref()
+                && name == "hostcall"
+                && !binding_lookup.contains_key(name.as_str())
+            {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "hostcall.invoke".to_string(),
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),

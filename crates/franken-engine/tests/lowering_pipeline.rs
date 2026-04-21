@@ -97,7 +97,7 @@ fn hostcall_literal_preserves_capability_intent_into_ir2() {
 fn dynamic_hostcall_path_inserts_runtime_ifc_guard() {
     let parser = CanonicalEs2020Parser;
     let tree = parser
-        .parse("doWork();", ParseGoal::Script)
+        .parse("hostcall();", ParseGoal::Script)
         .expect("script parse should succeed");
     let ir0 = Ir0Module::from_syntax_tree(tree, "dynamic_hostcall_fixture.ts");
     let context = LoweringContext::new("trace-dynamic", "decision-dynamic", "policy-dynamic");
@@ -640,7 +640,9 @@ fn hostcall_source_generates_ifc_flow_proof_entries() {
 #[test]
 fn dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser.parse("doWork();", ParseGoal::Script).expect("parse");
+    let tree = parser
+        .parse("hostcall();", ParseGoal::Script)
+        .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "dynamic_hostcall_fixture.ts");
     let ctx = LoweringContext::new(
         "trace-dynamic-artifact",
@@ -665,7 +667,16 @@ fn dynamic_hostcall_flow_proof_artifact_emits_runtime_checkpoint() {
 fn declassification_flow_inserts_runtime_ifc_guard_before_hostcall() {
     let mut ir2 = Ir2Module::new(ContentHash::compute(b"declass-ir2"), "declass_fixture.js");
     ir2.ops.push(Ir2Op {
-        inner: Ir1Op::Call { arg_count: 1 },
+        inner: Ir1Op::LoadBinding { binding_id: 0 },
+        effect: EffectBoundary::Pure,
+        required_capability: None,
+        flow: None,
+    });
+    ir2.ops.push(Ir2Op {
+        inner: Ir1Op::HostCall {
+            capability: "declassify.audit".to_string(),
+            arg_count: 1,
+        },
         effect: EffectBoundary::HostcallEffect,
         required_capability: Some(CapabilityTag("declassify.audit".to_string())),
         flow: Some(FlowAnnotation {
@@ -1431,17 +1442,12 @@ fn enrichment_call_expression_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_call.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    // All calls are classified as HostcallEffect by the pipeline, so the IR3
-    // emits HostCall (with fallback "hostcall.invoke" capability) rather than Call.
-    let has_hostcall = output
+    let has_call = output
         .ir3
         .instructions
         .iter()
-        .any(|i| matches!(i, Ir3Instruction::HostCall { .. }));
-    assert!(
-        has_hostcall,
-        "call expression should produce HostCall instruction"
-    );
+        .any(|i| matches!(i, Ir3Instruction::Call { .. }));
+    assert!(has_call, "call expression should produce Call instruction");
 }
 
 // --- 44. Member access ---

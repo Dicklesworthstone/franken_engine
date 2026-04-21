@@ -7314,18 +7314,14 @@ mod tests {
         ];
         let result = parse_command(&args).expect("should parse valid runtime command");
         if let CommandSpec::Runtime(runtime_args) = result {
-            if let RuntimeMode::Diagnostics {
+            let RuntimeMode::Diagnostics {
                 input,
                 out_dir,
                 summary,
-            } = runtime_args.mode
-            {
-                assert_eq!(input, PathBuf::from("runtime.json"));
-                assert_eq!(out_dir, Some(PathBuf::from("runtime/out")));
-                assert_eq!(summary, true);
-            } else {
-                panic!("expected Diagnostics mode");
-            }
+            } = runtime_args.mode;
+            assert_eq!(input, PathBuf::from("runtime.json"));
+            assert_eq!(out_dir, Some(PathBuf::from("runtime/out")));
+            assert!(summary);
         } else {
             panic!("expected Runtime command");
         }

@@ -7,6 +7,13 @@ use frankenengine_engine::research_artifact_registry::{
 };
 use std::path::Path;
 
+type SeededEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    fn() -> ResearchArtifactRegistry,
+);
+
 #[test]
 fn test_research_artifact_registry_integration() {
     // Create registry with multiple artifacts
@@ -81,7 +88,7 @@ fn test_research_artifact_registry_integration() {
 
 #[test]
 fn test_seeded_research_artifact_entries_have_coverage() {
-    let seeded_entries: &[(&str, &str, &str, fn() -> ResearchArtifactRegistry)] = &[
+    let seeded_entries: &[SeededEntry] = &[
         (
             "ext-eval-framework-0001",
             "evaluation_framework",

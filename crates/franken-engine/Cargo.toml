@@ -25,6 +25,7 @@ asupersync-integration = [
     "dep:franken-decision",
     "dep:franken-evidence",
 ]
+certified_rewrite_optimizer_integration = []
 
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate

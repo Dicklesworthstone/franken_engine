@@ -18,12 +18,11 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::hash_tiers::ContentHash;
-use serde_json::Value;
 
 fn temp_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -36,12 +35,12 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
-fn write_source(path: &PathBuf, filename: &str, source: &str) {
+fn write_source(path: &Path, filename: &str, source: &str) {
     let file_path = path.join(filename);
     fs::write(file_path, source).expect("source file should write");
 }
 
-fn write_package_json(path: &PathBuf) {
+fn write_package_json(path: &Path) {
     let package_json = r#"{
   "name": "hello-react-test",
   "version": "1.0.0",
@@ -54,7 +53,7 @@ fn write_package_json(path: &PathBuf) {
     write_source(path, "package.json", package_json);
 }
 
-fn write_hello_react_app(path: &PathBuf) {
+fn write_hello_react_app(path: &Path) {
     // Minimal React application - hello world counter
     let react_source = r#"import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -170,6 +169,16 @@ fn shipped_path_react_compile_run_parity_hello_world() {
 
     // Step 4: Load baseline manifest for parity comparison
     let baseline = BaselineManifest::create_expected();
+    assert_ne!(
+        baseline.compile_output_hash.as_bytes(),
+        &[0u8; 32],
+        "baseline compile hash should be non-zero"
+    );
+    assert_ne!(
+        baseline.run_output_hash.as_bytes(),
+        &[0u8; 32],
+        "baseline run hash should be non-zero"
+    );
 
     // Step 5: Assert parity (compile output hash)
     // Note: In practice, this would compare against a stable baseline

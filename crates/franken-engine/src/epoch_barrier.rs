@@ -10,7 +10,7 @@
 //! key derivation with transition barriers), Top-10 #5 (supply-chain
 //! trust), Top-10 #10 (provenance, revocation fabric).
 
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -249,6 +249,7 @@ pub struct EpochBarrier {
     pending_trace_id: Option<String>,
     in_flight_at_transition_start: u64,
     forced_cancellations: u64,
+    active_guard_ids: HashSet<u64>,
     evidence: Vec<TransitionEvidence>,
 }
 
@@ -266,6 +267,7 @@ impl EpochBarrier {
             pending_trace_id: None,
             in_flight_at_transition_start: 0,
             forced_cancellations: 0,
+            active_guard_ids: HashSet::new(),
             evidence: Vec::new(),
         }
     }
@@ -303,6 +305,7 @@ impl EpochBarrier {
         let guard_id = self.next_guard_id;
         self.next_guard_id = self.next_guard_id.saturating_add(1);
         self.in_flight_count = self.in_flight_count.saturating_add(1);
+        self.active_guard_ids.insert(guard_id);
 
         Ok(EpochGuard {
             guard_id,
@@ -314,14 +317,17 @@ impl EpochBarrier {
 
     /// Release a guard, decrementing the in-flight count.
     ///
-    /// Returns `true` if the guard was valid (epoch matches current or
-    /// pending transition), `false` if the guard is stale.
+    /// Returns `true` if the guard was valid and currently active, `false`
+    /// if the guard is stale, forged, or already released.
     pub fn release_guard(&mut self, guard: &EpochGuard) -> bool {
         // Only accept guards from the current epoch.
         if guard.epoch != self.current_epoch {
             return false;
         }
         if self.in_flight_count == 0 {
+            return false;
+        }
+        if !self.active_guard_ids.remove(&guard.guard_id) {
             return false;
         }
         self.in_flight_count -= 1;
@@ -374,6 +380,7 @@ impl EpochBarrier {
         let cancelled = self.in_flight_count;
         self.forced_cancellations = self.forced_cancellations.saturating_add(cancelled);
         self.in_flight_count = 0;
+        self.active_guard_ids.clear();
         Ok(cancelled)
     }
 
@@ -382,7 +389,9 @@ impl EpochBarrier {
     /// Returns `true` if all in-flight guards have been released or
     /// force-cancelled.
     pub fn can_complete(&self) -> bool {
-        self.state == BarrierState::Draining && self.in_flight_count == 0
+        self.state == BarrierState::Draining
+            && self.in_flight_count == 0
+            && self.active_guard_ids.is_empty()
     }
 
     /// Complete the transition, advancing to the new epoch.
@@ -394,10 +403,10 @@ impl EpochBarrier {
             return Err(BarrierError::NoTransitionInProgress);
         }
 
-        if self.in_flight_count > 0 {
+        if self.in_flight_count > 0 || !self.active_guard_ids.is_empty() {
             return Err(BarrierError::DrainTimeout {
                 epoch: self.current_epoch,
-                remaining_guards: self.in_flight_count,
+                remaining_guards: self.in_flight_count.max(self.active_guard_ids.len() as u64),
                 timeout_ms: self.config.drain_timeout_ms,
             });
         }
@@ -1301,6 +1310,44 @@ mod tests {
         assert!(barrier.release_guard(&guard));
         // Second release: in_flight is 0, returns false
         assert!(!barrier.release_guard(&guard));
+    }
+
+    #[test]
+    fn cloned_guard_release_does_not_drain_unrelated_guard() {
+        let mut barrier = det_barrier(1);
+        let g1 = barrier
+            .enter_critical(CriticalOpKind::DecisionEval, "t1")
+            .unwrap();
+        let g2 = barrier
+            .enter_critical(CriticalOpKind::KeyDerivation, "t2")
+            .unwrap();
+        let duplicate = g1.clone();
+
+        assert_eq!(barrier.in_flight(), 2);
+        barrier
+            .begin_transition(
+                SecurityEpoch::from_raw(2),
+                TransitionReason::PolicyKeyRotation,
+                "transition",
+            )
+            .unwrap();
+
+        assert!(barrier.release_guard(&g1));
+        assert!(!barrier.release_guard(&duplicate));
+        assert_eq!(barrier.in_flight(), 1);
+        assert!(!barrier.can_complete());
+
+        let err = barrier.complete_transition().unwrap_err();
+        assert!(matches!(
+            err,
+            BarrierError::DrainTimeout {
+                remaining_guards: 1,
+                ..
+            }
+        ));
+
+        assert!(barrier.release_guard(&g2));
+        assert!(barrier.can_complete());
     }
 
     #[test]

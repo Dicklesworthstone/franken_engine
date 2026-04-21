@@ -172,11 +172,15 @@ pub enum TokenError {
         required_seq: u64,
         verifier_seq: u64,
     },
+    /// Verifier has enough checkpoint sequence but not the signed checkpoint identity.
+    CheckpointIdentityMismatch { checkpoint_id: EngineObjectId },
     /// Verifier's revocation head is stale relative to the token's binding.
     RevocationFreshnessStale {
         required_seq: u64,
         verifier_seq: u64,
     },
+    /// Verifier has enough revocation sequence but not the signed revocation head hash.
+    RevocationHeadMismatch { revocation_head_hash: ContentHash },
     /// Token version not supported.
     UnsupportedVersion { version: String },
     /// ID derivation failed.
@@ -222,6 +226,10 @@ impl fmt::Display for TokenError {
                 "checkpoint binding failed: required seq={required_seq}, \
                  verifier seq={verifier_seq}"
             ),
+            Self::CheckpointIdentityMismatch { checkpoint_id } => write!(
+                f,
+                "checkpoint binding failed: checkpoint id {checkpoint_id} is not accepted by verifier"
+            ),
             Self::RevocationFreshnessStale {
                 required_seq,
                 verifier_seq,
@@ -229,6 +237,13 @@ impl fmt::Display for TokenError {
                 f,
                 "revocation freshness stale: required seq={required_seq}, \
                  verifier seq={verifier_seq}"
+            ),
+            Self::RevocationHeadMismatch {
+                revocation_head_hash,
+            } => write!(
+                f,
+                "revocation freshness failed: revocation head {} is not accepted by verifier",
+                revocation_head_hash.to_hex()
             ),
             Self::UnsupportedVersion { version } => {
                 write!(f, "unsupported version: {version}")
@@ -558,6 +573,7 @@ impl TokenBuilder {
 // ---------------------------------------------------------------------------
 
 /// Context for verifying a capability token.
+#[derive(Debug, Clone)]
 pub struct VerificationContext {
     /// Current deterministic tick.
     pub current_tick: u64,
@@ -565,6 +581,50 @@ pub struct VerificationContext {
     pub verifier_checkpoint_seq: u64,
     /// Verifier's revocation head sequence.
     pub verifier_revocation_seq: u64,
+    /// Checkpoint identities accepted by the verifier's frontier or ancestry proof.
+    pub accepted_checkpoint_ids: BTreeSet<EngineObjectId>,
+    /// Revocation head hashes accepted by the verifier's frontier or ancestry proof.
+    pub accepted_revocation_head_hashes: BTreeSet<ContentHash>,
+}
+
+impl VerificationContext {
+    /// Build a verification context with no accepted frontier identities.
+    pub fn new(
+        current_tick: u64,
+        verifier_checkpoint_seq: u64,
+        verifier_revocation_seq: u64,
+    ) -> Self {
+        Self {
+            current_tick,
+            verifier_checkpoint_seq,
+            verifier_revocation_seq,
+            accepted_checkpoint_ids: BTreeSet::new(),
+            accepted_revocation_head_hashes: BTreeSet::new(),
+        }
+    }
+
+    /// Record that this verifier has accepted the checkpoint identity.
+    pub fn with_checkpoint_id(mut self, checkpoint_id: EngineObjectId) -> Self {
+        self.accepted_checkpoint_ids.insert(checkpoint_id);
+        self
+    }
+
+    /// Record that this verifier has accepted the token checkpoint binding.
+    pub fn with_checkpoint_ref(self, checkpoint_ref: &CheckpointRef) -> Self {
+        self.with_checkpoint_id(checkpoint_ref.checkpoint_id.clone())
+    }
+
+    /// Record that this verifier has accepted the revocation head hash.
+    pub fn with_revocation_head_hash(mut self, revocation_head_hash: ContentHash) -> Self {
+        self.accepted_revocation_head_hashes
+            .insert(revocation_head_hash);
+        self
+    }
+
+    /// Record that this verifier has accepted the token revocation-freshness binding.
+    pub fn with_revocation_freshness(self, freshness: &RevocationFreshnessRef) -> Self {
+        self.with_revocation_head_hash(freshness.revocation_head_hash)
+    }
 }
 
 /// Verify a capability token against all bindings.
@@ -625,6 +685,13 @@ pub fn verify_token(
             verifier_seq: ctx.verifier_checkpoint_seq,
         });
     }
+    if let Some(ref binding) = token.checkpoint_binding
+        && !ctx.accepted_checkpoint_ids.contains(&binding.checkpoint_id)
+    {
+        return Err(TokenError::CheckpointIdentityMismatch {
+            checkpoint_id: binding.checkpoint_id.clone(),
+        });
+    }
 
     // 5. Revocation freshness binding.
     if let Some(ref freshness) = token.revocation_freshness
@@ -633,6 +700,15 @@ pub fn verify_token(
         return Err(TokenError::RevocationFreshnessStale {
             required_seq: freshness.min_revocation_seq,
             verifier_seq: ctx.verifier_revocation_seq,
+        });
+    }
+    if let Some(ref freshness) = token.revocation_freshness
+        && !ctx
+            .accepted_revocation_head_hashes
+            .contains(&freshness.revocation_head_hash)
+    {
+        return Err(TokenError::RevocationHeadMismatch {
+            revocation_head_hash: freshness.revocation_head_hash,
         });
     }
 
@@ -718,11 +794,25 @@ mod tests {
     }
 
     fn basic_ctx() -> VerificationContext {
-        VerificationContext {
-            current_tick: 500,
-            verifier_checkpoint_seq: 10,
-            verifier_revocation_seq: 5,
-        }
+        VerificationContext::new(500, 10, 5)
+            .with_checkpoint_ref(&make_checkpoint_ref(3))
+            .with_checkpoint_ref(&make_checkpoint_ref(5))
+            .with_checkpoint_ref(&make_checkpoint_ref(7))
+            .with_checkpoint_ref(&make_checkpoint_ref(8))
+            .with_checkpoint_ref(&make_checkpoint_ref(10))
+            .with_checkpoint_ref(&make_checkpoint_ref(15))
+            .with_checkpoint_ref(&make_checkpoint_ref(20))
+            .with_checkpoint_ref(&make_checkpoint_ref(42))
+            .with_checkpoint_ref(&make_checkpoint_ref(99))
+            .with_revocation_freshness(&make_revocation_ref(3))
+            .with_revocation_freshness(&make_revocation_ref(5))
+            .with_revocation_freshness(&make_revocation_ref(7))
+            .with_revocation_freshness(&make_revocation_ref(8))
+            .with_revocation_freshness(&make_revocation_ref(10))
+            .with_revocation_freshness(&make_revocation_ref(15))
+            .with_revocation_freshness(&make_revocation_ref(20))
+            .with_revocation_freshness(&make_revocation_ref(42))
+            .with_revocation_freshness(&make_revocation_ref(99))
     }
 
     // -- Token creation --

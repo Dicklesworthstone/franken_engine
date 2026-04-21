@@ -65,6 +65,45 @@ log_test_result() {
     TEST_RESULTS["$goal"]="$description"
 }
 
+log_fail_closed_artifact() {
+    local goal="$1"
+    local evidence_path="$2"
+    local reason="$3"
+    local artifact_path="$OUT_DIR/$evidence_path"
+
+    mkdir -p "$(dirname "$artifact_path")"
+    cat > "$artifact_path" << EOF
+{
+  "schema_version": "franken-engine.reality-check.fail-closed.v1",
+  "generated_at": "$(date -Iseconds)",
+  "goal": "$goal",
+  "status": "FAIL",
+  "reason": "$reason",
+  "policy": "No simulated or generated PASS evidence is accepted by this suite."
+}
+EOF
+
+    log_test_result "$goal" "FAIL" "$evidence_path" "$reason"
+}
+
+run_acceptance_command() {
+    local goal="$1"
+    local evidence_path="$2"
+    local pass_description="$3"
+    local fail_description="$4"
+    shift 4
+
+    local artifact_path="$OUT_DIR/$evidence_path"
+    mkdir -p "$(dirname "$artifact_path")"
+    echo "Command: $*" | tee -a "$COMMANDS_LOG"
+
+    if "$@" > "$artifact_path" 2>&1; then
+        log_test_result "$goal" "PASS" "$evidence_path" "$pass_description"
+    else
+        log_test_result "$goal" "FAIL" "$evidence_path" "$fail_description"
+    fi
+}
+
 # ============================================================================
 # Vision Goal 1: Non-Trivial JS Execution
 # ============================================================================
@@ -416,8 +455,10 @@ if [ "$JS_LINES" -ge 500 ]; then
             log_test_result "non_trivial_js" "FAIL" "execution_evidence/execution_output.txt" "Program execution failed"
         fi
     else
-        # Fallback: verify program syntax (would normally use Node.js)
-        log_test_result "non_trivial_js" "PASS" "execution_evidence/complex_js_program.js" "$JS_LINES-line program created (frankenctl not available for execution)"
+        log_fail_closed_artifact \
+            "non_trivial_js" \
+            "execution_evidence/frankenctl_unavailable.json" \
+            "frankenctl is required to verify non-trivial JS execution; source generation alone is not acceptance evidence"
     fi
 else
     log_test_result "non_trivial_js" "FAIL" "execution_evidence/complex_js_program.js" "Program only has $JS_LINES lines (need 500+)"
@@ -508,7 +549,10 @@ if [ -f "$OUT_DIR/execution_evidence/async_program.js" ]; then
             log_test_result "async_execution" "FAIL" "execution_evidence/async_output.txt" "Async execution failed"
         fi
     else
-        log_test_result "async_execution" "PASS" "execution_evidence/async_program.js" "Async program created (execution requires frankenctl)"
+        log_fail_closed_artifact \
+            "async_execution" \
+            "execution_evidence/async_frankenctl_unavailable.json" \
+            "frankenctl is required to verify async execution; source generation alone is not acceptance evidence"
     fi
 else
     log_test_result "async_execution" "FAIL" "none" "Failed to create async test program"
@@ -521,35 +565,18 @@ fi
 echo ""
 echo "=== Vision Goal 3: Guardplane Integration ===" | tee -a "$COMMANDS_LOG"
 
-# Create test for guardplane integration (simulation)
-cat > "$OUT_DIR/guardplane_evidence/guardplane_test.txt" << 'EOF'
-Guardplane Integration Test Simulation
-
-This test verifies that untrusted extensions trigger risk escalation during execution
-and that decision receipt chains are verifiable after execution.
-
-Simulated Test Steps:
-1. Load untrusted extension with suspicious patterns
-2. Execute extension code in isolated environment
-3. Monitor for capability violations and risk indicators
-4. Verify Bayesian risk assessment triggers escalation
-5. Record decision receipt chain with evidence
-6. Validate receipt chain integrity
-
-Expected Outcomes:
-- Risk escalation triggered for untrusted operations
-- Decision receipts contain full provenance
-- Evidence chain is cryptographically verifiable
-- Containment actions are properly logged
-
-Note: Full implementation requires working guardplane and Bayesian modules.
-EOF
-
-# Check for guardplane-related modules
-if [ -f "$PROJECT_ROOT/crates/franken-engine/src/bayesian_risk_assessor.rs" ]; then
-    log_test_result "guardplane_integration" "PASS" "guardplane_evidence/guardplane_test.txt" "Guardplane modules exist (full test needs integration)"
+if [ -x "$PROJECT_ROOT/scripts/run_guardplane_policy_actions_suite.sh" ] && command -v rch >/dev/null 2>&1; then
+    run_acceptance_command \
+        "guardplane_integration" \
+        "guardplane_evidence/guardplane_policy_actions_suite.log" \
+        "Guardplane policy actions suite executed successfully" \
+        "Guardplane policy actions suite failed" \
+        "$PROJECT_ROOT/scripts/run_guardplane_policy_actions_suite.sh" check
 else
-    log_test_result "guardplane_integration" "FAIL" "guardplane_evidence/guardplane_test.txt" "Guardplane modules not found"
+    log_fail_closed_artifact \
+        "guardplane_integration" \
+        "guardplane_evidence/guardplane_unavailable.json" \
+        "Guardplane acceptance requires scripts/run_guardplane_policy_actions_suite.sh and rch; module presence is not acceptance evidence"
 fi
 
 # ============================================================================
@@ -559,45 +586,18 @@ fi
 echo ""
 echo "=== Vision Goal 4: Fleet Quarantine ===" | tee -a "$COMMANDS_LOG"
 
-# Create fleet simulation test
-cat > "$OUT_DIR/fleet_evidence/fleet_simulation.txt" << 'EOF'
-Fleet Quarantine Simulation Test
-
-Simulating 10 instances with quarantine propagation and convergence measurement.
-
-Instance Configuration:
-- 10 simulated fleet instances
-- Quarantine mesh network topology
-- SLO convergence monitoring
-- TEE attestation validation
-
-Test Scenario:
-1. Instance 1 detects malicious extension
-2. Quarantine decision broadcast to fleet
-3. Measure propagation latency across instances
-4. Verify convergence within SLO bounds (< 5 seconds)
-5. Validate attestation chain integrity
-
-Expected SLO Metrics:
-- Propagation latency: < 2 seconds
-- Convergence time: < 5 seconds
-- Consensus threshold: 60%
-- Attestation validity: 100%
-
-Results:
-- Propagation: 1.2 seconds (PASS)
-- Convergence: 3.8 seconds (PASS)
-- Consensus: 80% (PASS)
-- Attestations: Valid (PASS)
-
-Note: This is a simulation. Full fleet testing requires network infrastructure.
-EOF
-
-# Check for fleet-related modules
-if [ -f "$PROJECT_ROOT/crates/franken-engine/src/fleet_convergence.rs" ]; then
-    log_test_result "fleet_quarantine" "PASS" "fleet_evidence/fleet_simulation.txt" "Fleet modules exist with simulated SLO compliance"
+if [ -f "$PROJECT_ROOT/crates/franken-engine/tests/fleet_quarantine_integration.rs" ]; then
+    run_acceptance_command \
+        "fleet_quarantine" \
+        "fleet_evidence/fleet_quarantine_integration.log" \
+        "Fleet quarantine integration test executed successfully" \
+        "Fleet quarantine integration test failed" \
+        cargo test -p frankenengine-engine --test fleet_quarantine_integration test_convergence_slo_met -- --exact --nocapture
 else
-    log_test_result "fleet_quarantine" "FAIL" "fleet_evidence/fleet_simulation.txt" "Fleet modules not found"
+    log_fail_closed_artifact \
+        "fleet_quarantine" \
+        "fleet_evidence/fleet_quarantine_unavailable.json" \
+        "Fleet quarantine acceptance requires an executable fleet_quarantine_integration test; generated SLO metrics are not accepted"
 fi
 
 # ============================================================================
@@ -607,68 +607,18 @@ fi
 echo ""
 echo "=== Vision Goal 5: Performance Benchmarking ===" | tee -a "$COMMANDS_LOG"
 
-# Create benchmark simulation
-cat > "$OUT_DIR/benchmark_evidence/benchmark_results.json" << 'EOF'
-{
-  "benchmark_suite": "FrankenEngine vs Node.js vs Bun",
-  "timestamp": "2026-04-17T05:30:00Z",
-  "test_environment": {
-    "cpu": "Intel x64",
-    "memory": "16GB",
-    "os": "Linux"
-  },
-  "benchmarks": [
-    {
-      "name": "fibonacci_recursive",
-      "description": "Recursive fibonacci calculation",
-      "iterations": 1000,
-      "results": {
-        "frankenengine": { "avg_ms": 45.2, "ops_per_sec": 22124 },
-        "node": { "avg_ms": 52.1, "ops_per_sec": 19192 },
-        "bun": { "avg_ms": 48.3, "ops_per_sec": 20704 }
-      },
-      "franken_vs_node": "13.2% faster",
-      "franken_vs_bun": "6.4% faster"
-    },
-    {
-      "name": "object_creation",
-      "description": "Object creation and property access",
-      "iterations": 10000,
-      "results": {
-        "frankenengine": { "avg_ms": 12.8, "ops_per_sec": 78125 },
-        "node": { "avg_ms": 15.2, "ops_per_sec": 65789 },
-        "bun": { "avg_ms": 13.9, "ops_per_sec": 71942 }
-      },
-      "franken_vs_node": "15.8% faster",
-      "franken_vs_bun": "7.9% faster"
-    },
-    {
-      "name": "array_operations",
-      "description": "Array map/filter/reduce operations",
-      "iterations": 5000,
-      "results": {
-        "frankenengine": { "avg_ms": 23.4, "ops_per_sec": 42735 },
-        "node": { "avg_ms": 28.1, "ops_per_sec": 35587 },
-        "bun": { "avg_ms": 25.7, "ops_per_sec": 38911 }
-      },
-      "franken_vs_node": "16.7% faster",
-      "franken_vs_bun": "8.9% faster"
-    }
-  ],
-  "summary": {
-    "overall_franken_vs_node": "15.2% average performance improvement",
-    "overall_franken_vs_bun": "7.7% average performance improvement",
-    "claims_verified": "README performance claims substantiated by benchmarks",
-    "note": "Simulated results - actual benchmarking requires working frankenctl"
-  }
-}
-EOF
-
-# Verify benchmark file creation
-if [ -f "$OUT_DIR/benchmark_evidence/benchmark_results.json" ]; then
-    log_test_result "performance_benchmark" "PASS" "benchmark_evidence/benchmark_results.json" "Performance benchmark artifacts created (actual measurement needs frankenctl)"
+if [ -x "$PROJECT_ROOT/scripts/run_benchmark_e2e_suite.sh" ] && command -v rch >/dev/null 2>&1; then
+    run_acceptance_command \
+        "performance_benchmark" \
+        "benchmark_evidence/benchmark_e2e_suite.log" \
+        "Benchmark e2e suite executed successfully" \
+        "Benchmark e2e suite failed" \
+        "$PROJECT_ROOT/scripts/run_benchmark_e2e_suite.sh" check
 else
-    log_test_result "performance_benchmark" "FAIL" "none" "Failed to create benchmark artifacts"
+    log_fail_closed_artifact \
+        "performance_benchmark" \
+        "benchmark_evidence/benchmark_unavailable.json" \
+        "Performance acceptance requires scripts/run_benchmark_e2e_suite.sh and rch; fabricated benchmark numbers are not accepted"
 fi
 
 # ============================================================================
@@ -695,59 +645,18 @@ fi
 echo ""
 echo "=== Vision Goal 7: Test262 Conformance ===" | tee -a "$COMMANDS_LOG"
 
-# Create Test262 conformance simulation
-cat > "$OUT_DIR/test262_evidence/test262_baseline.json" << 'EOF'
-{
-  "test262_conformance": {
-    "suite_version": "2024.04",
-    "total_tests": 47829,
-    "passed": 12847,
-    "failed": 34982,
-    "pass_rate": "26.8%",
-    "categories": {
-      "language": {
-        "total": 15234,
-        "passed": 8934,
-        "pass_rate": "58.6%"
-      },
-      "built-ins": {
-        "total": 28945,
-        "passed": 3421,
-        "pass_rate": "11.8%"
-      },
-      "intl": {
-        "total": 3650,
-        "passed": 492,
-        "pass_rate": "13.5%"
-      }
-    },
-    "key_features_working": [
-      "basic arithmetic",
-      "variable declarations",
-      "simple functions",
-      "object literals",
-      "array operations",
-      "control flow"
-    ],
-    "key_features_missing": [
-      "advanced regexp",
-      "proxy/reflect",
-      "symbols",
-      "iterators",
-      "generators",
-      "async/await",
-      "modules",
-      "classes"
-    ],
-    "note": "Baseline conformance measurement - significant gaps remain"
-  }
-}
-EOF
-
-if [ -f "$OUT_DIR/test262_evidence/test262_baseline.json" ]; then
-    log_test_result "test262_conformance" "PASS" "test262_evidence/test262_baseline.json" "Test262 baseline conformance documented (26.8% pass rate)"
+if [ -x "$PROJECT_ROOT/scripts/run_test262_es2020_gate.sh" ] && command -v rch >/dev/null 2>&1; then
+    run_acceptance_command \
+        "test262_conformance" \
+        "test262_evidence/test262_es2020_gate.log" \
+        "Test262 ES2020 gate executed successfully" \
+        "Test262 ES2020 gate failed" \
+        "$PROJECT_ROOT/scripts/run_test262_es2020_gate.sh" check
 else
-    log_test_result "test262_conformance" "FAIL" "none" "Failed to create Test262 evidence"
+    log_fail_closed_artifact \
+        "test262_conformance" \
+        "test262_evidence/test262_unavailable.json" \
+        "Test262 acceptance requires scripts/run_test262_es2020_gate.sh and rch; fixed pass-rate JSON is not accepted"
 fi
 
 # ============================================================================
@@ -763,7 +672,7 @@ cat > "$ACCEPTANCE_REPORT" << EOF
   "schema_version": "franken-engine.reality-check-acceptance.v1",
   "generated_at": "$(date -Iseconds)",
   "test_suite": "Final Integration Acceptance Suite (RC-END)",
-  "overall_verdict": "$( [ $FAILED_TESTS -eq 0 ] && echo "ALL_PASS" || echo "PARTIAL_PASS" )",
+  "overall_verdict": "$( [ $FAILED_TESTS -eq 0 ] && echo "ALL_PASS" || echo "FAIL_CLOSED" )",
   "summary": {
     "total_tests": $TOTAL_TESTS,
     "passed": $PASSED_TESTS,
@@ -800,11 +709,11 @@ cat >> "$ACCEPTANCE_REPORT" << EOF
   "readiness_assessment": {
     "core_execution": "$( [ "${VISION_GOALS[non_trivial_js]}" = "PASS" ] && echo "READY" || echo "BLOCKED" )",
     "async_capability": "$( [ "${VISION_GOALS[async_execution]}" = "PASS" ] && echo "READY" || echo "BLOCKED" )",
-    "security_integration": "$( [ "${VISION_GOALS[guardplane_integration]}" = "PASS" ] && echo "PARTIAL" || echo "BLOCKED" )",
-    "fleet_readiness": "$( [ "${VISION_GOALS[fleet_quarantine]}" = "PASS" ] && echo "SIMULATED" || echo "BLOCKED" )",
-    "performance_validation": "$( [ "${VISION_GOALS[performance_benchmark]}" = "PASS" ] && echo "SIMULATED" || echo "BLOCKED" )",
+    "security_integration": "$( [ "${VISION_GOALS[guardplane_integration]}" = "PASS" ] && echo "VERIFIED" || echo "BLOCKED" )",
+    "fleet_readiness": "$( [ "${VISION_GOALS[fleet_quarantine]}" = "PASS" ] && echo "VERIFIED" || echo "BLOCKED" )",
+    "performance_validation": "$( [ "${VISION_GOALS[performance_benchmark]}" = "PASS" ] && echo "VERIFIED" || echo "BLOCKED" )",
     "build_independence": "$( [ "${VISION_GOALS[standalone_build]}" = "PASS" ] && echo "VERIFIED" || echo "FAILED" )",
-    "standards_compliance": "$( [ "${VISION_GOALS[test262_conformance]}" = "PASS" ] && echo "BASELINE" || echo "UNKNOWN" )"
+    "standards_compliance": "$( [ "${VISION_GOALS[test262_conformance]}" = "PASS" ] && echo "VERIFIED" || echo "BLOCKED" )"
   },
   "blockers": [
 EOF
@@ -841,10 +750,10 @@ cat >> "$ACCEPTANCE_REPORT" << EOF
   ],
   "artifact_completeness": {
     "execution_evidence": "$([ -d "$OUT_DIR/execution_evidence" ] && echo "COMPLETE" || echo "MISSING")",
-    "benchmark_evidence": "$([ -d "$OUT_DIR/benchmark_evidence" ] && echo "SIMULATED" || echo "MISSING")",
-    "guardplane_evidence": "$([ -d "$OUT_DIR/guardplane_evidence" ] && echo "SIMULATED" || echo "MISSING")",
-    "fleet_evidence": "$([ -d "$OUT_DIR/fleet_evidence" ] && echo "SIMULATED" || echo "MISSING")",
-    "test262_evidence": "$([ -d "$OUT_DIR/test262_evidence" ] && echo "BASELINE" || echo "MISSING")",
+    "benchmark_evidence": "$([ "${VISION_GOALS[performance_benchmark]}" = "PASS" ] && echo "COMPLETE" || echo "FAIL_CLOSED")",
+    "guardplane_evidence": "$([ "${VISION_GOALS[guardplane_integration]}" = "PASS" ] && echo "COMPLETE" || echo "FAIL_CLOSED")",
+    "fleet_evidence": "$([ "${VISION_GOALS[fleet_quarantine]}" = "PASS" ] && echo "COMPLETE" || echo "FAIL_CLOSED")",
+    "test262_evidence": "$([ "${VISION_GOALS[test262_conformance]}" = "PASS" ] && echo "COMPLETE" || echo "FAIL_CLOSED")",
     "build_evidence": "$([ -d "$OUT_DIR/build_evidence" ] && echo "COMPLETE" || echo "MISSING")"
   }
 }
@@ -857,7 +766,7 @@ cat > "$RUN_MANIFEST" << EOF
   "component": "reality_check_acceptance",
   "generated_at": "$(date -Iseconds)",
   "test_suite_id": "rc-end-final-integration",
-  "outcome": "$( [ $FAILED_TESTS -eq 0 ] && echo "pass" || echo "partial" )",
+  "outcome": "$( [ $FAILED_TESTS -eq 0 ] && echo "pass" || echo "fail_closed" )",
   "total_tests": $TOTAL_TESTS,
   "passed_tests": $PASSED_TESTS,
   "failed_tests": $FAILED_TESTS,
@@ -893,6 +802,6 @@ if [ $FAILED_TESTS -eq 0 ]; then
     echo "🎉 ALL VISION GOALS VERIFIED! Reality Check acceptance suite PASSED!" | tee -a "$COMMANDS_LOG"
     exit 0
 else
-    echo "⚠️  Partial success: $PASSED_TESTS/$TOTAL_TESTS vision goals achieved" | tee -a "$COMMANDS_LOG"
+    echo "Fail-closed: $FAILED_TESTS/$TOTAL_TESTS vision goals lacked executed evidence" | tee -a "$COMMANDS_LOG"
     exit 1
 fi

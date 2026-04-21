@@ -53,6 +53,8 @@ const WITNESS_THEOREM_REPORT_SCHEMA_DEF: &[u8] = b"CapabilityWitnessPromotionThe
 const WITNESS_THEOREM_REPORT_ZONE: &str = "capability-witness-theorem-report";
 const WITNESS_PUBLICATION_SCHEMA_DEF: &[u8] = b"CapabilityWitnessPublication.v1";
 const WITNESS_PUBLICATION_ZONE: &str = "capability-witness-publication";
+const TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA: &str = "trusted_synthesizer_verification_key";
+const PROMOTION_QUORUM_METADATA: &str = "promotion_quorum";
 
 // ---------------------------------------------------------------------------
 // WitnessSchemaVersion
@@ -779,6 +781,9 @@ impl CapabilityWitness {
         if target == LifecycleState::Promoted {
             self.verify_promotion_theorem_gate()?;
         }
+        if target == LifecycleState::Active {
+            self.verify_active_acceptance()?;
+        }
         self.lifecycle_state = target;
         Ok(())
     }
@@ -1189,6 +1194,63 @@ impl CapabilityWitness {
         })
     }
 
+    fn trusted_synthesizer_verification_key(&self) -> Result<VerificationKey, WitnessError> {
+        let Some(encoded_key) = self
+            .metadata
+            .get(TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA)
+        else {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "missing trusted synthesizer verification key".to_string(),
+            });
+        };
+        let key_bytes = hex::decode(encoded_key).map_err(|err| WitnessError::SignatureInvalid {
+            detail: format!("trusted synthesizer verification key is not hex: {err}"),
+        })?;
+        let key_bytes: [u8; 32] =
+            key_bytes
+                .try_into()
+                .map_err(|bytes: Vec<u8>| WitnessError::SignatureInvalid {
+                    detail: format!(
+                        "trusted synthesizer verification key length is {}, expected 32",
+                        bytes.len()
+                    ),
+                })?;
+        VerificationKey::from_bytes(key_bytes).map_err(|err| WitnessError::SignatureInvalid {
+            detail: format!("trusted synthesizer verification key invalid: {err}"),
+        })
+    }
+
+    /// Verify every gate required before a promoted witness can become active,
+    /// indexed as active/publishable, or published.
+    pub fn verify_active_acceptance(&self) -> Result<(), WitnessError> {
+        self.verify_integrity()?;
+        self.verify_proof_coverage()?;
+        self.verify_promotion_theorem_gate()?;
+
+        if self
+            .metadata
+            .get(PROMOTION_QUORUM_METADATA)
+            .map(String::as_str)
+            != Some("theorem_gate")
+        {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "promotion quorum metadata is missing or unsupported".to_string(),
+            });
+        }
+        if !self
+            .promotion_signatures
+            .iter()
+            .any(|signature| signature.len() == 64)
+        {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "promotion signature quorum is empty".to_string(),
+            });
+        }
+
+        let trusted_key = self.trusted_synthesizer_verification_key()?;
+        self.verify_synthesizer_signature(&trusted_key)
+    }
+
     /// Verify content hash integrity.
     pub fn verify_integrity(&self) -> Result<(), WitnessError> {
         let computed = ContentHash::compute(&self.synthesis_unsigned_bytes());
@@ -1352,6 +1414,13 @@ impl WitnessBuilder {
             n_trials: 0,
             n_successes: 0,
         });
+        let mut metadata = self.metadata;
+        metadata
+            .entry(TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA.to_string())
+            .or_insert_with(|| self.signing_key.verification_key().to_hex());
+        metadata
+            .entry(PROMOTION_QUORUM_METADATA.to_string())
+            .or_insert_with(|| "theorem_gate".to_string());
 
         // Build an unsigned witness first (with placeholder ID, sig, content_hash).
         let schema_id = SchemaId::from_definition(WITNESS_SCHEMA_DEF);
@@ -1382,7 +1451,7 @@ impl WitnessBuilder {
             epoch: self.epoch,
             timestamp_ns: self.timestamp_ns,
             content_hash: ContentHash::compute(b""),
-            metadata: self.metadata,
+            metadata,
         };
 
         // Compute content hash from unsigned bytes.
@@ -1412,6 +1481,7 @@ impl WitnessBuilder {
             }
         })?;
         witness.synthesizer_signature = sig.to_bytes().to_vec();
+        witness.promotion_signatures = vec![sig.to_bytes().to_vec()];
 
         Ok(witness)
     }
@@ -1520,9 +1590,14 @@ impl WitnessStore {
     }
 
     /// Insert a witness into the store.
-    pub fn insert(&mut self, witness: CapabilityWitness) {
+    pub fn insert(&mut self, mut witness: CapabilityWitness) {
         let wid = witness.witness_id.clone();
-        if witness.lifecycle_state == LifecycleState::Active {
+        let active_verified = witness.lifecycle_state == LifecycleState::Active
+            && witness.verify_active_acceptance().is_ok();
+        if witness.lifecycle_state == LifecycleState::Active && !active_verified {
+            witness.lifecycle_state = LifecycleState::Promoted;
+        }
+        if active_verified {
             let ext_id = witness.extension_id.clone();
             // Supersede the previous active witness for this extension (if any).
             let prev_wid = self
@@ -1587,6 +1662,9 @@ impl WitnessStore {
 
         let old_state = witness.lifecycle_state;
         let ext_id = witness.extension_id.clone();
+        if target == LifecycleState::Active {
+            witness.verify_active_acceptance()?;
+        }
         witness.transition_to(target)?;
 
         // Track active witness per extension.
@@ -1882,6 +1960,16 @@ impl<A: StorageAdapter> WitnessIndexStore<A> {
                 .map_err(|err| WitnessIndexError::InvalidInput {
                     detail: format!("witness integrity verification failed: {err}"),
                 })?;
+            if matches!(
+                witness.lifecycle_state,
+                LifecycleState::Promoted | LifecycleState::Active
+            ) {
+                witness.verify_active_acceptance().map_err(|err| {
+                    WitnessIndexError::InvalidInput {
+                        detail: format!("active witness verification failed: {err}"),
+                    }
+                })?;
+            }
 
             let record = WitnessIndexRecord {
                 witness_id: witness.witness_id.clone(),
@@ -2933,6 +3021,11 @@ impl WitnessPublicationPipeline {
                 state: witness.lifecycle_state,
             });
         }
+        witness.verify_active_acceptance().map_err(|err| {
+            WitnessPublicationError::WitnessVerificationFailed {
+                detail: format!("active witness verification failed: {err}"),
+            }
+        })?;
         if self
             .publications
             .iter()
@@ -4492,6 +4585,47 @@ mod tests {
         assert!(matches!(err, WitnessError::InvalidTransition { .. }));
     }
 
+    #[test]
+    fn store_transition_to_active_rejects_forged_synthesizer_signature() {
+        let mut store = WitnessStore::new();
+        let witness = build_test_witness();
+        let wid = witness.witness_id.clone();
+        let ext_id = witness.extension_id.clone();
+        store.insert(witness);
+
+        store.transition(&wid, LifecycleState::Validated).unwrap();
+        store.transition(&wid, LifecycleState::Promoted).unwrap();
+        store
+            .get_mut(&wid)
+            .unwrap()
+            .synthesizer_signature
+            .fill(0x7f);
+
+        let err = store.transition(&wid, LifecycleState::Active).unwrap_err();
+        assert!(matches!(err, WitnessError::SignatureInvalid { .. }));
+        assert!(store.active_for_extension(&ext_id).is_none());
+    }
+
+    #[test]
+    fn store_insert_does_not_register_forged_active_witness() {
+        let mut store = WitnessStore::new();
+        let mut witness = build_test_witness();
+        let wid = witness.witness_id.clone();
+        let ext_id = witness.extension_id.clone();
+        witness.transition_to(LifecycleState::Validated).unwrap();
+        witness.transition_to(LifecycleState::Promoted).unwrap();
+        witness.transition_to(LifecycleState::Active).unwrap();
+        witness.synthesizer_signature.clear();
+
+        store.insert(witness);
+
+        assert!(store.active_for_extension(&ext_id).is_none());
+        assert_eq!(
+            store.get(&wid).unwrap().lifecycle_state,
+            LifecycleState::Promoted
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Witness publication pipeline tests
     // -----------------------------------------------------------------------
@@ -4574,6 +4708,26 @@ mod tests {
             &head_signing_key.verification_key(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn publication_pipeline_rejects_missing_promotion_signature_quorum() {
+        let head_signing_key = SigningKey::from_bytes([18u8; 32]).unwrap();
+        let mut pipeline = WitnessPublicationPipeline::new(
+            SecurityEpoch::from_raw(501),
+            head_signing_key,
+            publication_config_with_governance(),
+        )
+        .unwrap();
+        let mut witness = build_promoted_witness(2);
+        witness.promotion_signatures.clear();
+
+        let err = pipeline.publish_witness(witness, 91_000).unwrap_err();
+        assert!(matches!(
+            err,
+            WitnessPublicationError::WitnessVerificationFailed { .. }
+        ));
+        assert!(pipeline.publications().is_empty());
     }
 
     #[test]
@@ -6709,6 +6863,23 @@ mod tests {
         let found = store.witness_by_id(&wid, &ctx).unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().witness_id, wid);
+    }
+
+    #[test]
+    fn witness_index_store_rejects_forged_active_witness_signature() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let adapter = InMemoryStorageAdapter::new();
+        let mut store = WitnessIndexStore::new(adapter);
+        let ctx = test_event_context();
+        let mut witness = build_test_witness();
+        witness.transition_to(LifecycleState::Validated).unwrap();
+        witness.transition_to(LifecycleState::Promoted).unwrap();
+        witness.transition_to(LifecycleState::Active).unwrap();
+        witness.synthesizer_signature = vec![0x55; 64];
+
+        let err = store.index_witness(&witness, 5000, &ctx).unwrap_err();
+        assert!(matches!(err, WitnessIndexError::InvalidInput { .. }));
+        assert!(store.events().iter().any(|event| event.outcome == "error"));
     }
 
     #[test]

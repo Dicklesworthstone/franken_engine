@@ -390,6 +390,21 @@ fn pipeline_rejects_non_promoted_witness() {
 }
 
 #[test]
+fn pipeline_rejects_promoted_witness_missing_promotion_quorum_signature() {
+    let synthesizer_key = synthesizer_signing_key();
+    let mut pipeline = build_pipeline();
+    let mut witness = build_promoted_witness(303, &synthesizer_key);
+    witness.promotion_signatures.clear();
+
+    let result = pipeline.publish_witness(witness, 700_303);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::WitnessVerificationFailed { .. })
+    ));
+    assert!(pipeline.publications().is_empty());
+}
+
+#[test]
 fn pipeline_rejects_empty_revocation_reason() {
     let synthesizer_key = synthesizer_signing_key();
     let mut pipeline = build_pipeline();

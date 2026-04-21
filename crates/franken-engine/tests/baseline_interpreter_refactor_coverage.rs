@@ -21,19 +21,14 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use frankenengine_engine::baseline_interpreter::{
     ConsoleLevel, ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError,
     QuickJsLane, V8Lane, Value,
 };
-use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
-    HostcallDecisionRecord, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrHeader, IrLevel,
-    IrSchemaVersion, RegRange,
+    Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
-use frankenengine_engine::profiling::{Profiler, ProfilingConfig};
+use frankenengine_engine::profiling::ProfilingConfig;
 
 // ============================================================================
 // Test Helpers
@@ -67,19 +62,17 @@ fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -
 
 fn test_module_with_functions(
     instructions: Vec<Ir3Instruction>,
-    functions: Vec<Ir3FunctionDesc>,
+    _functions: Vec<Ir3FunctionDesc>,
 ) -> Ir3Module {
-    let mut m = test_module(instructions);
-    m.function_table = functions;
-    m
+    test_module(instructions)
 }
 
 fn qjs_run_with_config(
     module: &Ir3Module,
     config: InterpreterConfig,
 ) -> Result<ExecutionResult, InterpreterError> {
-    let mut core = InterpreterCore::new(config);
-    core.execute(module, "refactor-coverage-trace")
+    let mut core = InterpreterCore::new(config, "refactor-coverage-trace");
+    core.execute(module)
 }
 
 fn v8_run_with_config(
@@ -98,6 +91,37 @@ fn v8_run(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
     V8Lane::new().execute(module, "refactor-coverage-trace")
 }
 
+#[allow(dead_code)]
+struct Ir3FunctionDesc {
+    name: String,
+    param_count: u32,
+    local_count: u32,
+    body_start: u32,
+}
+
+fn call_math_random(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::CallBuiltin {
+        builtin: "builtin:MathRandom".to_string(),
+        args: RegRange { start: 0, count: 0 },
+        dst,
+    }
+}
+
+fn call_number_to_string(dst: u32) -> Ir3Instruction {
+    Ir3Instruction::CallBuiltin {
+        builtin: "builtin:NumberToString".to_string(),
+        args: RegRange { start: 0, count: 2 },
+        dst,
+    }
+}
+
+fn load_float(dst: u32, value: f64) -> Ir3Instruction {
+    Ir3Instruction::LoadFloat {
+        dst,
+        bits: value.to_bits(),
+    }
+}
+
 // ============================================================================
 // 1. Math.random Deterministic PRNG Tests
 // ============================================================================
@@ -107,21 +131,9 @@ fn math_random_uses_deterministic_xorshift64_prng() {
     // Test that Math.random produces deterministic output using Xorshift64
     let module = test_module_with_functions(
         vec![
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 1,
-            },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 2,
-            },
+            call_math_random(0),
+            call_math_random(1),
+            call_math_random(2),
             Ir3Instruction::Return { value: 0 },
         ],
         vec![Ir3FunctionDesc {
@@ -173,11 +185,7 @@ fn math_random_different_execution_states_produce_different_values() {
     let module1 = test_module_with_functions(
         vec![
             // Simple execution state
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
+            call_math_random(0),
             Ir3Instruction::Return { value: 0 },
         ],
         vec![Ir3FunctionDesc {
@@ -198,11 +206,7 @@ fn math_random_different_execution_states_produce_different_values() {
                 lhs: 1,
                 rhs: 2,
             },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
+            call_math_random(0),
             Ir3Instruction::Return { value: 0 },
         ],
         vec![Ir3FunctionDesc {
@@ -229,26 +233,10 @@ fn math_random_xorshift64_produces_full_precision() {
     let module = test_module_with_functions(
         vec![
             // Generate multiple random values
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 1,
-            },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 2,
-            },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 0 },
-                dst: 3,
-            },
+            call_math_random(0),
+            call_math_random(1),
+            call_math_random(2),
+            call_math_random(3),
             Ir3Instruction::Return { value: 0 },
         ],
         vec![Ir3FunctionDesc {
@@ -544,7 +532,7 @@ fn console_output_captured_instead_of_printed() {
 #[test]
 fn instruction_profiling_records_instructions_when_enabled() {
     // Test that profiler.record_instruction() is called when profiling is enabled
-    let mut config = InterpreterConfig::quickjs();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.extension_id = Some("test-extension".to_string());
 
     // Enable profiling
@@ -562,10 +550,10 @@ fn instruction_profiling_records_instructions_when_enabled() {
     ]);
 
     // Create interpreter core with profiling enabled
-    let mut core = InterpreterCore::new(config);
+    let mut core = InterpreterCore::new(config, "profiling-test-trace");
     core.enable_profiling(profiling_config);
 
-    let result = core.execute(&module, "profiling-test-trace").unwrap();
+    let result = core.execute(&module).unwrap();
 
     // Execution should succeed and return the expected value
     assert_eq!(result.value, Value::Int(141));
@@ -592,7 +580,7 @@ fn instruction_profiling_records_instructions_when_enabled() {
 #[test]
 fn instruction_profiling_records_timing_data() {
     // Test that profiler.record_instruction_time() captures timing
-    let mut config = InterpreterConfig::quickjs();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.extension_id = Some("timing-test".to_string());
 
     let profiling_config = ProfilingConfig::default();
@@ -623,10 +611,10 @@ fn instruction_profiling_records_timing_data() {
         Ir3Instruction::Return { value: 4 },
     ]);
 
-    let mut core = InterpreterCore::new(config);
+    let mut core = InterpreterCore::new(config, "timing-test-trace");
     core.enable_profiling(profiling_config);
 
-    let result = core.execute(&module, "timing-test-trace").unwrap();
+    let result = core.execute(&module).unwrap();
 
     // Execution should complete
     assert_eq!(result.value, Value::Int(1));
@@ -651,15 +639,15 @@ fn instruction_profiling_records_timing_data() {
 #[test]
 fn instruction_profiling_disabled_by_default() {
     // Test that profiling is disabled by default and no data is recorded
-    let config = InterpreterConfig::quickjs();
+    let config = InterpreterConfig::quickjs_defaults();
 
     let module = test_module(vec![
         Ir3Instruction::LoadInt { dst: 0, value: 42 },
         Ir3Instruction::Return { value: 0 },
     ]);
 
-    let mut core = InterpreterCore::new(config);
-    let result = core.execute(&module, "no-profiling-trace").unwrap();
+    let mut core = InterpreterCore::new(config, "no-profiling-trace");
+    let result = core.execute(&module).unwrap();
 
     // Execution should succeed
     assert_eq!(result.value, Value::Int(42));
@@ -679,7 +667,7 @@ fn instruction_profiling_disabled_by_default() {
 #[test]
 fn extension_id_propagated_to_decision_receipts() {
     // Test that extension_id from config is used in decision receipts
-    let mut config = InterpreterConfig::quickjs();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.extension_id = Some("test-extension-123".to_string());
 
     // Create a module that would trigger decision receipt creation
@@ -726,7 +714,7 @@ fn extension_id_propagated_to_decision_receipts() {
 #[test]
 fn extension_id_defaults_to_legacy_placeholder() {
     // Test that when extension_id is None, it defaults to "extension:current"
-    let config = InterpreterConfig::quickjs(); // No extension_id set
+    let config = InterpreterConfig::quickjs_defaults(); // No extension_id set
 
     let module = test_module_with_pool(
         vec![
@@ -767,7 +755,7 @@ fn extension_id_defaults_to_legacy_placeholder() {
 #[test]
 fn extension_id_flows_through_decision_receipt_chain() {
     // Test that extension_id is consistently used across multiple decision receipts
-    let mut config = InterpreterConfig::quickjs();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.extension_id = Some("multi-decision-test".to_string());
 
     let module = test_module_with_pool(
@@ -845,11 +833,7 @@ fn number_tostring_radix_base2_through_base36() {
                     dst: 1,
                     value: radix,
                 },
-                Ir3Instruction::CallFunction {
-                    func_index: 0,
-                    args: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
+                call_number_to_string(2),
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
@@ -899,11 +883,7 @@ fn number_tostring_handles_negative_numbers() {
                     dst: 1,
                     value: radix,
                 },
-                Ir3Instruction::CallFunction {
-                    func_index: 0,
-                    args: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
+                call_number_to_string(2),
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
@@ -939,16 +919,9 @@ fn number_tostring_handles_special_float_values() {
     // Test NaN
     let module_nan = test_module_with_functions(
         vec![
-            Ir3Instruction::LoadFloat {
-                dst: 0,
-                value: Float64::new(f64::NAN),
-            },
+            load_float(0, f64::NAN),
             Ir3Instruction::LoadInt { dst: 1, value: 16 },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 2 },
-                dst: 2,
-            },
+            call_number_to_string(2),
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
@@ -972,16 +945,9 @@ fn number_tostring_handles_special_float_values() {
     // Test positive infinity
     let module_inf = test_module_with_functions(
         vec![
-            Ir3Instruction::LoadFloat {
-                dst: 0,
-                value: Float64::new(f64::INFINITY),
-            },
+            load_float(0, f64::INFINITY),
             Ir3Instruction::LoadInt { dst: 1, value: 16 },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 2 },
-                dst: 2,
-            },
+            call_number_to_string(2),
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
@@ -1009,16 +975,9 @@ fn number_tostring_handles_special_float_values() {
     // Test negative infinity
     let module_neg_inf = test_module_with_functions(
         vec![
-            Ir3Instruction::LoadFloat {
-                dst: 0,
-                value: Float64::new(f64::NEG_INFINITY),
-            },
+            load_float(0, f64::NEG_INFINITY),
             Ir3Instruction::LoadInt { dst: 1, value: 16 },
-            Ir3Instruction::CallFunction {
-                func_index: 0,
-                args: RegRange { start: 0, count: 2 },
-                dst: 2,
-            },
+            call_number_to_string(2),
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
@@ -1057,11 +1016,7 @@ fn number_tostring_handles_zero_special_case() {
                     dst: 1,
                     value: radix,
                 },
-                Ir3Instruction::CallFunction {
-                    func_index: 0,
-                    args: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
+                call_number_to_string(2),
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
@@ -1096,19 +1051,12 @@ fn number_tostring_truncates_fractional_parts() {
     for (number, radix, expected) in test_cases {
         let module = test_module_with_functions(
             vec![
-                Ir3Instruction::LoadFloat {
-                    dst: 0,
-                    value: Float64::new(number),
-                },
+                load_float(0, number),
                 Ir3Instruction::LoadInt {
                     dst: 1,
                     value: radix,
                 },
-                Ir3Instruction::CallFunction {
-                    func_index: 0,
-                    args: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
+                call_number_to_string(2),
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
@@ -1162,11 +1110,7 @@ fn number_tostring_consistent_with_both_lanes() {
                     dst: 1,
                     value: radix,
                 },
-                Ir3Instruction::CallFunction {
-                    func_index: 0,
-                    args: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
+                call_number_to_string(2),
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {

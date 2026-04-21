@@ -697,14 +697,17 @@ enum BindingKind {
 }
 
 impl BindingKind {
-    fn from_u8(val: u8) -> Self {
+    fn from_u8(val: u8) -> Result<Self, InterpreterError> {
         match val {
-            0 => Self::Var,
-            1 => Self::Let,
-            2 => Self::Const,
-            3 => Self::Param,
-            4 => Self::Function,
-            _ => Self::Var,
+            0 => Ok(Self::Var),
+            1 => Ok(Self::Let),
+            2 => Ok(Self::Const),
+            3 => Ok(Self::Param),
+            4 => Ok(Self::Function),
+            _ => Err(InterpreterError::TypeError {
+                expected: "binding kind 0..=4".to_string(),
+                got: format!("kind {val}"),
+            }),
         }
     }
 
@@ -4925,7 +4928,7 @@ impl InterpreterCore {
                         .get(name_pool_index as usize)
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
-                    let binding_kind = BindingKind::from_u8(kind);
+                    let binding_kind = BindingKind::from_u8(kind)?;
                     let replaced = self
                         .scope_chain
                         .current_mut()
@@ -8374,13 +8377,18 @@ impl InterpreterCore {
                             0
                         };
 
-                        // Find the substring starting from the specified position
-                        if start_pos >= haystack.len() {
+                        // Find the substring starting from the specified UTF-16 position.
+                        let max_utf16_len = haystack.encode_utf16().count();
+                        if start_pos >= max_utf16_len {
                             Ok(Value::Int(-1))
                         } else {
-                            let search_slice = &haystack[start_pos..];
+                            let search_slice =
+                                Self::utf16_suffix_from(&haystack, start_pos, "indexOf")?;
                             match search_slice.find(&needle) {
-                                Some(pos) => Ok(Value::Int((start_pos + pos) as i64)),
+                                Some(pos) => {
+                                    let matched_units = search_slice[..pos].encode_utf16().count();
+                                    Ok(Value::Int((start_pos + matched_units) as i64))
+                                }
                                 None => Ok(Value::Int(-1)),
                             }
                         }
@@ -9068,11 +9076,12 @@ impl InterpreterCore {
                     0
                 };
 
-                // Check if search string exists starting from position
-                let result = if position >= this_str.len() {
+                // Check if search string exists starting from the UTF-16 position.
+                let max_utf16_len = this_str.encode_utf16().count();
+                let result = if position >= max_utf16_len {
                     false
                 } else {
-                    this_str[position..].contains(&search_str)
+                    Self::utf16_suffix_from(&this_str, position, "includes")?.contains(&search_str)
                 };
 
                 Ok(Value::Bool(result))
@@ -9202,11 +9211,13 @@ impl InterpreterCore {
                     0
                 };
 
-                // Check if string starts with search string at position
-                let result = if position >= this_str.len() {
+                // Check if string starts with search string at the UTF-16 position.
+                let max_utf16_len = this_str.encode_utf16().count();
+                let result = if position >= max_utf16_len {
                     search_str.is_empty()
                 } else {
-                    this_str[position..].starts_with(&search_str)
+                    Self::utf16_suffix_from(&this_str, position, "startsWith")?
+                        .starts_with(&search_str)
                 };
 
                 Ok(Value::Bool(result))
@@ -14457,6 +14468,19 @@ impl InterpreterCore {
         }
     }
 
+    fn utf16_suffix_from(
+        text: &str,
+        start_units: usize,
+        builtin: &str,
+    ) -> Result<String, InterpreterError> {
+        String::from_utf16(&text.encode_utf16().skip(start_units).collect::<Vec<_>>()).map_err(
+            |_| InterpreterError::TypeError {
+                expected: format!("valid UTF-16 boundary for {builtin}"),
+                got: format!("invalid UTF-16 unit slice at position {start_units}"),
+            },
+        )
+    }
+
     /// Parse integers with shared parseInt sign and radix handling.
     fn parse_int_with_sign_and_radix(input: &Value, radix_arg: Option<&Value>) -> Option<i64> {
         let input = Self::value_to_primitive_string(input);
@@ -19109,6 +19133,27 @@ mod tests {
         assert!(matches!(
             err,
             InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn declare_binding_unknown_kind_fails_closed() {
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 99,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["future_binding".to_string()],
+        );
+        let mut core = InterpreterCore::new(test_quickjs_config(), "binding-kind");
+        let err = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::TypeError { expected, got }
+                if expected == "binding kind 0..=4" && got == "kind 99"
         ));
     }
 

@@ -7535,7 +7535,7 @@ impl InterpreterCore {
 
                 // For now, create a simple array-like object and add the elements
                 // This is a simplified implementation that creates a new array
-                let array_id = self.alloc_object_with_prototype(None)?;
+                let array_id = self.alloc_array_with_prototype(None)?;
 
                 // Add each argument as an array element
                 for i in 0..args.count {
@@ -7632,7 +7632,7 @@ impl InterpreterCore {
                 // to prepend elements and shift existing elements to the right
 
                 // Create array object to hold the unshifted elements
-                let array_id = self.alloc_object_with_prototype(None)?;
+                let array_id = self.alloc_array_with_prototype(None)?;
 
                 // Add each argument as an array element at the beginning
                 for i in 0..args.count {
@@ -8114,56 +8114,19 @@ impl InterpreterCore {
                                 Vec::new()
                             };
 
-                            // Create new array with sliced elements
-                            let new_array_id = self.alloc_object_with_prototype(None)?;
-
-                            if !slice_elements.is_empty() {
-                                let mut new_length = 0u64;
-                                for element in slice_elements {
-                                    self.set_object_property(
-                                        new_array_id,
-                                        new_length.to_string(),
-                                        element,
-                                    )?;
-                                    new_length += 1;
-                                }
-
-                                // Set length property
-                                self.set_object_property(
-                                    new_array_id,
-                                    "length".to_string(),
-                                    Value::Int(new_length as i64),
-                                )?;
-                            } else {
-                                // Empty slice
-                                self.set_object_property(
-                                    new_array_id,
-                                    "length".to_string(),
-                                    Value::Int(0),
-                                )?;
-                            }
+                            let new_array_id = self.alloc_array_from_values(&slice_elements)?;
 
                             Ok(Value::Object(new_array_id))
                         } else {
                             // Invalid length, no length property, or object
                             // missing — return empty array.
-                            let empty_array_id = self.alloc_object_with_prototype(None)?;
-                            self.set_object_property(
-                                empty_array_id,
-                                "length".to_string(),
-                                Value::Int(0),
-                            )?;
+                            let empty_array_id = self.alloc_array_from_values(&[])?;
                             Ok(Value::Object(empty_array_id))
                         }
                     }
                     _ => {
                         // Non-object argument, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
+                        let empty_array_id = self.alloc_array_from_values(&[])?;
                         Ok(Value::Object(empty_array_id))
                     }
                 }
@@ -8183,24 +8146,11 @@ impl InterpreterCore {
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                             let keys: Vec<String> = obj.properties.keys().cloned().collect();
 
-                            // Create array object to hold the keys
-                            let array_id = self.alloc_object_with_prototype(None)?;
-
-                            // Set array elements as numeric properties
-                            for (index, key) in keys.iter().enumerate() {
-                                self.set_object_property(
-                                    array_id,
-                                    index.to_string(),
-                                    Value::Str(key.clone()),
-                                )?;
-                            }
-
-                            // Set length property
-                            self.set_object_property(
-                                array_id,
-                                "length".to_string(),
-                                Value::Int(keys.len() as i64),
-                            )?;
+                            let key_values = keys
+                                .iter()
+                                .map(|key| Value::Str(key.clone()))
+                                .collect::<Vec<_>>();
+                            let array_id = self.alloc_array_from_values(&key_values)?;
 
                             Ok(Value::Object(array_id))
                         } else {
@@ -8210,8 +8160,7 @@ impl InterpreterCore {
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
-                        let array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        let array_id = self.alloc_array_from_values(&[])?;
                         Ok(Value::Object(array_id))
                     }
                 }
@@ -8229,24 +8178,7 @@ impl InterpreterCore {
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                             let values: Vec<Value> = obj.properties.values().cloned().collect();
 
-                            // Create array object to hold the values
-                            let array_id = self.alloc_object_with_prototype(None)?;
-
-                            // Set array elements as numeric properties
-                            for (index, value) in values.iter().enumerate() {
-                                self.set_object_property(
-                                    array_id,
-                                    index.to_string(),
-                                    value.clone(),
-                                )?;
-                            }
-
-                            // Set length property
-                            self.set_object_property(
-                                array_id,
-                                "length".to_string(),
-                                Value::Int(values.len() as i64),
-                            )?;
+                            let array_id = self.alloc_array_from_values(&values)?;
 
                             Ok(Value::Object(array_id))
                         } else {
@@ -8256,8 +8188,7 @@ impl InterpreterCore {
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
-                        let array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        let array_id = self.alloc_array_from_values(&[])?;
                         Ok(Value::Object(array_id))
                     }
                 }
@@ -8279,32 +8210,14 @@ impl InterpreterCore {
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect();
 
-                            // Create array object to hold the entries
-                            let array_id = self.alloc_object_with_prototype(None)?;
+                            let array_id = self.alloc_array_with_prototype(None)?;
 
                             // Set array elements as numeric properties, each containing a [key, value] pair
                             for (index, (key, value)) in entries.iter().enumerate() {
-                                // Create a sub-array for [key, value]
-                                let entry_array_id = self.alloc_object_with_prototype(None)?;
-
-                                // Set key at index 0, value at index 1
-                                self.set_object_property(
-                                    entry_array_id,
-                                    "0".to_string(),
+                                let entry_array_id = self.alloc_array_from_values(&[
                                     Value::Str(key.clone()),
-                                )?;
-                                self.set_object_property(
-                                    entry_array_id,
-                                    "1".to_string(),
                                     value.clone(),
-                                )?;
-
-                                // Set length property for the entry array
-                                self.set_object_property(
-                                    entry_array_id,
-                                    "length".to_string(),
-                                    Value::Int(2),
-                                )?;
+                                ])?;
 
                                 // Add the entry array to the main array
                                 self.set_object_property(
@@ -8329,8 +8242,7 @@ impl InterpreterCore {
                     }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
-                        let array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        let array_id = self.alloc_array_from_values(&[])?;
                         Ok(Value::Object(array_id))
                     }
                 }
@@ -11168,45 +11080,22 @@ impl InterpreterCore {
                             let property_names: Vec<String> =
                                 obj.properties.keys().cloned().collect();
 
-                            // Create array object to hold the property names
-                            let array_id = self.alloc_object_with_prototype(None)?;
-
-                            // Add property names to the array
-                            for (i, name) in property_names.iter().enumerate() {
-                                self.set_object_property(
-                                    array_id,
-                                    i.to_string(),
-                                    Value::Str(name.clone()),
-                                )?;
-                            }
-
-                            // Set length property
-                            self.set_object_property(
-                                array_id,
-                                "length".to_string(),
-                                Value::Int(property_names.len() as i64),
-                            )?;
+                            let property_name_values = property_names
+                                .iter()
+                                .map(|name| Value::Str(name.clone()))
+                                .collect::<Vec<_>>();
+                            let array_id = self.alloc_array_from_values(&property_name_values)?;
 
                             Ok(Value::Object(array_id))
                         } else {
                             // Object not found, return empty array
-                            let empty_array_id = self.alloc_object_with_prototype(None)?;
-                            self.set_object_property(
-                                empty_array_id,
-                                "length".to_string(),
-                                Value::Int(0),
-                            )?;
+                            let empty_array_id = self.alloc_array_from_values(&[])?;
                             Ok(Value::Object(empty_array_id))
                         }
                     }
                     _ => {
                         // Non-object argument, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
+                        let empty_array_id = self.alloc_array_from_values(&[])?;
                         Ok(Value::Object(empty_array_id))
                     }
                 }
@@ -11537,7 +11426,7 @@ impl InterpreterCore {
                 )?;
 
                 // Create empty array as resolved value for now
-                let empty_array_id = self.alloc_object_with_prototype(None)?;
+                let empty_array_id = self.alloc_array_with_prototype(None)?;
                 self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
 
                 self.set_object_property(
@@ -12179,7 +12068,7 @@ impl InterpreterCore {
                 // Array.prototype.filter(callback[, thisArg]) implementation (simplified)
                 if args.count < 2 {
                     // Return empty array if no callback provided
-                    let empty_array_id = self.alloc_object_with_prototype(None)?;
+                    let empty_array_id = self.alloc_array_with_prototype(None)?;
                     self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
                     return Ok(Value::Object(empty_array_id));
                 }
@@ -12189,7 +12078,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -12213,7 +12102,7 @@ impl InterpreterCore {
                 };
 
                 // Create result array
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 // Collect truthy elements first to avoid borrow checker issues
                 let mut filtered_elements = Vec::new();
@@ -12545,7 +12434,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -12569,7 +12458,7 @@ impl InterpreterCore {
                 };
 
                 // Create result array
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
                 let mut result_length = 0;
 
                 // Simplified implementation: copy elements and flatten one level.
@@ -12911,7 +12800,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -12949,7 +12838,7 @@ impl InterpreterCore {
                 }
 
                 // Create a new array with the replaced value
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 // Copy all elements, replacing the one at the specified
                 // index. Snapshot under an immutable borrow so we can call
@@ -13020,7 +12909,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -13042,7 +12931,7 @@ impl InterpreterCore {
                 };
 
                 // Create result array (immutable operation)
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 // Copy elements in reverse order without holding the source borrow across writes.
                 let reversed_elements = if let Some(obj) = self.heap.get(array_id.0 as usize) {
@@ -13083,7 +12972,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -13105,7 +12994,7 @@ impl InterpreterCore {
                 };
 
                 // Create result array (immutable operation)
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 // Copy and sort elements (simplified string-based sorting).
                 let mut elements_with_indices =
@@ -13183,7 +13072,7 @@ impl InterpreterCore {
                     Value::Object(id) => id,
                     _ => {
                         // Non-objects can't be arrays, return empty array
-                        let empty_array_id = self.alloc_object_with_prototype(None)?;
+                        let empty_array_id = self.alloc_array_with_prototype(None)?;
                         self.set_object_property(
                             empty_array_id,
                             "length".to_string(),
@@ -13235,7 +13124,7 @@ impl InterpreterCore {
                 let actual_delete_count = delete_count.min(length - actual_start);
 
                 // Create result array (immutable operation)
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
                 let mut result_index = 0;
 
                 // Snapshot source elements before mutating the result array.
@@ -13386,7 +13275,7 @@ impl InterpreterCore {
 
                     // Convert groups to object properties (each group becomes an array)
                     for (key, values) in groups {
-                        let group_array_id = self.alloc_object_with_prototype(None)?;
+                        let group_array_id = self.alloc_array_with_prototype(None)?;
 
                         for (i, value) in values.iter().enumerate() {
                             self.set_object_property(group_array_id, i.to_string(), value.clone())?;
@@ -13529,7 +13418,7 @@ impl InterpreterCore {
 
                     // Convert groups to Map entries
                     for (key, values) in groups {
-                        let group_array_id = self.alloc_object_with_prototype(None)?;
+                        let group_array_id = self.alloc_array_with_prototype(None)?;
 
                         for (i, value) in values.iter().enumerate() {
                             self.set_object_property(group_array_id, i.to_string(), value.clone())?;
@@ -14129,7 +14018,7 @@ impl InterpreterCore {
                     _ => "[object Object]".to_string(),
                 };
 
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 if args.count < 2 {
                     // No separator provided - return array with original string
@@ -14226,7 +14115,7 @@ impl InterpreterCore {
                     _ => return Ok(Value::Undefined), // Non-objects return undefined
                 };
 
-                let result_array_id = self.alloc_object_with_prototype(None)?;
+                let result_array_id = self.alloc_array_with_prototype(None)?;
 
                 if let Some(obj) = self.heap.get(array_id.0 as usize) {
                     let length_prop = obj
@@ -23549,6 +23438,90 @@ mod tests {
             object_tag(&mut core, array_from_async),
             Value::Str("[object Array]".to_string())
         );
+    }
+
+    #[test]
+    fn array_producing_builtins_preserve_array_object_tag_metadata() {
+        let mut core = quickjs_test_core();
+
+        fn object_tag(core: &mut InterpreterCore, value: Value) -> Value {
+            core.registers[12] = value;
+            core.dispatch_builtin_hostcall(
+                "builtin:ObjectPrototypeToString",
+                RegRange {
+                    start: 12,
+                    count: 1,
+                },
+                None,
+            )
+            .expect("ObjectPrototypeToString should run successfully")
+        }
+
+        fn assert_array_tag(core: &mut InterpreterCore, value: Value) {
+            assert_eq!(
+                object_tag(core, value),
+                Value::Str("[object Array]".to_string())
+            );
+        }
+
+        let source_array = core
+            .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+            .expect("source array should allocate");
+        core.registers[0] = Value::Object(source_array);
+        core.registers[1] = Value::Int(1);
+        core.registers[2] = Value::Int(3);
+        let slice_result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeSlice",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .expect("Array.prototype.slice should return a value");
+        assert_array_tag(&mut core, slice_result);
+
+        let object_id = core
+            .alloc_object_with_prototype(None)
+            .expect("source object should allocate");
+        core.set_object_property(object_id, "a".to_string(), Value::Int(10))
+            .expect("source object should accept property a");
+        core.set_object_property(object_id, "b".to_string(), Value::Int(20))
+            .expect("source object should accept property b");
+        core.registers[0] = Value::Object(object_id);
+
+        let keys_result = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 0, count: 1 }, None)
+            .expect("Object.keys should return a value");
+        assert_array_tag(&mut core, keys_result);
+
+        core.registers[0] = Value::Object(object_id);
+        let values_result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.values should return a value");
+        assert_array_tag(&mut core, values_result);
+
+        core.registers[0] = Value::Object(object_id);
+        let entries_result = core
+            .dispatch_builtin_hostcall(
+                "builtin:ObjectEntries",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Object.entries should return a value");
+        assert_array_tag(&mut core, entries_result.clone());
+
+        let Value::Object(entries_id) = entries_result else {
+            panic!("Object.entries should return an object value");
+        };
+        let first_entry = core.heap[entries_id.0 as usize]
+            .properties
+            .get("0")
+            .cloned()
+            .expect("Object.entries should produce a first entry");
+        assert_array_tag(&mut core, first_entry);
     }
 
     #[test]

@@ -103,9 +103,8 @@ fn test_fleet_start_all_healthy() {
     let instance_count = fleet.instance_count();
     assert_eq!(instance_count, config.instance_count);
 
-    // Check each instance state
-    for i in 0..config.instance_count {
-        let node_id = NodeId(format!("node_{}", i));
+    // Check each actual simulator instance state.
+    for node_id in fleet.instance_ids() {
         let instance = fleet.get_instance(&node_id).unwrap();
         assert_eq!(instance.state, InstanceState::Healthy);
     }
@@ -218,11 +217,13 @@ fn test_tee_attestation_required() {
 
     // Generate valid quote
     let valid_quote = provider.generate_valid_quote("quarantine_test_nonce");
-    assert!(provider.verify_quote(&valid_quote));
+    let valid_quote_verified = provider.verify_quote(&valid_quote);
+    assert!(valid_quote_verified);
 
     // Generate expired quote (should fail)
     let expired_quote = provider.generate_expired_quote("expired_nonce");
-    assert!(provider.verify_quote(&expired_quote)); // Structure is valid
+    let expired_quote_structure_verified = provider.verify_quote(&expired_quote);
+    assert!(expired_quote_structure_verified); // Structure is valid
 
     // Convert to policy quote with high age (over freshness limit)
     let policy_quote = provider.to_policy_quote(&expired_quote, 7200); // 2 hours old
@@ -231,6 +232,29 @@ fn test_tee_attestation_required() {
     // High-impact quarantine decisions should require fresh attestation
     // (This would be enforced by the policy evaluation in production)
     assert!(policy_quote.quote_age_secs > 3600); // Exceeds typical freshness requirement
+
+    let tee_verification = serde_json::json!({
+        "tee_platform": config.tee_platform.canonical_tag(),
+        "provider_kind": "mock",
+        "mock_provider_active": true,
+        "authoritative": false,
+        "fail_closed_for_evidence_gates": true,
+        "evidence_gate_status": "fail_closed_non_authoritative_mock",
+        "quote_generation": {
+            "valid_quotes_generated": 1,
+            "valid_quotes_verified": if valid_quote_verified { 1 } else { 0 },
+            "expired_quotes_structure_verified": if expired_quote_structure_verified { 1 } else { 0 },
+            "expired_quotes_rejected_for_freshness": if policy_quote.quote_age_secs > 3600 { 1 } else { 0 },
+        },
+        "attestation_requirements": {
+            "high_impact_actions_require_attestation": true,
+            "freshness_window_seconds": 3600,
+            "signature_verification": "mock_hmac_deterministic_non_authoritative",
+        },
+        "measurement_source": "fleet_quarantine_integration_output",
+        "source_test": "test_tee_attestation_required",
+    });
+    println!("FLEET_TEE_VERIFICATION_JSON={tee_verification}");
 }
 
 #[test]
@@ -513,6 +537,8 @@ fn test_100_quarantine_events() {
     let p50 = sorted_times[sorted_times.len() * 50 / 100];
     let p95 = sorted_times[sorted_times.len() * 95 / 100];
     let p99 = sorted_times[sorted_times.len() * 99 / 100];
+    let max_time = *sorted_times.last().unwrap();
+    let mean_time = sorted_times.iter().sum::<u64>() as f64 / sorted_times.len() as f64;
     let violations = sorted_times
         .iter()
         .filter(|&&t| t > config.max_convergence_ms)
@@ -535,6 +561,24 @@ fn test_100_quarantine_events() {
         "100-event statistics: p50={}ms, p95={}ms, p99={}ms, violations={}",
         p50, p95, p99, violations
     );
+
+    let metrics = serde_json::json!({
+        "measurement_source": "fleet_quarantine_integration_output",
+        "source_test": "test_100_quarantine_events",
+        "simulated": false,
+        "durations_ms": sorted_times,
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "p99_ms": p99,
+        "max_ms": max_time,
+        "mean_ms": mean_time,
+        "slo_met": violations == 0,
+        "total_events": 100,
+        "violations": violations,
+        "slo_threshold_ms": config.max_convergence_ms,
+        "compliance_percentage": slo_compliance * 100.0,
+    });
+    println!("FLEET_CONVERGENCE_METRICS_JSON={metrics}");
 }
 
 // ---------------------------------------------------------------------------
@@ -569,4 +613,63 @@ fn generate_convergence_metrics(times: &[u64], max_convergence_ms: u64) -> Conve
         total_events: sorted_times.len(),
         violations,
     }
+}
+
+fn convergence_artifact_is_authoritative(value: &serde_json::Value) -> bool {
+    value.get("measurement_source").and_then(|v| v.as_str())
+        == Some("fleet_quarantine_integration_output")
+        && value.get("simulated").and_then(|v| v.as_bool()) == Some(false)
+        && value
+            .get("raw_measurement_count")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|count| count > 0)
+        && value
+            .get("source_artifact")
+            .and_then(|v| v.as_str())
+            .is_some_and(|source| !source.is_empty())
+}
+
+#[test]
+fn hardcoded_simulated_convergence_artifact_is_rejected() {
+    let simulated = serde_json::json!({
+        "p50_ms": 45,
+        "p95_ms": 120,
+        "p99_ms": 180,
+        "max_ms": 250,
+        "mean_ms": 67.5,
+        "slo_met": true,
+        "total_events": 100,
+        "violations": 0,
+        "slo_threshold_ms": 500,
+        "compliance_percentage": 100.0
+    });
+
+    assert!(!convergence_artifact_is_authoritative(&simulated));
+
+    let measured = serde_json::json!({
+        "measurement_source": "fleet_quarantine_integration_output",
+        "simulated": false,
+        "raw_measurement_count": 3,
+        "source_artifact": "artifacts/fleet_evidence/run/convergence_metrics_sources.jsonl",
+        "p50_ms": 1,
+        "p95_ms": 2,
+        "p99_ms": 3
+    });
+
+    assert!(convergence_artifact_is_authoritative(&measured));
+}
+
+#[test]
+fn e2e_script_derives_metrics_and_fails_closed_for_mock_tee() {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("scripts/test_fleet_quarantine_e2e.sh");
+    let script = fs::read_to_string(script_path).expect("read fleet quarantine script");
+
+    assert!(script.contains("convergence_metrics_sources.jsonl"));
+    assert!(script.contains("FLEET_CONVERGENCE_METRICS_JSON="));
+    assert!(script.contains("measurement_source == \"fleet_quarantine_integration_output\""));
+    assert!(script.contains("fail_closed_non_authoritative_mock"));
+    assert!(!script.contains("\"p50_ms\": 45"));
+    assert!(!script.contains("Generate convergence metrics artifact (simulated"));
 }

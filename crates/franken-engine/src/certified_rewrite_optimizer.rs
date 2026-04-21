@@ -790,10 +790,10 @@ impl CertifiedRewriteOptimizer {
                 };
                 result.add_rollback(rollback);
                 result.add_warning(format!(
-                    "Step {} validation failed, continuing with baseline",
+                    "Step {} validation failed, stopping at baseline",
                     step_number
                 ));
-                continue;
+                break;
             }
 
             step = step.with_validation_receipt(validation_result.receipt().unwrap());

@@ -1,0 +1,57 @@
+{
+  "fixture_schema_version": "franken-engine.extension-host.delegate-policy-wire-fixture.v1",
+  "delegate_cell_policy": {
+    "schema_version": "franken-engine.delegate-cell-policy.v1",
+    "initial_posterior_micros": 200000,
+    "capability_escalation_penalty_micros": 220000,
+    "flow_violation_penalty_micros": 150000,
+    "declassification_denial_penalty_micros": 110000,
+    "false_positive_cost_micros": 400000,
+    "false_negative_cost_micros": 850000
+  },
+  "guardplane_decision_log_entry": {
+    "schema_version": "franken-engine.guardplane-decision-log.v1",
+    "trace_id": "trace-wire-v1",
+    "decision_id": "decision-wire-v1",
+    "policy_id": "policy-wire-v1",
+    "component": "delegate_cell_policy",
+    "event": "delegate_guardplane_action",
+    "outcome": "suspend",
+    "error_code": null,
+    "source_event": "delegate_declassification",
+    "delegate_id": "delegate-wire",
+    "timestamp_ns": 4242,
+    "posterior_micros": 550000,
+    "action": "suspend",
+    "safe_mode_fallback": false,
+    "lifecycle_transition": "suspend",
+    "resulting_state": "suspended"
+  },
+  "containment_workflow_log_entry": {
+    "schema_version": "franken-engine.containment-workflow-log.v1",
+    "trace_id": "trace-wire-v1",
+    "decision_id": "containment-wire-v1",
+    "policy_id": "policy-wire-v1",
+    "component": "delegate_cell_policy",
+    "event": "delegate_containment_action",
+    "outcome": "ok",
+    "error_code": null,
+    "source_event": "delegate_declassification",
+    "delegate_id": "delegate-wire",
+    "timestamp_ns": 4243,
+    "action": "suspend",
+    "lifecycle_transition": "suspend",
+    "resulting_state": "suspended",
+    "mesh_attempted_targets": [
+      "peer-a",
+      "peer-b"
+    ],
+    "mesh_targets": [
+      "peer-a"
+    ],
+    "mesh_failed_targets": [
+      "peer-b"
+    ],
+    "mesh_propagated": false
+  }
+}

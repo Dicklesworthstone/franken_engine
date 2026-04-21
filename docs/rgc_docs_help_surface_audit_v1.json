@@ -15,10 +15,18 @@
     "doctor",
     "verify",
     "benchmark",
-    "replay"
+    "replay",
+    "react",
+    "gates",
+    "reports",
+    "test",
+    "synth",
+    "orchestrate",
+    "runtime"
   ],
   "required_help_fragments": [
     "frankenctl usage:",
+    "PRODUCTION-READY SURFACES:",
     "frankenctl version",
     "frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
     "frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
@@ -28,7 +36,15 @@
     "frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
     "frankenctl benchmark score --input <publication_gate_input.json>",
     "frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
-    "frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]"
+    "frankenctl replay run --trace <trace.json>",
+    "frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
+    "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
+    "frankenctl gates <gate-type> [options]  # validation gates - use for dev/CI only",
+    "frankenctl reports <report-type> [options]  # analysis reports - use for dev/CI only",
+    "frankenctl test <test-type> [options]  # testing tools - use for dev/CI only",
+    "frankenctl synth <synth-type> [options]  # synthesis tools - experimental",
+    "frankenctl orchestrate <orchestrate-type> [options]  # orchestration tools - experimental",
+    "frankenctl runtime <runtime-type> [options]  # runtime diagnostics - experimental"
   ],
   "banned_help_fragments": [
     "frankenctl init",
@@ -44,7 +60,10 @@
     "frankenctl api serve"
   ],
   "required_readme_fragments": [
-    "The shipped `frankenctl` CLI is intentionally narrower than the long-term",
+    "The shipped `frankenctl` CLI provides core execution surfaces and selective ",
+    "operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`, ",
+    "`verify`, `benchmark`, `replay`, `react`, `gates`, `reports`, `test`, `synth`, ",
+    "`orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) ",
     "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script",
     "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json",
     "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json",
@@ -100,7 +119,7 @@
       "claim_id": "readme-command-reference",
       "surface": "README.md",
       "status": "narrowed",
-      "rationale": "Reduced the command table to the exact top-level commands printed by frankenctl help."
+      "rationale": "Reduced the command table to the exact production contract while the quick example and help surface still enumerate the broader top-level CLI groups with explicit unsupported-in-production labeling."
     },
     {
       "claim_id": "readme-troubleshooting",

@@ -9,9 +9,16 @@ Machine-readable contract: `docs/rgc_docs_help_surface_audit_v1.json`
 This audit keeps `README.md` and the shipped `frankenctl --help` surface aligned
 with the commands that actually parse and run today.
 
-It intentionally narrows aspirational operator copy to the currently shipped
-CLI: `version`, `compile`, `run`, `doctor`, `verify`, `benchmark`, and
-`replay`.
+The current shipped CLI has two explicit buckets:
+
+- production-ready surfaces: `version`, `compile`, `run`, `doctor`, `verify`,
+  `benchmark`, `replay`, and `react`
+- operator/development surfaces: `gates`, `reports`, `test`, `synth`,
+  `orchestrate`, and `runtime`
+
+The second bucket is intentionally documented as unsupported in production, but
+it is still part of the real top-level help surface and must not be hidden by
+stale audit text.
 
 ## Contract Version
 
@@ -31,6 +38,13 @@ CLI: `version`, `compile`, `run`, `doctor`, `verify`, `benchmark`, and
 - `frankenctl benchmark score --input <publication_gate_input.json> [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]`
 - `frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]`
 - `frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]`
+- `frankenctl react compile|build|doctor|contract [options]`
+- `frankenctl gates <gate-type> [options]` (unsupported in production)
+- `frankenctl reports <report-type> [options]` (unsupported in production)
+- `frankenctl test <test-type> [options]` (unsupported in production)
+- `frankenctl synth <synth-type> [options]` (unsupported in production)
+- `frankenctl orchestrate <orchestrate-type> [options]` (unsupported in production)
+- `frankenctl runtime <runtime-type> [options]` (unsupported in production)
 
 ## Audited Claim Classes
 
@@ -38,8 +52,9 @@ CLI: `version`, `compile`, `run`, `doctor`, `verify`, `benchmark`, and
   shipped compile/verify/run commands
 - `readme-quick-start`: narrowed from unshipped init/control-plane surfaces to
   shipped compile/run/doctor/verify/benchmark/replay workflows
-- `readme-command-reference`: narrowed to the exact top-level commands exposed
-  by `frankenctl --help`
+- `readme-command-reference`: narrowed to the exact command groups exposed by
+  `frankenctl --help`, with production-ready versus operator/development status
+  called out explicitly
 - `readme-troubleshooting`: narrowed from non-existent subcommands to supported
   `doctor`, `verify`, `benchmark`, and `replay` remediation flows
 - `frankenctl-top-level-help`: accurate and treated as the authoritative command

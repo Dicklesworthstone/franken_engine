@@ -46,9 +46,11 @@ fn rev_signing_key() -> SigningKey {
 }
 
 fn verification_key_from_seed(byte: u8) -> VerificationKey {
-    SigningKey::from_bytes([byte; 32])
-        .unwrap()
-        .verification_key()
+    verification_key_from_fixture_bytes([byte; 32])
+}
+
+fn verification_key_from_fixture_bytes(bytes: [u8; 32]) -> VerificationKey {
+    SigningKey::from_bytes(bytes).unwrap().verification_key()
 }
 
 fn make_revocation(target_type: RevocationTargetType, target_bytes: [u8; 32]) -> Revocation {
@@ -256,7 +258,7 @@ fn high_risk_category_display_extension_lifecycle() {
 
 #[test]
 fn key_id_is_deterministic() {
-    let vk = VerificationKey::from_bytes([5; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([5; 32]);
     let id1 = key_id_from_verification_key(&vk);
     let id2 = key_id_from_verification_key(&vk);
     assert_eq!(id1, id2);
@@ -264,8 +266,8 @@ fn key_id_is_deterministic() {
 
 #[test]
 fn key_id_differs_for_different_keys() {
-    let vk1 = VerificationKey::from_bytes([1; 32]).unwrap();
-    let vk2 = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk1 = verification_key_from_fixture_bytes([1; 32]);
+    let vk2 = verification_key_from_fixture_bytes([2; 32]);
     let id1 = key_id_from_verification_key(&vk1);
     let id2 = key_id_from_verification_key(&vk2);
     assert_ne!(id1, id2);
@@ -365,7 +367,7 @@ fn revocation_denial_display_transitive_no_root() {
 fn token_acceptance_cleared_for_valid_token() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     let result = enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-1");
     assert!(result.is_cleared());
 }
@@ -374,7 +376,7 @@ fn token_acceptance_cleared_for_valid_token() {
 fn token_acceptance_emits_two_audit_events_on_clear() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-1");
     let events = enforcer.drain_audit_log();
     assert_eq!(events.len(), 2);
@@ -385,7 +387,7 @@ fn token_acceptance_denied_for_revoked_token() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([10; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     let result = enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-deny");
     assert!(!result.is_cleared());
 }
@@ -395,7 +397,7 @@ fn token_acceptance_denial_is_direct_for_revoked_token() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([10; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     match enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-deny") {
         EnforcementResult::Denied(d) => {
             assert!(!d.transitive);
@@ -413,7 +415,7 @@ fn token_acceptance_denied_emits_one_audit_event() {
     let token_jti = EngineObjectId([10; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
     enforcer.drain_audit_log();
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-deny");
     let events = enforcer.drain_audit_log();
     assert_eq!(events.len(), 1);
@@ -423,7 +425,7 @@ fn token_acceptance_denied_emits_one_audit_event() {
 #[test]
 fn token_acceptance_transitive_denial_for_revoked_issuer_key() {
     let mut enforcer = make_enforcer();
-    let issuer_key = VerificationKey::from_bytes([20; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([20; 32]);
     let issuer_key_id = key_id_from_verification_key(&issuer_key);
     revoke_target(
         &mut enforcer,
@@ -447,7 +449,7 @@ fn token_acceptance_transitive_denial_for_revoked_issuer_key() {
 fn high_risk_operation_cleared_for_valid_attestation() {
     let mut enforcer = make_enforcer();
     let attestation_id = EngineObjectId([3; 32]);
-    let principal_key = VerificationKey::from_bytes([4; 32]).unwrap();
+    let principal_key = verification_key_from_fixture_bytes([4; 32]);
     let result = enforcer.check_high_risk_operation(
         &attestation_id,
         &principal_key,
@@ -462,7 +464,7 @@ fn high_risk_operation_denied_for_revoked_attestation() {
     let mut enforcer = make_enforcer();
     let attestation_id = EngineObjectId([3; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [3; 32]);
-    let principal_key = VerificationKey::from_bytes([4; 32]).unwrap();
+    let principal_key = verification_key_from_fixture_bytes([4; 32]);
     let result = enforcer.check_high_risk_operation(
         &attestation_id,
         &principal_key,
@@ -477,7 +479,7 @@ fn high_risk_operation_denial_is_attestation_type() {
     let mut enforcer = make_enforcer();
     let attestation_id = EngineObjectId([3; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [3; 32]);
-    let principal_key = VerificationKey::from_bytes([4; 32]).unwrap();
+    let principal_key = verification_key_from_fixture_bytes([4; 32]);
     match enforcer.check_high_risk_operation(
         &attestation_id,
         &principal_key,
@@ -496,7 +498,7 @@ fn high_risk_operation_denial_is_attestation_type() {
 #[test]
 fn high_risk_operation_transitive_denial_for_revoked_key() {
     let mut enforcer = make_enforcer();
-    let principal_key = VerificationKey::from_bytes([4; 32]).unwrap();
+    let principal_key = verification_key_from_fixture_bytes([4; 32]);
     let key_id = key_id_from_verification_key(&principal_key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let attestation_id = EngineObjectId([9; 32]);
@@ -520,7 +522,7 @@ fn high_risk_operation_transitive_denial_for_revoked_key() {
 fn extension_activation_cleared_for_valid_extension() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([6; 32]);
-    let signing_key = VerificationKey::from_bytes([7; 32]).unwrap();
+    let signing_key = verification_key_from_fixture_bytes([7; 32]);
     let result = enforcer.check_extension_activation(&ext_id, &signing_key, "t-ext");
     assert!(result.is_cleared());
 }
@@ -530,7 +532,7 @@ fn extension_activation_denied_for_revoked_extension() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([6; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [6; 32]);
-    let signing_key = VerificationKey::from_bytes([7; 32]).unwrap();
+    let signing_key = verification_key_from_fixture_bytes([7; 32]);
     let result = enforcer.check_extension_activation(&ext_id, &signing_key, "t-ext-deny");
     assert!(!result.is_cleared());
 }
@@ -540,7 +542,7 @@ fn extension_activation_denial_is_extension_type() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([6; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [6; 32]);
-    let signing_key = VerificationKey::from_bytes([7; 32]).unwrap();
+    let signing_key = verification_key_from_fixture_bytes([7; 32]);
     match enforcer.check_extension_activation(&ext_id, &signing_key, "t-ext-deny") {
         EnforcementResult::Denied(d) => {
             assert_eq!(d.target_type, RevocationTargetType::Extension);
@@ -554,7 +556,7 @@ fn extension_activation_denial_is_extension_type() {
 #[test]
 fn extension_activation_transitive_denial_for_revoked_signing_key() {
     let mut enforcer = make_enforcer();
-    let signing_key = VerificationKey::from_bytes([7; 32]).unwrap();
+    let signing_key = verification_key_from_fixture_bytes([7; 32]);
     let key_id = key_id_from_verification_key(&signing_key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let ext_id = EngineObjectId([8; 32]);
@@ -582,11 +584,11 @@ fn batch_token_check_cleared_for_valid_tokens() {
     let tokens = vec![
         (
             EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
+            verification_key_from_fixture_bytes([2; 32]),
         ),
         (
             EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
+            verification_key_from_fixture_bytes([4; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch");
@@ -600,11 +602,11 @@ fn batch_token_check_denied_if_any_revoked() {
     let tokens = vec![
         (
             EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
+            verification_key_from_fixture_bytes([2; 32]),
         ),
         (
             EngineObjectId([5; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
+            verification_key_from_fixture_bytes([4; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-deny");
@@ -623,7 +625,7 @@ fn stats_initially_empty() {
 fn stats_incremented_on_token_acceptance_clear() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-1");
     let stats = enforcer.stats();
     let s = stats.get(&EnforcementPoint::TokenAcceptance).unwrap();
@@ -636,7 +638,7 @@ fn stats_incremented_on_token_acceptance_denial() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([10; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-deny");
     let stats = enforcer.stats();
     let s = stats.get(&EnforcementPoint::TokenAcceptance).unwrap();
@@ -647,7 +649,7 @@ fn stats_incremented_on_token_acceptance_denial() {
 #[test]
 fn stats_transitive_denial_counted() {
     let mut enforcer = make_enforcer();
-    let issuer_key = VerificationKey::from_bytes([20; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([20; 32]);
     let issuer_key_id = key_id_from_verification_key(&issuer_key);
     revoke_target(
         &mut enforcer,
@@ -669,7 +671,7 @@ fn set_tick_updates_tick() {
     enforcer.set_tick(9999);
     // tick is used internally in audit events; just check it doesn't panic
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-tick");
     let events = enforcer.drain_audit_log();
     assert!(!events.is_empty());
@@ -682,7 +684,7 @@ fn set_tick_updates_tick() {
 fn drain_audit_log_clears_after_drain() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "t-1");
     let events = enforcer.drain_audit_log();
     assert!(!events.is_empty());
@@ -757,7 +759,7 @@ fn enforcement_stats_serde_roundtrip() {
 fn audit_events_contain_correct_trace_id() {
     let mut enforcer = make_enforcer();
     let token_jti = EngineObjectId([1; 32]);
-    let issuer_key = VerificationKey::from_bytes([2; 32]).unwrap();
+    let issuer_key = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&token_jti, &issuer_key, "trace-abc");
     let events = enforcer.drain_audit_log();
     assert!(events.iter().all(|e| e.trace_id == "trace-abc"));
@@ -767,7 +769,7 @@ fn audit_events_contain_correct_trace_id() {
 fn audit_events_contain_correct_enforcement_point() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([6; 32]);
-    let signing_key = VerificationKey::from_bytes([7; 32]).unwrap();
+    let signing_key = verification_key_from_fixture_bytes([7; 32]);
     enforcer.check_extension_activation(&ext_id, &signing_key, "trace-ext");
     let events = enforcer.drain_audit_log();
     assert!(
@@ -965,7 +967,7 @@ fn revocation_check_event_unknown_schema_version_fails_closed() {
 #[test]
 fn multiple_checks_accumulate_audit_events() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t1");
     enforcer.check_token_acceptance(&EngineObjectId([2; 32]), &vk, "t2");
     let events = enforcer.drain_audit_log();
@@ -1632,7 +1634,7 @@ fn enrichment_enforcement_stats_serde_roundtrip_large_values() {
 fn enrichment_key_id_all_zeros() {
     // Zero-byte verification keys are now rejected at construction; use a
     // minimal non-zero value instead to preserve the determinism check.
-    let vk = VerificationKey::from_bytes([1; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([1; 32]);
     let id = key_id_from_verification_key(&vk);
     // Should produce a valid, non-zero EngineObjectId from hashing
     let id2 = key_id_from_verification_key(&vk);
@@ -1641,7 +1643,7 @@ fn enrichment_key_id_all_zeros() {
 
 #[test]
 fn enrichment_key_id_all_ff() {
-    let vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([0xFF; 32]);
     let id = key_id_from_verification_key(&vk);
     let id2 = key_id_from_verification_key(&vk);
     assert_eq!(id, id2);
@@ -1653,8 +1655,8 @@ fn enrichment_key_id_single_bit_difference() {
     let bytes1 = [1u8; 32];
     let mut bytes2 = [1u8; 32];
     bytes2[0] = 2;
-    let vk1 = VerificationKey::from_bytes(bytes1).unwrap();
-    let vk2 = VerificationKey::from_bytes(bytes2).unwrap();
+    let vk1 = verification_key_from_fixture_bytes(bytes1);
+    let vk2 = verification_key_from_fixture_bytes(bytes2);
     assert_ne!(
         key_id_from_verification_key(&vk1),
         key_id_from_verification_key(&vk2),
@@ -1666,8 +1668,8 @@ fn enrichment_key_id_last_byte_difference() {
     let bytes1 = [0xAAu8; 32];
     let mut bytes2 = [0xAAu8; 32];
     bytes2[31] = 0xAB;
-    let vk1 = VerificationKey::from_bytes(bytes1).unwrap();
-    let vk2 = VerificationKey::from_bytes(bytes2).unwrap();
+    let vk1 = verification_key_from_fixture_bytes(bytes1);
+    let vk2 = verification_key_from_fixture_bytes(bytes2);
     assert_ne!(
         key_id_from_verification_key(&vk1),
         key_id_from_verification_key(&vk2),
@@ -1676,7 +1678,7 @@ fn enrichment_key_id_last_byte_difference() {
 
 #[test]
 fn enrichment_key_id_determinism_ten_runs() {
-    let vk = VerificationKey::from_bytes([77; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([77; 32]);
     let reference = key_id_from_verification_key(&vk);
     for _ in 0..10 {
         assert_eq!(key_id_from_verification_key(&vk), reference);
@@ -1711,7 +1713,7 @@ fn enrichment_enforcer_debug() {
 fn enrichment_set_tick_zero() {
     let mut enforcer = make_enforcer();
     enforcer.set_tick(0);
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-tick-0");
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].checked_at.0, 0);
@@ -1721,7 +1723,7 @@ fn enrichment_set_tick_zero() {
 fn enrichment_set_tick_max_u64() {
     let mut enforcer = make_enforcer();
     enforcer.set_tick(u64::MAX);
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-tick-max");
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].checked_at.0, u64::MAX);
@@ -1742,16 +1744,10 @@ fn enrichment_drain_audit_log_idempotent_empty() {
 fn enrichment_token_acceptance_same_jti_different_key_cleared() {
     let mut enforcer = make_enforcer();
     let jti = EngineObjectId([50; 32]);
-    let r1 = enforcer.check_token_acceptance(
-        &jti,
-        &VerificationKey::from_bytes([1; 32]).unwrap(),
-        "t-a",
-    );
-    let r2 = enforcer.check_token_acceptance(
-        &jti,
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
-        "t-b",
-    );
+    let r1 =
+        enforcer.check_token_acceptance(&jti, &verification_key_from_fixture_bytes([1; 32]), "t-a");
+    let r2 =
+        enforcer.check_token_acceptance(&jti, &verification_key_from_fixture_bytes([2; 32]), "t-b");
     assert!(r1.is_cleared());
     assert!(r2.is_cleared());
 }
@@ -1760,7 +1756,7 @@ fn enrichment_token_acceptance_same_jti_different_key_cleared() {
 fn enrichment_token_acceptance_cleared_checks_performed_is_two() {
     let mut enforcer = make_enforcer();
     let jti = EngineObjectId([50; 32]);
-    let vk = VerificationKey::from_bytes([51; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([51; 32]);
     match enforcer.check_token_acceptance(&jti, &vk, "t-cp") {
         EnforcementResult::Cleared {
             checks_performed,
@@ -1779,7 +1775,7 @@ fn enrichment_token_acceptance_direct_denial_stops_before_key_check() {
     let jti = EngineObjectId([50; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Token, [50; 32]);
     enforcer.drain_audit_log();
-    let vk = VerificationKey::from_bytes([51; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([51; 32]);
     enforcer.check_token_acceptance(&jti, &vk, "t-early-stop");
     let events = enforcer.drain_audit_log();
     // Only 1 audit event: the direct token check (does not proceed to key check)
@@ -1792,7 +1788,7 @@ fn enrichment_token_acceptance_direct_denial_stops_before_key_check() {
 fn enrichment_token_acceptance_both_token_and_key_revoked_prefers_direct() {
     let mut enforcer = make_enforcer();
     let jti = EngineObjectId([60; 32]);
-    let vk = VerificationKey::from_bytes([61; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([61; 32]);
     let key_id = key_id_from_verification_key(&vk);
     // Revoke both the token and the issuer key
     revoke_target(&mut enforcer, RevocationTargetType::Token, [60; 32]);
@@ -1815,7 +1811,7 @@ fn enrichment_token_acceptance_both_token_and_key_revoked_prefers_direct() {
 fn enrichment_high_risk_cleared_checks_performed_is_two() {
     let mut enforcer = make_enforcer();
     let att_id = EngineObjectId([70; 32]);
-    let pk = VerificationKey::from_bytes([71; 32]).unwrap();
+    let pk = verification_key_from_fixture_bytes([71; 32]);
     match enforcer.check_high_risk_operation(
         &att_id,
         &pk,
@@ -1837,7 +1833,7 @@ fn enrichment_high_risk_cleared_checks_performed_is_two() {
 fn enrichment_high_risk_both_attestation_and_key_revoked_prefers_direct() {
     let mut enforcer = make_enforcer();
     let att_id = EngineObjectId([72; 32]);
-    let pk = VerificationKey::from_bytes([73; 32]).unwrap();
+    let pk = verification_key_from_fixture_bytes([73; 32]);
     let key_id = key_id_from_verification_key(&pk);
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [72; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
@@ -1861,7 +1857,7 @@ fn enrichment_high_risk_denied_attestation_emits_one_audit_event() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [75; 32]);
     enforcer.drain_audit_log();
-    let pk = VerificationKey::from_bytes([76; 32]).unwrap();
+    let pk = verification_key_from_fixture_bytes([76; 32]);
     enforcer.check_high_risk_operation(
         &EngineObjectId([75; 32]),
         &pk,
@@ -1876,7 +1872,7 @@ fn enrichment_high_risk_denied_attestation_emits_one_audit_event() {
 #[test]
 fn enrichment_high_risk_transitive_emits_two_audit_events() {
     let mut enforcer = make_enforcer();
-    let pk = VerificationKey::from_bytes([78; 32]).unwrap();
+    let pk = verification_key_from_fixture_bytes([78; 32]);
     let key_id = key_id_from_verification_key(&pk);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     enforcer.drain_audit_log();
@@ -1906,7 +1902,7 @@ fn enrichment_high_risk_all_categories_with_revoked_attestation() {
         let mut enforcer = make_enforcer();
         let bytes = [(i as u8) + 80; 32];
         revoke_target(&mut enforcer, RevocationTargetType::Attestation, bytes);
-        let pk = VerificationKey::from_bytes([(i as u8) + 180; 32]).unwrap();
+        let pk = verification_key_from_fixture_bytes([(i as u8) + 180; 32]);
         let result = enforcer.check_high_risk_operation(
             &EngineObjectId(bytes),
             &pk,
@@ -1923,7 +1919,7 @@ fn enrichment_high_risk_all_categories_with_revoked_attestation() {
 fn enrichment_extension_activation_cleared_checks_performed_is_two() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([90; 32]);
-    let sk = VerificationKey::from_bytes([91; 32]).unwrap();
+    let sk = verification_key_from_fixture_bytes([91; 32]);
     match enforcer.check_extension_activation(&ext_id, &sk, "t-ext-cp") {
         EnforcementResult::Cleared {
             checks_performed,
@@ -1940,7 +1936,7 @@ fn enrichment_extension_activation_cleared_checks_performed_is_two() {
 fn enrichment_extension_both_ext_and_key_revoked_prefers_direct() {
     let mut enforcer = make_enforcer();
     let ext_id = EngineObjectId([92; 32]);
-    let sk = VerificationKey::from_bytes([93; 32]).unwrap();
+    let sk = verification_key_from_fixture_bytes([93; 32]);
     let key_id = key_id_from_verification_key(&sk);
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [92; 32]);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
@@ -1960,7 +1956,7 @@ fn enrichment_extension_denied_ext_emits_one_audit_event() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [94; 32]);
     enforcer.drain_audit_log();
-    let sk = VerificationKey::from_bytes([95; 32]).unwrap();
+    let sk = verification_key_from_fixture_bytes([95; 32]);
     enforcer.check_extension_activation(&EngineObjectId([94; 32]), &sk, "t-ext-1evt");
     let events = enforcer.drain_audit_log();
     assert_eq!(events.len(), 1);
@@ -1971,7 +1967,7 @@ fn enrichment_extension_denied_ext_emits_one_audit_event() {
 #[test]
 fn enrichment_extension_transitive_emits_two_audit_events() {
     let mut enforcer = make_enforcer();
-    let sk = VerificationKey::from_bytes([97; 32]).unwrap();
+    let sk = verification_key_from_fixture_bytes([97; 32]);
     let key_id = key_id_from_verification_key(&sk);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     enforcer.drain_audit_log();
@@ -1990,7 +1986,7 @@ fn enrichment_batch_single_token_cleared() {
     let mut enforcer = make_enforcer();
     let tokens = vec![(
         EngineObjectId([1; 32]),
-        VerificationKey::from_bytes([2; 32]).unwrap(),
+        verification_key_from_fixture_bytes([2; 32]),
     )];
     let result = enforcer.check_token_batch(&tokens, "t-batch-single");
     assert!(result.is_cleared());
@@ -2009,11 +2005,11 @@ fn enrichment_batch_first_token_revoked() {
     let tokens = vec![
         (
             EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
+            verification_key_from_fixture_bytes([2; 32]),
         ),
         (
             EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
+            verification_key_from_fixture_bytes([4; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-first");
@@ -2032,15 +2028,15 @@ fn enrichment_batch_last_token_revoked() {
     let tokens = vec![
         (
             EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
+            verification_key_from_fixture_bytes([2; 32]),
         ),
         (
             EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
+            verification_key_from_fixture_bytes([4; 32]),
         ),
         (
             EngineObjectId([5; 32]),
-            VerificationKey::from_bytes([6; 32]).unwrap(),
+            verification_key_from_fixture_bytes([6; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-last");
@@ -2055,14 +2051,14 @@ fn enrichment_batch_last_token_revoked() {
 #[test]
 fn enrichment_batch_transitive_denial_via_issuer_key() {
     let mut enforcer = make_enforcer();
-    let shared_key = VerificationKey::from_bytes([50; 32]).unwrap();
+    let shared_key = verification_key_from_fixture_bytes([50; 32]);
     let key_id = key_id_from_verification_key(&shared_key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let tokens = vec![
         (EngineObjectId([1; 32]), shared_key.clone()),
         (
             EngineObjectId([2; 32]),
-            VerificationKey::from_bytes([99; 32]).unwrap(),
+            verification_key_from_fixture_bytes([99; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-trans");
@@ -2083,11 +2079,11 @@ fn enrichment_batch_multiple_revoked_returns_first() {
     let tokens = vec![
         (
             EngineObjectId([10; 32]),
-            VerificationKey::from_bytes([11; 32]).unwrap(),
+            verification_key_from_fixture_bytes([11; 32]),
         ),
         (
             EngineObjectId([20; 32]),
-            VerificationKey::from_bytes([21; 32]).unwrap(),
+            verification_key_from_fixture_bytes([21; 32]),
         ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-multi");
@@ -2106,7 +2102,7 @@ fn enrichment_batch_checks_performed_count() {
         .map(|i| {
             (
                 EngineObjectId([i; 32]),
-                VerificationKey::from_bytes([i + 100; 32]).unwrap(),
+                verification_key_from_fixture_bytes([i + 100; 32]),
             )
         })
         .collect();
@@ -2125,7 +2121,7 @@ fn enrichment_batch_checks_performed_count() {
 #[test]
 fn enrichment_stats_separate_per_enforcement_point() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-s");
     enforcer.check_high_risk_operation(
         &EngineObjectId([2; 32]),
@@ -2145,7 +2141,7 @@ fn enrichment_stats_separate_per_enforcement_point() {
 fn enrichment_stats_multiple_clears_accumulate() {
     let mut enforcer = make_enforcer();
     for i in 0..10u8 {
-        let vk = VerificationKey::from_bytes([i + 100; 32]).unwrap();
+        let vk = verification_key_from_fixture_bytes([i + 100; 32]);
         enforcer.check_token_acceptance(&EngineObjectId([i; 32]), &vk, &format!("t-{i}"));
     }
     let stats = enforcer.stats();
@@ -2160,13 +2156,13 @@ fn enrichment_stats_mixed_clears_and_denials() {
     let mut enforcer = make_enforcer();
     // 3 cleared
     for i in 0..3u8 {
-        let vk = VerificationKey::from_bytes([i + 100; 32]).unwrap();
+        let vk = verification_key_from_fixture_bytes([i + 100; 32]);
         enforcer.check_token_acceptance(&EngineObjectId([i; 32]), &vk, "t-mix");
     }
     // 2 direct denials
     for i in 10..12u8 {
         revoke_target(&mut enforcer, RevocationTargetType::Token, [i; 32]);
-        let vk = VerificationKey::from_bytes([i + 100; 32]).unwrap();
+        let vk = verification_key_from_fixture_bytes([i + 100; 32]);
         enforcer.check_token_acceptance(&EngineObjectId([i; 32]), &vk, "t-mix");
     }
     let stats = enforcer.stats();
@@ -2180,7 +2176,7 @@ fn enrichment_stats_mixed_clears_and_denials() {
 #[test]
 fn enrichment_stats_transitive_denials_counted_separately() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([42; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([42; 32]);
     let key_id = key_id_from_verification_key(&vk);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     // 3 transitive denials
@@ -2200,7 +2196,7 @@ fn enrichment_stats_transitive_denials_counted_separately() {
 fn enrichment_audit_events_ordered_chronologically() {
     let mut enforcer = make_enforcer();
     enforcer.set_tick(100);
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-ord-1");
     enforcer.set_tick(200);
     enforcer.check_token_acceptance(&EngineObjectId([2; 32]), &vk, "t-ord-2");
@@ -2220,7 +2216,7 @@ fn enrichment_audit_events_ordered_chronologically() {
 #[test]
 fn enrichment_audit_event_trace_ids_preserved() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "alpha");
     enforcer.check_token_acceptance(&EngineObjectId([2; 32]), &vk, "beta");
     let events = enforcer.drain_audit_log();
@@ -2236,7 +2232,7 @@ fn enrichment_audit_event_trace_ids_preserved() {
 fn enrichment_determinism_extension_activation() {
     let run = || {
         let mut enforcer = make_enforcer();
-        let sk = VerificationKey::from_bytes([7; 32]).unwrap();
+        let sk = verification_key_from_fixture_bytes([7; 32]);
         let key_id = key_id_from_verification_key(&sk);
         revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
         enforcer.drain_audit_log();
@@ -2256,7 +2252,7 @@ fn enrichment_determinism_high_risk_operation() {
         let mut enforcer = make_enforcer();
         revoke_target(&mut enforcer, RevocationTargetType::Attestation, [50; 32]);
         enforcer.drain_audit_log();
-        let pk = VerificationKey::from_bytes([51; 32]).unwrap();
+        let pk = verification_key_from_fixture_bytes([51; 32]);
         let r = enforcer.check_high_risk_operation(
             &EngineObjectId([50; 32]),
             &pk,
@@ -2281,11 +2277,11 @@ fn enrichment_determinism_batch_check() {
         let tokens = vec![
             (
                 EngineObjectId([1; 32]),
-                VerificationKey::from_bytes([2; 32]).unwrap(),
+                verification_key_from_fixture_bytes([2; 32]),
             ),
             (
                 EngineObjectId([3; 32]),
-                VerificationKey::from_bytes([4; 32]).unwrap(),
+                verification_key_from_fixture_bytes([4; 32]),
             ),
         ];
         let r = enforcer.check_token_batch(&tokens, "t-det-batch");
@@ -2308,7 +2304,7 @@ fn enrichment_revocation_by_id_is_type_agnostic() {
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
     // Extension with the same ID bytes is also treated as revoked
     let ext_id = EngineObjectId([10; 32]);
-    let sk = VerificationKey::from_bytes([11; 32]).unwrap();
+    let sk = verification_key_from_fixture_bytes([11; 32]);
     let result = enforcer.check_extension_activation(&ext_id, &sk, "t-agnostic");
     assert!(!result.is_cleared());
 }
@@ -2319,7 +2315,7 @@ fn enrichment_extension_revocation_blocks_same_id_token_check() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [20; 32]);
     let jti = EngineObjectId([20; 32]);
-    let vk = VerificationKey::from_bytes([21; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([21; 32]);
     let result = enforcer.check_token_acceptance(&jti, &vk, "t-cross-ext");
     assert!(!result.is_cleared());
 }
@@ -2330,7 +2326,7 @@ fn enrichment_attestation_revocation_blocks_same_id_token_check() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [30; 32]);
     let jti = EngineObjectId([30; 32]);
-    let vk = VerificationKey::from_bytes([31; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([31; 32]);
     let result = enforcer.check_token_acceptance(&jti, &vk, "t-cross-att");
     assert!(!result.is_cleared());
 }
@@ -2342,7 +2338,7 @@ fn enrichment_chain_mut_revocation_reflected_in_checks() {
     let mut enforcer = make_enforcer();
     // Initially cleared
     let jti = EngineObjectId([40; 32]);
-    let vk = VerificationKey::from_bytes([41; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([41; 32]);
     assert!(
         enforcer
             .check_token_acceptance(&jti, &vk, "t-pre")
@@ -2415,7 +2411,7 @@ fn enrichment_enforcement_result_cleared_all_points_serde() {
 #[test]
 fn enrichment_stats_btreemap_ordering() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     // Perform checks in reverse order of EnforcementPoint
     enforcer.check_extension_activation(&EngineObjectId([3; 32]), &vk, "t-o");
     enforcer.check_high_risk_operation(
@@ -2445,7 +2441,7 @@ fn enrichment_stress_many_distinct_revocations() {
     for i in 0..30u8 {
         let result = enforcer.check_token_acceptance(
             &EngineObjectId([i; 32]),
-            &VerificationKey::from_bytes([i + 100; 32]).unwrap(),
+            &verification_key_from_fixture_bytes([i + 100; 32]),
             &format!("t-stress-{i}"),
         );
         assert!(!result.is_cleared(), "token {i} should be denied");
@@ -2453,7 +2449,7 @@ fn enrichment_stress_many_distinct_revocations() {
     // Unrevoked token should still clear
     let result = enforcer.check_token_acceptance(
         &EngineObjectId([200; 32]),
-        &VerificationKey::from_bytes([201; 32]).unwrap(),
+        &verification_key_from_fixture_bytes([201; 32]),
         "t-stress-clear",
     );
     assert!(result.is_cleared());
@@ -2462,7 +2458,7 @@ fn enrichment_stress_many_distinct_revocations() {
 #[test]
 fn enrichment_stress_interleaved_enforcement_points() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     for i in 0..20u8 {
         enforcer.check_token_acceptance(&EngineObjectId([i; 32]), &vk, &format!("t-il-{i}"));
         enforcer.check_high_risk_operation(
@@ -2488,7 +2484,7 @@ fn enrichment_stress_interleaved_enforcement_points() {
 #[test]
 fn enrichment_drain_does_not_affect_stats() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-drain");
     let _events = enforcer.drain_audit_log();
     // Stats remain after drain
@@ -2499,7 +2495,7 @@ fn enrichment_drain_does_not_affect_stats() {
 #[test]
 fn enrichment_drain_then_check_produces_fresh_events() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-first");
     let _ = enforcer.drain_audit_log();
     enforcer.check_token_acceptance(&EngineObjectId([2; 32]), &vk, "t-second");
@@ -2513,7 +2509,7 @@ fn enrichment_drain_then_check_produces_fresh_events() {
 #[test]
 fn enrichment_property_cleared_implies_not_denied() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     let result = enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-prop");
     if result.is_cleared() {
         assert!(result.into_result().is_ok());
@@ -2524,7 +2520,7 @@ fn enrichment_property_cleared_implies_not_denied() {
 fn enrichment_property_denied_implies_not_cleared() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [1; 32]);
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     let result = enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-prop");
     if !result.is_cleared() {
         assert!(result.into_result().is_err());
@@ -2536,7 +2532,7 @@ fn enrichment_property_denied_implies_not_cleared() {
 #[test]
 fn enrichment_token_check_audit_events_have_correct_target_types() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-tt");
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].target_type, RevocationTargetType::Token);
@@ -2546,7 +2542,7 @@ fn enrichment_token_check_audit_events_have_correct_target_types() {
 #[test]
 fn enrichment_high_risk_check_audit_events_have_correct_target_types() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_high_risk_operation(
         &EngineObjectId([1; 32]),
         &vk,
@@ -2561,7 +2557,7 @@ fn enrichment_high_risk_check_audit_events_have_correct_target_types() {
 #[test]
 fn enrichment_extension_check_audit_events_have_correct_target_types() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_extension_activation(&EngineObjectId([1; 32]), &vk, "t-tt");
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].target_type, RevocationTargetType::Extension);
@@ -2573,7 +2569,7 @@ fn enrichment_extension_check_audit_events_have_correct_target_types() {
 #[test]
 fn enrichment_cleared_token_audit_first_event_not_transitive() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "t-tf");
     let events = enforcer.drain_audit_log();
     assert!(!events[0].transitive);
@@ -2583,7 +2579,7 @@ fn enrichment_cleared_token_audit_first_event_not_transitive() {
 #[test]
 fn enrichment_cleared_high_risk_audit_first_event_not_transitive() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_high_risk_operation(
         &EngineObjectId([1; 32]),
         &vk,
@@ -2598,7 +2594,7 @@ fn enrichment_cleared_high_risk_audit_first_event_not_transitive() {
 #[test]
 fn enrichment_cleared_extension_audit_first_event_not_transitive() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     enforcer.check_extension_activation(&EngineObjectId([1; 32]), &vk, "t-tf");
     let events = enforcer.drain_audit_log();
     assert!(!events[0].transitive);
@@ -2610,7 +2606,7 @@ fn enrichment_cleared_extension_audit_first_event_not_transitive() {
 #[test]
 fn enrichment_empty_trace_id_accepted() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     let result = enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &vk, "");
     assert!(result.is_cleared());
     let events = enforcer.drain_audit_log();
@@ -2644,7 +2640,7 @@ fn enrichment_denial_display_all_enforcement_points() {
 #[test]
 fn enrichment_tick_monotonicity_across_checks() {
     let mut enforcer = make_enforcer();
-    let vk = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk = verification_key_from_fixture_bytes([2; 32]);
     for tick in [10, 20, 30, 40, 50] {
         enforcer.set_tick(tick);
         enforcer.check_token_acceptance(

@@ -10773,6 +10773,22 @@ mod enrichment_tests {
                 ..
             }
         ));
+        let oversized_receipt = CryptographicDecisionReceipt {
+            receipt_id: derive_receipt_id(&oversized_request_id, 4100, "approved"),
+            request_id: oversized_request_id,
+            verdict: DecisionVerdict::Approved { conditions: vec![] },
+            contract_chain: vec![],
+            conditions: vec![],
+            posterior_at_decision_micros: 500_000,
+            timestamp_ns: 4100,
+            signature: [0; 32],
+        };
+        let verify_result =
+            std::panic::catch_unwind(|| oversized_receipt.verify(&key.public_key()));
+        assert_eq!(
+            verify_result.expect("oversized receipt verification should not panic"),
+            false
+        );
 
         let corrupted_posterior = expect_policy_sign_error(
             "corrupted posterior counter",

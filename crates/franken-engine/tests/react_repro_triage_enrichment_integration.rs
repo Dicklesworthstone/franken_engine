@@ -1356,9 +1356,8 @@ fn enrichment_full_pipeline_multi_entry_catalog() {
         .collect();
 
     let catalog = ReproCatalog::build(entries, ep(5));
-    // Note: verify_integrity may fail when build() sorts entries after hashing.
-    // The hash is computed pre-sort but verified post-sort — a known source quirk.
     assert_eq!(catalog.summary.total_entries, 3);
+    assert!(catalog.verify_integrity());
     assert!(catalog.has_critical_engine_bugs());
     // First entry sorted should be Critical
     assert_eq!(catalog.entries[0].severity, FailureSeverity::Critical);

@@ -393,8 +393,6 @@ impl ReproCatalog {
             severity_weighted_score: severity_score,
         };
 
-        let content_hash = compute_catalog_hash(&entries, &summary);
-
         let mut sorted_entries = entries;
         sorted_entries.sort_by(|a, b| {
             b.severity
@@ -408,6 +406,8 @@ impl ReproCatalog {
         if sorted_entries.len() > MAX_CATALOG_ENTRIES {
             sorted_entries.truncate(MAX_CATALOG_ENTRIES);
         }
+
+        let content_hash = compute_catalog_hash(&sorted_entries, &summary);
 
         Self {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -1315,6 +1315,65 @@ mod tests {
     #[test]
     fn catalog_verify_integrity_single_entry() {
         let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
+        assert!(catalog.verify_integrity());
+    }
+
+    #[test]
+    fn catalog_verify_integrity_unsorted_entries() {
+        let entries = vec![
+            TriageEntry::build(
+                FailureClass::PackageMisuse,
+                FailureSeverity::Low,
+                default_owner_route(FailureClass::PackageMisuse),
+                MinimizedRepro::build("pkg", "e", "a", BTreeSet::new(), "cmd"),
+                "misuse advisory",
+            ),
+            TriageEntry::build(
+                FailureClass::TransformBug,
+                FailureSeverity::Critical,
+                default_owner_route(FailureClass::TransformBug),
+                MinimizedRepro::build("transform", "e", "a", BTreeSet::new(), "cmd"),
+                "transform advisory",
+            ),
+            TriageEntry::build(
+                FailureClass::ResolverBug,
+                FailureSeverity::Medium,
+                default_owner_route(FailureClass::ResolverBug),
+                MinimizedRepro::build("resolver", "e", "a", BTreeSet::new(), "cmd"),
+                "resolver advisory",
+            ),
+        ];
+
+        let catalog = ReproCatalog::build(entries, SecurityEpoch::from_raw(1));
+
+        assert!(catalog.verify_integrity());
+        assert_eq!(catalog.entries[0].severity, FailureSeverity::Critical);
+    }
+
+    #[test]
+    fn catalog_verify_integrity_after_truncation() {
+        let entries = (0..=MAX_CATALOG_ENTRIES)
+            .map(|index| {
+                TriageEntry::build(
+                    FailureClass::TransformBug,
+                    FailureSeverity::High,
+                    default_owner_route(FailureClass::TransformBug),
+                    MinimizedRepro::build(
+                        &format!("source-{index}"),
+                        "expected",
+                        "actual",
+                        BTreeSet::new(),
+                        "cmd",
+                    ),
+                    "transform advisory",
+                )
+            })
+            .collect();
+
+        let catalog = ReproCatalog::build(entries, SecurityEpoch::from_raw(1));
+
+        assert_eq!(catalog.entries.len(), MAX_CATALOG_ENTRIES);
+        assert_eq!(catalog.summary.total_entries, MAX_CATALOG_ENTRIES + 1);
         assert!(catalog.verify_integrity());
     }
 

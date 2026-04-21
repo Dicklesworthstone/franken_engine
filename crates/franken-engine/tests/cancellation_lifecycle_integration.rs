@@ -880,6 +880,46 @@ fn cancel_managed_cell_success() {
 }
 
 #[test]
+fn cancel_managed_cell_reused_live_id_is_not_idempotent() {
+    let mut cell_mgr = CellManager::new();
+    cell_mgr
+        .create_extension_cell("ext-reused", "t1")
+        .expect("create first cell");
+    let mut cx = mock_cx(200);
+    let mut cancel_mgr = CancellationManager::new();
+
+    let first = cancel_mgr
+        .cancel_managed_cell(&mut cell_mgr, "ext-reused", &mut cx, LifecycleEvent::Unload)
+        .expect("first cancel");
+    assert!(!first.was_idempotent);
+    assert!(first.success);
+    assert!(cell_mgr.get("ext-reused").is_none());
+
+    cell_mgr
+        .create_extension_cell("ext-reused", "t2")
+        .expect("reuse cell id");
+    cell_mgr
+        .get_mut("ext-reused")
+        .expect("reused cell")
+        .register_obligation("ob-reused", "must not be hidden by stale idempotency");
+
+    let second = cancel_mgr
+        .cancel_managed_cell(
+            &mut cell_mgr,
+            "ext-reused",
+            &mut cx,
+            LifecycleEvent::Terminate,
+        )
+        .expect("second cancel");
+
+    assert!(!second.was_idempotent);
+    assert!(second.timeout_escalated);
+    assert_eq!(second.finalize_result.obligations_aborted, 1);
+    assert_eq!(cancel_mgr.outcome_count(), 2);
+    assert_eq!(cell_mgr.closed_count(), 2);
+}
+
+#[test]
 fn cancel_managed_cell_not_found_returns_error() {
     let mut cell_mgr = CellManager::new();
     let mut cx = mock_cx(100);

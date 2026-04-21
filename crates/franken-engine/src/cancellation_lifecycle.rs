@@ -335,8 +335,9 @@ impl CancellationManager {
     ) -> Result<CancellationOutcome, CancellationError> {
         let cell_id = cell.cell_id().to_string();
 
-        // Idempotency: if already cancelled, return a no-op outcome
-        if self.cancelled_cells.contains_key(&cell_id) || cell.state() == RegionState::Closed {
+        // Idempotency is tied to the cell instance state, not just the stable
+        // cell id. A cell id may be archived and reused for a new live cell.
+        if cell.state() == RegionState::Closed {
             let outcome = CancellationOutcome {
                 cell_id: cell_id.clone(),
                 event,
@@ -355,6 +356,7 @@ impl CancellationManager {
             self.outcomes.push(outcome.clone());
             return Ok(outcome);
         }
+        self.cancelled_cells.remove(&cell_id);
 
         let mode = self.effective_mode(event);
         let trace_id = cx.trace_id().to_string();
@@ -989,6 +991,46 @@ mod tests {
 
         assert!(outcome.success);
         assert_eq!(outcome.cell_id, "ext-1");
+    }
+
+    #[test]
+    fn cancel_managed_cell_reused_live_id_is_not_idempotent() {
+        let mut cell_mgr = CellManager::new();
+        cell_mgr
+            .create_extension_cell("ext-reused", "t1")
+            .expect("create first cell");
+        let mut cx = mock_cx(200);
+        let mut cancel_mgr = CancellationManager::new();
+
+        let first = cancel_mgr
+            .cancel_managed_cell(&mut cell_mgr, "ext-reused", &mut cx, LifecycleEvent::Unload)
+            .expect("first cancel");
+        assert!(!first.was_idempotent);
+        assert!(first.success);
+        assert!(cell_mgr.get("ext-reused").is_none());
+
+        cell_mgr
+            .create_extension_cell("ext-reused", "t2")
+            .expect("reuse cell id");
+        cell_mgr
+            .get_mut("ext-reused")
+            .expect("reused cell")
+            .register_obligation("ob-reused", "must not be hidden by stale idempotency");
+
+        let second = cancel_mgr
+            .cancel_managed_cell(
+                &mut cell_mgr,
+                "ext-reused",
+                &mut cx,
+                LifecycleEvent::Terminate,
+            )
+            .expect("second cancel");
+
+        assert!(!second.was_idempotent);
+        assert!(second.timeout_escalated);
+        assert_eq!(second.finalize_result.obligations_aborted, 1);
+        assert_eq!(cancel_mgr.outcome_count(), 2);
+        assert_eq!(cell_mgr.closed_count(), 2);
     }
 
     #[test]

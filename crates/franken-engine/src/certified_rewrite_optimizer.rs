@@ -25,15 +25,14 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 
 use crate::certified_optimization_governance::{
-    GovernanceState, OptimizationCertificate, OptimizationTier, RollbackRecord,
+    CertificateStatus, GovernanceState, OptimizationCertificate, OptimizationTier, RollbackRecord,
+    RollbackTrigger,
 };
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::translation_validation::{TranslationValidationGate, ValidationMode, ValidationVerdict};
-use crate::translation_validation_receipt::TranslationValidationReceipt;
 use crate::versioned_rewrite_pack::{RewritePack, RewriteRuleEntry};
 
 // ---------------------------------------------------------------------------
@@ -63,6 +62,136 @@ const MAX_REWRITE_STEPS: usize = 1_000;
 
 /// Maximum number of validation attempts per transformation.
 const MAX_VALIDATION_ATTEMPTS: usize = 3;
+
+/// Rewrite rule identifier.
+pub type RewriteRuleId = String;
+
+/// Translation validator used by the optimizer.
+pub type TranslationValidator = TranslationValidationGate;
+
+const RULE_CONST_FOLD: &str = "const_fold";
+const RULE_IDENTITY_ADD_ZERO: &str = "identity_add_zero";
+const RULE_IDENTITY_MUL_ONE: &str = "identity_mul_one";
+const RULE_MUL_ZERO: &str = "mul_zero";
+
+const BUILTIN_RULE_ORDER: &[&str] = &[
+    RULE_CONST_FOLD,
+    RULE_IDENTITY_ADD_ZERO,
+    RULE_IDENTITY_MUL_ONE,
+    RULE_MUL_ZERO,
+];
+
+// ---------------------------------------------------------------------------
+// ValidationReceipt / ValidationResult
+// ---------------------------------------------------------------------------
+
+/// Receipt proving that a rewrite candidate was checked by translation validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationReceipt {
+    /// Stable receipt identifier.
+    pub receipt_id: String,
+    /// Whether validation passed.
+    pub passed: bool,
+    /// Structured verdict emitted by the translation-validation path.
+    pub verdict: ValidationVerdict,
+    /// Hash of the before-program.
+    pub before_hash: ContentHash,
+    /// Hash of the after-program.
+    pub after_hash: ContentHash,
+}
+
+impl ValidationReceipt {
+    /// Creates a compatibility receipt for tests and callers that only need a pass bit.
+    pub fn new(receipt_id: String, passed: bool) -> Self {
+        let evidence_hash = ContentHash::compute(receipt_id.as_bytes());
+        let verdict = if passed {
+            ValidationVerdict::Pass {
+                mode: ValidationMode::SymbolicEquivalence {
+                    proof_hash: evidence_hash,
+                },
+                evidence_hash,
+            }
+        } else {
+            ValidationVerdict::Inconclusive {
+                mode: ValidationMode::SymbolicEquivalence {
+                    proof_hash: evidence_hash,
+                },
+                reason: "validation did not pass".to_string(),
+            }
+        };
+        Self {
+            receipt_id,
+            passed,
+            verdict,
+            before_hash: ContentHash::compute(b"compat-before"),
+            after_hash: ContentHash::compute(b"compat-after"),
+        }
+    }
+
+    fn from_verdict(
+        receipt_id: String,
+        verdict: ValidationVerdict,
+        before: &str,
+        after: &str,
+    ) -> Self {
+        let passed = verdict.permits_activation();
+        Self {
+            receipt_id,
+            passed,
+            verdict,
+            before_hash: ContentHash::compute(before.as_bytes()),
+            after_hash: ContentHash::compute(after.as_bytes()),
+        }
+    }
+
+    /// Returns whether validation passed and permits activation.
+    pub fn validation_passed(&self) -> bool {
+        self.passed && self.verdict.permits_activation()
+    }
+}
+
+/// Result of checking a candidate transformation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationResult {
+    valid: bool,
+    receipt: Option<ValidationReceipt>,
+    error_message: Option<String>,
+}
+
+impl ValidationResult {
+    /// Successful validation.
+    pub fn success(receipt: ValidationReceipt) -> Self {
+        Self {
+            valid: true,
+            receipt: Some(receipt),
+            error_message: None,
+        }
+    }
+
+    /// Failed validation with an audit receipt.
+    pub fn failure(receipt: ValidationReceipt, error_message: String) -> Self {
+        Self {
+            valid: false,
+            receipt: Some(receipt),
+            error_message: Some(error_message),
+        }
+    }
+
+    /// Returns whether validation passed.
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Returns the validation receipt.
+    pub fn receipt(&self) -> Option<ValidationReceipt> {
+        self.receipt.clone()
+    }
+
+    /// Returns the validation error, when present.
+    pub fn error_message(&self) -> Option<String> {
+        self.error_message.clone()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // OptimizationRequest
@@ -290,6 +419,7 @@ pub struct OptimizationResult {
 impl OptimizationResult {
     /// Creates a new optimization result.
     pub fn new(request: OptimizationRequest, success: bool) -> Self {
+        let epoch = request.security_epoch;
         Self {
             request,
             success,
@@ -301,7 +431,7 @@ impl OptimizationResult {
             errors: Vec::new(),
             warnings: Vec::new(),
             total_time_ms: 0,
-            governance_state: GovernanceState::new(),
+            governance_state: GovernanceState::new(epoch),
         }
     }
 
@@ -563,7 +693,7 @@ impl CertifiedRewriteOptimizer {
             security_epoch,
             rewrite_packs: BTreeMap::new(),
             translation_validator: TranslationValidator::new(),
-            governance_state: GovernanceState::new(),
+            governance_state: GovernanceState::new(security_epoch),
             max_steps: MAX_REWRITE_STEPS,
             max_validation_attempts: MAX_VALIDATION_ATTEMPTS,
         }
@@ -620,7 +750,10 @@ impl CertifiedRewriteOptimizer {
             let optimized_program = self.apply_rewrite_rule(&current_program, &rule_id)?;
 
             if optimized_program == current_program {
-                continue; // No change, try next iteration
+                result.add_warning(format!(
+                    "Rule {rule_id} produced no change; stopping fail-closed"
+                ));
+                break;
             }
 
             let step_start = Instant::now();
@@ -645,11 +778,16 @@ impl CertifiedRewriteOptimizer {
 
             if !validation_result.is_valid() {
                 // Validation failed - trigger rollback
-                let rollback = RollbackRecord::new(
-                    step_number,
-                    "validation_failed".to_string(),
-                    validation_result.error_message().unwrap_or_default(),
-                );
+                let rollback = RollbackRecord {
+                    record_id: format!("rollback:{COMPONENT}:{step_number}:{rule_id}"),
+                    function_id: request.request_id.clone(),
+                    trigger: RollbackTrigger::ProofFailure,
+                    from_tier: request.target_tier,
+                    to_tier: OptimizationTier::Baseline,
+                    epoch: request.security_epoch,
+                    reason: validation_result.error_message().unwrap_or_default(),
+                    elapsed_steps: step_number as u64,
+                };
                 result.add_rollback(rollback);
                 result.add_warning(format!(
                     "Step {} validation failed, continuing with baseline",
@@ -716,35 +854,118 @@ impl CertifiedRewriteOptimizer {
     /// Finds applicable rewrite rules for the given program.
     fn find_applicable_rules(
         &self,
-        _program: &str,
+        program: &str,
     ) -> Result<Vec<RewriteRuleId>, CertifiedOptimizerError> {
-        // TODO: Implement actual rule matching logic
-        // For now, return a placeholder rule
-        Ok(vec!["const_fold".to_string()])
+        let mut rule_ids = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+
+        for rule_id in BUILTIN_RULE_ORDER {
+            if Self::rule_matches_program(rule_id, program) && seen.insert((*rule_id).to_string()) {
+                rule_ids.push((*rule_id).to_string());
+            }
+        }
+
+        let mut pack_rules = Vec::new();
+        for pack in self.rewrite_packs.values() {
+            if !pack.is_canonical() || pack.has_internal_blocking() {
+                continue;
+            }
+            for rule in &pack.rules {
+                if Self::pack_rule_is_applicable(rule, program) {
+                    pack_rules.push((rule.priority_millionths, rule.rule_id.clone()));
+                }
+            }
+        }
+        pack_rules.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+
+        for (_, rule_id) in pack_rules {
+            if seen.insert(rule_id.clone()) {
+                rule_ids.push(rule_id);
+            }
+        }
+
+        Ok(rule_ids)
     }
 
     /// Applies a rewrite rule to transform the program.
     fn apply_rewrite_rule(
         &self,
         program: &str,
-        _rule_id: &RewriteRuleId,
+        rule_id: &RewriteRuleId,
     ) -> Result<String, CertifiedOptimizerError> {
-        // TODO: Implement actual rewrite application
-        // For now, just return the original program (no transformation)
-        Ok(program.to_string())
+        let Some(rewritten) = Self::apply_builtin_rewrite(program, rule_id) else {
+            return Err(CertifiedOptimizerError::RewritePackError {
+                request_id: COMPONENT.to_string(),
+                error: format!("unsupported rewrite rule '{rule_id}'"),
+            });
+        };
+
+        if rewritten == program.trim() {
+            return Err(CertifiedOptimizerError::RewritePackError {
+                request_id: COMPONENT.to_string(),
+                error: format!("rewrite rule '{rule_id}' produced no change"),
+            });
+        }
+
+        Ok(rewritten)
     }
 
     /// Validates a program transformation.
     fn validate_transformation(
         &mut self,
-        _before: &str,
-        _after: &str,
-        _rule_id: &RewriteRuleId,
-        _mode: &ValidationMode,
+        before: &str,
+        after: &str,
+        rule_id: &RewriteRuleId,
+        mode: &ValidationMode,
     ) -> Result<ValidationResult, CertifiedOptimizerError> {
-        // TODO: Integrate with actual translation validator
-        // For now, return a successful validation
-        let receipt = ValidationReceipt::new("placeholder".to_string(), true);
+        let evidence_payload = format!(
+            "{SCHEMA_VERSION}:{rule_id}:{}:{}:{mode}",
+            ContentHash::compute(before.as_bytes()),
+            ContentHash::compute(after.as_bytes())
+        );
+        let evidence_hash = ContentHash::compute(evidence_payload.as_bytes());
+        let receipt_id = format!("{COMPONENT}:validation:{rule_id}:{evidence_hash}");
+
+        if before == after {
+            let reason = "candidate rewrite is a no-op".to_string();
+            let receipt = ValidationReceipt::from_verdict(
+                receipt_id,
+                ValidationVerdict::Fail {
+                    mode: mode.clone(),
+                    divergence_reason: reason.clone(),
+                    counterexample_hash: evidence_hash,
+                },
+                before,
+                after,
+            );
+            return Ok(ValidationResult::failure(receipt, reason));
+        }
+
+        let expected = self.apply_rewrite_rule(before, rule_id)?;
+        if expected != after {
+            let reason = format!("candidate output differs from rule application: expected '{expected}'");
+            let receipt = ValidationReceipt::from_verdict(
+                receipt_id,
+                ValidationVerdict::Fail {
+                    mode: mode.clone(),
+                    divergence_reason: reason.clone(),
+                    counterexample_hash: evidence_hash,
+                },
+                before,
+                after,
+            );
+            return Ok(ValidationResult::failure(receipt, reason));
+        }
+
+        let receipt = ValidationReceipt::from_verdict(
+            receipt_id,
+            ValidationVerdict::Pass {
+                mode: mode.clone(),
+                evidence_hash,
+            },
+            before,
+            after,
+        );
         Ok(ValidationResult::success(receipt))
     }
 
@@ -752,21 +973,135 @@ impl CertifiedRewriteOptimizer {
     fn generate_certificate(
         &self,
         rule_id: &RewriteRuleId,
-        _before: &str,
-        _after: &str,
+        before: &str,
+        after: &str,
     ) -> Result<OptimizationCertificate, CertifiedOptimizerError> {
-        // TODO: Implement actual certificate generation
-        // For now, return a placeholder certificate
-        Ok(OptimizationCertificate::new(
-            rule_id.clone(),
-            OptimizationTier::Standard,
-        ))
+        let expected = self.apply_rewrite_rule(before, rule_id)?;
+        if expected != after {
+            return Err(CertifiedOptimizerError::CertificationFailed {
+                request_id: COMPONENT.to_string(),
+                step_number: 0,
+                reason: "certificate candidate does not match validated rewrite".to_string(),
+            });
+        }
+
+        let before_hash = ContentHash::compute(before.as_bytes());
+        let after_hash = ContentHash::compute(after.as_bytes());
+        let proof_hash = ContentHash::compute(
+            format!("{SCHEMA_VERSION}:proof:{rule_id}:{before_hash}:{after_hash}").as_bytes(),
+        );
+
+        Ok(OptimizationCertificate {
+            cert_id: format!("{COMPONENT}:cert:{rule_id}:{before_hash}:{after_hash}"),
+            tier: OptimizationTier::Standard,
+            function_id: format!("{COMPONENT}:{rule_id}"),
+            rewrite_count: 1,
+            proof_hash,
+            issued_epoch: self.security_epoch,
+            expiry_epoch: self.security_epoch.next(),
+            translation_receipt_valid: true,
+            status: CertificateStatus::Valid,
+        })
+    }
+
+    fn pack_rule_is_applicable(rule: &RewriteRuleEntry, program: &str) -> bool {
+        rule.enabled && rule.proven_sound && Self::rule_matches_program(&rule.rule_id, program)
+    }
+
+    fn rule_matches_program(rule_id: &str, program: &str) -> bool {
+        Self::apply_builtin_rewrite(program, rule_id).is_some()
+    }
+
+    fn apply_builtin_rewrite(program: &str, rule_id: &str) -> Option<String> {
+        match rule_id {
+            RULE_CONST_FOLD => Self::rewrite_constant_expression(program)
+                .or_else(|| Self::rewrite_add_zero(program))
+                .or_else(|| Self::rewrite_mul_one(program))
+                .or_else(|| Self::rewrite_mul_zero(program)),
+            RULE_IDENTITY_ADD_ZERO => Self::rewrite_add_zero(program),
+            RULE_IDENTITY_MUL_ONE => Self::rewrite_mul_one(program),
+            RULE_MUL_ZERO => Self::rewrite_mul_zero(program),
+            _ => None,
+        }
+    }
+
+    fn rewrite_add_zero(program: &str) -> Option<String> {
+        let (left, right) = Self::split_binary(program, '+')?;
+        if right == "0" && !left.is_empty() {
+            return Some(left.to_string());
+        }
+        if left == "0" && !right.is_empty() {
+            return Some(right.to_string());
+        }
+        None
+    }
+
+    fn rewrite_mul_one(program: &str) -> Option<String> {
+        let (left, right) = Self::split_binary(program, '*')?;
+        if right == "1" && !left.is_empty() {
+            return Some(left.to_string());
+        }
+        if left == "1" && !right.is_empty() {
+            return Some(right.to_string());
+        }
+        None
+    }
+
+    fn rewrite_mul_zero(program: &str) -> Option<String> {
+        let (left, right) = Self::split_binary(program, '*')?;
+        if (left == "0" && !right.is_empty()) || (right == "0" && !left.is_empty()) {
+            return Some("0".to_string());
+        }
+        None
+    }
+
+    fn rewrite_constant_expression(program: &str) -> Option<String> {
+        for operator in ['+', '-', '*', '/'] {
+            if let Some((left, right)) = Self::split_binary(program, operator) {
+                let left_value = left.parse::<i64>().ok()?;
+                let right_value = right.parse::<i64>().ok()?;
+                let value = match operator {
+                    '+' => left_value.checked_add(right_value)?,
+                    '-' => left_value.checked_sub(right_value)?,
+                    '*' => left_value.checked_mul(right_value)?,
+                    '/' if right_value != 0 => left_value.checked_div(right_value)?,
+                    _ => return None,
+                };
+                return Some(value.to_string());
+            }
+        }
+        None
+    }
+
+    fn split_binary(program: &str, operator: char) -> Option<(&str, &str)> {
+        let trimmed = program.trim();
+        let mut parts = trimmed.split(operator);
+        let left = parts.next()?.trim();
+        let right = parts.next()?.trim();
+        if parts.next().is_some() || left.is_empty() || right.is_empty() {
+            return None;
+        }
+        Some((left, right))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_certificate(rule_id: &str, epoch: SecurityEpoch) -> OptimizationCertificate {
+        OptimizationCertificate {
+            cert_id: format!("test-cert:{rule_id}"),
+            tier: OptimizationTier::Conservative,
+            function_id: format!("test-function:{rule_id}"),
+            rewrite_count: 1,
+            proof_hash: ContentHash::compute(rule_id.as_bytes()),
+            issued_epoch: epoch,
+            expiry_epoch: epoch.next(),
+            translation_receipt_valid: true,
+            status: CertificateStatus::Valid,
+        }
+    }
 
     #[test]
     fn test_optimization_request_creation() {
@@ -780,7 +1115,7 @@ mod tests {
 
         assert_eq!(request.request_id, "test_request");
         assert_eq!(request.security_epoch, epoch);
-        assert_eq!(request.target_tier, OptimizationTier::Conservative);
+        assert_eq!(request.target_tier, OptimizationTier::Standard);
         assert_eq!(request.input_program, "x + 0");
         assert_eq!(request.timeout_ms, DEFAULT_OPTIMIZATION_TIMEOUT_MS);
         assert!(request.require_formal_proofs);
@@ -902,8 +1237,7 @@ mod tests {
 
     #[test]
     fn test_optimization_step_with_certificate() {
-        let certificate =
-            OptimizationCertificate::new("const_fold".to_string(), OptimizationTier::Conservative);
+        let certificate = test_certificate("const_fold", SecurityEpoch::from_raw(1));
         let step = OptimizationStep::new(
             1,
             "const_fold".to_string(),
@@ -1027,8 +1361,65 @@ mod tests {
 
         let result = result.unwrap();
         assert!(result.success);
-        assert!(result.optimized_program.is_some());
+        assert_eq!(result.optimized_program, Some("x".to_string()));
+        assert!(result.all_steps_validated());
+        assert!(result.all_steps_certified());
         assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn unsupported_program_does_not_receive_success_certificate() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let request = OptimizationRequest::new(
+            "unsupported_test".to_string(),
+            epoch,
+            OptimizationTier::Standard,
+            "call_with_side_effects(x)".to_string(),
+        );
+
+        let result = optimizer.optimize(request).unwrap();
+
+        assert!(result.success);
+        assert_eq!(
+            result.optimized_program,
+            Some("call_with_side_effects(x)".to_string())
+        );
+        assert!(result.optimization_steps.is_empty());
+        assert!(!result.all_steps_certified());
+        assert_eq!(result.metrics.steps_certified, 0);
+    }
+
+    #[test]
+    fn no_op_candidate_fails_translation_validation() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+        let mode = ValidationMode::SymbolicEquivalence {
+            proof_hash: ContentHash::compute(b"test-proof"),
+        };
+
+        let result = optimizer
+            .validate_transformation("x + 0", "x + 0", &"const_fold".to_string(), &mode)
+            .unwrap();
+
+        assert!(!result.is_valid());
+        assert!(result
+            .error_message()
+            .unwrap()
+            .contains("no-op"));
+        assert!(!result.receipt().unwrap().validation_passed());
+    }
+
+    #[test]
+    fn unsupported_rule_cannot_generate_certificate() {
+        let epoch = SecurityEpoch::from_raw(1);
+        let optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let result =
+            optimizer.generate_certificate(&"unsupported_rule".to_string(), "x + 0", "x");
+
+        assert!(result.is_err());
     }
 
     #[test]

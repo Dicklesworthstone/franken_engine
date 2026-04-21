@@ -78,7 +78,7 @@ fn proxy_constructor_creates_proxy_object() {
             dst: 3,
         },
         // Return the proxy object
-        Ir3Instruction::Return { val: 3 },
+        Ir3Instruction::Return { value: 3 },
         Ir3Instruction::Halt,
     ]);
 
@@ -131,7 +131,7 @@ fn proxy_get_trap_intercepts_property_access() {
             dst: 4,
         },
         // Return the retrieved value
-        Ir3Instruction::Return { val: 4 },
+        Ir3Instruction::Return { value: 4 },
         Ir3Instruction::Halt,
     ]);
 
@@ -181,7 +181,7 @@ fn proxy_set_trap_intercepts_property_assignment() {
             dst: 6,
         },
         // Return the read value
-        Ir3Instruction::Return { val: 6 },
+        Ir3Instruction::Return { value: 6 },
         Ir3Instruction::Halt,
     ]);
 
@@ -322,7 +322,7 @@ fn reflect_get_provides_default_behavior() {
             dst: 3,
         },
         // Return the result
-        Ir3Instruction::Return { val: 3 },
+        Ir3Instruction::Return { value: 3 },
         Ir3Instruction::Halt,
     ]);
 
@@ -356,7 +356,7 @@ fn proxy_constructor_fails_with_invalid_handler() {
             args: reg_range(&[1, 2]),
             dst: 3,
         },
-        Ir3Instruction::Return { val: 3 },
+        Ir3Instruction::Return { value: 3 },
         Ir3Instruction::Halt,
     ]);
 
@@ -402,7 +402,7 @@ fn reflect_set_provides_default_behavior() {
             dst: 5,
         },
         // Return the read value
-        Ir3Instruction::Return { val: 5 },
+        Ir3Instruction::Return { value: 5 },
         Ir3Instruction::Halt,
     ]);
 
@@ -442,7 +442,7 @@ fn reflect_has_detects_existing_properties() {
             dst: 3,
         },
         // Return the result
-        Ir3Instruction::Return { val: 3 },
+        Ir3Instruction::Return { value: 3 },
         Ir3Instruction::Halt,
     ]);
 
@@ -480,7 +480,7 @@ fn reflect_has_returns_false_for_nonexistent_properties() {
             dst: 3,
         },
         // Return the result
-        Ir3Instruction::Return { val: 3 },
+        Ir3Instruction::Return { value: 3 },
         Ir3Instruction::Halt,
     ]);
 

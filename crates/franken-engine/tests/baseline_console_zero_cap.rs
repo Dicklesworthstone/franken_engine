@@ -45,7 +45,10 @@ fn module_for_console_caps(console_caps: &[&str]) -> Ir3Module {
 fn zero_console_cap_drops_all_builtin_and_direct_console_levels() {
     let mut config = InterpreterConfig::quickjs_defaults();
     config.max_console_entries = 0;
-    config.granted_capabilities = BTreeSet::from([RuntimeCapability::VmDispatch]);
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
     let lane = QuickJsLane::with_config(config);
 
     for caps in [
@@ -55,7 +58,12 @@ fn zero_console_cap_drops_all_builtin_and_direct_console_levels() {
             "builtin:ConsoleWarn",
             "builtin:ConsoleInfo",
         ],
-        ["console:log", "console:error", "console:warn", "console:info"],
+        [
+            "console:log",
+            "console:error",
+            "console:warn",
+            "console:info",
+        ],
     ] {
         let result = lane
             .execute(&module_for_console_caps(&caps), "console-zero-cap")

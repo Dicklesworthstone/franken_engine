@@ -29,7 +29,12 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::cancellation_lifecycle::LifecycleEvent;
+use serde::Serialize;
+
+use frankenengine_engine::cancellation_lifecycle::{CancellationEvent, LifecycleEvent};
+use frankenengine_engine::control_plane::TraceId;
+use frankenengine_engine::cx_threading::EffectCategory;
+use frankenengine_engine::execution_cell::CellEvent;
 use frankenengine_engine::extension_host_lifecycle::{
     ExtensionHostLifecycleManager, ExtensionRecord, HostLifecycleError, HostLifecycleEvent,
 };
@@ -46,6 +51,222 @@ fn mock_cx(budget_ms: u64) -> MockCx {
 
 fn mock_cx_seed(seed: u64, budget_ms: u64) -> MockCx {
     MockCx::new(trace_id_from_seed(seed), MockBudget::new(budget_ms))
+}
+
+#[derive(Serialize)]
+struct AuthorityDecisionSequenceSnapshot {
+    schema_version: &'static str,
+    module: &'static str,
+    scenario: &'static str,
+    decisions: Vec<AuthorityDecisionEntry>,
+}
+
+#[derive(Serialize)]
+struct AuthorityDecisionEntry {
+    sequence: u64,
+    phase: String,
+    kind: &'static str,
+    component: String,
+    event: String,
+    outcome: String,
+    trace_id: String,
+    extension_id: String,
+    session_id: Option<String>,
+    cell_id: String,
+    cell_kind: String,
+    region_state: Option<String>,
+    lifecycle_event: Option<String>,
+    cancellation_phase: Option<String>,
+    budget_consumed_ms: u64,
+}
+
+fn extension_host_lifecycle_authority_decision_snapshot_json() -> String {
+    let extension_id = "ext-authority-golden";
+    let session_id = "binding-main";
+    let session_cell_id = format!("{extension_id}::session::{session_id}");
+    let trace_id = TraceId::from_raw(42).to_string();
+
+    let mut mgr = ExtensionHostLifecycleManager::new();
+    let mut cx = MockCx::new(TraceId::from_raw(42), MockBudget::new(1_000));
+
+    mgr.load_extension(extension_id, &mut cx).unwrap();
+    mgr.create_session(extension_id, session_id, &mut cx)
+        .unwrap();
+
+    let invoke_event = {
+        let session_cell = mgr
+            .cell_manager_mut()
+            .get_mut(&session_cell_id)
+            .expect("session cell must exist after binding");
+        session_cell
+            .execute_effect(&mut cx, EffectCategory::Hostcall, "hostcall.invoke")
+            .unwrap();
+        session_cell
+            .events()
+            .last()
+            .expect("invoke should emit one cell event")
+            .clone()
+    };
+
+    mgr.cancel_extension(extension_id, &mut cx, LifecycleEvent::Revocation)
+        .unwrap();
+
+    let lifecycle_events = mgr.events().to_vec();
+    let cancellation_events = mgr.drain_cancellation_events();
+
+    let mut decisions = Vec::new();
+    push_lifecycle_decision(
+        &mut decisions,
+        "load",
+        lifecycle_events
+            .iter()
+            .find(|event| event.event == "extension_loaded")
+            .expect("load event must be present"),
+        extension_id,
+        None,
+        extension_id,
+        "extension",
+    );
+    push_lifecycle_decision(
+        &mut decisions,
+        "bind",
+        lifecycle_events
+            .iter()
+            .find(|event| event.event == "session_created")
+            .expect("bind event must be present"),
+        extension_id,
+        Some(session_id),
+        &session_cell_id,
+        "session",
+    );
+    push_invoke_decision(
+        &mut decisions,
+        "invoke",
+        &invoke_event,
+        extension_id,
+        session_id,
+    );
+    for event in &cancellation_events {
+        push_cancellation_decision(&mut decisions, event, extension_id, session_id);
+    }
+    push_lifecycle_decision(
+        &mut decisions,
+        "revoke",
+        lifecycle_events
+            .iter()
+            .find(|event| event.event == "extension_revocation")
+            .expect("revocation event must be present"),
+        extension_id,
+        None,
+        extension_id,
+        "extension",
+    );
+
+    assert!(
+        decisions.iter().all(|entry| entry.trace_id == trace_id),
+        "scenario must use one fixed trace id"
+    );
+
+    let snapshot = AuthorityDecisionSequenceSnapshot {
+        schema_version: "frankenengine.extension_host_lifecycle.authority_decision_sequence.v1",
+        module: "extension_host_lifecycle",
+        scenario: "load_bind_invoke_revoke",
+        decisions,
+    };
+
+    format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap())
+}
+
+fn push_lifecycle_decision(
+    decisions: &mut Vec<AuthorityDecisionEntry>,
+    phase: &str,
+    event: &HostLifecycleEvent,
+    extension_id: &str,
+    session_id: Option<&str>,
+    cell_id: &str,
+    cell_kind: &str,
+) {
+    decisions.push(AuthorityDecisionEntry {
+        sequence: decisions.len() as u64,
+        phase: phase.to_string(),
+        kind: "host_lifecycle_event",
+        component: event.component.clone(),
+        event: event.event.clone(),
+        outcome: event.outcome.clone(),
+        trace_id: event.trace_id.clone(),
+        extension_id: extension_id.to_string(),
+        session_id: session_id.map(str::to_string),
+        cell_id: cell_id.to_string(),
+        cell_kind: cell_kind.to_string(),
+        region_state: None,
+        lifecycle_event: None,
+        cancellation_phase: None,
+        budget_consumed_ms: 0,
+    });
+}
+
+fn push_invoke_decision(
+    decisions: &mut Vec<AuthorityDecisionEntry>,
+    phase: &str,
+    event: &CellEvent,
+    extension_id: &str,
+    session_id: &str,
+) {
+    decisions.push(AuthorityDecisionEntry {
+        sequence: decisions.len() as u64,
+        phase: phase.to_string(),
+        kind: "execution_cell_event",
+        component: event.component.clone(),
+        event: event.event.clone(),
+        outcome: event.outcome.clone(),
+        trace_id: event.trace_id.clone(),
+        extension_id: extension_id.to_string(),
+        session_id: Some(session_id.to_string()),
+        cell_id: event.cell_id.clone(),
+        cell_kind: event.cell_kind.to_string(),
+        region_state: Some(format!("{:?}", event.region_state)),
+        lifecycle_event: None,
+        cancellation_phase: None,
+        budget_consumed_ms: event.budget_consumed_ms,
+    });
+}
+
+fn push_cancellation_decision(
+    decisions: &mut Vec<AuthorityDecisionEntry>,
+    event: &CancellationEvent,
+    extension_id: &str,
+    session_id: &str,
+) {
+    let is_session = event.cell_id.contains("::session::");
+    let target = if is_session { "session" } else { "extension" };
+    decisions.push(AuthorityDecisionEntry {
+        sequence: decisions.len() as u64,
+        phase: format!("revoke_{target}_{}", event.phase),
+        kind: "cancellation_event",
+        component: event.component.clone(),
+        event: format!("cancellation_{}", event.lifecycle_event),
+        outcome: event.outcome.clone(),
+        trace_id: event.trace_id.clone(),
+        extension_id: extension_id.to_string(),
+        session_id: is_session.then(|| session_id.to_string()),
+        cell_id: event.cell_id.clone(),
+        cell_kind: event.cell_kind.to_string(),
+        region_state: None,
+        lifecycle_event: Some(event.lifecycle_event.to_string()),
+        cancellation_phase: Some(event.phase.clone()),
+        budget_consumed_ms: event.budget_consumed_ms,
+    });
+}
+
+#[test]
+fn authority_decision_sequence_matches_golden_snapshot() {
+    let actual = extension_host_lifecycle_authority_decision_snapshot_json();
+    let expected = include_str!("golden_vectors/extension_host_lifecycle_authority_decisions.json");
+    assert_eq!(
+        actual.as_bytes(),
+        expected.as_bytes(),
+        "extension_host_lifecycle authority sequence golden drifted"
+    );
 }
 
 // ===========================================================================

@@ -4474,6 +4474,7 @@ impl DeclassificationGateway {
             })
         };
 
+        let mut receipt_emission_failed = false;
         let receipt = match CryptographicDecisionReceipt::new_signed(
             &request.request_id,
             verdict.clone(),
@@ -4485,6 +4486,7 @@ impl DeclassificationGateway {
         ) {
             Ok(receipt) => receipt,
             Err(err) => {
+                receipt_emission_failed = true;
                 let reason = DeclassificationDenialReason::ContractRejected {
                     contract_id: "receipt_signing".to_string(),
                     detail: bounded_policy_sign_error_detail(&err),
@@ -4517,6 +4519,12 @@ impl DeclassificationGateway {
             .or_default()
             .push(request.timestamp_ns);
 
+        let audit_request_id = if receipt_emission_failed {
+            receipt.request_id.clone()
+        } else {
+            request.request_id.clone()
+        };
+
         let (outcome, error_code) = match verdict {
             DecisionVerdict::Approved { .. } => {
                 self.events.push(DeclassificationDecisionEvent {
@@ -4527,7 +4535,7 @@ impl DeclassificationGateway {
                     event: "declassification_request".to_string(),
                     outcome: "approved".to_string(),
                     error_code: None,
-                    request_id: request.request_id,
+                    request_id: audit_request_id,
                     requester: request.requester,
                     receipt_id: receipt.receipt_id.clone(),
                 });
@@ -4546,7 +4554,7 @@ impl DeclassificationGateway {
                 let label_distance =
                     declassification_label_distance(request.current_label, request.target_label);
                 self.denied_evidence.push(DeclassificationDeniedEvidence {
-                    request_id: request.request_id.clone(),
+                    request_id: audit_request_id.clone(),
                     requester: request.requester.clone(),
                     reason: reason.clone(),
                     severity: denial_severity(label_distance),
@@ -4562,7 +4570,7 @@ impl DeclassificationGateway {
                     event: "declassification_request".to_string(),
                     outcome: "denied".to_string(),
                     error_code: Some(error_code_value.clone()),
-                    request_id: request.request_id,
+                    request_id: audit_request_id,
                     requester: request.requester,
                     receipt_id: receipt.receipt_id.clone(),
                 });
@@ -4580,7 +4588,7 @@ impl DeclassificationGateway {
                     event: "declassification_request".to_string(),
                     outcome: "deferred".to_string(),
                     error_code: Some("FE-DECLASS-0008".to_string()),
-                    request_id: request.request_id,
+                    request_id: audit_request_id,
                     requester: request.requester,
                     receipt_id: receipt.receipt_id.clone(),
                 });
@@ -10785,10 +10793,7 @@ mod enrichment_tests {
         };
         let verify_result =
             std::panic::catch_unwind(|| oversized_receipt.verify(&key.public_key()));
-        assert_eq!(
-            verify_result.expect("oversized receipt verification should not panic"),
-            false
-        );
+        assert!(!verify_result.expect("oversized receipt verification should not panic"));
 
         let corrupted_posterior = expect_policy_sign_error(
             "corrupted posterior counter",
@@ -10867,7 +10872,7 @@ mod enrichment_tests {
             &context,
         );
 
-        match outcome {
+        let bounded_request_id = match outcome {
             DeclassificationOutcome::Denied { reason, receipt } => {
                 match reason {
                     DeclassificationDenialReason::ContractRejected {
@@ -10881,14 +10886,18 @@ mod enrichment_tests {
                 }
                 assert!(receipt.request_id.starts_with("oversized-request-"));
                 assert!(receipt.verify(&gateway.public_key()));
+                receipt.request_id
             }
             other => panic!("expected fail-closed denial, got {other:?}"),
-        }
+        };
 
         assert_eq!(gateway.receipt_log().receipts().len(), 1);
         assert_eq!(gateway.events().len(), 1);
         assert_eq!(gateway.events()[0].outcome, "denied");
-        assert_eq!(gateway.events()[0].request_id, oversized_request_id);
+        assert_eq!(gateway.events()[0].request_id, bounded_request_id);
+        assert_ne!(gateway.events()[0].request_id, oversized_request_id);
+        assert_eq!(gateway.denied_evidence().len(), 1);
+        assert_eq!(gateway.denied_evidence()[0].request_id, bounded_request_id);
     }
 
     // ── LifecycleTransitionRecord ───────────────────────────────────────

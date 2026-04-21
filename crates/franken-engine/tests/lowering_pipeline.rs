@@ -15,7 +15,7 @@ use frankenengine_engine::ast::{BinaryOperator, ParseGoal, SourceSpan, SyntaxTre
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
 use frankenengine_engine::ir_contract::{
-    CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Op, Ir2Module, Ir2Op,
+    CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal, Ir1Op, Ir2Module, Ir2Op,
     Ir3Instruction,
 };
 use frankenengine_engine::lowering_pipeline::{
@@ -1341,6 +1341,45 @@ fn enrichment_return_statement_lowering() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_return.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
     assert!(!output.ir3.instructions.is_empty());
+}
+
+#[test]
+fn bare_return_statement_lowers_undefined_without_value_stack_underflow() {
+    let parser = CanonicalEs2020Parser;
+    let tree = parser
+        .parse("function f() { return; }", ParseGoal::Script)
+        .expect("parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "bare_return.js");
+
+    let ir1 = lower_ir0_to_ir1(&ir0).expect("IR1 lowering should succeed");
+    let body_ops = ir1
+        .module
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            Ir1Op::DeclareFunction { body_ops, .. } => Some(body_ops),
+            _ => None,
+        })
+        .expect("function declaration should retain lowered body");
+    assert!(matches!(
+        body_ops.as_slice(),
+        [
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined
+            },
+            Ir1Op::Return
+        ]
+    ));
+
+    let output = lower_ir0_to_ir3(&ir0, &default_ctx())
+        .expect("bare return should not underflow during IR3 lowering");
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::LoadUndefined { .. }))
+    );
 }
 
 // --- 40. Function declaration ---

@@ -1902,9 +1902,6 @@ fn lower_statement_to_ir1_with_flow(
                     value: Ir1Literal::Undefined,
                 });
             }
-            // Keep explicit returns aligned with the module-level `Return`
-            // lowering path, which reads register 0 after control flow.
-            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Return);
         }
         Statement::Throw(throw_stmt) => {

@@ -34,12 +34,13 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     OnboardingScorecardSignal, PreflightVerdict, ReplayArtifactRecord,
     RolloutDecisionArtifactInput, RolloutRecommendation, RuntimeDiagnosticsCliInput,
     RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample, SupportBundleRedactionPolicy,
-    build_ga_evidence_package, build_onboarding_scorecard, build_rollout_decision_artifact,
-    collect_runtime_diagnostics, export_evidence_bundle, export_support_bundle,
-    parse_decision_type, parse_evidence_severity, render_diagnostics_summary,
-    render_evidence_summary, render_ga_evidence_package_summary,
-    render_onboarding_scorecard_summary, render_preflight_summary,
-    render_rollout_decision_artifact_summary, render_support_bundle_summary, run_preflight_doctor,
+    build_ga_evidence_package, build_onboarding_owner_routing, build_onboarding_scorecard,
+    build_rollout_decision_artifact, collect_runtime_diagnostics, export_evidence_bundle,
+    export_support_bundle, parse_decision_type, parse_evidence_severity,
+    render_diagnostics_summary, render_evidence_summary, render_ga_evidence_package_summary,
+    render_onboarding_scorecard_markdown, render_onboarding_scorecard_summary,
+    render_preflight_summary, render_rollout_decision_artifact_summary,
+    render_support_bundle_summary, run_preflight_doctor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -1184,6 +1185,97 @@ fn lib_render_onboarding_scorecard_summary_contains_key_fields() {
     assert!(rendered.contains("schema_version:"));
     assert!(rendered.contains("readiness:"));
     assert!(rendered.contains("reproducible_commands:"));
+}
+
+#[test]
+fn lib_render_onboarding_scorecard_markdown_contains_sections() {
+    let input = clean_input();
+    let preflight = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    let scorecard = build_onboarding_scorecard(&OnboardingScorecardInput {
+        workload_id: "pkg/markdown".to_string(),
+        package_name: "markdown".to_string(),
+        target_platforms: vec!["linux-x64".to_string()],
+        preflight,
+        external_signals: vec![OnboardingScorecardSignal {
+            signal_id: "compat:markdown".to_string(),
+            source: "compatibility_advisory".to_string(),
+            severity: EvidenceSeverity::Warning,
+            summary: "markdown summary warning".to_string(),
+            remediation: "review compatibility advice".to_string(),
+            reproducible_command: "runtime_diagnostics onboarding-scorecard --input sample.json"
+                .to_string(),
+            evidence_links: vec!["artifacts/compatibility/markdown.json".to_string()],
+            owner_hint: Some("compatibility-lane".to_string()),
+        }],
+    });
+
+    let rendered = render_onboarding_scorecard_markdown(&scorecard);
+    assert!(rendered.contains("# Onboarding Scorecard"));
+    assert!(rendered.contains("## Next Steps"));
+    assert!(rendered.contains("## Reproducible Commands"));
+    assert!(rendered.contains("owner `compatibility-lane`"));
+}
+
+#[test]
+fn lib_onboarding_owner_routing_groups_by_owner() {
+    let input = clean_input();
+    let preflight = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    let scorecard = build_onboarding_scorecard(&OnboardingScorecardInput {
+        workload_id: "pkg/routing".to_string(),
+        package_name: "routing".to_string(),
+        target_platforms: vec!["linux-x64".to_string()],
+        preflight,
+        external_signals: vec![
+            OnboardingScorecardSignal {
+                signal_id: "compat:blocking".to_string(),
+                source: "compatibility_advisory".to_string(),
+                severity: EvidenceSeverity::Critical,
+                summary: "critical compatibility blocker".to_string(),
+                remediation: "patch compatibility layer".to_string(),
+                reproducible_command: "scripts/run_compatibility_check.sh".to_string(),
+                evidence_links: vec!["artifacts/compatibility/blocking.json".to_string()],
+                owner_hint: Some("compatibility-lane".to_string()),
+            },
+            OnboardingScorecardSignal {
+                signal_id: "platform:warning".to_string(),
+                source: "platform_matrix".to_string(),
+                severity: EvidenceSeverity::Warning,
+                summary: "platform drift warning".to_string(),
+                remediation: "rerun platform matrix".to_string(),
+                reproducible_command: "scripts/run_platform_matrix.sh".to_string(),
+                evidence_links: vec!["artifacts/platform/warning.json".to_string()],
+                owner_hint: Some("platform-lane".to_string()),
+            },
+        ],
+    });
+
+    let routing = build_onboarding_owner_routing(&scorecard);
+    assert_eq!(
+        routing.schema_version,
+        "franken-engine.runtime-diagnostics.onboarding-owner-routing.v1"
+    );
+    assert_eq!(routing.workload_id, "pkg/routing");
+    assert_eq!(
+        routing.total_unresolved_signals,
+        scorecard.unresolved_signals.len()
+    );
+    assert_eq!(routing.owner_groups[0].owner, "compatibility-lane");
+    assert_eq!(
+        routing.owner_groups[0].highest_severity,
+        EvidenceSeverity::Critical
+    );
+    assert_eq!(
+        routing.owner_groups[0].signals[0].signal_id,
+        "compat:blocking"
+    );
 }
 
 // ── build_rollout_decision_artifact ─────────────────────────────────────

@@ -2125,6 +2125,16 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
     );
     assert!(
         out_dir
+            .join("support_bundle/onboarding_scorecard_summary.md")
+            .is_file(),
+        "expected onboarding scorecard summary to be written"
+    );
+    assert!(
+        out_dir.join("support_bundle/owner_routing.json").is_file(),
+        "expected owner routing artifact to be written"
+    );
+    assert!(
+        out_dir
             .join("support_bundle/rollout_decision_artifact.json")
             .is_file(),
         "expected rollout decision artifact to be written"

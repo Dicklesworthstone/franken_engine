@@ -460,10 +460,17 @@ fn rgc_061_onboarding_scorecard_golden_path_is_ready_and_writes_artifacts() {
     assert!(summary.contains("reproducible_commands:"));
 
     let scorecard_path = out_dir.join("support_bundle/onboarding_scorecard.json");
+    let summary_path = out_dir.join("support_bundle/onboarding_scorecard_summary.md");
+    let owner_routing_path = out_dir.join("support_bundle/owner_routing.json");
     let index_path = out_dir.join("support_bundle/index.json");
     let preflight_path = out_dir.join("support_bundle/preflight_report.json");
     assert!(index_path.exists(), "support bundle index should exist");
     assert!(scorecard_path.exists(), "scorecard artifact should exist");
+    assert!(summary_path.exists(), "scorecard summary should exist");
+    assert!(
+        owner_routing_path.exists(),
+        "owner routing artifact should exist"
+    );
     assert!(preflight_path.exists(), "preflight artifact should exist");
 
     let scorecard_json: Value = serde_json::from_str(&read_to_string(&scorecard_path))
@@ -474,6 +481,12 @@ fn rgc_061_onboarding_scorecard_golden_path_is_ready_and_writes_artifacts() {
         scorecard_json["target_platforms"],
         serde_json::json!(["linux-x64", "macos-arm64"])
     );
+    let summary = read_to_string(&summary_path);
+    assert!(summary.contains("# Onboarding Scorecard"));
+    let owner_routing_json: Value =
+        serde_json::from_str(&read_to_string(&owner_routing_path)).expect("owner routing parses");
+    assert_eq!(owner_routing_json["total_unresolved_signals"], 0);
+    assert_eq!(owner_routing_json["owner_groups"], serde_json::json!([]));
 
     cleanup_path(&input_path);
     cleanup_path(&out_dir);

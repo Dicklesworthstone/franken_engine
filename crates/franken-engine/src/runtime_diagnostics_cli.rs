@@ -25,6 +25,8 @@ const DEFAULT_SUPPORT_BUNDLE_REDACTION_MARKER: &str = "sha256:REDACTED";
 const PREFLIGHT_DOCTOR_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-DOCTOR-0001";
 const ONBOARDING_SCORECARD_SCHEMA_VERSION: &str =
     "franken-engine.runtime-diagnostics.onboarding-scorecard.v1";
+const ONBOARDING_OWNER_ROUTING_SCHEMA_VERSION: &str =
+    "franken-engine.runtime-diagnostics.onboarding-owner-routing.v1";
 const COMPATIBILITY_ADVISORY_SCHEMA_VERSION: &str =
     "franken-engine.runtime-diagnostics.compatibility-advisory.v1";
 const ROLLOUT_DECISION_ARTIFACT_SCHEMA_VERSION: &str =
@@ -757,6 +759,40 @@ pub struct OnboardingScorecardOutput {
     pub next_steps: Vec<OnboardingRemediationStep>,
     pub reproducible_commands: Vec<String>,
     pub logs: Vec<StructuredLogEvent>,
+}
+
+/// One unresolved onboarding signal routed to a concrete owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingOwnerRoutingSignal {
+    pub signal_id: String,
+    pub source: String,
+    pub severity: EvidenceSeverity,
+    pub summary: String,
+    pub remediation: String,
+    pub reproducible_command: String,
+    pub evidence_links: Vec<String>,
+}
+
+/// Grouped owner-routing view derived from an onboarding scorecard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingOwnerRoutingGroup {
+    pub owner: String,
+    pub highest_severity: EvidenceSeverity,
+    pub signal_count: usize,
+    pub signals: Vec<OnboardingOwnerRoutingSignal>,
+}
+
+/// Machine-readable owner-routing artifact for onboarding remediation work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingOwnerRoutingOutput {
+    pub schema_version: String,
+    pub workload_id: String,
+    pub package_name: String,
+    pub target_platforms: Vec<String>,
+    pub readiness: OnboardingReadinessClass,
+    pub remediation_effort: OnboardingRemediationEffort,
+    pub total_unresolved_signals: usize,
+    pub owner_groups: Vec<OnboardingOwnerRoutingGroup>,
 }
 
 /// Recommended rollout action produced from consolidated advisory evidence.
@@ -1873,6 +1909,133 @@ pub fn render_onboarding_scorecard_summary(output: &OnboardingScorecardOutput) -
     }
 
     lines.join("\n")
+}
+
+/// Render onboarding scorecard output as deterministic Markdown for support bundles.
+pub fn render_onboarding_scorecard_markdown(output: &OnboardingScorecardOutput) -> String {
+    let mut lines = vec![
+        "# Onboarding Scorecard".to_string(),
+        String::new(),
+        format!("- Workload: `{}`", output.workload_id),
+        format!("- Package: `{}`", output.package_name),
+        format!("- Readiness: `{}`", output.readiness),
+        format!("- Remediation Effort: `{}`", output.remediation_effort),
+        format!(
+            "- Risk Total Millionths: `{}`",
+            output.score.total_risk_millionths
+        ),
+        format!(
+            "- Signals: `critical={}` `warning={}` `info={}`",
+            output.score.critical_signals, output.score.warning_signals, output.score.info_signals
+        ),
+    ];
+
+    if !output.target_platforms.is_empty() {
+        let target_platforms = output
+            .target_platforms
+            .iter()
+            .map(|platform| format!("`{platform}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- Target Platforms: {target_platforms}"));
+    }
+
+    lines.push(String::new());
+    lines.push("## Next Steps".to_string());
+    if output.next_steps.is_empty() {
+        lines.push("- None.".to_string());
+    } else {
+        for step in &output.next_steps {
+            let mut line = format!(
+                "- [{}] `{}` owner `{}`: {}. Remediation: {}. Command: `{}`.",
+                step.severity,
+                step.step_id,
+                step.owner,
+                step.summary,
+                step.remediation,
+                step.reproducible_command
+            );
+            if !step.evidence_links.is_empty() {
+                line.push_str(" Evidence: ");
+                line.push_str(&step.evidence_links.join(", "));
+                line.push('.');
+            }
+            lines.push(line);
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("## Reproducible Commands".to_string());
+    if output.reproducible_commands.is_empty() {
+        lines.push("- None.".to_string());
+    } else {
+        for command in &output.reproducible_commands {
+            lines.push(format!("- `{command}`"));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Build a deterministic owner-routing artifact from an onboarding scorecard.
+pub fn build_onboarding_owner_routing(
+    output: &OnboardingScorecardOutput,
+) -> OnboardingOwnerRoutingOutput {
+    let mut owners = BTreeMap::<String, Vec<OnboardingOwnerRoutingSignal>>::new();
+    for signal in &output.unresolved_signals {
+        let owner = signal
+            .owner_hint
+            .clone()
+            .unwrap_or_else(|| default_owner_for_source(signal.source.as_str(), signal.severity));
+        owners
+            .entry(owner)
+            .or_default()
+            .push(OnboardingOwnerRoutingSignal {
+                signal_id: signal.signal_id.clone(),
+                source: signal.source.clone(),
+                severity: signal.severity,
+                summary: signal.summary.clone(),
+                remediation: signal.remediation.clone(),
+                reproducible_command: signal.reproducible_command.clone(),
+                evidence_links: signal.evidence_links.clone(),
+            });
+    }
+
+    let owner_groups = owners
+        .into_iter()
+        .map(|(owner, mut signals)| {
+            signals.sort_by(|left, right| {
+                right
+                    .severity
+                    .cmp(&left.severity)
+                    .then(left.signal_id.cmp(&right.signal_id))
+                    .then(left.source.cmp(&right.source))
+            });
+            let highest_severity = signals
+                .first()
+                .map(|signal| signal.severity)
+                .unwrap_or(EvidenceSeverity::Info);
+            let signal_count = signals.len();
+
+            OnboardingOwnerRoutingGroup {
+                owner,
+                highest_severity,
+                signal_count,
+                signals,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    OnboardingOwnerRoutingOutput {
+        schema_version: ONBOARDING_OWNER_ROUTING_SCHEMA_VERSION.to_string(),
+        workload_id: output.workload_id.clone(),
+        package_name: output.package_name.clone(),
+        target_platforms: output.target_platforms.clone(),
+        readiness: output.readiness,
+        remediation_effort: output.remediation_effort,
+        total_unresolved_signals: output.unresolved_signals.len(),
+        owner_groups,
+    }
 }
 
 /// Build a deterministic consolidated rollout decision artifact.

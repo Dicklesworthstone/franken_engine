@@ -7,15 +7,16 @@ use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioRepo
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     GaEvidenceArtifactCategory, GaEvidenceArtifactLink, GaEvidencePackageInput,
-    OnboardingScorecardInput, OnboardingScorecardSignal, RolloutDecisionArtifactInput,
-    RuntimeDiagnosticsCliInput, SupportBundleFile, SupportBundleOutput,
-    SupportBundleRedactionPolicy, build_compatibility_advisories, build_ga_evidence_package,
+    OnboardingScorecardInput, OnboardingScorecardOutput, OnboardingScorecardSignal,
+    PreflightDoctorOutput, RolloutDecisionArtifactInput, RuntimeDiagnosticsCliInput,
+    SupportBundleFile, SupportBundleOutput, SupportBundleRedactionPolicy,
+    build_compatibility_advisories, build_ga_evidence_package, build_onboarding_owner_routing,
     build_onboarding_scorecard, build_rollout_decision_artifact, collect_runtime_diagnostics,
     export_evidence_bundle, export_support_bundle, parse_decision_type, parse_evidence_severity,
     render_compatibility_advisory_summary, render_diagnostics_summary, render_evidence_summary,
-    render_ga_evidence_package_summary, render_onboarding_scorecard_summary,
-    render_preflight_summary, render_rollout_decision_artifact_summary,
-    render_support_bundle_summary, run_preflight_doctor,
+    render_ga_evidence_package_summary, render_onboarding_scorecard_markdown,
+    render_onboarding_scorecard_summary, render_preflight_summary,
+    render_rollout_decision_artifact_summary, render_support_bundle_summary, run_preflight_doctor,
 };
 
 fn main() {
@@ -682,47 +683,7 @@ fn run_onboarding_scorecard(args: &[String]) -> Result<(), String> {
 
     if let Some(out_dir) = out_dir {
         write_support_bundle_files(&preflight.support_bundle, &out_dir)?;
-        let report_path = out_dir.join("support_bundle/preflight_report.json");
-        if let Some(parent) = report_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create preflight report directory '{}': {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        fs::write(
-            &report_path,
-            serde_json::to_vec_pretty(&preflight)
-                .map_err(|error| format!("failed to encode preflight report: {error}"))?,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to write preflight report '{}': {error}",
-                report_path.display()
-            )
-        })?;
-
-        let scorecard_path = out_dir.join("support_bundle/onboarding_scorecard.json");
-        if let Some(parent) = scorecard_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create onboarding scorecard directory '{}': {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        fs::write(
-            &scorecard_path,
-            serde_json::to_vec_pretty(&scorecard)
-                .map_err(|error| format!("failed to encode onboarding scorecard: {error}"))?,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to write onboarding scorecard '{}': {error}",
-                scorecard_path.display()
-            )
-        })?;
+        write_onboarding_scorecard_reports(&out_dir, &preflight, &scorecard)?;
     }
 
     if summary {
@@ -914,48 +875,7 @@ fn run_rollout_decision_artifact(args: &[String]) -> Result<(), String> {
 
     if let Some(out_dir) = out_dir {
         write_support_bundle_files(&preflight.support_bundle, &out_dir)?;
-
-        let report_path = out_dir.join("support_bundle/preflight_report.json");
-        if let Some(parent) = report_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create preflight report directory '{}': {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        fs::write(
-            &report_path,
-            serde_json::to_vec_pretty(&preflight)
-                .map_err(|error| format!("failed to encode preflight report: {error}"))?,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to write preflight report '{}': {error}",
-                report_path.display()
-            )
-        })?;
-
-        let scorecard_path = out_dir.join("support_bundle/onboarding_scorecard.json");
-        if let Some(parent) = scorecard_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create onboarding scorecard directory '{}': {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        fs::write(
-            &scorecard_path,
-            serde_json::to_vec_pretty(&scorecard)
-                .map_err(|error| format!("failed to encode onboarding scorecard: {error}"))?,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to write onboarding scorecard '{}': {error}",
-                scorecard_path.display()
-            )
-        })?;
+        write_onboarding_scorecard_reports(&out_dir, &preflight, &scorecard)?;
 
         let artifact_path = out_dir.join("support_bundle/rollout_decision_artifact.json");
         if let Some(parent) = artifact_path.parent() {
@@ -1225,18 +1145,7 @@ fn run_ga_evidence_package(args: &[String]) -> Result<(), String> {
 
     if let Some(out_dir) = out_dir {
         write_support_bundle_files(&preflight.support_bundle, &out_dir)?;
-        write_json_file(
-            &out_dir,
-            "support_bundle/preflight_report.json",
-            &preflight,
-            "preflight report",
-        )?;
-        write_json_file(
-            &out_dir,
-            "support_bundle/onboarding_scorecard.json",
-            &scorecard,
-            "onboarding scorecard",
-        )?;
+        write_onboarding_scorecard_reports(&out_dir, &preflight, &scorecard)?;
         write_json_file(
             &out_dir,
             "support_bundle/rollout_decision_artifact.json",
@@ -1377,6 +1286,61 @@ fn write_json_file<T: Serialize>(
             destination.display()
         )
     })
+}
+
+fn write_text_file(
+    out_dir: &Path,
+    relative_path: &str,
+    contents: &str,
+    label: &str,
+) -> Result<(), String> {
+    let destination = out_dir.join(relative_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create {label} directory '{}': {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::write(&destination, contents).map_err(|error| {
+        format!(
+            "failed to write {label} '{}': {error}",
+            destination.display()
+        )
+    })
+}
+
+fn write_onboarding_scorecard_reports(
+    out_dir: &Path,
+    preflight: &PreflightDoctorOutput,
+    scorecard: &OnboardingScorecardOutput,
+) -> Result<(), String> {
+    write_json_file(
+        out_dir,
+        "support_bundle/preflight_report.json",
+        preflight,
+        "preflight report",
+    )?;
+    write_json_file(
+        out_dir,
+        "support_bundle/onboarding_scorecard.json",
+        scorecard,
+        "onboarding scorecard",
+    )?;
+    write_text_file(
+        out_dir,
+        "support_bundle/onboarding_scorecard_summary.md",
+        &render_onboarding_scorecard_markdown(scorecard),
+        "onboarding scorecard summary",
+    )?;
+    write_json_file(
+        out_dir,
+        "support_bundle/owner_routing.json",
+        &build_onboarding_owner_routing(scorecard),
+        "owner routing report",
+    )
 }
 
 #[cfg(test)]

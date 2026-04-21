@@ -49,8 +49,9 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     OnboardingScorecardSignal, PreflightDoctorOutput, RolloutDecisionArtifactInput,
     RolloutDecisionArtifactOutput, RolloutRecommendation, RuntimeDiagnosticsCliInput,
     SupportBundleFile, SupportBundleOutput, SupportBundleRedactionPolicy,
-    build_compatibility_advisories, build_onboarding_scorecard, build_rollout_decision_artifact,
-    parse_decision_type, parse_evidence_severity, run_preflight_doctor,
+    build_compatibility_advisories, build_onboarding_owner_routing, build_onboarding_scorecard,
+    build_rollout_decision_artifact, parse_decision_type, parse_evidence_severity,
+    render_onboarding_scorecard_markdown, run_preflight_doctor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
@@ -2601,6 +2602,14 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
         write_json_file(
             &out_dir.join("support_bundle/onboarding_scorecard.json"),
             &output.onboarding_scorecard,
+        )?;
+        write_bytes_file(
+            &out_dir.join("support_bundle/onboarding_scorecard_summary.md"),
+            render_onboarding_scorecard_markdown(&output.onboarding_scorecard).as_bytes(),
+        )?;
+        write_json_file(
+            &out_dir.join("support_bundle/owner_routing.json"),
+            &build_onboarding_owner_routing(&output.onboarding_scorecard),
         )?;
         write_json_file(
             &out_dir.join("support_bundle/rollout_decision_artifact.json"),

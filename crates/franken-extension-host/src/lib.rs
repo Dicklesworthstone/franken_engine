@@ -1583,16 +1583,43 @@ impl IntegrityLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum LabelAuthority {
+    #[default]
+    UntrustedIngress,
+    HostTrusted,
+}
+
+impl LabelAuthority {
+    const fn is_host_trusted(self) -> bool {
+        matches!(self, Self::HostTrusted)
+    }
+}
+
 /// Runtime flow label carried by hostcall inputs/outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowLabel {
     secrecy: SecrecyLevel,
     integrity: IntegrityLevel,
+    #[serde(skip)]
+    authority: LabelAuthority,
 }
 
 impl FlowLabel {
     pub const fn new(secrecy: SecrecyLevel, integrity: IntegrityLevel) -> Self {
-        Self { secrecy, integrity }
+        Self {
+            secrecy,
+            integrity,
+            authority: LabelAuthority::UntrustedIngress,
+        }
+    }
+
+    pub(crate) const fn host_trusted(secrecy: SecrecyLevel, integrity: IntegrityLevel) -> Self {
+        Self {
+            secrecy,
+            integrity,
+            authority: LabelAuthority::HostTrusted,
+        }
     }
 
     /// Join operation for combined values:
@@ -1608,7 +1635,16 @@ impl FlowLabel {
         } else {
             other.integrity
         };
-        Self { secrecy, integrity }
+        let authority = if self.authority.is_host_trusted() && other.authority.is_host_trusted() {
+            LabelAuthority::HostTrusted
+        } else {
+            LabelAuthority::UntrustedIngress
+        };
+        Self {
+            secrecy,
+            integrity,
+            authority,
+        }
     }
 
     pub const fn secrecy(self) -> SecrecyLevel {
@@ -1617,6 +1653,18 @@ impl FlowLabel {
 
     pub const fn integrity(self) -> IntegrityLevel {
         self.integrity
+    }
+
+    pub const fn is_host_trusted(self) -> bool {
+        self.authority.is_host_trusted()
+    }
+
+    const fn enforcement_label(self) -> Self {
+        if self.authority.is_host_trusted() {
+            self
+        } else {
+            Self::new(SecrecyLevel::TopSecret, IntegrityLevel::Untrusted)
+        }
     }
 }
 
@@ -3475,8 +3523,9 @@ impl HostcallDispatcher {
             };
         }
 
+        let source_label = argument.label.enforcement_label();
         if let Some(clearance) = self.sink_policy.clearance_for(hostcall_type)
-            && !FlowLabelLattice::can_flow_to_sink(&argument.label, &clearance)
+            && !FlowLabelLattice::can_flow_to_sink(&source_label, &clearance)
         {
             let event = FlowViolationEvent {
                 trace_id: context.trace_id.to_string(),
@@ -3488,14 +3537,14 @@ impl HostcallDispatcher {
                 error_code: "FE-FLOW-0001".to_string(),
                 extension_id: extension_id.to_string(),
                 hostcall_type,
-                source_label: argument.label,
+                source_label,
                 sink_clearance: clearance,
             };
             self.violation_events.push(event);
             self.guardplane_evidence.push(FlowViolationEvidence {
                 extension_id: extension_id.to_string(),
                 hostcall_type,
-                source_label: argument.label,
+                source_label,
                 sink_clearance: clearance,
                 decision_id: context.decision_id.to_string(),
             });
@@ -3503,7 +3552,7 @@ impl HostcallDispatcher {
             return HostcallDispatchOutcome {
                 result: HostcallResult::Denied {
                     reason: DenialReason::FlowViolation {
-                        source: argument.label,
+                        source: source_label,
                         sink: clearance,
                     },
                 },
@@ -4224,7 +4273,10 @@ impl DeclassificationGateway {
                 });
                 (
                     DeclassificationOutcome::Approved {
-                        new_label: request.target_label,
+                        new_label: FlowLabel::host_trusted(
+                            request.target_label.secrecy(),
+                            request.target_label.integrity(),
+                        ),
                         receipt,
                     },
                     None,
@@ -6614,7 +6666,7 @@ mod flow_label_tests {
         let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
         let payload = Labeled::new(
             "log-line".to_string(),
-            FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted),
+            FlowLabel::host_trusted(SecrecyLevel::Public, IntegrityLevel::Trusted),
         );
         let outcome = dispatcher.dispatch(
             "ext-a",
@@ -6658,7 +6710,7 @@ mod flow_label_tests {
         let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
         let ipc_payload = Labeled::new(
             vec![1u8, 2, 3],
-            FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+            FlowLabel::host_trusted(SecrecyLevel::Confidential, IntegrityLevel::Validated),
         );
 
         let ipc_outcome = dispatcher.dispatch(
@@ -6673,7 +6725,7 @@ mod flow_label_tests {
         let inherited = ipc_outcome.output.expect("ipc output");
         assert_eq!(
             inherited.label(),
-            FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated)
+            FlowLabel::host_trusted(SecrecyLevel::Confidential, IntegrityLevel::Validated)
         );
 
         let net_outcome = dispatcher.dispatch(
@@ -10417,7 +10469,7 @@ mod enrichment_tests {
             .collect();
         let internal_data = Labeled::new(
             "log".to_string(),
-            FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated),
+            FlowLabel::host_trusted(SecrecyLevel::Public, IntegrityLevel::Validated),
         );
         let context = FlowEnforcementContext::new("t", "d", "p");
         let outcome = dispatcher.dispatch(

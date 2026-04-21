@@ -177,6 +177,7 @@ fn labeled_system_generated_uses_public_trusted() {
     let labeled = Labeled::<u32>::system_generated(99);
     assert_eq!(labeled.label().secrecy(), SecrecyLevel::Public);
     assert_eq!(labeled.label().integrity(), IntegrityLevel::Trusted);
+    assert!(!labeled.label().is_host_trusted());
 }
 
 #[test]
@@ -307,7 +308,7 @@ fn dispatcher_denies_flow_violation_on_sink() {
         HostcallResult::Denied {
             reason: DenialReason::FlowViolation { source, sink },
         } => {
-            assert_eq!(source.secrecy(), SecrecyLevel::Secret);
+            assert_eq!(*source, FlowLabel::default());
             assert_eq!(sink.max_secrecy, SecrecyLevel::Internal);
         }
         other => panic!("expected flow violation denial, got {other:?}"),
@@ -318,28 +319,53 @@ fn dispatcher_denies_flow_violation_on_sink() {
 }
 
 #[test]
-fn dispatcher_allows_flow_within_sink_clearance() {
+fn untrusted_payload_constructors_cannot_spoof_host_trusted_sink_label() {
     let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
-    let caps = capability_set(&[Capability::FsWrite, Capability::FsRead]);
-    // Internal data to fs_write (default max_secrecy = Internal)
-    let data = Labeled::new(
-        "ok payload".to_string(),
-        FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
-    );
+    let caps = capability_set(&[Capability::NetClient]);
     let ctx = test_context();
 
+    let forged_label = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted);
+    assert!(!forged_label.is_host_trusted());
+    let forged = Labeled::new("exfil".to_string(), forged_label);
+    assert!(!forged.label().is_host_trusted());
+
     let outcome = dispatcher.dispatch(
-        "ext-4",
-        HostcallType::FsWrite,
+        "ext-forged-label",
+        HostcallType::NetworkSend,
         &caps,
-        Capability::FsWrite,
-        data,
+        Capability::NetClient,
+        forged,
         &ctx,
     );
 
-    assert_eq!(outcome.result, HostcallResult::Success);
-    assert!(outcome.output.is_some());
-    assert!(dispatcher.violation_events().is_empty());
+    match &outcome.result {
+        HostcallResult::Denied {
+            reason: DenialReason::FlowViolation { source, sink },
+        } => {
+            assert_eq!(*source, FlowLabel::default());
+            assert_eq!(sink.max_secrecy, SecrecyLevel::Public);
+        }
+        other => panic!("expected untrusted constructor spoof to be denied, got {other:?}"),
+    }
+    assert!(outcome.output.is_none());
+    assert_eq!(dispatcher.violation_events().len(), 1);
+
+    let system_generated = Labeled::system_generated("exfil-again".to_string());
+    assert!(!system_generated.label().is_host_trusted());
+    let outcome = dispatcher.dispatch(
+        "ext-system-generated",
+        HostcallType::NetworkSend,
+        &caps,
+        Capability::NetClient,
+        system_generated,
+        &ctx,
+    );
+    assert!(matches!(
+        outcome.result,
+        HostcallResult::Denied {
+            reason: DenialReason::FlowViolation { .. }
+        }
+    ));
 }
 
 #[test]

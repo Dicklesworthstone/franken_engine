@@ -942,12 +942,12 @@ fn hostcall_dispatch_flow_violation_denied() {
 }
 
 #[test]
-fn hostcall_dispatch_success_with_correct_flow() {
+fn hostcall_dispatch_rejects_public_system_generated_spoof_on_sink() {
     let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
     let caps = BTreeSet::from([Capability::FsRead, Capability::FsWrite]);
     let fctx = flow_ctx();
 
-    // Public Trusted data to fs_write sink (Internal Validated) — should succeed
+    // Public constructors cannot mint host-trusted authority for sink checks.
     let argument = Labeled::system_generated("ok-data".to_string());
     let outcome = dispatcher.dispatch(
         "ext-03",
@@ -958,8 +958,13 @@ fn hostcall_dispatch_success_with_correct_flow() {
         &fctx,
     );
 
-    assert!(matches!(outcome.result, HostcallResult::Success));
-    assert!(outcome.output.is_some());
+    assert!(matches!(
+        outcome.result,
+        HostcallResult::Denied {
+            reason: DenialReason::FlowViolation { .. }
+        }
+    ));
+    assert!(outcome.output.is_none());
 }
 
 // ---------------------------------------------------------------------------

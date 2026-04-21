@@ -41,7 +41,7 @@ fn render_dispatch_arm_snapshot(source: &str) -> String {
         capabilities.len()
     );
     for capability in &capabilities {
-        snapshot.push_str(&capability);
+        snapshot.push_str(capability);
         snapshot.push('\n');
     }
 
@@ -55,11 +55,40 @@ fn render_dispatch_arm_snapshot(source: &str) -> String {
     snapshot
 }
 
+fn builtin_ids_for(capability: &str) -> Vec<u32> {
+    let needle = format!("=> Some(\"{capability}\"");
+    let mut ids = Vec::new();
+    for line in BASELINE_INTERPRETER.lines() {
+        let trimmed = line.trim();
+        if !trimmed.contains(&needle) {
+            continue;
+        }
+        let Some((id_text, _)) = trimmed.split_once("=>") else {
+            continue;
+        };
+        if let Ok(id) = id_text.trim().parse::<u32>() {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
 #[test]
 fn baseline_dispatch_arm_snapshot_matches_golden() {
     assert_eq!(
         render_dispatch_arm_snapshot(BASELINE_INTERPRETER),
         DISPATCH_ARMS_GOLDEN
+    );
+}
+
+#[test]
+fn batch_29_number_and_char_at_ids_map_to_canonical_dispatch_targets() {
+    assert_eq!(builtin_ids_for("builtin:NumberIsNaN"), vec![90, 239, 337]);
+    assert_eq!(builtin_ids_for("builtin:NumberIsFinite"), vec![91, 338]);
+    assert_eq!(
+        builtin_ids_for("builtin:StringPrototypeCharAt"),
+        vec![30, 339]
     );
 }
 
@@ -107,6 +136,109 @@ fn object_tag_instruction(value_reg: u32, dst: u32) -> Ir3Instruction {
         },
         dst,
     }
+}
+
+fn host_call_instruction(capability: &str, start: u32, count: u32, dst: u32) -> Ir3Instruction {
+    Ir3Instruction::HostCall {
+        capability: CapabilityTag(capability.to_string()),
+        args: RegRange { start, count },
+        dst,
+    }
+}
+
+#[test]
+fn batch_29_number_and_char_at_dispatch_uses_active_argument_registers() {
+    let nan_result = run_value(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadFloat {
+                dst: 4,
+                bits: f64::NAN.to_bits(),
+            },
+            host_call_instruction("builtin:NumberIsNaN", 4, 1, 0),
+            Ir3Instruction::Halt,
+        ],
+        vec!["ignored".to_string()],
+    )
+    .expect("Number.isNaN should execute from non-zero args.start");
+    assert_eq!(nan_result, Value::Bool(true));
+
+    let string_nan_result = run_value(
+        vec![
+            Ir3Instruction::LoadFloat {
+                dst: 0,
+                bits: f64::NAN.to_bits(),
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            host_call_instruction("builtin:NumberIsNaN", 4, 1, 0),
+            Ir3Instruction::Halt,
+        ],
+        vec!["NaN".to_string()],
+    )
+    .expect("Number.isNaN should keep strict non-coercing semantics");
+    assert_eq!(string_nan_result, Value::Bool(false));
+
+    let finite_result = run_value(
+        vec![
+            Ir3Instruction::LoadFloat {
+                dst: 0,
+                bits: f64::INFINITY.to_bits(),
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 7 },
+            host_call_instruction("builtin:NumberIsFinite", 4, 1, 0),
+            Ir3Instruction::Halt,
+        ],
+        Vec::new(),
+    )
+    .expect("Number.isFinite should execute from non-zero args.start");
+    assert_eq!(finite_result, Value::Bool(true));
+
+    let string_finite_result = run_value(
+        vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            host_call_instruction("builtin:NumberIsFinite", 4, 1, 0),
+            Ir3Instruction::Halt,
+        ],
+        vec!["7".to_string()],
+    )
+    .expect("Number.isFinite should keep strict non-coercing semantics");
+    assert_eq!(string_finite_result, Value::Bool(false));
+
+    let char_at_explicit_index = run_value(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 5, value: 1 },
+            host_call_instruction("builtin:StringPrototypeCharAt", 4, 2, 0),
+            Ir3Instruction::Halt,
+        ],
+        vec!["hello".to_string()],
+    )
+    .expect("String.prototype.charAt should honor explicit index from args.start + 1");
+    assert_eq!(char_at_explicit_index, Value::Str("e".to_string()));
+
+    let char_at_default_index = run_value(
+        vec![
+            Ir3Instruction::LoadInt { dst: 4, value: 42 },
+            host_call_instruction("builtin:StringPrototypeCharAt", 4, 1, 0),
+            Ir3Instruction::Halt,
+        ],
+        Vec::new(),
+    )
+    .expect("String.prototype.charAt should default missing index to zero");
+    assert_eq!(char_at_default_index, Value::Str("4".to_string()));
 }
 
 fn array_with_three_values_prefix() -> Vec<Ir3Instruction> {

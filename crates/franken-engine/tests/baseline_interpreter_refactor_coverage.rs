@@ -66,6 +66,7 @@ fn test_module_with_functions(
     test_module(instructions)
 }
 
+#[allow(dead_code)]
 fn qjs_run_with_config(
     module: &Ir3Module,
     config: InterpreterConfig,
@@ -74,11 +75,12 @@ fn qjs_run_with_config(
     core.execute(module)
 }
 
+#[allow(dead_code)]
 fn v8_run_with_config(
     module: &Ir3Module,
     _config: InterpreterConfig,
 ) -> Result<ExecutionResult, InterpreterError> {
-    let mut lane = V8Lane::new();
+    let lane = V8Lane::new();
     lane.execute(module, "refactor-coverage-trace")
 }
 
@@ -98,6 +100,8 @@ struct Ir3FunctionDesc {
     body_start: u32,
 }
 
+const NUMBER_PROTOTYPE_TOSTRING_BUILTIN: &str = "builtin:NumberPrototypeToString";
+
 fn call_math_random(dst: u32) -> Ir3Instruction {
     Ir3Instruction::HostCall {
         capability: CapabilityTag("builtin:MathRandom".to_string()),
@@ -108,7 +112,7 @@ fn call_math_random(dst: u32) -> Ir3Instruction {
 
 fn call_number_to_string(dst: u32) -> Ir3Instruction {
     Ir3Instruction::HostCall {
-        capability: CapabilityTag("builtin:NumberPrototypeToString".to_string()),
+        capability: CapabilityTag(NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string()),
         args: RegRange { start: 0, count: 2 },
         dst,
     }
@@ -586,6 +590,13 @@ fn extension_id_flows_through_decision_receipt_chain() {
 // ============================================================================
 
 #[test]
+fn number_tostring_refactor_coverage_tracks_live_builtin_capability() {
+    let source = baseline_interpreter_source();
+    assert!(source.contains(NUMBER_PROTOTYPE_TOSTRING_BUILTIN));
+    assert!(!source.contains("\"builtin:NumberToString\""));
+}
+
+#[test]
 fn number_tostring_radix_base2_through_base36() {
     // Test proper radix conversion for all valid bases (2-36)
     let test_cases = vec![
@@ -614,7 +625,7 @@ fn number_tostring_radix_base2_through_base36() {
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
-                name: "builtin:NumberToString".to_string(),
+                name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
                 param_count: 2,
                 local_count: 3,
                 body_start: 0,
@@ -664,7 +675,7 @@ fn number_tostring_handles_negative_numbers() {
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
-                name: "builtin:NumberToString".to_string(),
+                name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
                 param_count: 2,
                 local_count: 3,
                 body_start: 0,
@@ -700,7 +711,7 @@ fn number_tostring_handles_special_float_values() {
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
-            name: "builtin:NumberToString".to_string(),
+            name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
             param_count: 2,
             local_count: 3,
             body_start: 0,
@@ -726,7 +737,7 @@ fn number_tostring_handles_special_float_values() {
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
-            name: "builtin:NumberToString".to_string(),
+            name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
             param_count: 2,
             local_count: 3,
             body_start: 0,
@@ -756,7 +767,7 @@ fn number_tostring_handles_special_float_values() {
             Ir3Instruction::Return { value: 2 },
         ],
         vec![Ir3FunctionDesc {
-            name: "builtin:NumberToString".to_string(),
+            name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
             param_count: 2,
             local_count: 3,
             body_start: 0,
@@ -795,7 +806,7 @@ fn number_tostring_handles_zero_special_case() {
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
-                name: "builtin:NumberToString".to_string(),
+                name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
                 param_count: 2,
                 local_count: 3,
                 body_start: 0,
@@ -833,7 +844,7 @@ fn number_tostring_truncates_fractional_parts() {
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
-                name: "builtin:NumberToString".to_string(),
+                name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
                 param_count: 2,
                 local_count: 3,
                 body_start: 0,
@@ -887,7 +898,7 @@ fn number_tostring_consistent_with_both_lanes() {
                 Ir3Instruction::Return { value: 2 },
             ],
             vec![Ir3FunctionDesc {
-                name: "builtin:NumberToString".to_string(),
+                name: NUMBER_PROTOTYPE_TOSTRING_BUILTIN.to_string(),
                 param_count: 2,
                 local_count: 3,
                 body_start: 0,

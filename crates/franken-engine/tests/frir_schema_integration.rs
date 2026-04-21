@@ -1324,15 +1324,9 @@ fn witness_chain_verify_empty_is_invalid() {
         passes: Vec::new(),
         source_hash: make_hash(b"src"),
         final_output_hash: make_hash(b"out"),
-        output_hash: make_hash(b"out"),
         target_lane: LaneTarget::Js,
         complete: false,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: false,
-            errors: vec!["Empty chain".to_string()],
-            pass_verdicts: Vec::new(),
-        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1349,15 +1343,9 @@ fn witness_chain_verify_source_hash_mismatch() {
         passes: vec![w.clone()],
         source_hash: make_hash(b"wrong-source"),
         final_output_hash: w.output_hash,
-        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: false,
-            errors: vec!["Source hash mismatch".to_string()],
-            pass_verdicts: vec![WitnessVerdict::Valid],
-        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1373,15 +1361,9 @@ fn witness_chain_verify_final_output_mismatch() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: make_hash(b"wrong-final"),
-        output_hash: make_hash(b"wrong-final"),
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: false,
-            errors: vec!["Final output hash mismatch".to_string()],
-            pass_verdicts: vec![WitnessVerdict::Valid],
-        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1398,15 +1380,9 @@ fn witness_chain_verify_broken_link_between_passes() {
         passes: vec![w0.clone(), w1.clone()],
         source_hash: w0.input_hash,
         final_output_hash: w1.output_hash,
-        output_hash: w1.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: false,
-            errors: vec!["Broken link between passes".to_string()],
-            pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Invalid],
-        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1423,15 +1399,9 @@ fn witness_chain_verify_pass_with_invalid_verdict() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: w.output_hash,
-        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: false,
-            errors: vec!["Failed invariant check".to_string()],
-            pass_verdicts: vec![WitnessVerdict::Invalid],
-        },
     };
     let v = chain.verify();
     assert!(!v.valid);
@@ -1448,15 +1418,9 @@ fn witness_chain_total_cost_single_pass() {
         passes: vec![w.clone()],
         source_hash: w.input_hash,
         final_output_hash: w.output_hash,
-        output_hash: w.output_hash,
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: true,
-            errors: Vec::new(),
-            pass_verdicts: vec![WitnessVerdict::Valid],
-        },
     };
     assert_eq!(chain.total_cost_millionths(), 50_000);
 }
@@ -1477,19 +1441,9 @@ fn witness_chain_offline_online_split() {
         passes: vec![w0, w1, w2],
         source_hash: make_hash(b"source"),
         final_output_hash: make_hash(b"analyzed"),
-        output_hash: make_hash(b"analyzed"),
         target_lane: LaneTarget::Js,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: true,
-            errors: Vec::new(),
-            pass_verdicts: vec![
-                WitnessVerdict::Valid,
-                WitnessVerdict::Valid,
-                WitnessVerdict::Valid,
-            ],
-        },
     };
     assert_eq!(chain.offline_pass_count(), 2);
     assert_eq!(chain.online_pass_count(), 1);
@@ -1504,15 +1458,9 @@ fn witness_chain_serde_roundtrip() {
         passes: vec![w1.clone(), w2.clone()],
         source_hash: w1.input_hash,
         final_output_hash: w2.output_hash,
-        output_hash: w2.output_hash,
         target_lane: LaneTarget::Wasm,
         complete: true,
         chain_hash: make_hash(b"chain"),
-        verification: ChainVerification {
-            valid: true,
-            errors: Vec::new(),
-            pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Valid],
-        },
     };
     let json = serde_json::to_string(&chain).unwrap();
     let back: WitnessChain = serde_json::from_str(&json).unwrap();
@@ -2198,23 +2146,15 @@ fn make_artifact_from_passes(passes: Vec<PassWitness>) -> FrirArtifact {
         frir_version: FrirVersion::CURRENT,
         source_hash,
         target_lane: LaneTarget::Js,
-        pipeline_config: PipelineConfig::production(),
-        fallback_reasons: vec![],
         witness_chain: WitnessChain {
             schema_version: FRIR_SCHEMA_VERSION.to_string(),
             frir_version: FrirVersion::CURRENT,
             passes,
             source_hash,
             final_output_hash: output_hash,
-            output_hash,
             target_lane: LaneTarget::Js,
             complete: true,
             chain_hash: make_hash(&chain_hash_input),
-            verification: ChainVerification {
-                valid: true,
-                errors: Vec::new(),
-                pass_verdicts: Vec::new(),
-            },
         },
         equivalence_witnesses: vec![],
         aggregated_effects: vec![],

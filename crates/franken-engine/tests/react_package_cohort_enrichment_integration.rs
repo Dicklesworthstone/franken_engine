@@ -834,6 +834,8 @@ fn enrichment_run_manifest_serde_roundtrip() {
         fail_count: 0,
         pass_rate_millionths: 1_000_000,
         contract_satisfied: true,
+        compat_gate_passed: true,
+        compat_report_hash: "compat-hash-deadbeef".to_string(),
         artifact_paths: ReactCohortArtifactPaths {
             react_package_cohort_matrix: "matrix.json".to_string(),
             react_ecosystem_compat_report: "react_ecosystem_compat_report.json".to_string(),

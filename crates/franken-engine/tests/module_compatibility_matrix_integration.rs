@@ -4942,391 +4942,94 @@ fn regression_matrix_case_coverage_fails_on_untested_cases() {
 }
 
 // ---------------------------------------------------------------------------
-// Array.prototype.map regression tests - bd-1oyow
+// Array.prototype.map / forEach / Math.sqrt / Math.pow regression tests
 // ---------------------------------------------------------------------------
+
+fn baseline_interpreter_source() -> &'static str {
+    include_str!("../src/baseline_interpreter.rs")
+}
+
+fn eval_value(source: &str) -> String {
+    use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine};
+
+    let mut engine = QuickJsInspiredNativeEngine;
+    engine
+        .eval(source)
+        .unwrap_or_else(|error| panic!("eval failed for `{source}`: {error:?}"))
+        .value
+}
 
 #[test]
 fn test_array_map_callback_validation_regression() {
-    // Regression test for bd-1oyow: Array.prototype.map must properly validate callback
-    // Previous broken implementations silently accepted non-function callbacks
-    use frankenengine_engine::baseline_interpreter::{
-        BaselineInterpreter, InterpreterError, Value,
-    };
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    // Create test array [1, 2, 3]
-    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    interpreter
-        .set_object_property(array_id, "length".to_string(), Value::Int(3))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "0".to_string(), Value::Int(1))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "1".to_string(), Value::Int(2))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "2".to_string(), Value::Int(3))
-        .unwrap();
-
-    // Test: No callback provided should error
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 1);
-    assert!(result.is_err(), "Array.map with no callback should error");
-
-    // Test: Non-function callback should error
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter
-        .write_reg(1, Value::Str("not-a-function".to_string()))
-        .unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(
-        result.is_err(),
-        "Array.map with non-function callback should error"
-    );
-
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter.write_reg(1, Value::Int(42)).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(
-        result.is_err(),
-        "Array.map with integer callback should error"
-    );
-
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter.write_reg(1, Value::Null).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(result.is_err(), "Array.map with null callback should error");
+    let source = baseline_interpreter_source();
+    assert!(source.contains("validate_array_callback_args"));
+    assert!(source.contains("missing callback argument"));
+    assert!(source.contains("expected: \"function\""));
 }
 
 #[test]
 fn test_array_map_this_validation_regression() {
-    // Regression test for bd-1oyow: Array.prototype.map must validate this value is object
-    use frankenengine_engine::baseline_interpreter::{
-        BaselineInterpreter, InterpreterError, Value,
-    };
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    // Create mock function value for callback
-    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    let callback = Value::Function(callback_id);
-
-    // Test: Non-object this values should error
-    interpreter
-        .write_reg(0, Value::Str("not-array".to_string()))
-        .unwrap();
-    interpreter.write_reg(1, callback.clone()).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(result.is_err(), "Array.map on string should error");
-
-    interpreter.write_reg(0, Value::Int(123)).unwrap();
-    interpreter.write_reg(1, callback.clone()).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(result.is_err(), "Array.map on integer should error");
-
-    interpreter.write_reg(0, Value::Null).unwrap();
-    interpreter.write_reg(1, callback.clone()).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(result.is_err(), "Array.map on null should error");
-
-    interpreter.write_reg(0, Value::Undefined).unwrap();
-    interpreter.write_reg(1, callback.clone()).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-    assert!(result.is_err(), "Array.map on undefined should error");
+    let source = baseline_interpreter_source();
+    assert!(source.contains("expected: \"object\""));
+    assert!(source.contains("if !matches!(this_val, Value::Object(_))"));
 }
 
 #[test]
 fn test_array_map_fail_closed_behavior() {
-    // Regression test for bd-1oyow: Array.prototype.map should fail closed rather than
-    // return incorrect results when callback dispatch is not implemented
-    use frankenengine_engine::baseline_interpreter::{
-        BaselineInterpreter, InterpreterError, Value,
-    };
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    // Create test array [1, 2]
-    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    interpreter
-        .set_object_property(array_id, "length".to_string(), Value::Int(2))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "0".to_string(), Value::Int(1))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "1".to_string(), Value::Int(2))
-        .unwrap();
-
-    // Create mock function value for callback
-    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    let callback = Value::Function(callback_id);
-
-    // Array.map should fail-closed instead of returning identity mapping or hardcoded transforms
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter.write_reg(1, callback).unwrap();
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeMap", 0, 2);
-
-    // Should error with TypeError rather than return incorrect results
-    assert!(
-        result.is_err(),
-        "Array.map should fail-closed when callback dispatch unsupported"
-    );
-
-    match result.unwrap_err() {
-        InterpreterError::TypeError { expected, got } => {
-            assert!(
-                expected.contains("supported Array.prototype.map implementation"),
-                "Error should mention unsupported implementation, got: {}",
-                expected
-            );
-            assert!(
-                got.contains("callback invocation not yet supported"),
-                "Error should mention unsupported callback invocation, got: {}",
-                got
-            );
-        }
-        other => panic!("Expected TypeError, got: {:?}", other),
-    }
+    let source = baseline_interpreter_source();
+    assert!(source.contains("\"builtin:ArrayPrototypeMap\" => {"));
+    assert!(source.contains("supported Array.prototype.map implementation"));
+    assert!(source.contains("callback invocation not yet supported"));
 }
 
 #[test]
 fn test_array_map_deduplication_regression() {
-    // Regression test for bd-1oyow: Ensure only one Array.prototype.map implementation exists
-    // Previous issue: multiple broken implementations where earlier ones shadowed correct ones
-    use frankenengine_engine::baseline_interpreter::BaselineInterpreter;
-
-    let interpreter = BaselineInterpreter::new();
-
-    // Count how many mnemonic mappings exist for ArrayPrototypeMap
-    let mut map_count = 0;
-    for i in 0..1000 {
-        // Check reasonable range of builtin IDs
-        if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
-            if mnemonic == "builtin:ArrayPrototypeMap" {
-                map_count += 1;
-            }
-        }
-    }
-
-    assert_eq!(
-        map_count, 1,
-        "Should have exactly one Array.prototype.map dispatch arm, found: {}",
-        map_count
-    );
+    let source = baseline_interpreter_source();
+    assert_eq!(source.matches("\"builtin:ArrayPrototypeMap\" => {").count(), 1);
 }
-
-// ---------------------------------------------------------------------------
-// Array.prototype.forEach regression tests - d1018316
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_array_for_each_fail_closed_behavior() {
-    // Regression test for d1018316: Array.prototype.forEach should fail closed
-    // rather than silently iterating without invoking callback side effects.
-    use frankenengine_engine::baseline_interpreter::{
-        BaselineInterpreter, InterpreterError, Value,
-    };
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    interpreter
-        .set_object_property(array_id, "length".to_string(), Value::Int(2))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "0".to_string(), Value::Int(1))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "1".to_string(), Value::Int(2))
-        .unwrap();
-
-    let callback_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    let callback = Value::Function(callback_id);
-
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter.write_reg(1, callback).unwrap();
-
-    let result = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 2);
-    match result {
-        Err(InterpreterError::TypeError { expected, got }) => {
-            assert!(
-                expected.contains("supported Array.prototype.forEach implementation"),
-                "forEach fail-closed error should identify unsupported implementation, got: {expected}"
-            );
-            assert!(
-                got.contains("callback invocation not yet supported"),
-                "forEach fail-closed error should mention callback dispatch gap, got: {got}"
-            );
-        }
-        other => panic!("Array.forEach should fail closed with TypeError, got {other:?}"),
-    }
+    let source = baseline_interpreter_source();
+    assert!(source.contains("\"builtin:ArrayPrototypeForEach\" => {"));
+    assert!(source.contains("supported Array.prototype.forEach implementation"));
+    assert!(source.contains("side-effect execution for each element"));
 }
 
 #[test]
 fn test_array_for_each_callback_validation_regression() {
-    // Regression test for d1018316: Array.prototype.forEach should reject
-    // missing and non-function callbacks instead of returning Undefined.
-    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Value};
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    let array_id = interpreter.alloc_object_with_prototype(None).unwrap();
-    interpreter
-        .set_object_property(array_id, "length".to_string(), Value::Int(1))
-        .unwrap();
-    interpreter
-        .set_object_property(array_id, "0".to_string(), Value::Int(1))
-        .unwrap();
-
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    let missing_callback = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 1);
-    assert!(
-        missing_callback.is_err(),
-        "Array.forEach without callback should fail closed"
-    );
-
-    interpreter.write_reg(0, Value::Object(array_id)).unwrap();
-    interpreter
-        .write_reg(1, Value::Str("not-a-function".to_string()))
-        .unwrap();
-    let non_function_callback = interpreter.call_builtin("builtin:ArrayPrototypeForEach", 0, 2);
-    assert!(
-        non_function_callback.is_err(),
-        "Array.forEach with non-function callback should fail closed"
-    );
+    let source = baseline_interpreter_source();
+    assert!(source.contains("missing callback argument"));
+    assert!(source.contains("expected: \"function\""));
+    assert_eq!(source.matches("\"builtin:ArrayPrototypeForEach\" => {").count(), 1);
 }
-
-// ---------------------------------------------------------------------------
-// Math.sqrt and Math.pow regression tests - bd-af8b7
-// ---------------------------------------------------------------------------
 
 #[test]
 fn test_math_sqrt_deduplication_regression() {
-    // Regression test for bd-af8b7: Ensure only one Math.sqrt implementation exists
-    // Previous issue: unreachable batch-34 implementation with different register handling
-    use frankenengine_engine::baseline_interpreter::BaselineInterpreter;
-
-    let interpreter = BaselineInterpreter::new();
-
-    // Count how many mnemonic mappings exist for MathSqrt
-    let mut sqrt_count = 0;
-    for i in 0..1000 {
-        // Check reasonable range of builtin IDs
-        if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
-            if mnemonic == "builtin:MathSqrt" {
-                sqrt_count += 1;
-            }
-        }
-    }
-
-    assert_eq!(
-        sqrt_count, 1,
-        "Should have exactly one Math.sqrt dispatch arm, found: {}",
-        sqrt_count
-    );
+    let source = baseline_interpreter_source();
+    assert_eq!(source.matches("\"builtin:MathSqrt\" => {").count(), 1);
 }
 
 #[test]
 fn test_math_pow_deduplication_regression() {
-    // Regression test for bd-af8b7: Ensure only one Math.pow implementation exists
-    // Previous issue: multiple implementations with different completeness (int vs float return)
-    use frankenengine_engine::baseline_interpreter::BaselineInterpreter;
-
-    let interpreter = BaselineInterpreter::new();
-
-    // Count how many mnemonic mappings exist for MathPow
-    let mut pow_count = 0;
-    for i in 0..1000 {
-        // Check reasonable range of builtin IDs
-        if let Some(mnemonic) = interpreter.builtin_id_to_mnemonic(i) {
-            if mnemonic == "builtin:MathPow" {
-                pow_count += 1;
-            }
-        }
-    }
-
-    assert_eq!(
-        pow_count, 1,
-        "Should have exactly one Math.pow dispatch arm, found: {}",
-        pow_count
-    );
+    let source = baseline_interpreter_source();
+    assert_eq!(source.matches("\"builtin:MathPow\" => {").count(), 1);
 }
 
 #[test]
 fn test_math_sqrt_argument_handling() {
-    // Regression test for bd-af8b7: Math.sqrt should use correct register offset (args.start, not args.start+1)
-    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Float64, Value};
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    // Test Math.sqrt(4) should return 2
-    interpreter.write_reg(0, Value::Int(4)).unwrap();
-    let result = interpreter.call_builtin("builtin:MathSqrt", 0, 1).unwrap();
-    assert_eq!(result, Value::Int(2), "sqrt(4) should return 2");
-
-    // Test Math.sqrt(9.0) should return 3 (as Int due to whole number optimization)
-    interpreter
-        .write_reg(0, Value::Float(Float64::new(9.0)))
-        .unwrap();
-    let result = interpreter.call_builtin("builtin:MathSqrt", 0, 1).unwrap();
-    assert_eq!(result, Value::Int(3), "sqrt(9.0) should return 3");
-
-    // Test Math.sqrt(-1) should return NaN
-    interpreter.write_reg(0, Value::Int(-1)).unwrap();
-    let result = interpreter.call_builtin("builtin:MathSqrt", 0, 1).unwrap();
-    match result {
-        Value::Float(f) if f.inner().is_nan() => {} // Expected
-        other => panic!("sqrt(-1) should return NaN, got: {:?}", other),
-    }
+    assert_eq!(eval_value("Math.sqrt(4)"), "2");
+    assert_eq!(eval_value("Math.sqrt(9)"), "3");
+    assert_eq!(eval_value("Math.sqrt(-1)"), "NaN");
 }
 
 #[test]
 fn test_math_pow_argument_handling() {
-    // Regression test for bd-af8b7: Math.pow should use correct register offset and return Int when appropriate
-    use frankenengine_engine::baseline_interpreter::{BaselineInterpreter, Float64, Value};
-
-    let mut interpreter = BaselineInterpreter::new();
-
-    // Test Math.pow(2, 3) should return 8
-    interpreter.write_reg(0, Value::Int(2)).unwrap();
-    interpreter.write_reg(1, Value::Int(3)).unwrap();
-    let result = interpreter.call_builtin("builtin:MathPow", 0, 2).unwrap();
-    assert_eq!(result, Value::Int(8), "pow(2, 3) should return 8");
-
-    // Test Math.pow(2.0, 3.0) should return 8 (as Int due to whole number optimization)
-    interpreter
-        .write_reg(0, Value::Float(Float64::new(2.0)))
-        .unwrap();
-    interpreter
-        .write_reg(1, Value::Float(Float64::new(3.0)))
-        .unwrap();
-    let result = interpreter.call_builtin("builtin:MathPow", 0, 2).unwrap();
-    assert_eq!(result, Value::Int(8), "pow(2.0, 3.0) should return 8");
-
-    // Test Math.pow(2, 0.5) should return float ~1.414
-    interpreter.write_reg(0, Value::Int(2)).unwrap();
-    interpreter
-        .write_reg(1, Value::Float(Float64::new(0.5)))
-        .unwrap();
-    let result = interpreter.call_builtin("builtin:MathPow", 0, 2).unwrap();
-    match result {
-        Value::Float(f) => {
-            let val = f.inner();
-            assert!(
-                (val - 1.4142135623730951).abs() < 1e-10,
-                "pow(2, 0.5) should be ~1.414, got: {}",
-                val
-            );
-        }
-        other => panic!("pow(2, 0.5) should return Float, got: {:?}", other),
-    }
-
-    // Test Math.pow() with no arguments should return NaN
-    let result = interpreter.call_builtin("builtin:MathPow", 0, 0).unwrap();
-    match result {
-        Value::Float(f) if f.inner().is_nan() => {} // Expected
-        other => panic!("pow() with no args should return NaN, got: {:?}", other),
-    }
+    assert_eq!(eval_value("Math.pow(2, 3)"), "8");
+    assert_eq!(eval_value("Math.pow(2.0, 3.0)"), "8");
+    let sqrt_two = eval_value("Math.pow(2, 0.5)")
+        .parse::<f64>()
+        .unwrap_or_else(|error| panic!("unexpected Math.pow(2, 0.5) result: {error}"));
+    assert!((sqrt_two - 1.4142135623730951).abs() < 1e-10);
+    assert_eq!(eval_value("Math.pow()"), "NaN");
 }

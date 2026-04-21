@@ -46,8 +46,8 @@ fn generate_phase0_artifacts_hermetic(output_dir: &Path) -> Result<(), Box<dyn s
     let proof_note = output_dir.join("proof_note.md");
     let env_json = output_dir.join("env.json");
     let manifest_json = output_dir.join("manifest.json");
-    let repro_lock = output_dir.join("repro.lock");
-    let provenance_json = output_dir.join("provenance.json");
+    let _repro_lock = output_dir.join("repro.lock");
+    let _provenance_json = output_dir.join("provenance.json");
 
     // Generate baseline report or fallback
     let baseline_success = Command::new("cargo")
@@ -372,7 +372,7 @@ fn test_manifest_references_performance_receipt() {
 
     if !manifest_path.exists() {
         // Run the script first if artifacts don't exist
-        let output = run_phase0_script();
+        let output = run_phase0_script_legacy();
         assert!(output.status.success(), "Script should succeed");
     }
 
@@ -417,7 +417,7 @@ fn test_no_placeholder_signatures_in_artifacts() {
     let artifact_dir = repo_root().join("artifacts/parser_phase0");
     if !artifact_dir.exists() {
         // Run the script first if artifacts don't exist
-        let output = run_phase0_script();
+        let output = run_phase0_script_legacy();
         assert!(output.status.success(), "Script should succeed");
     }
 

@@ -67,7 +67,7 @@ fn test_artifact_bundle_validation_comprehensive() {
         let claim_id = format!("test-claim-{}", i);
         let reviewer = format!("reviewer-{}", i);
 
-        let checklist = ReplicationChecklist::new(&claim_id, bundle_path, &reviewer);
+        let checklist = ReplicationChecklist::new(&claim_id, *bundle_path, &reviewer);
         assert!(
             checklist.is_ready_for_replication(),
             "Artifact bundle '{}' should be considered valid",
@@ -228,7 +228,7 @@ fn test_replication_checklist_structural_integrity() {
     let original_reviewer = "test-reviewer-preservation";
 
     let checklist =
-        ReplicationChecklist::new(&original_claim, &original_bundle, &original_reviewer);
+        ReplicationChecklist::new(original_claim, original_bundle, original_reviewer);
 
     assert_eq!(
         checklist.claim_id, original_claim,

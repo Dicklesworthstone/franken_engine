@@ -6605,9 +6605,9 @@ impl InterpreterCore {
             Value::Int(_) | Value::Float(_) => "[object Number]".to_string(),
             Value::Str(_) => "[object String]".to_string(),
             Value::Object(_) => "[object Object]".to_string(),
-            Value::Function(_)
-            | Value::Closure(_)
-            | Value::BuiltinFunction(_) => "[object Function]".to_string(),
+            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
+                "[object Function]".to_string()
+            }
             Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
             Value::Generator(_) => "[object Generator]".to_string(),
             Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
@@ -23255,7 +23255,11 @@ mod tests {
         run_to_string(&mut core, Value::Null, "[object Null]");
         run_to_string(&mut core, Value::Bool(false), "[object Boolean]");
         run_to_string(&mut core, Value::Int(7), "[object Number]");
-        run_to_string(&mut core, Value::Float(Float64::new(1.5)), "[object Number]");
+        run_to_string(
+            &mut core,
+            Value::Float(Float64::new(1.5)),
+            "[object Number]",
+        );
         run_to_string(&mut core, Value::Str("test".to_string()), "[object String]");
 
         // Array-like object with length property should not be treated as an array.
@@ -23267,7 +23271,9 @@ mod tests {
         run_to_string(&mut core, Value::Object(object_id), "[object Object]");
 
         // Arrays should still return the array tag.
-        let array_id = core.alloc_array_from_values(&[Value::Str("x".to_string())]).unwrap();
+        let array_id = core
+            .alloc_array_from_values(&[Value::Str("x".to_string())])
+            .unwrap();
         run_to_string(&mut core, Value::Object(array_id), "[object Array]");
 
         // Runtime callable and object-like tags.
@@ -23279,10 +23285,18 @@ mod tests {
             "[object Function]",
         );
         run_to_string(&mut core, Value::Iterator(3), "[object Iterator]");
-        run_to_string(&mut core, Value::GeneratorFunction(4), "[object GeneratorFunction]");
+        run_to_string(
+            &mut core,
+            Value::GeneratorFunction(4),
+            "[object GeneratorFunction]",
+        );
         run_to_string(&mut core, Value::Generator(5), "[object Generator]");
         run_to_string(&mut core, Value::AsyncFunction(6), "[object AsyncFunction]");
-        run_to_string(&mut core, Value::AsyncFunctionObject(7), "[object AsyncFunction]");
+        run_to_string(
+            &mut core,
+            Value::AsyncFunctionObject(7),
+            "[object AsyncFunction]",
+        );
         run_to_string(
             &mut core,
             Value::AsyncGeneratorFunction(8),
@@ -23294,7 +23308,6 @@ mod tests {
             "[object AsyncGenerator]",
         );
         run_to_string(&mut core, Value::Promise(10), "[object Promise]");
-
     }
 
     #[test]
@@ -23517,10 +23530,8 @@ mod tests {
             interpreter.registers[1] = Value::Str("😀".to_string());
             interpreter.registers[2] = Value::Int(2);
 
-            let result = interpreter.call_builtin_by_id(
-                builtin_id,
-                RegRange { start: 0, count: 3 },
-            );
+            let result =
+                interpreter.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 });
             assert!(
                 matches!(result, Err(InterpreterError::TypeError { .. })),
                 "String.prototype.endsWith should reject non-materializable UTF-16 boundary"

@@ -16,13 +16,15 @@
 Native Rust runtime for adversarial extension workloads, with deterministic replay, cryptographic decision receipts, and fleet-scale containment.
 
 <div align="center">
-<h3>Quick Install</h3>
+<h3>Quick Start From Source</h3>
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh?$(date +%s)" | bash
+git clone https://github.com/Dicklesworthstone/franken_engine.git
+cd franken_engine
+cargo build --workspace --release
 ```
 
-<p><em>Linux, macOS, and Windows support with architecture-aware binaries.</em></p>
+<p><em>This repository currently ships Rust workspace crates and source-built utility binaries, not a packaged installer or prebuilt release binaries.</em></p>
 </div>
 
 ---
@@ -48,16 +50,15 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 | Cross-repo constitution | Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
 | Evidence-first operations | Every published performance and security claim ships with reproducible artifact bundles |
 
-## Quick Example
+## Planned CLI Contract Example
 
-The shipped `frankenctl` CLI provides core execution surfaces and selective 
-operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`, 
-`verify`, `benchmark`, `replay`, `react`, `gates`, `reports`, `test`, `synth`, 
-`orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) 
-for explicitly excluded operator capabilities.
+The `frankenctl` examples below document the intended operator contract. The
+current repository does not ship a `frankenctl` binary; build and verification
+today happen through the Rust workspace crates and the release binaries listed
+in [Installation](#installation).
 
 ```bash
-# 1) Install and verify
+# 1) Verify the future CLI binary once it exists
 frankenctl version
 
 # 2) Create a tiny source file and artifact directory
@@ -320,26 +321,27 @@ See [`docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md`](./docs/RGC_DOCS_HELP_SURFACE_AUDI
 
 ## Installation
 
-### Option 1: One-Line Installer
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh" | bash
-```
-
-### Option 2: Cargo
-
-```bash
-cargo install frankenengine-cli
-```
-
-### Option 3: Build From Source
+### Build From Source
 
 ```bash
 git clone https://github.com/Dicklesworthstone/franken_engine.git
 cd franken_engine
 cargo build --release --workspace
-./target/release/frankenctl version
 ```
+
+The workspace currently publishes source for these crates:
+
+- `frankenengine-engine`
+- `frankenengine-extension-host`
+- `frankenengine-test-support`
+- `frankenengine-metamorphic`
+
+The source tree currently defines these release binaries:
+
+- `franken-react-sidecar`
+- `franken-benchmark-evidence-export`
+
+There is no root `install.sh`, `frankenengine-cli` Cargo package, `frankenctl` binary, or prebuilt Linux/macOS/Windows binary bundle in this repository at this time.
 
 ### Optional Operator Stack
 
@@ -390,9 +392,9 @@ frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace
 
 ## Command Reference
 
-The command table below is the current shipped `frankenctl` contract. Treat
-workspace init, promotion, revocation repair, lockstep diffing, TUI, and API
-serving as roadmap/library surfaces until dedicated CLI beads land them.
+The command table below is the planned `frankenctl` contract. The current
+repository does not build a `frankenctl` binary; treat these commands as
+roadmap/library surfaces until dedicated CLI beads land them.
 
 | Command | Purpose | Example |
 |---|---|---|

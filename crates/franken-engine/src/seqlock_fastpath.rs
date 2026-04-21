@@ -175,6 +175,7 @@ impl<T> SnapshotFastPath<T> {
             return false;
         }
 
+        let _reentrant_guard = ReentrantPublishGuard::enter(self);
         let _writer_guard = self.lock_writer_gate();
         if self.is_initialized() {
             return false;
@@ -767,6 +768,24 @@ mod tests {
         assert_eq!(after_recovery.value, 17);
         assert_eq!(after_recovery.source, FastPathReadSource::FastPath);
         assert_eq!(fast_path.telemetry().writes, 1);
+    }
+
+    #[test]
+    fn reentrant_seed_hook_panics_without_self_deadlocking() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            fast_path.publish_with_hook(11_u64, || {
+                fast_path.seed_if_uninitialized(13_u64);
+            });
+        }));
+        assert!(panic_result.is_err());
+        assert!(!fast_path.is_initialized());
+
+        assert!(fast_path.seed_if_uninitialized(17_u64));
+        let after_recovery = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(after_recovery.value, 17);
+        assert_eq!(after_recovery.source, FastPathReadSource::FastPath);
     }
 
     #[test]

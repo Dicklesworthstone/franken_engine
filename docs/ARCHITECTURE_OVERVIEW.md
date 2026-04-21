@@ -4,7 +4,7 @@
 **Date**: April 2026  
 **Bead**: bd-axlvk.1
 
-FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically explicit security and deterministic replay capabilities. This document provides a high-level architectural overview for developers getting oriented in the 455+ module codebase.
+FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically explicit security and deterministic replay capabilities. This document provides a high-level architectural overview for developers getting oriented in the Rust module graph. Generated module, gate, export, and binary counts are tracked in [ARCHITECTURE_INVENTORY.md](ARCHITECTURE_INVENTORY.md).
 
 ---
 
@@ -114,11 +114,12 @@ FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically ex
 
 ### Governance Components
 
-#### Gate System (53 modules)
+#### Gate System
 - **Purpose**: Evidence-backed validation at every execution boundary
 - **Examples**: `parity_gate.rs`, `security_gate.rs`, `performance_gate.rs`
 - **Function**: Prevents progression without verified evidence of correctness
 - **Integration**: Embedded throughout pipeline at critical decision points
+- **Inventory**: Current `*_gate.rs` count is generated in `docs/ARCHITECTURE_INVENTORY.md`
 
 #### Capability Framework
 - **Authority Domains**: Hierarchical permission boundaries
@@ -182,5 +183,6 @@ This architecture achieves **category-defining performance/security posture** be
 - **Governance**: `*_gate.rs`, `*_governance.rs`, `security_epoch.rs`
 - **Evidence**: `evidence_ledger.rs`, `audit_trail.rs`, `replay_*.rs`
 - **Infrastructure**: `execution_orchestrator.rs`, `resource_management.rs`
+- **Generated Inventory**: `docs/ARCHITECTURE_INVENTORY.md` records the current source modules, `lib.rs` exports, gate modules, disabled exports, and release binaries.
 
 This document provides the essential mental model for navigating FrankenEngine's architecture. For implementation details, start with the modules listed above and follow the data flow patterns described in the pipeline diagram.

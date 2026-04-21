@@ -14,6 +14,10 @@ path = "src/bin/franken_react_sidecar.rs"
 name = "franken-benchmark-evidence-export"
 path = "src/bin/franken_benchmark_evidence_export.rs"
 
+[[bin]]
+name = "franken-architecture-inventory"
+path = "src/bin/franken_architecture_inventory.rs"
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

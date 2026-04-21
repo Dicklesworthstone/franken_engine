@@ -188,3 +188,78 @@ fn object_to_string_tag_uses_internal_metadata_metamorphic_relation() {
     assert_eq!(shaped_array_tag, empty_array_tag);
     assert_ne!(array_like_object_tag, shaped_array_tag);
 }
+
+#[test]
+fn object_to_string_tag_covers_primitive_builtin_tags() {
+    let cases = [
+        (
+            vec![
+                Ir3Instruction::LoadUndefined { dst: 0 },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+            "[object Undefined]",
+        ),
+        (
+            vec![
+                Ir3Instruction::LoadNull { dst: 0 },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+            "[object Null]",
+        ),
+        (
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: true,
+                },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+            "[object Boolean]",
+        ),
+        (
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+            "[object Number]",
+        ),
+        (
+            vec![
+                Ir3Instruction::LoadFloat {
+                    dst: 0,
+                    bits: 1.5_f64.to_bits(),
+                },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+            "[object Number]",
+        ),
+        (
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                object_tag_instruction(0, 0),
+                Ir3Instruction::Halt,
+            ],
+            vec!["tag-source".to_string()],
+            "[object String]",
+        ),
+    ];
+
+    for (instructions, constant_pool, expected) in cases {
+        let tag = run_value(instructions, constant_pool)
+            .expect("Object.prototype.toString primitive tag should execute");
+        assert_eq!(tag, Value::Str(expected.to_string()));
+    }
+}

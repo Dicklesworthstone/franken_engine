@@ -340,6 +340,7 @@ dependencies = [
 name = "frankenengine-engine-fuzz"
 version = "0.0.0"
 dependencies = [
+ "arbitrary",
  "frankenengine-engine",
  "libfuzzer-sys",
  "serde_json",

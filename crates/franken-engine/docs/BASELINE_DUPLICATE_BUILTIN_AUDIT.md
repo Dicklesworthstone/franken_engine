@@ -65,6 +65,12 @@ Regression tests in `baseline_interpreter.rs` now exercise the high-risk alias
 groups through mapped builtin IDs so future duplicate-arm regressions are caught
 at the dispatch boundary, not only at helper level.
 
+`tests/baseline_interpreter_conformance.rs` also compares the canonical
+dispatch-arm inventory against the golden artifact at
+`tests/golden_vectors/baseline_dispatch_arms.txt`. Any added duplicate changes
+the total/unique/duplicate counts and fails the conformance test until the
+runtime dispatch table and golden are reviewed together.
+
 ## Closure Criteria
 
 `bd-1n5s6` is considered satisfied when the scan above remains at zero duplicate

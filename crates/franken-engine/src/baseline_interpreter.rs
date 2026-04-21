@@ -299,6 +299,7 @@ pub enum Value {
 pub enum BuiltinFunctionKind {
     Require,
     IteratorNext,
+    IteratorSelf,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -329,10 +330,19 @@ impl BuiltinFunction {
         }
     }
 
+    fn iterator_self(iterator_handle: u32) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::IteratorSelf,
+            module_specifier: String::new(),
+            iterator_handle: Some(iterator_handle),
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::IteratorNext => "next",
+            BuiltinFunctionKind::IteratorSelf => "@@iterator",
         }
     }
 }
@@ -2526,6 +2536,16 @@ impl InterpreterCore {
                 let next_value = self.advance_for_of_iterator(Value::Iterator(iterator_handle))?;
                 self.alloc_iterator_result_object(next_value)
             }
+            BuiltinFunctionKind::IteratorSelf => {
+                let iterator_handle =
+                    builtin
+                        .iterator_handle
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "iterator-bound builtin".to_string(),
+                            got: "missing iterator handle".to_string(),
+                        })?;
+                Ok(Value::Iterator(iterator_handle))
+            }
         }
     }
 
@@ -4048,7 +4068,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let key_str = self.property_key_from_value(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
@@ -4073,7 +4093,7 @@ impl InterpreterCore {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     let set_val = self.read_reg(val)?;
-                    let key_str = Self::property_key(&key_val);
+                    let key_str = self.property_key_from_value(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
@@ -4092,7 +4112,7 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
-                    let key_str = Self::property_key(&key_val);
+                    let key_str = self.property_key_from_value(&key_val);
 
                     match obj_val {
                         Value::Object(oid) => {
@@ -5510,7 +5530,7 @@ impl InterpreterCore {
     }
 
     fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let key = Self::property_key(&self.read_reg(lhs)?);
+        let key = self.property_key_from_value(&self.read_reg(lhs)?);
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
@@ -5632,6 +5652,9 @@ impl InterpreterCore {
     fn iterator_property_value(&self, iterator_handle: u32, key: &str) -> Value {
         match key {
             "next" => Value::BuiltinFunction(BuiltinFunction::iterator_next(iterator_handle)),
+            "@@iterator" | "Symbol.iterator" => {
+                Value::BuiltinFunction(BuiltinFunction::iterator_self(iterator_handle))
+            }
             _ => Value::Undefined,
         }
     }
@@ -6548,6 +6571,21 @@ impl InterpreterCore {
         }
     }
 
+    fn property_key_from_value(&self, value: &Value) -> String {
+        if let Value::Object(object_id) = value
+            && let Some(object) = self.heap.get(object_id.0 as usize)
+            && matches!(
+                object.properties.get("__type"),
+                Some(Value::Str(kind)) if kind == "Symbol"
+            )
+            && let Some(Value::Str(key)) = object.properties.get("__key")
+        {
+            return key.clone();
+        }
+
+        Self::property_key(value)
+    }
+
     #[allow(dead_code)] // Kept for potential integer-only operations; tested below
     fn coerce_to_number(value: &Value) -> Option<i64> {
         match value {
@@ -6994,7 +7032,7 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
-                    let key_string = Self::property_key(&key_value);
+                    let key_string = self.property_key_from_value(&key_value);
                     let value = match object_value {
                         Value::Object(object_id) => self
                             .heap
@@ -7023,7 +7061,7 @@ impl InterpreterCore {
                         Value::Object(object_id) => {
                             self.set_object_property(
                                 object_id,
-                                Self::property_key(&key_value),
+                                self.property_key_from_value(&key_value),
                                 property_value,
                             )?;
                         }
@@ -7567,43 +7605,11 @@ impl InterpreterCore {
 
                 let arg = self.read_reg(args.start)?;
                 match arg {
-                    Value::Object(obj_id) => {
-                        // Check if object has array-like characteristics
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            // An array-like object should have a "length" property
-                            if let Some(length_val) = obj.properties.get("length") {
-                                // Additional check: verify the length is a non-negative integer
-                                match length_val {
-                                    Value::Int(len) if *len >= 0 => {
-                                        // Check if object has numeric properties consistent with array
-                                        let len_u32 = *len as u32;
-                                        let mut has_array_pattern = true;
-
-                                        // Basic validation: check that numeric properties exist for indices < length
-                                        for i in 0..len_u32.min(10) {
-                                            // Check first 10 elements for efficiency
-                                            if !obj.properties.contains_key(&i.to_string()) {
-                                                has_array_pattern = false;
-                                                break;
-                                            }
-                                        }
-
-                                        // If length is 0, it's still an array
-                                        if len_u32 == 0 {
-                                            has_array_pattern = true;
-                                        }
-
-                                        Ok(Value::Bool(has_array_pattern))
-                                    }
-                                    _ => Ok(Value::Bool(false)), // Invalid length property
-                                }
-                            } else {
-                                Ok(Value::Bool(false)) // No length property
-                            }
-                        } else {
-                            Ok(Value::Bool(false)) // Object not found
-                        }
-                    }
+                    Value::Object(obj_id) => Ok(Value::Bool(
+                        self.heap
+                            .get(obj_id.0 as usize)
+                            .is_some_and(|object| object.is_array),
+                    )),
                     _ => Ok(Value::Bool(false)), // Non-object values are not arrays
                 }
             }
@@ -8215,29 +8221,17 @@ impl InterpreterCore {
                                 .map(|(k, v)| (k.clone(), v.clone()))
                                 .collect();
 
-                            let array_id = self.alloc_array_with_prototype(None)?;
+                            let mut entry_values = Vec::with_capacity(entries.len());
 
                             // Set array elements as numeric properties, each containing a [key, value] pair
-                            for (index, (key, value)) in entries.iter().enumerate() {
+                            for (key, value) in &entries {
                                 let entry_array_id = self.alloc_array_from_values(&[
                                     Value::Str(key.clone()),
                                     value.clone(),
                                 ])?;
-
-                                // Add the entry array to the main array
-                                self.set_object_property(
-                                    array_id,
-                                    index.to_string(),
-                                    Value::Object(entry_array_id),
-                                )?;
+                                entry_values.push(Value::Object(entry_array_id));
                             }
-
-                            // Set length property for the main array
-                            self.set_object_property(
-                                array_id,
-                                "length".to_string(),
-                                Value::Int(entries.len() as i64),
-                            )?;
+                            let array_id = self.alloc_array_from_values(&entry_values)?;
 
                             Ok(Value::Object(array_id))
                         } else {
@@ -16340,9 +16334,13 @@ mod tests {
         assert_eq!(properties.get("length"), Some(&Value::Int(2)));
     }
 
-    fn iterator_next_via_property(core: &mut InterpreterCore, iterator: Value) -> Value {
+    fn iterator_method_via_property(
+        core: &mut InterpreterCore,
+        iterator: Value,
+        key: Value,
+    ) -> Value {
         core.registers[0] = iterator;
-        core.registers[1] = Value::Str("next".to_string());
+        core.registers[1] = key;
         core.execute(&test_module(vec![
             Ir3Instruction::GetProperty {
                 obj: 0,
@@ -16357,8 +16355,12 @@ mod tests {
             },
             Ir3Instruction::Return { value: 3 },
         ]))
-        .expect("iterator next property call should execute")
+        .expect("iterator property method call should execute")
         .value
+    }
+
+    fn iterator_next_via_property(core: &mut InterpreterCore, iterator: Value) -> Value {
+        iterator_method_via_property(core, iterator, Value::Str("next".to_string()))
     }
 
     fn assert_iterator_result(
@@ -17895,6 +17897,70 @@ mod tests {
         assert_iterator_result(&core, third_result, false, Value::Int(30));
 
         assert_eq!(core.advance_for_of_iterator(iterator).unwrap(), None);
+    }
+
+    #[test]
+    fn array_iterator_symbol_iterator_method_returns_same_iterator() {
+        // ECMA-262 array iterator objects expose @@iterator as an identity method.
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(&mut core, 2, &[(0, Value::Int(7)), (1, Value::Int(9))]);
+        core.registers[0] = Value::Object(array_id);
+
+        let iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+        let symbol_iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:SymbolIterator",
+                RegRange { start: 0, count: 0 },
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            iterator_method_via_property(&mut core, iterator.clone(), symbol_iterator),
+            iterator
+        );
+        assert_eq!(
+            iterator_method_via_property(
+                &mut core,
+                iterator.clone(),
+                Value::Str("@@iterator".to_string())
+            ),
+            iterator
+        );
+
+        let first_result = iterator_next_via_property(&mut core, iterator);
+        assert_iterator_result(&core, first_result, false, Value::Int(7));
+    }
+
+    #[test]
+    fn array_iterator_next_after_close_returns_done_result() {
+        // IteratorClose marks the array iterator complete; later next() calls stay done.
+        let mut core = quickjs_test_core();
+        let array_id = seed_array(&mut core, 2, &[(0, Value::Int(1)), (1, Value::Int(2))]);
+        core.registers[0] = Value::Object(array_id);
+
+        let iterator = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypeValues",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .unwrap();
+
+        core.close_iterator(iterator.clone(), IteratorCloseReason::Break)
+            .unwrap();
+
+        let done_result = iterator_next_via_property(&mut core, iterator.clone());
+        assert_iterator_result(&core, done_result, true, Value::Undefined);
+
+        let repeated_done_result = iterator_next_via_property(&mut core, iterator);
+        assert_iterator_result(&core, repeated_done_result, true, Value::Undefined);
     }
 
     #[test]

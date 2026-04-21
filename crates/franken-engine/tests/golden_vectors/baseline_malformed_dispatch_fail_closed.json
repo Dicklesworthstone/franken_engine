@@ -1,0 +1,21 @@
+{
+  "coverage_gap": "baseline_interpreter malformed dispatch inputs",
+  "binding_kind_error": {
+    "kind": "type_error",
+    "expected": "binding kind 0..=4",
+    "got": "kind 99"
+  },
+  "invalid_utf16_index_of": {
+    "kind": "type_error",
+    "expected": "valid UTF-16 boundary for indexOf",
+    "got": "invalid UTF-16 unit slice at position 1"
+  },
+  "valid_utf16_includes": {
+    "kind": "bool",
+    "value": true
+  },
+  "valid_utf16_starts_with": {
+    "kind": "bool",
+    "value": true
+  }
+}

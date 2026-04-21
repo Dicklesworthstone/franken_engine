@@ -1,0 +1,34 @@
+{
+  "coverage_gap": "seqlock_fastpath recovery and telemetry surface",
+  "policy": {
+    "max_retries": 4,
+    "max_writer_pressure_observations": 2
+  },
+  "seeded_first": true,
+  "seeded_again": false,
+  "initial_read": {
+    "value": 17,
+    "source": "fast_path",
+    "attempts": 0,
+    "writer_pressure_observations": 0,
+    "fallback_reason": null
+  },
+  "after_publish": {
+    "value": 23,
+    "source": "fast_path",
+    "attempts": 0,
+    "writer_pressure_observations": 0,
+    "fallback_reason": null
+  },
+  "telemetry": {
+    "total_reads": 2,
+    "fast_path_reads": 2,
+    "fallback_reads": 0,
+    "total_retries": 0,
+    "writer_pressure_observations": 0,
+    "retry_budget_fallbacks": 0,
+    "uninitialized_fallbacks": 0,
+    "writer_pressure_fallbacks": 0,
+    "writes": 1
+  }
+}

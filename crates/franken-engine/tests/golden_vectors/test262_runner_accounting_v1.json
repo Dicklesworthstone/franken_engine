@@ -1,0 +1,34 @@
+{
+  "coverage_gap": "test262_conformance_runner accounting and category mapping",
+  "category_cases": [
+    {
+      "path": "language/expressions/addition.js",
+      "category": "language"
+    },
+    {
+      "path": "built-ins/Array/prototype/push.js",
+      "category": "built-ins"
+    },
+    {
+      "path": "intl402/DateTimeFormat/basic.js",
+      "category": "intl"
+    },
+    {
+      "path": "annexes/legacy-escape.js",
+      "category": "annexes"
+    },
+    {
+      "path": "harness/assert.js",
+      "category": "harness"
+    }
+  ],
+  "overall": {
+    "total_tests": 4,
+    "passed": 1,
+    "failed": 1,
+    "skipped": 1,
+    "errored": 1,
+    "pass_rate_millionths": 250000,
+    "total_duration_us": 100
+  }
+}

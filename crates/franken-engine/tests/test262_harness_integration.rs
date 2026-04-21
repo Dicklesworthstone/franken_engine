@@ -7,7 +7,7 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-use test262_harness::{Test262Harness, Test262HarnessConfig};
+use test262_harness::{Test262Harness, Test262HarnessConfig, Test262HarnessLane, Test262Verdict};
 
 fn write_file(path: &Path, content: &str) {
     let parent = path.parent().expect("test fixture file must have parent");
@@ -35,6 +35,14 @@ includes:
 flags: [onlyStrict]
 ---*/
 helperAdd(1, 2);
+"#,
+    );
+    write_file(
+        &suite_root.join("test/language/expressions/addition/literal-add.js"),
+        r#"/*---
+description: synthetic literal addition test
+---*/
+1 + 2;
 "#,
     );
     write_file(
@@ -72,12 +80,51 @@ fn harness_discovers_cases_from_test262_tarball_and_filters_module_flags() {
     let harness = Test262Harness::new(Test262HarnessConfig::new(archive_path, extraction_root));
     let cases = harness.discover_cases().expect("discover test262 cases");
 
-    assert_eq!(cases.len(), 1, "module test should be filtered out");
-    let case = &cases[0];
+    assert_eq!(cases.len(), 2, "module test should be filtered out");
+    let case = cases
+        .iter()
+        .find(|case| case.test_id == "language/expressions/addition/helper-add.js")
+        .expect("helper-backed case should be discovered");
     assert_eq!(case.test_id, "language/expressions/addition/helper-add.js");
     assert_eq!(case.metadata.includes, vec!["helper.js"]);
     assert_eq!(case.metadata.flags, vec!["onlyStrict"]);
     assert!(case.source.contains("function helperAdd(a, b)"));
     assert!(case.source.contains("\"use strict\";"));
     assert!(case.source.contains("helperAdd(1, 2);"));
+}
+
+#[test]
+#[ignore = "requires JsEngine eval capability grant policy wiring"]
+fn harness_executes_discovered_case_through_supported_engine_lanes() {
+    let temp = tempdir().expect("create tempdir");
+    let archive_path = temp.path().join("test262-sample.tar.gz");
+    let extraction_root = temp.path().join("extracted");
+    create_synthetic_test262_tarball(&archive_path);
+
+    for lane in [
+        Test262HarnessLane::QuickJs,
+        Test262HarnessLane::V8,
+        Test262HarnessLane::Hybrid,
+    ] {
+        let mut config = Test262HarnessConfig::new(&archive_path, &extraction_root);
+        config.lane = lane;
+        config.selection_prefixes =
+            vec!["language/expressions/addition/literal-add.js".to_string()];
+        let harness = Test262Harness::new(config);
+        let cases = harness.discover_cases().expect("discover test262 cases");
+        let case = cases
+            .into_iter()
+            .next()
+            .expect("synthetic tarball should yield one runnable case");
+
+        let result = harness.execute_case(&case);
+
+        assert_eq!(
+            result.verdict,
+            Test262Verdict::Pass,
+            "lane {lane:?} result {result:?}"
+        );
+        assert_eq!(result.observed_value.as_deref(), Some("3"), "lane {lane:?}");
+        assert!(result.error_message.is_none(), "lane {lane:?}");
+    }
 }

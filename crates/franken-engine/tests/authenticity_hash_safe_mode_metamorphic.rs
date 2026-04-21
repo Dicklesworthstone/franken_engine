@@ -1,9 +1,26 @@
 #![forbid(unsafe_code)]
 
-use frankenengine_engine::hash_tiers::{AuthenticityHash, HashError};
+use frankenengine_engine::hash_tiers::{AuthenticityHash, HashAlgorithm, HashError};
 
 const KEY: &[u8] = b"bd-22jta-safe-mode-key";
 const DATA: &[u8] = b"bd-22jta-safe-mode-payload";
+
+fn assert_keyed_hash_unavailable_round_trips(err: HashError, expected_reason: &str) {
+    let json = serde_json::to_string(&err).expect("hash errors serialize");
+    let restored: HashError = serde_json::from_str(&json).expect("hash errors deserialize");
+    assert_eq!(restored, err, "safe-mode hash errors must be serde-stable");
+
+    match err {
+        HashError::KeyedHashUnavailable { algorithm, reason } => {
+            assert_eq!(algorithm, HashAlgorithm::SipInspiredKeyed);
+            assert!(
+                reason.contains(expected_reason),
+                "expected reason containing {expected_reason:?}, got {reason:?}"
+            );
+        }
+        other => panic!("expected keyed-hash safe-mode error, got {other:?}"),
+    }
+}
 
 #[test]
 fn try_compute_keyed_matches_infallible_wrapper_equivalence_mr() {
@@ -15,6 +32,27 @@ fn try_compute_keyed_matches_infallible_wrapper_equivalence_mr() {
         fallible, infallible,
         "fallible safe-mode API must be equivalent to the infallible wrapper on valid inputs"
     );
+}
+
+#[test]
+fn try_compute_keyed_rejects_invalid_safe_mode_keys_mr() {
+    let cases = [
+        (Vec::new(), "empty key"),
+        (vec![0xa5; 4097], "exceeds maximum"),
+    ];
+
+    for (key, expected_reason) in cases {
+        let err = AuthenticityHash::try_compute_keyed(&key, DATA)
+            .expect_err("invalid safe-mode key must fail closed");
+        assert_keyed_hash_unavailable_round_trips(err, expected_reason);
+    }
+}
+
+#[test]
+fn safe_keyed_verify_rejects_invalid_key_before_tag_shape_mr() {
+    let err = AuthenticityHash::safe_keyed_verify(b"", DATA, &[0u8; 1])
+        .expect_err("local key misconfiguration should fail closed deterministically");
+    assert_keyed_hash_unavailable_round_trips(err, "empty key");
 }
 
 #[test]

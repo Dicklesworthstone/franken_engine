@@ -186,8 +186,8 @@ impl AuthenticityHash {
         data: &[u8],
         candidate_tag: &[u8],
     ) -> Result<bool, HashError> {
-        let candidate = Self::try_from_slice(candidate_tag)?;
         let expected = Self::try_compute_keyed(key, data)?;
+        let candidate = Self::try_from_slice(candidate_tag)?;
         Ok(candidate.constant_time_eq(&expected))
     }
 
@@ -357,11 +357,32 @@ fn collision_resistant_hash(input: &[u8]) -> [u8; 32] {
 
 /// Keyed hash: HMAC-SHA256 over the data.
 fn keyed_hash(key: &[u8], data: &[u8]) -> [u8; 32] {
-    try_keyed_hash(key, data).expect("HMAC-SHA256 accepts keys of any size")
+    raw_keyed_hash(key, data).expect("HMAC-SHA256 accepts legacy key sizes")
 }
 
 /// Fallible keyed hash: HMAC-SHA256 over the data.
 fn try_keyed_hash(key: &[u8], data: &[u8]) -> Result<[u8; 32], HashError> {
+    validate_safe_mode_key(key)?;
+    raw_keyed_hash(key, data)
+}
+
+fn validate_safe_mode_key(key: &[u8]) -> Result<(), HashError> {
+    let reason = if key.is_empty() {
+        Some("empty key".to_string())
+    } else if key.len() > 4096 {
+        Some(format!("key length {} exceeds maximum 4096", key.len()))
+    } else {
+        None
+    };
+    reason.map_or(Ok(()), |reason| {
+        Err(HashError::KeyedHashUnavailable {
+            algorithm: HashAlgorithm::SipInspiredKeyed,
+            reason,
+        })
+    })
+}
+
+fn raw_keyed_hash(key: &[u8], data: &[u8]) -> Result<[u8; 32], HashError> {
     type HmacSha256 = Hmac<Sha256>;
     let mut mac =
         HmacSha256::new_from_slice(key).map_err(|err| HashError::KeyedHashUnavailable {

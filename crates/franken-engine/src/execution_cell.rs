@@ -992,7 +992,11 @@ impl ExtensionHostBinding {
 
     /// Number of active extensions.
     pub fn active_extension_count(&self) -> usize {
-        self.manager.active_count()
+        self.manager
+            .cells
+            .values()
+            .filter(|cell| cell.kind() == CellKind::Extension)
+            .count()
     }
 
     /// Number of evidence entries emitted.
@@ -2125,6 +2129,20 @@ mod tests {
                 "extension_unload"
             ]
         );
+    }
+
+    #[test]
+    fn binding_active_extension_count_excludes_session_cells() {
+        let mut binding = ExtensionHostBinding::new(DrainDeadline::default());
+        let mut cx = mock_cx(500);
+
+        binding
+            .load_extension("ext-1", &mut cx, "d-1", "p-1")
+            .unwrap();
+        let _ = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+
+        assert_eq!(binding.manager().active_count(), 2);
+        assert_eq!(binding.active_extension_count(), 1);
     }
 
     #[test]

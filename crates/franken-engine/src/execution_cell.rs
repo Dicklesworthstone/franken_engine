@@ -732,6 +732,7 @@ pub struct CellCloseReport {
 #[derive(Debug)]
 pub struct ExtensionHostBinding {
     manager: CellManager,
+    sessions_by_extension: BTreeMap<String, Vec<String>>,
     evidence_log: Vec<LifecycleEvidenceEntry>,
     event_sequence: u64,
     default_drain_deadline: DrainDeadline,
@@ -742,6 +743,7 @@ impl ExtensionHostBinding {
     pub fn new(default_drain_deadline: DrainDeadline) -> Self {
         Self {
             manager: CellManager::new(),
+            sessions_by_extension: BTreeMap::new(),
             evidence_log: Vec::new(),
             event_sequence: 0,
             default_drain_deadline,
@@ -789,6 +791,9 @@ impl ExtensionHostBinding {
             &policy_id,
         );
         let _ = self.manager.insert_cell(&ext_id, cell)?;
+        self.sessions_by_extension
+            .entry(ext_id.clone())
+            .or_default();
 
         self.emit_evidence(
             &trace_id,
@@ -818,6 +823,12 @@ impl ExtensionHostBinding {
         let session_id = session_id.into();
         let trace_id = trace_id.into();
 
+        if self.manager.cells.contains_key(&session_id) {
+            return Err(CellError::CellAlreadyExists {
+                cell_id: session_id,
+            });
+        }
+
         let (decision_id, policy_id, session_cell) = {
             let cell =
                 self.manager
@@ -834,6 +845,10 @@ impl ExtensionHostBinding {
         };
 
         let _ = self.manager.insert_cell(&session_id, session_cell)?;
+        self.sessions_by_extension
+            .entry(extension_id.to_string())
+            .or_default()
+            .push(session_id.clone());
 
         self.emit_evidence(
             &trace_id,
@@ -875,9 +890,23 @@ impl ExtensionHostBinding {
         let budget_before_close = cell.total_budget_consumed_ms();
 
         let deadline = self.default_drain_deadline;
+        let session_ids = self
+            .sessions_by_extension
+            .get(extension_id)
+            .cloned()
+            .unwrap_or_default();
+        for session_id in &session_ids {
+            if self.manager.cells.contains_key(session_id) {
+                let _ = self
+                    .manager
+                    .close_cell(session_id, cx, reason.clone(), deadline)?;
+            }
+        }
+
         let result = self
             .manager
             .close_cell(extension_id, cx, reason.clone(), deadline)?;
+        self.sessions_by_extension.remove(extension_id);
 
         // Budget includes all prior execute_effect calls plus the close transition.
         let total_budget = budget_before_close.saturating_add(CELL_TRANSITION_BUDGET_MS);
@@ -927,7 +956,18 @@ impl ExtensionHostBinding {
         cx: &mut C,
         reason: CancelReason,
     ) -> Vec<Result<CellCloseReport, CellError>> {
-        let cell_ids: Vec<String> = self.manager.cells.keys().cloned().collect();
+        let cell_ids: Vec<String> = self
+            .manager
+            .cells
+            .iter()
+            .filter_map(|(cell_id, cell)| {
+                if cell.kind() == CellKind::Extension {
+                    Some(cell_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let mut reports = Vec::new();
         for cell_id in cell_ids {
             reports.push(self.unload_extension(&cell_id, cx, reason.clone()));
@@ -2038,6 +2078,9 @@ mod tests {
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
             .unwrap();
         assert!(report.success);
+        assert_eq!(binding.active_extension_count(), 0);
+        assert!(binding.manager().get("sess-1").is_none());
+        assert!(binding.manager().get("sess-2").is_none());
 
         // Verify evidence trace
         assert_eq!(binding.evidence_count(), 4); // load + 2 sessions + unload
@@ -2057,6 +2100,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn binding_unload_extension_closes_registered_session_cells() {
+        let mut binding = ExtensionHostBinding::new(DrainDeadline::default());
+        let mut cx = mock_cx(500);
+
+        binding
+            .load_extension("ext-1", &mut cx, "d-1", "p-1")
+            .unwrap();
+        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
+        assert_eq!(binding.manager().active_count(), 3);
+
+        let report = binding
+            .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
+            .unwrap();
+
+        assert!(report.success);
+        assert_eq!(binding.manager().active_count(), 0);
+        assert!(binding.manager().get("ext-1").is_none());
+        assert!(binding.manager().get("sess-1").is_none());
+        assert!(binding.manager().get("sess-2").is_none());
+        let closed_ids: Vec<&str> = binding
+            .manager()
+            .closed_results()
+            .iter()
+            .map(|(cell_id, _)| cell_id.as_str())
+            .collect();
+        assert_eq!(closed_ids, vec!["sess-1", "sess-2", "ext-1"]);
+    }
+
     // -----------------------------------------------------------------------
     // ExtensionHostBinding — concurrent extension isolation
     // -----------------------------------------------------------------------
@@ -2072,6 +2145,8 @@ mod tests {
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
             .unwrap();
+        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        binding.start_session("ext-2", "sess-2", "t-s2").unwrap();
 
         // Execute effects in ext-1
         binding
@@ -2088,6 +2163,8 @@ mod tests {
         assert!(report.success);
 
         // ext-2 is still running, unaffected
+        assert!(binding.manager().get("sess-1").is_none());
+        assert!(binding.manager().get("sess-2").is_some());
         let cell2 = binding.manager().get("ext-2").unwrap();
         assert_eq!(cell2.state(), RegionState::Running);
         assert_eq!(cell2.total_budget_consumed_ms(), 0);

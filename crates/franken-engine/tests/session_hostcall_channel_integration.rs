@@ -1,7 +1,7 @@
 //! Integration tests for the `session_hostcall_channel` module.
 //!
 //! Covers: SessionState/SequencePolicy Display, SessionConfig defaults,
-//! SessionChannelError Display for all 13 variants, identity/config validation,
+//! SessionChannelError Display for all variants, identity/config validation,
 //! session lifecycle (create/send/receive/close), backpressure signaling,
 //! AEAD nonce derivation, shared-buffer transport, multi-session isolation,
 //! replay detection and escalation, expiry policies, and structured events.
@@ -784,7 +784,7 @@ fn backpressure_signal_fails_on_closed_session() {
 
 #[test]
 fn backpressure_signal_fails_on_nonexistent_session() {
-    let channel = SessionHostcallChannel::new();
+    let mut channel = SessionHostcallChannel::new();
     let handle = SessionHandle {
         session_id: "ghost".into(),
     };
@@ -815,6 +815,47 @@ fn verify_signal_rejects_wrong_session_binding() {
         .verify_authenticated_signal(&wrong_handle, &signal)
         .expect_err("should fail");
     assert!(matches!(err, SessionChannelError::SessionNotFound { .. }));
+}
+
+#[test]
+fn verify_signal_rejects_after_session_close() {
+    let mut channel = SessionHostcallChannel::new();
+    let handle = create_basic_session(&mut channel, "sess-verify-closed");
+    let signal = channel
+        .authenticated_backpressure_signal(&handle, 1, 10, "trace-sig", 101)
+        .expect("signal");
+
+    channel
+        .close_session(&handle, "trace-close", 200, None, None)
+        .expect("close");
+
+    let err = channel
+        .verify_authenticated_signal(&handle, &signal)
+        .expect_err("closed sessions must reject stale control signals");
+    assert!(matches!(
+        err,
+        SessionChannelError::SessionNotEstablished {
+            state: SessionState::Closed,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn verify_signal_rejects_duplicate_replay() {
+    let mut channel = SessionHostcallChannel::new();
+    let handle = create_basic_session(&mut channel, "sess-verify-replay");
+    let signal = channel
+        .authenticated_backpressure_signal(&handle, 1, 10, "trace-sig", 101)
+        .expect("signal");
+
+    channel
+        .verify_authenticated_signal(&handle, &signal)
+        .expect("first verify consumes signal sequence");
+    let err = channel
+        .verify_authenticated_signal(&handle, &signal)
+        .expect_err("second verify must be a replay");
+    assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
 }
 
 // ---------------------------------------------------------------------------

@@ -1672,7 +1672,7 @@ fn shared_buffer_sequence_continues_from_inline() {
 
 #[test]
 fn verify_signal_on_nonexistent_session() {
-    let channel = SessionHostcallChannel::new();
+    let mut channel = SessionHostcallChannel::new();
     let handle = SessionHandle {
         session_id: "ghost".into(),
     };
@@ -1695,11 +1695,11 @@ fn verify_signal_on_nonexistent_session() {
 }
 
 // ===========================================================================
-// 53) Multiple signals from same session produce consistent MACs
+// 53) Multiple signals from same session reserve unique control sequences
 // ===========================================================================
 
 #[test]
-fn multiple_signals_same_params_produce_same_mac() {
+fn multiple_signals_same_params_produce_unique_sequences_and_macs() {
     let mut channel = SessionHostcallChannel::new();
     let handle = create_basic_session(&mut channel, "sess-sig-consistent");
 
@@ -1710,7 +1710,11 @@ fn multiple_signals_same_params_produce_same_mac() {
         .authenticated_backpressure_signal(&handle, 5, 10, "trace-bp", 101)
         .unwrap();
 
-    assert_eq!(sig1.mac, sig2.mac, "same inputs should produce same MAC");
+    assert_ne!(sig1.sequence, sig2.sequence);
+    assert_ne!(
+        sig1.mac, sig2.mac,
+        "reserved signal sequence must bind otherwise identical control envelopes"
+    );
 }
 
 // ===========================================================================

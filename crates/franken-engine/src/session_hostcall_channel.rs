@@ -293,6 +293,10 @@ pub enum SessionChannelError {
         session_id: String,
         sequence: u64,
     },
+    InvalidControlSignal {
+        session_id: String,
+        detail: String,
+    },
     ReplayDetected {
         session_id: String,
         sequence: u64,
@@ -349,6 +353,9 @@ impl fmt::Display for SessionChannelError {
                 sequence,
             } => {
                 write!(f, "MAC mismatch on {session_id} sequence {sequence}")
+            }
+            Self::InvalidControlSignal { session_id, detail } => {
+                write!(f, "invalid control signal on {session_id}: {detail}")
             }
             Self::ReplayDetected {
                 session_id,
@@ -442,6 +449,8 @@ struct SessionRecord {
     received_messages: u64,
     next_sequence: u64,
     last_received_sequence: u64,
+    next_signal_sequence: u64,
+    last_verified_signal_sequence: u64,
     sequence_policy: SequencePolicy,
     replay_drop_threshold: u64,
     replay_drop_window_ticks: u64,
@@ -558,6 +567,8 @@ impl SessionHostcallChannel {
                 received_messages: 0,
                 next_sequence: 1,
                 last_received_sequence: 0,
+                next_signal_sequence: 1,
+                last_verified_signal_sequence: 0,
                 sequence_policy: config.sequence_policy,
                 replay_drop_threshold: config.replay_drop_threshold,
                 replay_drop_window_ticks: config.replay_drop_window_ticks,
@@ -972,30 +983,36 @@ impl SessionHostcallChannel {
 
     /// Create an authenticated backpressure signal envelope.
     pub fn authenticated_backpressure_signal(
-        &self,
+        &mut self,
         handle: &SessionHandle,
         pending_messages: usize,
         limit: usize,
         trace_id: &str,
         timestamp_ticks: u64,
     ) -> Result<HostcallEnvelope, SessionChannelError> {
-        let session = self.sessions.get(&handle.session_id).ok_or_else(|| {
+        let session = self.sessions.get_mut(&handle.session_id).ok_or_else(|| {
             SessionChannelError::SessionNotFound {
                 session_id: handle.session_id.clone(),
             }
         })?;
-        if session.state != SessionState::Established {
-            return Err(SessionChannelError::SessionNotEstablished {
+        ensure_session_active(session, timestamp_ticks)?;
+        if session.next_signal_sequence == u64::MAX {
+            session.state = SessionState::Expired;
+            return Err(SessionChannelError::SessionExpired {
                 session_id: session.session_id.clone(),
-                state: session.state,
+                reason: "signal_sequence_exhausted".to_string(),
             });
         }
+
+        let sequence = session.next_signal_sequence;
+        session.next_signal_sequence += 1;
+        session.sent_messages = session.sent_messages.saturating_add(1);
 
         let mut envelope = HostcallEnvelope {
             session_id: session.session_id.clone(),
             extension_id: session.extension_id.clone(),
             host_id: session.host_id.clone(),
-            sequence: session.next_sequence,
+            sequence,
             payload: ChannelPayload::Backpressure(BackpressureSignal {
                 pending_messages,
                 limit,
@@ -1010,30 +1027,87 @@ impl SessionHostcallChannel {
 
     /// Verify an authenticated control/backpressure signal.
     pub fn verify_authenticated_signal(
-        &self,
+        &mut self,
         handle: &SessionHandle,
         envelope: &HostcallEnvelope,
     ) -> Result<(), SessionChannelError> {
-        let session = self.sessions.get(&handle.session_id).ok_or_else(|| {
+        let session = self.sessions.get_mut(&handle.session_id).ok_or_else(|| {
             SessionChannelError::SessionNotFound {
                 session_id: handle.session_id.clone(),
             }
         })?;
+        if session.state != SessionState::Established {
+            return Err(SessionChannelError::SessionNotEstablished {
+                session_id: session.session_id.clone(),
+                state: session.state,
+            });
+        }
         if envelope.session_id != session.session_id {
             return Err(SessionChannelError::SessionBindingMismatch {
                 expected_session_id: session.session_id.clone(),
                 actual_session_id: envelope.session_id.clone(),
             });
         }
+        if envelope.extension_id != session.extension_id || envelope.host_id != session.host_id {
+            return Err(SessionChannelError::SessionBindingMismatch {
+                expected_session_id: session.session_id.clone(),
+                actual_session_id: envelope.session_id.clone(),
+            });
+        }
+        if !matches!(envelope.payload, ChannelPayload::Backpressure(_)) {
+            return Err(SessionChannelError::InvalidControlSignal {
+                session_id: session.session_id.clone(),
+                detail: "expected backpressure control payload".to_string(),
+            });
+        }
         let expected = compute_envelope_mac(&session.session_key, envelope);
-        if expected.constant_time_eq(&envelope.mac) {
-            Ok(())
-        } else {
-            Err(SessionChannelError::MacMismatch {
+        if !expected.constant_time_eq(&envelope.mac) {
+            return Err(SessionChannelError::MacMismatch {
                 session_id: session.session_id.clone(),
                 sequence: envelope.sequence,
-            })
+            });
         }
+
+        let expected_min_seq = session.last_verified_signal_sequence.saturating_add(1);
+        let replay_reason = if envelope.sequence == session.last_verified_signal_sequence {
+            Some(ReplayDropReason::Duplicate)
+        } else if envelope.sequence < session.last_verified_signal_sequence {
+            Some(ReplayDropReason::Replay)
+        } else if session.sequence_policy == SequencePolicy::Strict
+            && envelope.sequence != expected_min_seq
+        {
+            Some(ReplayDropReason::OutOfOrder)
+        } else {
+            None
+        };
+
+        if let Some(reason) = replay_reason {
+            if register_replay_drop(session, envelope.sent_at_tick) {
+                session.state = SessionState::Expired;
+                return Err(SessionChannelError::SessionExpired {
+                    session_id: session.session_id.clone(),
+                    reason: "control_signal_replay_drop_threshold_exceeded".to_string(),
+                });
+            }
+            return match reason {
+                ReplayDropReason::OutOfOrder => Err(SessionChannelError::OutOfOrderDetected {
+                    session_id: session.session_id.clone(),
+                    sequence: envelope.sequence,
+                    expected_min: expected_min_seq,
+                }),
+                ReplayDropReason::Replay | ReplayDropReason::Duplicate => {
+                    Err(SessionChannelError::ReplayDetected {
+                        session_id: session.session_id.clone(),
+                        sequence: envelope.sequence,
+                        last_seen: session.last_verified_signal_sequence,
+                    })
+                }
+            };
+        }
+
+        session.last_verified_signal_sequence = envelope.sequence;
+        session.received_messages = session.received_messages.saturating_add(1);
+        Ok(())
     }
 
     /// Current queue length for a session.
@@ -2478,6 +2552,64 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verify_signal_after_session_close_fails() {
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-verify-after-close");
+        let signal = channel
+            .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
+            .unwrap();
+        channel
+            .close_session(&handle, "trace-close", 200, None, None)
+            .unwrap();
+
+        let err = channel
+            .verify_authenticated_signal(&handle, &signal)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SessionChannelError::SessionNotEstablished {
+                state: SessionState::Closed,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_signal_duplicate_replay_fails() {
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-verify-replay");
+        let signal = channel
+            .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
+            .unwrap();
+
+        channel
+            .verify_authenticated_signal(&handle, &signal)
+            .expect("first verification consumes signal sequence");
+        let err = channel
+            .verify_authenticated_signal(&handle, &signal)
+            .unwrap_err();
+        assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
+    }
+
+    #[test]
+    fn verify_signal_with_wrong_principal_binding_fails() {
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-verify-principal");
+        let mut signal = channel
+            .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
+            .unwrap();
+        signal.extension_id = "other-extension".to_string();
+
+        let err = channel
+            .verify_authenticated_signal(&handle, &signal)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SessionChannelError::SessionBindingMismatch { .. }
+        ));
+    }
+
     // -- verify_authenticated_signal with wrong session_id --
 
     #[test]
@@ -2569,6 +2701,13 @@ mod tests {
                 "42",
             ),
             (
+                SessionChannelError::InvalidControlSignal {
+                    session_id: "s7c".to_string(),
+                    detail: "bad payload".to_string(),
+                },
+                "bad payload",
+            ),
+            (
                 SessionChannelError::ReplayDetected {
                     session_id: "s8".to_string(),
                     sequence: 3,
@@ -2642,6 +2781,10 @@ mod tests {
             SessionChannelError::MacMismatch {
                 session_id: "s".to_string(),
                 sequence: 1,
+            },
+            SessionChannelError::InvalidControlSignal {
+                session_id: "s".to_string(),
+                detail: "d".to_string(),
             },
             SessionChannelError::ReplayDetected {
                 session_id: "s".to_string(),
@@ -2913,6 +3056,10 @@ mod tests {
                 session_id: "s".to_string(),
                 sequence: 1,
             }),
+            Box::new(SessionChannelError::InvalidControlSignal {
+                session_id: "s".to_string(),
+                detail: "bad payload".to_string(),
+            }),
             Box::new(SessionChannelError::ReplayDetected {
                 session_id: "s".to_string(),
                 sequence: 1,
@@ -3027,6 +3174,10 @@ mod tests {
             SessionChannelError::MacMismatch {
                 session_id: "s9".to_string(),
                 sequence: 1,
+            },
+            SessionChannelError::InvalidControlSignal {
+                session_id: "s9c".to_string(),
+                detail: "bad payload".to_string(),
             },
             SessionChannelError::ReplayDetected {
                 session_id: "s10".to_string(),

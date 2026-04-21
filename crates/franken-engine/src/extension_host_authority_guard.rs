@@ -795,13 +795,9 @@ fn forbidden_crate_roots(patterns: &[(String, String)]) -> BTreeMap<String, Stri
 
 fn import_pattern_root(pattern: &str) -> Option<String> {
     let trimmed = pattern.trim().trim_end_matches(';').trim();
-    let rest = if let Some(rest) = trimmed.strip_prefix("use ") {
-        rest
-    } else if let Some(rest) = trimmed.strip_prefix("extern crate ") {
-        rest
-    } else {
-        return None;
-    };
+    let rest = trimmed
+        .strip_prefix("use ")
+        .or_else(|| trimmed.strip_prefix("extern crate "))?;
 
     first_ident(rest).map(str::to_string)
 }
@@ -833,6 +829,11 @@ fn check_direct_imports_without_syn(
     forbidden_roots: &BTreeMap<String, String>,
     findings: &mut Vec<ExtensionHostFinding>,
 ) {
+    let fallback_context = DirectImportFallbackContext {
+        module_path,
+        file_path,
+        source,
+    };
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
     let mut seen: BTreeSet<(usize, String)> = BTreeSet::new();
 
@@ -850,24 +851,22 @@ fn check_direct_imports_without_syn(
             .and_then(first_ident)
             .map(str::to_string);
 
-        if let Some(root) = import_root.as_deref().or(extern_root.as_deref()) {
-            if let Some(remediation) = forbidden_roots.get(root) {
-                let token = if extern_root.is_some() {
-                    format!("extern crate {root}")
-                } else {
-                    format!("use {root}")
-                };
-                push_direct_import_fallback(
-                    module_path,
-                    file_path,
-                    source,
-                    findings,
-                    &mut seen,
-                    line_num,
-                    format!("Direct upstream import: `{token}`"),
-                    remediation.clone(),
-                );
-            }
+        if let Some(root) = import_root.as_deref().or(extern_root.as_deref())
+            && let Some(remediation) = forbidden_roots.get(root)
+        {
+            let token = if extern_root.is_some() {
+                format!("extern crate {root}")
+            } else {
+                format!("use {root}")
+            };
+            push_direct_import_fallback(
+                &fallback_context,
+                findings,
+                &mut seen,
+                line_num,
+                format!("Direct upstream import: `{token}`"),
+                remediation.clone(),
+            );
         }
 
         if let (Some(root), Some(alias)) = (
@@ -891,9 +890,7 @@ fn check_direct_imports_without_syn(
             let needle = format!("{root}::");
             if trimmed.contains(&needle) {
                 push_direct_import_fallback(
-                    module_path,
-                    file_path,
-                    source,
+                    &fallback_context,
                     findings,
                     &mut seen,
                     line_num,
@@ -910,9 +907,7 @@ fn check_direct_imports_without_syn(
                     "Use crate::control_plane adapter layer instead".to_string()
                 });
                 push_direct_import_fallback(
-                    module_path,
-                    file_path,
-                    source,
+                    &fallback_context,
                     findings,
                     &mut seen,
                     line_num,
@@ -985,10 +980,14 @@ fn sanitize_rust_line_for_guard(line: &str) -> String {
     out
 }
 
+struct DirectImportFallbackContext<'a> {
+    module_path: &'a str,
+    file_path: &'a str,
+    source: &'a str,
+}
+
 fn push_direct_import_fallback(
-    module_path: &str,
-    file_path: &str,
-    source: &str,
+    context: &DirectImportFallbackContext<'_>,
     findings: &mut Vec<ExtensionHostFinding>,
     seen: &mut BTreeSet<(usize, String)>,
     line: usize,
@@ -1001,10 +1000,10 @@ fn push_direct_import_fallback(
 
     findings.push(ExtensionHostFinding {
         kind: ViolationKind::DirectUpstreamImport,
-        module_path: module_path.to_string(),
-        file_path: file_path.to_string(),
+        module_path: context.module_path.to_string(),
+        file_path: context.file_path.to_string(),
         line,
-        source_line: source_line(source, line),
+        source_line: source_line(context.source, line),
         description,
         remediation,
         exempted: false,

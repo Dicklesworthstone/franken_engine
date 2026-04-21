@@ -526,12 +526,11 @@ impl Test262Runner {
             .arg("rev-parse")
             .arg("HEAD")
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !revision.is_empty() {
-                    return revision;
-                }
+            let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !revision.is_empty() {
+                return revision;
             }
         }
 

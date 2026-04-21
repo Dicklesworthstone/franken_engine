@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::control_plane::ContextAdapter;
 use crate::cx_threading::{CxThreadedEvent, EffectCategory};
+use crate::hash_tiers::ContentHash;
 use crate::region_lifecycle::{
     CancelReason, DrainDeadline, FinalizeResult, Region, RegionEvent, RegionState,
 };
@@ -820,12 +821,13 @@ impl ExtensionHostBinding {
         session_id: impl Into<String>,
         trace_id: impl Into<String>,
     ) -> Result<String, CellError> {
-        let session_id = session_id.into();
+        let requested_session_id = session_id.into();
+        let session_cell_id = Self::session_cell_id(extension_id, &requested_session_id);
         let trace_id = trace_id.into();
 
-        if self.manager.cells.contains_key(&session_id) {
+        if self.manager.cells.contains_key(&session_cell_id) {
             return Err(CellError::CellAlreadyExists {
-                cell_id: session_id,
+                cell_id: session_cell_id,
             });
         }
 
@@ -840,15 +842,15 @@ impl ExtensionHostBinding {
             let decision_id = cell.decision_id.clone();
             let policy_id = cell.policy_id.clone();
 
-            let session_cell = cell.create_session(&session_id, &trace_id)?;
+            let session_cell = cell.create_session(&session_cell_id, &trace_id)?;
             (decision_id, policy_id, session_cell)
         };
 
-        let _ = self.manager.insert_cell(&session_id, session_cell)?;
+        let _ = self.manager.insert_cell(&session_cell_id, session_cell)?;
         self.sessions_by_extension
             .entry(extension_id.to_string())
             .or_default()
-            .push(session_id.clone());
+            .push(session_cell_id.clone());
 
         self.emit_evidence(
             &trace_id,
@@ -857,13 +859,13 @@ impl ExtensionHostBinding {
             "session_start",
             "ok",
             None,
-            &session_id,
+            &session_cell_id,
             CellKind::Session,
             RegionState::Running,
             0,
         );
 
-        Ok(session_id)
+        Ok(session_cell_id)
     }
 
     /// Unload an extension using the quiescent close protocol.
@@ -998,6 +1000,22 @@ impl ExtensionHostBinding {
         self.event_sequence
     }
 
+    /// Derive a deterministic session-cell key from extension and caller binding IDs.
+    ///
+    /// The hash preimage uses length prefixes so distinct tuples cannot collapse
+    /// into the same byte stream, for example `("ab", "c")` versus `("a", "bc")`.
+    pub fn session_cell_id(extension_id: &str, binding_id: &str) -> String {
+        const CONTEXT: &[u8] = b"franken-engine.extension-host-binding.session-cell.v1";
+
+        let mut preimage =
+            Vec::with_capacity(CONTEXT.len() + extension_id.len() + binding_id.len() + 24);
+        append_length_prefixed(&mut preimage, CONTEXT);
+        append_length_prefixed(&mut preimage, extension_id.as_bytes());
+        append_length_prefixed(&mut preimage, binding_id.as_bytes());
+
+        format!("session:{}", ContentHash::compute(&preimage).to_hex())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn emit_evidence(
         &mut self,
@@ -1030,6 +1048,11 @@ impl ExtensionHostBinding {
             metadata: BTreeMap::new(),
         });
     }
+}
+
+fn append_length_prefixed(preimage: &mut Vec<u8>, bytes: &[u8]) {
+    preimage.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -2028,10 +2051,14 @@ mod tests {
         let sess_id = binding
             .start_session("ext-1", "sess-1", "t-sess-1")
             .unwrap();
-        assert_eq!(sess_id, "sess-1");
+        assert_eq!(
+            sess_id,
+            ExtensionHostBinding::session_cell_id("ext-1", "sess-1")
+        );
 
         let sess_evidence = binding.evidence_for_event("session_start");
         assert_eq!(sess_evidence.len(), 1);
+        assert_eq!(sess_evidence[0].cell_id, sess_id);
         assert_eq!(sess_evidence[0].decision_id, "d-1");
         assert_eq!(sess_evidence[0].policy_id, "p-1");
         assert_eq!(sess_evidence[0].cell_kind, CellKind::Session);
@@ -2062,8 +2089,8 @@ mod tests {
             .unwrap();
 
         // Start sessions
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
 
         // Execute effects in the extension cell
         binding
@@ -2079,8 +2106,8 @@ mod tests {
             .unwrap();
         assert!(report.success);
         assert_eq!(binding.active_extension_count(), 0);
-        assert!(binding.manager().get("sess-1").is_none());
-        assert!(binding.manager().get("sess-2").is_none());
+        assert!(binding.manager().get(&sess_1).is_none());
+        assert!(binding.manager().get(&sess_2).is_none());
 
         // Verify evidence trace
         assert_eq!(binding.evidence_count(), 4); // load + 2 sessions + unload
@@ -2108,8 +2135,8 @@ mod tests {
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
             .unwrap();
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
         assert_eq!(binding.manager().active_count(), 3);
 
         let report = binding
@@ -2119,15 +2146,15 @@ mod tests {
         assert!(report.success);
         assert_eq!(binding.manager().active_count(), 0);
         assert!(binding.manager().get("ext-1").is_none());
-        assert!(binding.manager().get("sess-1").is_none());
-        assert!(binding.manager().get("sess-2").is_none());
+        assert!(binding.manager().get(&sess_1).is_none());
+        assert!(binding.manager().get(&sess_2).is_none());
         let closed_ids: Vec<&str> = binding
             .manager()
             .closed_results()
             .iter()
             .map(|(cell_id, _)| cell_id.as_str())
             .collect();
-        assert_eq!(closed_ids, vec!["sess-1", "sess-2", "ext-1"]);
+        assert_eq!(closed_ids, vec![sess_1.as_str(), sess_2.as_str(), "ext-1"]);
     }
 
     // -----------------------------------------------------------------------
@@ -2145,8 +2172,8 @@ mod tests {
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
             .unwrap();
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        binding.start_session("ext-2", "sess-2", "t-s2").unwrap();
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        let sess_2 = binding.start_session("ext-2", "sess-2", "t-s2").unwrap();
 
         // Execute effects in ext-1
         binding
@@ -2163,8 +2190,8 @@ mod tests {
         assert!(report.success);
 
         // ext-2 is still running, unaffected
-        assert!(binding.manager().get("sess-1").is_none());
-        assert!(binding.manager().get("sess-2").is_some());
+        assert!(binding.manager().get(&sess_1).is_none());
+        assert!(binding.manager().get(&sess_2).is_some());
         let cell2 = binding.manager().get("ext-2").unwrap();
         assert_eq!(cell2.state(), RegionState::Running);
         assert_eq!(cell2.total_budget_consumed_ms(), 0);

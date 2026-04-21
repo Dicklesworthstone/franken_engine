@@ -19,10 +19,14 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::control_plane::TraceId;
+use serde::Serialize;
+
+use frankenengine_engine::control_plane::{
+    Budget, ContextAdapter, ControlPlaneAdapterError, TraceId,
+};
 use frankenengine_engine::cx_threading::EffectCategory;
 use frankenengine_engine::execution_cell::{
-    CellError, CellEvent, CellKind, CellManager, ExecutionCell,
+    CellError, CellEvent, CellKind, CellManager, ExecutionCell, ExtensionHostBinding,
 };
 use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline, RegionState};
 use frankenengine_test_support::control_plane::{MockBudget, MockCx};
@@ -37,6 +41,59 @@ fn trace_id() -> TraceId {
 
 fn make_cx(budget_ms: u64) -> MockCx {
     MockCx::new(trace_id(), MockBudget::new(budget_ms))
+}
+
+#[derive(Debug, Clone)]
+struct IntegrationCx {
+    trace_id: TraceId,
+    budget: Budget,
+}
+
+impl IntegrationCx {
+    fn new(budget_ms: u64) -> Self {
+        Self {
+            trace_id: TraceId::from_raw(0xfeed_f00d),
+            budget: Budget::new(budget_ms),
+        }
+    }
+}
+
+impl ContextAdapter for IntegrationCx {
+    fn trace_id(&self) -> TraceId {
+        self.trace_id
+    }
+
+    fn budget(&self) -> Budget {
+        self.budget
+    }
+
+    fn consume_budget(&mut self, requested_ms: u64) -> Result<(), ControlPlaneAdapterError> {
+        self.budget = self
+            .budget
+            .consume(requested_ms)
+            .ok_or(ControlPlaneAdapterError::BudgetExhausted { requested_ms })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct BindingE2eLogEntry {
+    phase: &'static str,
+    extension_id: String,
+    session_binding_id: String,
+    session_cell_id: String,
+    active_cell_ids: Vec<String>,
+    evidence_count: u64,
+    outcome: &'static str,
+}
+
+fn active_cell_ids(binding: &ExtensionHostBinding) -> Vec<String> {
+    binding
+        .manager()
+        .active_cell_ids()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 // ===========================================================================
@@ -865,4 +922,132 @@ fn close_with_pending_obligations_still_finalizes() {
     let events = cell.events();
     let event_names: Vec<&str> = events.iter().map(|e| e.event.as_str()).collect();
     assert!(event_names.contains(&"finalize"));
+}
+
+// ===========================================================================
+// 14. ExtensionHostBinding — extension-scoped session IDs
+// ===========================================================================
+
+#[test]
+fn extension_host_binding_scopes_same_session_binding_id_per_extension() {
+    let mut binding = ExtensionHostBinding::new(DrainDeadline::default());
+    let mut cx = IntegrationCx::new(1_000);
+    let mut log_entries = Vec::new();
+
+    binding
+        .load_extension("ext-a", &mut cx, "decision-a", "policy-a")
+        .unwrap();
+    binding
+        .load_extension("ext-b", &mut cx, "decision-b", "policy-b")
+        .unwrap();
+
+    let ext_a_session = binding
+        .start_session("ext-a", "sess-1", "trace-ext-a-sess-1")
+        .unwrap();
+    log_entries.push(BindingE2eLogEntry {
+        phase: "start_session",
+        extension_id: "ext-a".to_string(),
+        session_binding_id: "sess-1".to_string(),
+        session_cell_id: ext_a_session.clone(),
+        active_cell_ids: active_cell_ids(&binding),
+        evidence_count: binding.evidence_count(),
+        outcome: "ok",
+    });
+
+    let ext_b_session = binding
+        .start_session("ext-b", "sess-1", "trace-ext-b-sess-1")
+        .unwrap();
+    log_entries.push(BindingE2eLogEntry {
+        phase: "start_session",
+        extension_id: "ext-b".to_string(),
+        session_binding_id: "sess-1".to_string(),
+        session_cell_id: ext_b_session.clone(),
+        active_cell_ids: active_cell_ids(&binding),
+        evidence_count: binding.evidence_count(),
+        outcome: "ok",
+    });
+
+    assert_ne!(
+        ext_a_session, ext_b_session,
+        "same caller session id must not collide across extensions"
+    );
+    assert_eq!(
+        ext_a_session,
+        ExtensionHostBinding::session_cell_id("ext-a", "sess-1")
+    );
+    assert_eq!(
+        ext_b_session,
+        ExtensionHostBinding::session_cell_id("ext-b", "sess-1")
+    );
+    assert_ne!(
+        ExtensionHostBinding::session_cell_id("ab", "c"),
+        ExtensionHostBinding::session_cell_id("a", "bc"),
+        "length-prefixed hashing must keep tuple boundaries unambiguous"
+    );
+    assert!(binding.manager().get("sess-1").is_none());
+    assert!(binding.manager().get(&ext_a_session).is_some());
+    assert!(binding.manager().get(&ext_b_session).is_some());
+
+    let session_evidence = binding.evidence_for_event("session_start");
+    let session_evidence_ids: Vec<&str> = session_evidence
+        .iter()
+        .map(|entry| entry.cell_id.as_str())
+        .collect();
+    assert_eq!(
+        session_evidence_ids,
+        vec![ext_a_session.as_str(), ext_b_session.as_str()]
+    );
+
+    binding
+        .unload_extension("ext-a", &mut cx, CancelReason::Quarantine)
+        .unwrap();
+    log_entries.push(BindingE2eLogEntry {
+        phase: "unload_extension",
+        extension_id: "ext-a".to_string(),
+        session_binding_id: "sess-1".to_string(),
+        session_cell_id: ext_a_session.clone(),
+        active_cell_ids: active_cell_ids(&binding),
+        evidence_count: binding.evidence_count(),
+        outcome: "ok",
+    });
+
+    assert!(binding.manager().get("ext-a").is_none());
+    assert!(binding.manager().get(&ext_a_session).is_none());
+    assert!(binding.manager().get("ext-b").is_some());
+    assert!(binding.manager().get(&ext_b_session).is_some());
+
+    binding
+        .unload_extension("ext-b", &mut cx, CancelReason::OperatorShutdown)
+        .unwrap();
+    log_entries.push(BindingE2eLogEntry {
+        phase: "unload_extension",
+        extension_id: "ext-b".to_string(),
+        session_binding_id: "sess-1".to_string(),
+        session_cell_id: ext_b_session.clone(),
+        active_cell_ids: active_cell_ids(&binding),
+        evidence_count: binding.evidence_count(),
+        outcome: "ok",
+    });
+
+    assert_eq!(binding.manager().active_count(), 0);
+    assert_eq!(
+        binding
+            .evidence_log()
+            .iter()
+            .filter(|entry| entry.event == "extension_unload")
+            .count(),
+        2
+    );
+
+    let json_lines: Vec<String> = log_entries
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(json_lines.len(), 4);
+    assert!(
+        json_lines
+            .iter()
+            .all(|line| line.contains("\"outcome\":\"ok\""))
+    );
 }

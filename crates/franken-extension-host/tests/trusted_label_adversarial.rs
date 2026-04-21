@@ -264,6 +264,7 @@ frankenengine-extension-host = {{ path = "{}" }}
     let output = Command::new(env!("CARGO"))
         .arg("check")
         .arg("--quiet")
+        .arg("--offline")
         .current_dir(&probe_root)
         .env("CARGO_INCREMENTAL", "0")
         .env("CARGO_TARGET_DIR", probe_root.join("target"))

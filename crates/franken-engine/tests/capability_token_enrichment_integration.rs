@@ -64,11 +64,25 @@ fn build_basic_token(sk: &SigningKey) -> CapabilityToken {
 }
 
 fn basic_ctx() -> VerificationContext {
-    VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    }
+    VerificationContext::new(500, 10, 5)
+        .with_checkpoint_ref(&make_checkpoint_ref(3))
+        .with_checkpoint_ref(&make_checkpoint_ref(5))
+        .with_checkpoint_ref(&make_checkpoint_ref(7))
+        .with_checkpoint_ref(&make_checkpoint_ref(8))
+        .with_checkpoint_ref(&make_checkpoint_ref(10))
+        .with_checkpoint_ref(&make_checkpoint_ref(15))
+        .with_checkpoint_ref(&make_checkpoint_ref(20))
+        .with_checkpoint_ref(&make_checkpoint_ref(42))
+        .with_checkpoint_ref(&make_checkpoint_ref(99))
+        .with_revocation_freshness(&make_revocation_ref(3))
+        .with_revocation_freshness(&make_revocation_ref(5))
+        .with_revocation_freshness(&make_revocation_ref(7))
+        .with_revocation_freshness(&make_revocation_ref(8))
+        .with_revocation_freshness(&make_revocation_ref(10))
+        .with_revocation_freshness(&make_revocation_ref(15))
+        .with_revocation_freshness(&make_revocation_ref(20))
+        .with_revocation_freshness(&make_revocation_ref(42))
+        .with_revocation_freshness(&make_revocation_ref(99))
 }
 
 // ===========================================================================
@@ -562,11 +576,7 @@ fn enrichment_verify_token_not_yet_valid() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 50, // Before nbf=100
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(50, 10, 5); // Before nbf=100
     let err = verify_token(&token, &presenter, &ctx).unwrap_err();
     assert!(matches!(err, TokenError::NotYetValid { .. }));
 }
@@ -576,11 +586,7 @@ fn enrichment_verify_token_expired() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 1001, // After expiry=1000
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(1001, 10, 5); // After expiry=1000
     let err = verify_token(&token, &presenter, &ctx).unwrap_err();
     assert!(matches!(err, TokenError::Expired { .. }));
 }
@@ -590,11 +596,7 @@ fn enrichment_verify_token_at_exact_nbf() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 100, // exactly at nbf
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(100, 10, 5); // exactly at nbf
     assert!(verify_token(&token, &presenter, &ctx).is_ok());
 }
 
@@ -603,11 +605,7 @@ fn enrichment_verify_token_at_exact_expiry() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 1000, // exactly at expiry
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(1000, 10, 5); // exactly at expiry
     assert!(verify_token(&token, &presenter, &ctx).is_ok());
 }
 
@@ -627,11 +625,7 @@ fn enrichment_verify_token_checkpoint_binding_failed() {
     .build()
     .unwrap();
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10, // Below required 20
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(500, 10, 5); // Below required 20
     let err = verify_token(&token, &presenter, &ctx).unwrap_err();
     assert!(matches!(err, TokenError::CheckpointBindingFailed { .. }));
 }
@@ -652,11 +646,7 @@ fn enrichment_verify_token_revocation_freshness_stale() {
     .build()
     .unwrap();
     let presenter = make_principal(10);
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5, // Below required 10
-    };
+    let ctx = VerificationContext::new(500, 10, 5); // Below required 10
     let err = verify_token(&token, &presenter, &ctx).unwrap_err();
     assert!(matches!(err, TokenError::RevocationFreshnessStale { .. }));
 }

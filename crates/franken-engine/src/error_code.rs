@@ -639,7 +639,9 @@ impl HasErrorCode for TokenError {
             | TokenError::NotYetValid { .. }
             | TokenError::Expired { .. }
             | TokenError::CheckpointBindingFailed { .. }
+            | TokenError::CheckpointIdentityMismatch { .. }
             | TokenError::RevocationFreshnessStale { .. }
+            | TokenError::RevocationHeadMismatch { .. }
             | TokenError::UnsupportedVersion { .. }
             | TokenError::IdDerivationFailed { .. }
             | TokenError::InvertedTemporalWindow { .. }

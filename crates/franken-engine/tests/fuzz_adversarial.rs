@@ -320,11 +320,11 @@ fn run_token_program(data: &[u8]) {
     mutate_token(&mut token, data);
 
     let presenter = PrincipalId::from_bytes(bytes32(data, 9));
-    let ctx = VerificationContext {
-        current_tick: u64::from(byte(data, 10)) + u64::from(byte(data, 11)),
-        verifier_checkpoint_seq: u64::from(byte(data, 12)),
-        verifier_revocation_seq: u64::from(byte(data, 13)),
-    };
+    let ctx = VerificationContext::new(
+        u64::from(byte(data, 10)) + u64::from(byte(data, 11)),
+        u64::from(byte(data, 12)),
+        u64::from(byte(data, 13)),
+    );
 
     let _ = verify_token(&token, &presenter, &ctx);
     if let Ok(json) = serde_json::to_string(&token)

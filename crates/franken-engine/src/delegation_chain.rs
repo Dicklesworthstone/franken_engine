@@ -98,11 +98,11 @@ impl DelegationVerificationContext {
     }
 
     fn as_token_context(&self) -> TokenVerificationContext {
-        TokenVerificationContext {
-            current_tick: self.current_tick,
-            verifier_checkpoint_seq: self.verifier_checkpoint_seq,
-            verifier_revocation_seq: self.verifier_revocation_seq,
-        }
+        TokenVerificationContext::new(
+            self.current_tick,
+            self.verifier_checkpoint_seq,
+            self.verifier_revocation_seq,
+        )
     }
 }
 

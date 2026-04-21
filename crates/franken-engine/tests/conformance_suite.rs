@@ -1475,11 +1475,7 @@ fn conformance_token_build_and_verify() {
         Some(&presenter),
     );
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(500, 0, 0);
     verify_token(&token, &presenter, &ctx).expect("token must verify");
 }
 
@@ -1497,11 +1493,7 @@ fn conformance_token_rejects_wrong_audience() {
     );
 
     let fake_presenter = PrincipalId::from_bytes([99u8; 32]);
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(500, 0, 0);
     let result = verify_token(&token, &fake_presenter, &ctx);
     assert!(
         matches!(result, Err(TokenError::AudienceRejected { .. })),
@@ -1522,11 +1514,7 @@ fn conformance_token_rejects_expired() {
         Some(&presenter),
     );
 
-    let ctx = VerificationContext {
-        current_tick: 2000, // past expiry of 1000
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(2000, 0, 0); // past expiry of 1000
     let result = verify_token(&token, &presenter, &ctx);
     assert!(
         matches!(result, Err(TokenError::Expired { .. })),
@@ -1552,11 +1540,7 @@ fn conformance_token_rejects_not_yet_valid() {
     .build()
     .expect("build");
 
-    let ctx = VerificationContext {
-        current_tick: 50, // before nbf of 100
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(50, 0, 0); // before nbf of 100
     let result = verify_token(&token, &presenter, &ctx);
     assert!(
         matches!(result, Err(TokenError::NotYetValid { .. })),
@@ -1626,11 +1610,7 @@ fn conformance_token_checkpoint_binding_verified() {
     .expect("build");
 
     // Verifier with seq < 5 must fail.
-    let ctx_stale = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 3,
-        verifier_revocation_seq: 0,
-    };
+    let ctx_stale = VerificationContext::new(500, 3, 0);
     let result = verify_token(&token, &presenter, &ctx_stale);
     assert!(
         matches!(result, Err(TokenError::CheckpointBindingFailed { .. })),
@@ -1638,11 +1618,8 @@ fn conformance_token_checkpoint_binding_verified() {
     );
 
     // Verifier with seq >= 5 must pass.
-    let ctx_ok = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 5,
-        verifier_revocation_seq: 0,
-    };
+    let ctx_ok = VerificationContext::new(500, 5, 0)
+        .with_checkpoint_ref(token.checkpoint_binding.as_ref().unwrap());
     verify_token(&token, &presenter, &ctx_ok).expect("checkpoint binding must pass");
 }
 
@@ -1669,11 +1646,7 @@ fn conformance_token_revocation_freshness_binding_verified() {
     .expect("build");
 
     // Verifier with seq < 10 must fail.
-    let ctx_stale = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 5,
-    };
+    let ctx_stale = VerificationContext::new(500, 0, 5);
     let result = verify_token(&token, &presenter, &ctx_stale);
     assert!(
         matches!(result, Err(TokenError::RevocationFreshnessStale { .. })),
@@ -1681,11 +1654,8 @@ fn conformance_token_revocation_freshness_binding_verified() {
     );
 
     // Verifier with seq >= 10 must pass.
-    let ctx_ok = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 10,
-    };
+    let ctx_ok = VerificationContext::new(500, 0, 10)
+        .with_revocation_freshness(token.revocation_freshness.as_ref().unwrap());
     verify_token(&token, &presenter, &ctx_ok).expect("revocation freshness must pass");
 }
 
@@ -1710,11 +1680,7 @@ fn conformance_token_multiple_capabilities() {
     .expect("build");
 
     assert_eq!(token.capabilities.len(), 3);
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 0,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(500, 0, 0);
     verify_token(&token, &presenter, &ctx).expect("multi-cap token must verify");
 }
 
@@ -1968,11 +1934,8 @@ fn conformance_integration_checkpoint_to_token_binding() {
     .build()
     .expect("build");
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: cp.checkpoint_seq,
-        verifier_revocation_seq: 0,
-    };
+    let ctx = VerificationContext::new(500, cp.checkpoint_seq, 0)
+        .with_checkpoint_ref(token.checkpoint_binding.as_ref().unwrap());
     verify_token(&token, &presenter, &ctx).expect("checkpoint-bound token must verify");
 }
 

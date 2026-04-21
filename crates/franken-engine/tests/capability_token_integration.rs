@@ -74,11 +74,25 @@ fn build_basic_token(sk: &SigningKey) -> CapabilityToken {
 }
 
 fn basic_ctx() -> VerificationContext {
-    VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    }
+    VerificationContext::new(500, 10, 5)
+        .with_checkpoint_ref(&make_checkpoint_ref(3))
+        .with_checkpoint_ref(&make_checkpoint_ref(5))
+        .with_checkpoint_ref(&make_checkpoint_ref(7))
+        .with_checkpoint_ref(&make_checkpoint_ref(8))
+        .with_checkpoint_ref(&make_checkpoint_ref(10))
+        .with_checkpoint_ref(&make_checkpoint_ref(15))
+        .with_checkpoint_ref(&make_checkpoint_ref(20))
+        .with_checkpoint_ref(&make_checkpoint_ref(42))
+        .with_checkpoint_ref(&make_checkpoint_ref(99))
+        .with_revocation_freshness(&make_revocation_ref(3))
+        .with_revocation_freshness(&make_revocation_ref(5))
+        .with_revocation_freshness(&make_revocation_ref(7))
+        .with_revocation_freshness(&make_revocation_ref(8))
+        .with_revocation_freshness(&make_revocation_ref(10))
+        .with_revocation_freshness(&make_revocation_ref(15))
+        .with_revocation_freshness(&make_revocation_ref(20))
+        .with_revocation_freshness(&make_revocation_ref(42))
+        .with_revocation_freshness(&make_revocation_ref(99))
 }
 
 // ---------------------------------------------------------------------------
@@ -571,11 +585,7 @@ fn verify_succeeds_for_valid_token() {
 fn verify_succeeds_at_exact_nbf() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
-    let ctx = VerificationContext {
-        current_tick: 100, // exactly nbf
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(100, 10, 5); // exactly nbf
     verify_token(&token, &make_principal(10), &ctx).unwrap();
 }
 
@@ -583,11 +593,7 @@ fn verify_succeeds_at_exact_nbf() {
 fn verify_succeeds_at_exact_expiry() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
-    let ctx = VerificationContext {
-        current_tick: 1000, // exactly expiry
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(1000, 10, 5); // exactly expiry
     verify_token(&token, &make_principal(10), &ctx).unwrap();
 }
 
@@ -628,11 +634,7 @@ fn verify_with_checkpoint_binding_succeeds_when_frontier_sufficient() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10, // exactly meets requirement
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(500, 10, 5).with_checkpoint_ref(&make_checkpoint_ref(10));
     verify_token(&token, &make_principal(10), &ctx).unwrap();
 }
 
@@ -652,11 +654,7 @@ fn verify_with_checkpoint_binding_succeeds_when_frontier_exceeds() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 100, // well above requirement
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(500, 100, 5).with_checkpoint_ref(&make_checkpoint_ref(10));
     verify_token(&token, &make_principal(10), &ctx).unwrap();
 }
 
@@ -874,11 +872,7 @@ fn verify_multi_audience_accepts_any_member() {
 fn verify_fails_not_yet_valid() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
-    let ctx = VerificationContext {
-        current_tick: 50, // before nbf=100
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(50, 10, 5); // before nbf=100
 
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     match &err {
@@ -897,11 +891,7 @@ fn verify_fails_not_yet_valid() {
 fn verify_fails_expired() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
-    let ctx = VerificationContext {
-        current_tick: 2000, // after expiry=1000
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(2000, 10, 5); // after expiry=1000
 
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     match &err {
@@ -920,11 +910,7 @@ fn verify_fails_expired() {
 fn verify_fails_one_tick_before_nbf() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk); // nbf=100
-    let ctx = VerificationContext {
-        current_tick: 99,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(99, 10, 5);
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::NotYetValid { .. }));
 }
@@ -933,11 +919,7 @@ fn verify_fails_one_tick_before_nbf() {
 fn verify_fails_one_tick_after_expiry() {
     let sk = make_sk(1);
     let token = build_basic_token(&sk); // expiry=1000
-    let ctx = VerificationContext {
-        current_tick: 1001,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(1001, 10, 5);
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::Expired { .. }));
 }
@@ -962,11 +944,7 @@ fn verify_fails_checkpoint_binding_frontier_too_low() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 15, // below required 20
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(500, 15, 5); // below required 20
 
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     match &err {
@@ -1001,11 +979,7 @@ fn verify_fails_revocation_freshness_stale() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 3, // below required 10
-    };
+    let ctx = VerificationContext::new(500, 10, 3); // below required 10
 
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     match &err {
@@ -1044,11 +1018,7 @@ fn audience_failure_takes_priority_over_temporal() {
     // Audience check happens before temporal.
     let sk = make_sk(1);
     let token = build_basic_token(&sk);
-    let ctx = VerificationContext {
-        current_tick: 50, // before nbf
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(50, 10, 5); // before nbf
     let err = verify_token(&token, &make_principal(99), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::AudienceRejected { .. }));
 }
@@ -1382,11 +1352,7 @@ fn zero_length_window_exact_tick_verifies() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 500,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(500, 10, 5);
     verify_token(&token, &make_principal(99), &ctx).unwrap();
 }
 
@@ -1404,11 +1370,7 @@ fn zero_length_window_before_fails() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 499,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(499, 10, 5);
     let err = verify_token(&token, &make_principal(99), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::NotYetValid { .. }));
 }
@@ -1427,11 +1389,7 @@ fn zero_length_window_after_fails() {
     .build()
     .unwrap();
 
-    let ctx = VerificationContext {
-        current_tick: 501,
-        verifier_checkpoint_seq: 10,
-        verifier_revocation_seq: 5,
-    };
+    let ctx = VerificationContext::new(501, 10, 5);
     let err = verify_token(&token, &make_principal(99), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::Expired { .. }));
 }

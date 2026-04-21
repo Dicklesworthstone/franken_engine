@@ -4158,7 +4158,16 @@ impl CryptographicDecisionReceipt {
         posterior_at_decision_micros: u64,
         timestamp_ns: u64,
         signer: &DecisionSigningKey,
-    ) -> Self {
+    ) -> Result<Self, PolicySignError> {
+        if posterior_at_decision_micros > GUARDPLANE_MAX_POSTERIOR_MICROS {
+            return Err(policy_sign_fail_closed(
+                PolicySignSurface::DeclassificationReceipt,
+                request_id,
+                format!(
+                    "posterior_at_decision_micros {posterior_at_decision_micros} exceeds {GUARDPLANE_MAX_POSTERIOR_MICROS}"
+                ),
+            ));
+        }
         let outcome_tag = match &verdict {
             DecisionVerdict::Approved { .. } => "approved",
             DecisionVerdict::Denied { .. } => "denied",
@@ -4178,10 +4187,9 @@ impl CryptographicDecisionReceipt {
             PolicySignSurface::DeclassificationReceipt,
             request_id,
             &payload,
-        )
-        .expect("receipt signing payload should serialize");
+        )?;
         let signature = signer.sign(&payload_bytes);
-        Self {
+        Ok(Self {
             receipt_id,
             request_id: request_id.to_string(),
             verdict,
@@ -4190,10 +4198,10 @@ impl CryptographicDecisionReceipt {
             posterior_at_decision_micros,
             timestamp_ns,
             signature,
-        }
+        })
     }
 
-    fn signing_payload_bytes(&self) -> Vec<u8> {
+    fn signing_payload_bytes(&self) -> Result<Vec<u8>, PolicySignError> {
         let payload = ReceiptSigningPayload {
             receipt_id: &self.receipt_id,
             request_id: &self.request_id,
@@ -4208,11 +4216,12 @@ impl CryptographicDecisionReceipt {
             &self.request_id,
             &payload,
         )
-        .expect("receipt signing payload should serialize")
     }
 
     pub fn verify(&self, public_key: &DecisionPublicKey) -> bool {
-        public_key.verify(&self.signing_payload_bytes(), &self.signature)
+        self.signing_payload_bytes()
+            .map(|payload| public_key.verify(&payload, &self.signature))
+            .unwrap_or(false)
     }
 }
 
@@ -4350,7 +4359,7 @@ impl DeclassificationGateway {
             });
         }
 
-        let verdict = if let Some(verdict) = verdict_override {
+        let mut verdict = if let Some(verdict) = verdict_override {
             verdict
         } else {
             let request_history = self
@@ -4388,15 +4397,36 @@ impl DeclassificationGateway {
             })
         };
 
-        let receipt = CryptographicDecisionReceipt::new_signed(
+        let receipt = match CryptographicDecisionReceipt::new_signed(
             &request.request_id,
             verdict.clone(),
-            contract_chain,
-            conditions,
+            contract_chain.clone(),
+            conditions.clone(),
             posterior_at_decision_micros,
             request.timestamp_ns,
             &self.signing_key,
-        );
+        ) {
+            Ok(receipt) => receipt,
+            Err(err) => {
+                let reason = DeclassificationDenialReason::ContractRejected {
+                    contract_id: "receipt_signing".to_string(),
+                    detail: err.to_string(),
+                };
+                verdict = DecisionVerdict::Denied {
+                    reason: reason.clone(),
+                };
+                CryptographicDecisionReceipt::new_signed(
+                    &request.request_id,
+                    DecisionVerdict::Denied { reason },
+                    vec!["declassification_receipt_emission".to_string()],
+                    Vec::new(),
+                    posterior_at_decision_micros.min(GUARDPLANE_MAX_POSTERIOR_MICROS),
+                    request.timestamp_ns,
+                    &self.signing_key,
+                )
+                .expect("fail-closed declassification receipt should serialize")
+            }
+        };
         self.receipt_log.append(receipt.clone());
         self.request_history_by_requester
             .entry(request.requester.clone())
@@ -10371,7 +10401,8 @@ mod enrichment_tests {
             500_000,
             1000,
             &key,
-        );
+        )
+        .expect("receipt should sign");
         log.append(receipt.clone());
         assert_eq!(log.receipts().len(), 1);
         assert_eq!(log.receipts()[0], receipt);
@@ -10392,7 +10423,8 @@ mod enrichment_tests {
             750_000,
             2000,
             &key,
-        );
+        )
+        .expect("receipt should sign");
         let pubkey = key.public_key();
         assert!(receipt.verify(&pubkey));
     }
@@ -10409,7 +10441,8 @@ mod enrichment_tests {
             100_000,
             3000,
             &key_a,
-        );
+        )
+        .expect("receipt should sign");
         assert!(!receipt.verify(&key_b.public_key()));
     }
 

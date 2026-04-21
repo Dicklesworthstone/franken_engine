@@ -149,8 +149,7 @@ fuzz_target!(|data: &[u8]| {
         ),
     };
 
-    let Some(value) = execute(instructions, pool) else {
-        return;
-    };
+    let value = execute(instructions, pool)
+        .expect("constructed Object.prototype.toString module should execute");
     assert_eq!(value, Value::Str(expected.to_string()));
 });

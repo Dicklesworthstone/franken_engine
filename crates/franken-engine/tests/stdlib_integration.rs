@@ -417,6 +417,84 @@ fn string_ends_with() {
 }
 
 #[test]
+fn string_ends_with_utf16_conformance_corpus() {
+    struct Case {
+        this_value: &'static str,
+        search: &'static str,
+        length: Option<i64>,
+        expected: bool,
+    }
+
+    let cases = [
+        // ES String.prototype.endsWith compares UTF-16 code units. An empty
+        // search succeeds even when the supplied end is between a surrogate pair.
+        Case {
+            this_value: "😀",
+            search: "",
+            length: Some(FP_SCALE),
+            expected: true,
+        },
+        Case {
+            this_value: "😀",
+            search: "😀",
+            length: Some(FP_SCALE),
+            expected: false,
+        },
+        Case {
+            this_value: "😀",
+            search: "😀",
+            length: Some(2 * FP_SCALE),
+            expected: true,
+        },
+        Case {
+            this_value: "A😀B",
+            search: "😀",
+            length: Some(3 * FP_SCALE),
+            expected: true,
+        },
+        Case {
+            this_value: "A😀B",
+            search: "😀",
+            length: Some(2 * FP_SCALE),
+            expected: false,
+        },
+        Case {
+            this_value: "A😀B",
+            search: "B",
+            length: Some(99 * FP_SCALE),
+            expected: true,
+        },
+        Case {
+            this_value: "\u{feff}abc",
+            search: "\u{feff}",
+            length: Some(FP_SCALE),
+            expected: true,
+        },
+        Case {
+            this_value: "abc\u{feff}",
+            search: "\u{feff}",
+            length: None,
+            expected: true,
+        },
+    ];
+
+    for case in cases {
+        let mut args = vec![JsValue::Str(case.search.into())];
+        if let Some(length) = case.length {
+            args.push(JsValue::Int(length));
+        }
+        assert_eq!(
+            exec_string_method(BuiltinId::StringPrototypeEndsWith, case.this_value, &args).unwrap(),
+            JsValue::Bool(case.expected),
+            "String.prototype.endsWith({:?}, {:?}) for {:?}",
+            case.search,
+            case.length,
+            case.this_value
+        );
+    }
+}
+
+#[test]
 fn string_to_upper_lower() {
     assert_eq!(
         exec_string_method(BuiltinId::StringPrototypeToUpperCase, "hello", &[]).unwrap(),

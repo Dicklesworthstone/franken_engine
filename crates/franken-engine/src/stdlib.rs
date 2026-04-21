@@ -2487,12 +2487,7 @@ pub fn exec_string_method(
             let end_pos = opt_int_arg(args, 1)
                 .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
                 .unwrap_or(utf16_len as usize);
-            let haystack = if search.is_empty() {
-                this.to_string()
-            } else {
-                utf16_slice_lossless(this, 0, end_pos, "String.prototype.endsWith")?
-            };
-            Ok(JsValue::Bool(haystack.ends_with(search.as_str())))
+            Ok(JsValue::Bool(utf16_ends_with_at(this, &search, end_pos)))
         }
         BuiltinId::StringPrototypeIndexOf => {
             let search = require_str("String.prototype.indexOf", args, 0)?;
@@ -3931,6 +3926,21 @@ fn utf16_slice_lossless(
         builtin_name,
         &format!("UTF-16 slice [{start}, {end})"),
     )
+}
+
+fn utf16_ends_with_at(value: &str, search: &str, end: usize) -> bool {
+    let value_units = utf16_code_units_vec(value);
+    let search_units = utf16_code_units_vec(search);
+    utf16_ends_with_units_at(&value_units, &search_units, end)
+}
+
+fn utf16_ends_with_units_at(value_units: &[u16], search_units: &[u16], end: usize) -> bool {
+    let clamped_end = end.min(value_units.len());
+    let search_len = search_units.len();
+    if search_len > clamped_end {
+        return false;
+    }
+    value_units[clamped_end - search_len..clamped_end] == *search_units
 }
 
 fn utf16_code_unit_at(value: &str, index: usize) -> Option<u16> {
@@ -5382,6 +5392,31 @@ mod tests {
             .unwrap(),
             JsValue::Bool(true)
         );
+    }
+
+    #[test]
+    fn test_string_ends_with_compares_utf16_code_units() {
+        assert!(utf16_ends_with_units_at(&[0xD83D, 0xDE00], &[], 1));
+        assert!(!utf16_ends_with_units_at(
+            &[0xD83D, 0xDE00],
+            &[0xD83D, 0xDE00],
+            1
+        ));
+        assert!(utf16_ends_with_units_at(
+            &[0xD83D, 0xDE00],
+            &[0xD83D, 0xDE00],
+            2
+        ));
+        assert!(utf16_ends_with_units_at(
+            &[0x0061, 0xD83D, 0xDE00, 0x0062],
+            &[0xD83D, 0xDE00],
+            3
+        ));
+        assert!(!utf16_ends_with_units_at(
+            &[0x0061, 0xD83D, 0xDE00, 0x0062],
+            &[0xD83D, 0xDE00],
+            2
+        ));
     }
 
     #[test]

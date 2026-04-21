@@ -628,8 +628,8 @@ fn test_config_immutability_regression() {
         }],
         security_tests: vec![SecurityTestSpec {
             test_id: "immutable_test_security".to_string(),
-            source_complexity: SourceComplexity::Simple,
-            threat_model: ThreatModel::CodeInjection,
+            threat_vectors: vec![ThreatVector::CodeInjection],
+            security_level: SecurityLevel::High,
             expected_outcome: TestOutcome::Success,
         }],
     };

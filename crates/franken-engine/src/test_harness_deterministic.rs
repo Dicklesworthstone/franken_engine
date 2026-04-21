@@ -27,7 +27,7 @@ pub struct TestHarnessConfig {
 }
 
 /// Test execution modes supported by the harness
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TestExecutionMode {
     /// Standard unit test execution
@@ -278,6 +278,7 @@ pub struct ParserTestSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyntaxFeature {
+    Variables,
     ArrowFunctions,
     AsyncAwait,
     Classes,

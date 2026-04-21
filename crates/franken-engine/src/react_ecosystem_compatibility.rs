@@ -34,8 +34,8 @@ use sha2::{Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::react_compile_verification::CompileMode;
 use crate::react_package_cohort::{
-    detect_alias_loops, franken_engine_react_cohort_manifest, resolve_subpath_with_fallbacks,
-    verify_format_consistency, ExportCondition, ReactPackage,
+    ExportCondition, ReactPackage, detect_alias_loops, franken_engine_react_cohort_manifest,
+    resolve_subpath_with_fallbacks, verify_format_consistency,
 };
 use crate::security_epoch::SecurityEpoch;
 

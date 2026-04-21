@@ -854,9 +854,11 @@ mod tests {
         assert!(preimage.windows(zone.len()).any(|w| w == zone.as_bytes()));
 
         // Should contain schema ID bytes.
-        assert!(preimage
-            .windows(OBJECT_ID_LEN)
-            .any(|w| w == schema.as_bytes()));
+        assert!(
+            preimage
+                .windows(OBJECT_ID_LEN)
+                .any(|w| w == schema.as_bytes())
+        );
 
         // Should contain content.
         assert!(preimage.windows(content.len()).any(|w| w == content));
@@ -913,15 +915,19 @@ mod tests {
             IdError::EmptyCanonicalBytes.to_string(),
             "canonical bytes are empty"
         );
-        assert!(IdError::InvalidHexLength {
-            expected: 64,
-            actual: 10
-        }
-        .to_string()
-        .contains("64"));
-        assert!(IdError::InvalidHexChar { position: 5 }
+        assert!(
+            IdError::InvalidHexLength {
+                expected: 64,
+                actual: 10
+            }
             .to_string()
-            .contains("5"));
+            .contains("64")
+        );
+        assert!(
+            IdError::InvalidHexChar { position: 5 }
+                .to_string()
+                .contains("5")
+        );
     }
 
     // -- Serialization --

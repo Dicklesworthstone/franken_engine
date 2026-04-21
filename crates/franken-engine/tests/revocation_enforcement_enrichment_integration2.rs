@@ -25,7 +25,8 @@ use frankenengine_engine::revocation_chain::{
     Revocation, RevocationChain, RevocationReason, RevocationTargetType, revocation_schema_id,
 };
 use frankenengine_engine::revocation_enforcement::{
-    EnforcementPoint, EnforcementResult, EnforcementStats, HighRiskCategory, RevocationCheckEvent,
+    EnforcementPoint, EnforcementResult, EnforcementStats, HighRiskCategory,
+    REVOCATION_AUDIT_DIRECT_DENIAL_CODE, REVOCATION_AUDIT_OUTCOME_DENIED, RevocationCheckEvent,
     RevocationDenial, RevocationEnforcer, key_id_from_verification_key,
 };
 use frankenengine_engine::signature_preimage::{

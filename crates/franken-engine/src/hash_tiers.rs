@@ -523,6 +523,40 @@ mod tests {
             ),
         ];
 
+        let required_constant_time_calls = [
+            (
+                "fleet_convergence.rs",
+                "self.signature.constant_time_eq(&expected)",
+            ),
+            (
+                "translation_validation.rs",
+                "self.signature.constant_time_eq(&expected)",
+            ),
+            (
+                "proof_schema.rs",
+                "self.signature.constant_time_eq(&expected)",
+            ),
+            (
+                "proof_schema.rs",
+                "self.issuer_signature.constant_time_eq(&expected)",
+            ),
+            (
+                "translation_validation_receipt.rs",
+                "self.signature.constant_time_eq(&expected)",
+            ),
+        ];
+
+        for (name, expected_call) in required_constant_time_calls {
+            let source = checked_sources
+                .iter()
+                .find_map(|(source_name, source)| (*source_name == name).then_some(*source))
+                .unwrap_or_else(|| panic!("missing checked source for {name}"));
+            assert!(
+                source.contains(expected_call),
+                "{name} must keep the keyed-hash verifier call `{expected_call}`"
+            );
+        }
+
         for (name, source) in checked_sources {
             assert!(
                 !source.contains("signature == expected"),
@@ -537,6 +571,34 @@ mod tests {
                 "{name} must use constant-time equality for computed signature checks"
             );
         }
+    }
+
+    #[test]
+    fn authenticity_hash_constant_time_eq_single_byte_mutation_metamorphic() {
+        let base = AuthenticityHash::compute_keyed(
+            b"bd-2cyl5-metamorphic-key",
+            b"bd-2cyl5-metamorphic-payload",
+        );
+        let mut rejected_positions = Vec::new();
+
+        for index in 0..base.as_bytes().len() {
+            let mut mutated = *base.as_bytes();
+            mutated[index] ^= 0x80;
+            let tampered = AuthenticityHash(mutated);
+            rejected_positions.push((
+                index,
+                base.constant_time_eq(&tampered),
+                tampered.constant_time_eq(&base),
+            ));
+        }
+
+        assert_eq!(rejected_positions.len(), 32);
+        assert!(
+            rejected_positions
+                .iter()
+                .all(|(_, forward, reverse)| !forward && !reverse),
+            "every one-byte tag mutation must be rejected symmetrically: {rejected_positions:?}"
+        );
     }
 
     #[test]

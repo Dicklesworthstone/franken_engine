@@ -43,6 +43,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use subtle::ConstantTimeEq;
 
 use crate::ast::ParseGoal;
 use crate::capability::RuntimeCapability;
@@ -1101,7 +1102,11 @@ impl EvidenceLog {
     fn verify_receipt_signature(&self, receipt: &DecisionReceipt) -> bool {
         let message = self.receipt_signing_message(receipt);
         let expected_signature = self.compute_hmac(&message);
-        receipt.signature == expected_signature
+        receipt
+            .signature
+            .as_bytes()
+            .ct_eq(expected_signature.as_bytes())
+            .into()
     }
 
     /// Create the message to be signed for a receipt.

@@ -87,6 +87,11 @@ impl ContentHash {
         &self.0
     }
 
+    /// Constant-time comparison for persisted verifier paths.
+    pub fn constant_time_eq(&self, other: &Self) -> bool {
+        self.0.ct_eq(&other.0).into()
+    }
+
     /// Hex representation.
     pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(64);
@@ -508,6 +513,14 @@ mod tests {
                 "translation_validation_receipt.rs",
                 include_str!("translation_validation_receipt.rs"),
             ),
+            (
+                "workload_transfer_prior.rs",
+                include_str!("workload_transfer_prior.rs"),
+            ),
+            (
+                "baseline_interpreter.rs",
+                include_str!("baseline_interpreter.rs"),
+            ),
         ];
 
         for (name, source) in checked_sources {
@@ -518,6 +531,10 @@ mod tests {
             assert!(
                 !source.contains("issuer_signature == expected"),
                 "{name} must use AuthenticityHash::constant_time_eq for issuer signature checks"
+            );
+            assert!(
+                !source.contains("signature == expected_signature"),
+                "{name} must use constant-time equality for computed signature checks"
             );
         }
     }

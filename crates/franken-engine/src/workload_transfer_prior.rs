@@ -597,7 +597,7 @@ impl RevocationReceipt {
     pub fn verify_signature(&self, key: &[u8]) -> bool {
         let preimage = self.signing_preimage();
         let expected = ContentHash::compute(&[&preimage, key].concat());
-        self.signature == expected
+        self.signature.constant_time_eq(&expected)
     }
 
     /// Sign this receipt with a key.

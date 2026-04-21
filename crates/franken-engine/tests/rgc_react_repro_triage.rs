@@ -5,19 +5,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::minimized_repro_extraction::{
-    BEAD_ID as EXTRACTION_BEAD_ID, COMPONENT as EXTRACTION_COMPONENT, ExtractionConfig,
-    ExtractionEngine, FailureCategory, MinimizationStrategy, MinimizedRepro as ExtractionRepro,
-    POLICY_ID as EXTRACTION_POLICY_ID, ReproInput, SCHEMA_VERSION as EXTRACTION_SCHEMA_VERSION,
-    TriageFinding, TriageSeverity,
+    ExtractionConfig, ExtractionEngine, FailureCategory, MinimizationStrategy,
+    MinimizedRepro as ExtractionRepro, ReproInput, TriageFinding, TriageSeverity,
+    BEAD_ID as EXTRACTION_BEAD_ID, COMPONENT as EXTRACTION_COMPONENT,
+    POLICY_ID as EXTRACTION_POLICY_ID, SCHEMA_VERSION as EXTRACTION_SCHEMA_VERSION,
 };
 use frankenengine_engine::react_repro_triage::{
-    BEAD_ID, COMPONENT, FailureClass, FailureSeverity, FailureSymptoms, MinimizedRepro, OwnerRoute,
-    POLICY_ID, ReproCatalog, SCHEMA_VERSION, TriageEntry, assign_severity, build_triage_event,
-    classify_failure, default_owner_route, generate_advisory,
+    assign_severity, build_triage_event, classify_failure, default_owner_route, generate_advisory,
+    FailureClass, FailureSeverity, FailureSymptoms, MinimizedRepro, OwnerRoute, ReproCatalog,
+    TriageEntry, BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_react_repro_triage_v1.json");
 const CATALOG_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.react-repro-catalog-artifact.v1";
@@ -183,8 +183,8 @@ fn extraction_finding(
     }
 }
 
-fn build_sample_extraction_report()
--> frankenengine_engine::minimized_repro_extraction::ExtractionReport {
+fn build_sample_extraction_report(
+) -> frankenengine_engine::minimized_repro_extraction::ExtractionReport {
     let config = ExtractionConfig::default();
     let mut engine = ExtractionEngine::new(config);
 
@@ -327,15 +327,13 @@ fn maybe_emit_catalog_artifact_from_env() {
     };
     let output_path = PathBuf::from(output_path);
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|err| {
-            panic!("failed to create {}: {err}", parent.display())
-        });
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|err| panic!("failed to create {}: {err}", parent.display()));
     }
     let encoded = serde_json::to_string_pretty(&build_catalog_artifact())
         .expect("catalog artifact should encode");
-    fs::write(&output_path, encoded).unwrap_or_else(|err| {
-        panic!("failed to write {}: {err}", output_path.display())
-    });
+    fs::write(&output_path, encoded)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", output_path.display()));
 }
 
 #[test]
@@ -550,18 +548,14 @@ fn rgc_405c_runner_script_pins_repo_local_target_dir_and_targets() {
     assert!(runner.contains("policy-rgc-react-repro-triage-v1"));
     assert!(runner.contains("RGC_REACT_REPRO_TRIAGE_EMIT_ARTIFACT_PATH"));
     assert!(runner.contains("rgc_405c_emit_catalog_artifact_for_runner"));
-    assert!(
-        contract
-            .operator_verification
-            .iter()
-            .any(|command| command.contains("scripts/run_rgc_react_repro_triage.sh"))
-    );
-    assert!(
-        contract
-            .operator_verification
-            .iter()
-            .any(|command| command.contains("scripts/e2e/rgc_react_repro_triage_replay.sh"))
-    );
+    assert!(contract
+        .operator_verification
+        .iter()
+        .any(|command| command.contains("scripts/run_rgc_react_repro_triage.sh")));
+    assert!(contract
+        .operator_verification
+        .iter()
+        .any(|command| command.contains("scripts/e2e/rgc_react_repro_triage_replay.sh")));
 
     for target in &contract.required_test_targets {
         assert!(

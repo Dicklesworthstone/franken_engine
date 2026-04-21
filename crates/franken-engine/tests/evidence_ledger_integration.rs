@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::process::Command;
 
 use frankenengine_engine::evidence_ledger::{
     ArtifactRecord, CandidateAction, ChosenAction, Constraint, DecisionSemanticsAnnotations,
@@ -147,6 +148,19 @@ fn temp_dir(label: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&path).expect("create temp dir");
     path
+}
+
+fn log_e2e_phase(test: &str, phase: &str, event: &str, data: serde_json::Value) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "suite": "evidence-ledger-real-service-e2e",
+            "test": test,
+            "phase": phase,
+            "event": event,
+            "data": data,
+        })
+    );
 }
 
 // ===========================================================================
@@ -1510,4 +1524,166 @@ fn emitted_stitching_bundle_publishes_operator_replay_artifacts() {
     assert!(summary.contains("support-export"));
 
     let _ = std::fs::remove_dir_all(&artifact_dir);
+}
+
+#[test]
+fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
+    let test_name = "evidence_ledger_cli_writes_real_artifacts_and_structured_logs";
+    let artifact_dir = temp_dir("cli-real-service");
+    let trace_id = "trace-real-e2e-evidence-ledger";
+    let decision_id = "decision-real-e2e-evidence-ledger";
+    let policy_id = "policy-real-e2e-evidence-ledger";
+    let run_id = "run-real-e2e-evidence-ledger";
+
+    log_e2e_phase(
+        test_name,
+        "setup",
+        "artifact_store_provisioned",
+        serde_json::json!({
+            "artifact_dir": artifact_dir.display().to_string(),
+            "real_service": "franken_evidence_ledger_stitching",
+            "mocked": false,
+        }),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_evidence_ledger_stitching"))
+        .args([
+            "--artifact-dir",
+            artifact_dir.to_str().expect("artifact dir must be utf-8"),
+            "--trace-id",
+            trace_id,
+            "--decision-id",
+            decision_id,
+            "--policy-id",
+            policy_id,
+            "--run-id",
+            run_id,
+            "--generated-at-utc",
+            "2026-04-21T00:00:00Z",
+            "--source-commit",
+            "integration-test-commit",
+            "--toolchain",
+            "integration-test-toolchain",
+            "--summary",
+        ])
+        .output()
+        .expect("execute real evidence-ledger stitching binary");
+
+    log_e2e_phase(
+        test_name,
+        "act",
+        "binary_exited",
+        serde_json::json!({
+            "status": output.status.code(),
+            "stdout_bytes": output.stdout.len(),
+            "stderr_bytes": output.stderr.len(),
+        }),
+    );
+
+    assert!(
+        output.status.success(),
+        "real evidence-ledger stitching binary failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let persisted_files = std::fs::read_dir(&artifact_dir)
+        .expect("read persisted artifact dir")
+        .map(|entry| {
+            entry
+                .expect("read persisted artifact entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    log_e2e_phase(
+        test_name,
+        "assert",
+        "artifact_store_snapshot",
+        serde_json::json!({
+            "file_count": persisted_files.len(),
+            "files": persisted_files,
+        }),
+    );
+
+    for artifact in [
+        "commands.txt",
+        "events.jsonl",
+        "evidence_ledger_stitching_bundle.json",
+        "evidence_query_surface_snapshot.json",
+        "manifest.json",
+        "run_manifest.json",
+        "trace_ids.json",
+    ] {
+        assert!(
+            artifact_dir.join(artifact).exists(),
+            "real artifact store missing {artifact}"
+        );
+    }
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(artifact_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("parse run manifest from real artifact store");
+    assert_eq!(run_manifest["trace_id"].as_str(), Some(trace_id));
+    assert_eq!(run_manifest["decision_id"].as_str(), Some(decision_id));
+    assert_eq!(run_manifest["policy_id"].as_str(), Some(policy_id));
+    assert_eq!(run_manifest["artifact_count"].as_u64(), Some(3));
+    assert_eq!(run_manifest["boundary_count"].as_u64(), Some(3));
+
+    let events_raw =
+        std::fs::read_to_string(artifact_dir.join("events.jsonl")).expect("read events jsonl");
+    let events = events_raw
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("parse event line"))
+        .collect::<Vec<_>>();
+    assert!(
+        events.iter().all(|event| {
+            event["trace_id"].as_str() == Some(trace_id)
+                && event["decision_id"].as_str() == Some(decision_id)
+                && event["policy_id"].as_str() == Some(policy_id)
+                && event["component"].as_str() == Some("evidence_ledger_stitching")
+                && event["outcome"].as_str() == Some("pass")
+                && event.get("error_code").is_some()
+        }),
+        "all persisted events must carry stable structured log fields"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event"].as_str() == Some("boundary_linked"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event"].as_str() == Some("artifact_lineage_recorded"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event"].as_str() == Some("stitching_bundle_built"))
+    );
+
+    let trace_ids: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(artifact_dir.join("trace_ids.json")).expect("read trace ids"),
+    )
+    .expect("parse trace ids artifact");
+    assert_eq!(trace_ids["trace_ids"][0].as_str(), Some(trace_id));
+
+    let summary = String::from_utf8(output.stdout).expect("summary stdout is utf-8");
+    assert!(summary.contains("benchmark-snapshot"));
+    assert!(summary.contains("release-gate"));
+    assert!(summary.contains("support-export"));
+
+    log_e2e_phase(
+        test_name,
+        "assert",
+        "assertions_completed",
+        serde_json::json!({
+            "event_count": events.len(),
+            "run_manifest_artifact_count": run_manifest["artifact_count"],
+            "run_manifest_boundary_count": run_manifest["boundary_count"],
+        }),
+    );
 }

@@ -24,6 +24,12 @@ use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::revocation_chain::{RevocationChain, RevocationTargetType};
 use crate::signature_preimage::VerificationKey;
 
+pub const REVOCATION_AUDIT_POLICY_PREFIX: &str = "revocation-enforcement-policy";
+pub const REVOCATION_AUDIT_OUTCOME_CLEARED: &str = "cleared";
+pub const REVOCATION_AUDIT_OUTCOME_DENIED: &str = "denied";
+pub const REVOCATION_AUDIT_DIRECT_DENIAL_CODE: &str = "revocation.denied.direct";
+pub const REVOCATION_AUDIT_TRANSITIVE_DENIAL_CODE: &str = "revocation.denied.transitive";
+
 // ---------------------------------------------------------------------------
 // Enforcement point identifiers
 // ---------------------------------------------------------------------------
@@ -144,6 +150,20 @@ pub struct RevocationCheckEvent {
     pub transitive: bool,
     /// Trace ID for forensic linkage.
     pub trace_id: String,
+    /// Deterministic decision receipt correlation ID for this check.
+    pub decision_id: String,
+    /// Stable policy ID for the enforcement rule that produced this check.
+    pub policy_id: String,
+    /// Revocation frontier head sequence observed by this check.
+    pub frontier_head_seq: Option<u64>,
+    /// Revocation frontier chain hash observed by this check.
+    pub frontier_chain_hash: String,
+    /// Concrete revocation decision that made this target revoked, if any.
+    pub revocation_id: Option<EngineObjectId>,
+    /// Stable audit outcome (`cleared` or `denied`).
+    pub outcome: String,
+    /// Stable denial code when `outcome == denied`.
+    pub error_code: Option<String>,
     /// Timestamp of the check.
     pub checked_at: DeterministicTimestamp,
 }
@@ -188,6 +208,38 @@ impl EnforcementResult {
 pub fn key_id_from_verification_key(vk: &VerificationKey) -> EngineObjectId {
     let hash = ContentHash::compute(vk.as_bytes());
     EngineObjectId(*hash.as_bytes())
+}
+
+fn revocation_audit_decision_id(
+    point: EnforcementPoint,
+    target_id: &EngineObjectId,
+    transitive: bool,
+    trace_id: &str,
+) -> String {
+    let check_kind = if transitive { "transitive" } else { "direct" };
+    format!("revocation-decision:{trace_id}:{point}:{check_kind}:{target_id}")
+}
+
+fn revocation_audit_policy_id(point: EnforcementPoint) -> String {
+    format!("{REVOCATION_AUDIT_POLICY_PREFIX}:{point}:v1")
+}
+
+fn revocation_audit_outcome(is_revoked: bool) -> String {
+    if is_revoked {
+        REVOCATION_AUDIT_OUTCOME_DENIED.to_string()
+    } else {
+        REVOCATION_AUDIT_OUTCOME_CLEARED.to_string()
+    }
+}
+
+fn revocation_audit_error_code(is_revoked: bool, transitive: bool) -> Option<String> {
+    if !is_revoked {
+        None
+    } else if transitive {
+        Some(REVOCATION_AUDIT_TRANSITIVE_DENIAL_CODE.to_string())
+    } else {
+        Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +556,10 @@ impl RevocationEnforcer {
         transitive: bool,
         trace_id: &str,
     ) {
+        let revocation_id = self
+            .chain
+            .lookup_revocation(target_id)
+            .map(|revocation| revocation.revocation_id.clone());
         self.audit_log.push(RevocationCheckEvent {
             enforcement_point: point,
             target_id: target_id.clone(),
@@ -511,6 +567,13 @@ impl RevocationEnforcer {
             is_revoked,
             transitive,
             trace_id: trace_id.to_string(),
+            decision_id: revocation_audit_decision_id(point, target_id, transitive, trace_id),
+            policy_id: revocation_audit_policy_id(point),
+            frontier_head_seq: self.chain.head_seq(),
+            frontier_chain_hash: self.chain.chain_hash().to_hex(),
+            revocation_id,
+            outcome: revocation_audit_outcome(is_revoked),
+            error_code: revocation_audit_error_code(is_revoked, transitive),
             checked_at: DeterministicTimestamp(self.current_tick),
         });
     }
@@ -1229,6 +1292,13 @@ mod tests {
             is_revoked: true,
             transitive: false,
             trace_id: "t-ser".to_string(),
+            decision_id: "decision-ser".to_string(),
+            policy_id: "policy-ser".to_string(),
+            frontier_head_seq: Some(7),
+            frontier_chain_hash: "chain-hash-ser".to_string(),
+            revocation_id: Some(EngineObjectId([6; 32])),
+            outcome: REVOCATION_AUDIT_OUTCOME_DENIED.to_string(),
+            error_code: Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string()),
             checked_at: DeterministicTimestamp(5000),
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -2025,6 +2095,13 @@ mod tests {
             is_revoked: false,
             transitive: false,
             trace_id: "trace-field-check".to_string(),
+            decision_id: "decision-field-check".to_string(),
+            policy_id: "policy-field-check".to_string(),
+            frontier_head_seq: None,
+            frontier_chain_hash: "chain-hash-field-check".to_string(),
+            revocation_id: None,
+            outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+            error_code: None,
             checked_at: DeterministicTimestamp(9999),
         };
         let json = serde_json::to_string(&event).unwrap();
@@ -2034,6 +2111,13 @@ mod tests {
         assert!(json.contains("\"is_revoked\""));
         assert!(json.contains("\"transitive\""));
         assert!(json.contains("\"trace_id\""));
+        assert!(json.contains("\"decision_id\""));
+        assert!(json.contains("\"policy_id\""));
+        assert!(json.contains("\"frontier_head_seq\""));
+        assert!(json.contains("\"frontier_chain_hash\""));
+        assert!(json.contains("\"revocation_id\""));
+        assert!(json.contains("\"outcome\""));
+        assert!(json.contains("\"error_code\""));
         assert!(json.contains("\"checked_at\""));
         assert!(json.contains("trace-field-check"));
     }

@@ -1,0 +1,27 @@
+{
+  "fields": [
+    "checked_at",
+    "decision_id",
+    "enforcement_point",
+    "error_code",
+    "frontier_chain_hash",
+    "frontier_head_seq",
+    "is_revoked",
+    "outcome",
+    "policy_id",
+    "revocation_id",
+    "target_id",
+    "target_type",
+    "trace_id",
+    "transitive"
+  ],
+  "schema_version": "FrankenEngine.RevocationCheckEvent.audit.v2",
+  "stable_error_codes": [
+    "revocation.denied.direct",
+    "revocation.denied.transitive"
+  ],
+  "stable_outcomes": [
+    "cleared",
+    "denied"
+  ]
+}

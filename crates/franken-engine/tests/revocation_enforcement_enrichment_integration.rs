@@ -679,6 +679,13 @@ fn enrich_revocation_check_event_serde() {
         is_revoked: false,
         transitive: false,
         trace_id: "t-serde".to_string(),
+        decision_id: "decision-serde".to_string(),
+        policy_id: "policy-serde".to_string(),
+        frontier_head_seq: None,
+        frontier_chain_hash: "chain-hash-serde".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
         checked_at: DeterministicTimestamp(5000),
     };
     let json = serde_json::to_string(&event).unwrap();

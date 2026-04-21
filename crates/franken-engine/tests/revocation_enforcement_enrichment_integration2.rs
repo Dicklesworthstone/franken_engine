@@ -528,6 +528,13 @@ fn enrichment_check_event_serde() {
         is_revoked: true,
         transitive: false,
         trace_id: "t-ser".to_string(),
+        decision_id: "decision-ser".to_string(),
+        policy_id: "policy-ser".to_string(),
+        frontier_head_seq: Some(9),
+        frontier_chain_hash: "chain-hash-ser".to_string(),
+        revocation_id: Some(EngineObjectId([6; 32])),
+        outcome: REVOCATION_AUDIT_OUTCOME_DENIED.to_string(),
+        error_code: Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string()),
         checked_at: DeterministicTimestamp(5000),
     };
     let json = serde_json::to_string(&event).unwrap();

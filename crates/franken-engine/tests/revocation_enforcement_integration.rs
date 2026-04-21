@@ -19,6 +19,8 @@ use frankenengine_engine::signature_preimage::{
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 const ZONE: &str = "test-zone";
+const REVOCATION_CHECK_EVENT_SCHEMA_GOLDEN: &str =
+    include_str!("golden_vectors/revocation_check_event_schema.json");
 
 fn head_signing_key() -> SigningKey {
     SigningKey::from_bytes([
@@ -36,6 +38,12 @@ fn rev_signing_key() -> SigningKey {
         0xBF, 0xC0,
     ])
     .unwrap()
+}
+
+fn verification_key_from_seed(byte: u8) -> VerificationKey {
+    SigningKey::from_bytes([byte; 32])
+        .unwrap()
+        .verification_key()
 }
 
 fn make_revocation(target_type: RevocationTargetType, target_bytes: [u8; 32]) -> Revocation {
@@ -80,6 +88,77 @@ fn revoke_target(
     let rev = make_revocation(target_type, target_bytes);
     let sk = head_signing_key();
     enforcer.chain_mut().append(rev, &sk, "t-revoke").unwrap();
+}
+
+fn representative_revocation_check_events() -> Vec<RevocationCheckEvent> {
+    let mut pass_enforcer = make_enforcer();
+    revoke_target(
+        &mut pass_enforcer,
+        RevocationTargetType::Extension,
+        [90; 32],
+    );
+    pass_enforcer.drain_audit_log();
+    let pass_token = EngineObjectId([1; 32]);
+    let pass_issuer = verification_key_from_seed(2);
+    pass_enforcer.check_token_acceptance(&pass_token, &pass_issuer, "trace-golden-pass");
+    let pass_event = pass_enforcer.drain_audit_log()[0].clone();
+
+    let mut direct_enforcer = make_enforcer();
+    let direct_token = EngineObjectId([10; 32]);
+    revoke_target(&mut direct_enforcer, RevocationTargetType::Token, [10; 32]);
+    direct_enforcer.drain_audit_log();
+    let direct_issuer = verification_key_from_seed(3);
+    direct_enforcer.check_token_acceptance(&direct_token, &direct_issuer, "trace-golden-direct");
+    let direct_event = direct_enforcer.drain_audit_log()[0].clone();
+
+    let mut transitive_enforcer = make_enforcer();
+    let transitive_issuer = verification_key_from_seed(20);
+    let issuer_key_id = key_id_from_verification_key(&transitive_issuer);
+    revoke_target(
+        &mut transitive_enforcer,
+        RevocationTargetType::Key,
+        *issuer_key_id.as_bytes(),
+    );
+    transitive_enforcer.drain_audit_log();
+    transitive_enforcer.check_token_acceptance(
+        &EngineObjectId([30; 32]),
+        &transitive_issuer,
+        "trace-golden-transitive",
+    );
+    let transitive_event = transitive_enforcer.drain_audit_log()[1].clone();
+
+    vec![pass_event, direct_event, transitive_event]
+}
+
+fn revocation_check_event_schema_snapshot() -> String {
+    let sample_event = representative_revocation_check_events()
+        .into_iter()
+        .next()
+        .expect("representative audit event");
+    let value = serde_json::to_value(sample_event).expect("serialize audit event");
+    let mut fields = value
+        .as_object()
+        .expect("audit event should serialize as an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    fields.sort();
+    let snapshot = serde_json::json!({
+        "schema_version": "FrankenEngine.RevocationCheckEvent.audit.v2",
+        "fields": fields,
+        "stable_outcomes": [
+            REVOCATION_AUDIT_OUTCOME_CLEARED,
+            REVOCATION_AUDIT_OUTCOME_DENIED
+        ],
+        "stable_error_codes": [
+            REVOCATION_AUDIT_DIRECT_DENIAL_CODE,
+            REVOCATION_AUDIT_TRANSITIVE_DENIAL_CODE
+        ]
+    });
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&snapshot).expect("schema snapshot JSON")
+    )
 }
 
 // ── EnforcementPoint display ─────────────────────────────────────────────
@@ -667,6 +746,124 @@ fn audit_events_contain_correct_enforcement_point() {
 }
 
 #[test]
+fn audit_event_correlates_pass_with_decision_policy_and_frontier() {
+    let mut enforcer = make_enforcer();
+    revoke_target(&mut enforcer, RevocationTargetType::Extension, [90; 32]);
+    let expected_head_seq = enforcer.chain().head_seq();
+    let expected_chain_hash = enforcer.chain().chain_hash().to_hex();
+    enforcer.drain_audit_log();
+
+    let token_jti = EngineObjectId([1; 32]);
+    let issuer_key = verification_key_from_seed(2);
+    enforcer.check_token_acceptance(&token_jti, &issuer_key, "trace-pass-correlation");
+    let events = enforcer.drain_audit_log();
+    let event = &events[0];
+
+    assert_eq!(event.outcome, REVOCATION_AUDIT_OUTCOME_CLEARED);
+    assert_eq!(event.error_code, None);
+    assert_eq!(event.revocation_id, None);
+    assert_eq!(event.frontier_head_seq, expected_head_seq);
+    assert_eq!(event.frontier_chain_hash, expected_chain_hash);
+    assert!(event.decision_id.contains("trace-pass-correlation"));
+    assert!(event.decision_id.contains("token_acceptance"));
+    assert!(event.decision_id.contains("direct"));
+    assert_eq!(
+        event.policy_id,
+        "revocation-enforcement-policy:token_acceptance:v1"
+    );
+}
+
+#[test]
+fn audit_event_correlates_direct_denial_with_revocation_id_and_error_code() {
+    let mut enforcer = make_enforcer();
+    let token_jti = EngineObjectId([10; 32]);
+    revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
+    let expected_revocation_id = enforcer
+        .chain()
+        .lookup_revocation(&token_jti)
+        .expect("token revocation")
+        .revocation_id
+        .clone();
+    let expected_head_seq = enforcer.chain().head_seq();
+    let expected_chain_hash = enforcer.chain().chain_hash().to_hex();
+    enforcer.drain_audit_log();
+
+    let issuer_key = verification_key_from_seed(3);
+    enforcer.check_token_acceptance(&token_jti, &issuer_key, "trace-direct-correlation");
+    let events = enforcer.drain_audit_log();
+    let event = &events[0];
+
+    assert_eq!(event.outcome, REVOCATION_AUDIT_OUTCOME_DENIED);
+    assert_eq!(
+        event.error_code.as_deref(),
+        Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE)
+    );
+    assert_eq!(event.revocation_id, Some(expected_revocation_id));
+    assert_eq!(event.frontier_head_seq, expected_head_seq);
+    assert_eq!(event.frontier_chain_hash, expected_chain_hash);
+    assert!(event.decision_id.contains("trace-direct-correlation"));
+    assert!(event.decision_id.contains("direct"));
+}
+
+#[test]
+fn audit_event_correlates_transitive_denial_with_frontier_and_error_code() {
+    let mut enforcer = make_enforcer();
+    let issuer_key = verification_key_from_seed(20);
+    let issuer_key_id = key_id_from_verification_key(&issuer_key);
+    revoke_target(
+        &mut enforcer,
+        RevocationTargetType::Key,
+        *issuer_key_id.as_bytes(),
+    );
+    let expected_revocation_id = enforcer
+        .chain()
+        .lookup_revocation(&issuer_key_id)
+        .expect("issuer-key revocation")
+        .revocation_id
+        .clone();
+    let expected_head_seq = enforcer.chain().head_seq();
+    let expected_chain_hash = enforcer.chain().chain_hash().to_hex();
+    enforcer.drain_audit_log();
+
+    enforcer.check_token_acceptance(
+        &EngineObjectId([30; 32]),
+        &issuer_key,
+        "trace-transitive-correlation",
+    );
+    let events = enforcer.drain_audit_log();
+    let direct_pass = &events[0];
+    let transitive_denial = &events[1];
+
+    assert_eq!(direct_pass.outcome, REVOCATION_AUDIT_OUTCOME_CLEARED);
+    assert_eq!(direct_pass.error_code, None);
+    assert_eq!(transitive_denial.outcome, REVOCATION_AUDIT_OUTCOME_DENIED);
+    assert_eq!(
+        transitive_denial.error_code.as_deref(),
+        Some(REVOCATION_AUDIT_TRANSITIVE_DENIAL_CODE)
+    );
+    assert_eq!(
+        transitive_denial.revocation_id,
+        Some(expected_revocation_id)
+    );
+    assert_eq!(transitive_denial.frontier_head_seq, expected_head_seq);
+    assert_eq!(transitive_denial.frontier_chain_hash, expected_chain_hash);
+    assert!(
+        transitive_denial
+            .decision_id
+            .contains("trace-transitive-correlation")
+    );
+    assert!(transitive_denial.decision_id.contains("transitive"));
+}
+
+#[test]
+fn revocation_check_event_schema_matches_golden_snapshot() {
+    assert_eq!(
+        revocation_check_event_schema_snapshot(),
+        REVOCATION_CHECK_EVENT_SCHEMA_GOLDEN
+    );
+}
+
+#[test]
 fn multiple_checks_accumulate_audit_events() {
     let mut enforcer = make_enforcer();
     let vk = VerificationKey::from_bytes([2; 32]).unwrap();
@@ -1111,6 +1308,13 @@ fn enrichment_check_event_debug() {
         is_revoked: false,
         transitive: false,
         trace_id: "trace-dbg".to_string(),
+        decision_id: "decision-dbg".to_string(),
+        policy_id: "policy-dbg".to_string(),
+        frontier_head_seq: None,
+        frontier_chain_hash: "chain-hash-dbg".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
         checked_at: DeterministicTimestamp(1000),
     };
     let dbg = format!("{:?}", event);
@@ -1126,6 +1330,13 @@ fn enrichment_check_event_clone_eq() {
         is_revoked: true,
         transitive: true,
         trace_id: "trace-clone".to_string(),
+        decision_id: "decision-clone".to_string(),
+        policy_id: "policy-clone".to_string(),
+        frontier_head_seq: Some(3),
+        frontier_chain_hash: "chain-hash-clone".to_string(),
+        revocation_id: Some(EngineObjectId([6; 32])),
+        outcome: REVOCATION_AUDIT_OUTCOME_DENIED.to_string(),
+        error_code: Some(REVOCATION_AUDIT_TRANSITIVE_DENIAL_CODE.to_string()),
         checked_at: DeterministicTimestamp(2000),
     };
     let cloned = event.clone();
@@ -1141,6 +1352,13 @@ fn enrichment_check_event_ne_different_revoked() {
         is_revoked: false,
         transitive: false,
         trace_id: "t".to_string(),
+        decision_id: "decision-a".to_string(),
+        policy_id: "policy-a".to_string(),
+        frontier_head_seq: None,
+        frontier_chain_hash: "chain-hash-a".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
         checked_at: DeterministicTimestamp(100),
     };
     let e2 = RevocationCheckEvent {
@@ -1150,6 +1368,13 @@ fn enrichment_check_event_ne_different_revoked() {
         is_revoked: true,
         transitive: false,
         trace_id: "t".to_string(),
+        decision_id: "decision-a".to_string(),
+        policy_id: "policy-a".to_string(),
+        frontier_head_seq: Some(0),
+        frontier_chain_hash: "chain-hash-a".to_string(),
+        revocation_id: Some(EngineObjectId([2; 32])),
+        outcome: REVOCATION_AUDIT_OUTCOME_DENIED.to_string(),
+        error_code: Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string()),
         checked_at: DeterministicTimestamp(100),
     };
     assert_ne!(e1, e2);
@@ -1164,6 +1389,13 @@ fn enrichment_check_event_serde_roundtrip() {
         is_revoked: false,
         transitive: true,
         trace_id: "trace-serde".to_string(),
+        decision_id: "decision-serde".to_string(),
+        policy_id: "policy-serde".to_string(),
+        frontier_head_seq: Some(4),
+        frontier_chain_hash: "chain-hash-serde".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
         checked_at: DeterministicTimestamp(9999),
     };
     let json = serde_json::to_string(&event).unwrap();
@@ -1180,6 +1412,13 @@ fn enrichment_check_event_json_field_names_stable() {
         is_revoked: false,
         transitive: false,
         trace_id: "t-fields".to_string(),
+        decision_id: "decision-fields".to_string(),
+        policy_id: "policy-fields".to_string(),
+        frontier_head_seq: None,
+        frontier_chain_hash: "chain-hash-fields".to_string(),
+        revocation_id: None,
+        outcome: REVOCATION_AUDIT_OUTCOME_CLEARED.to_string(),
+        error_code: None,
         checked_at: DeterministicTimestamp(100),
     };
     let json = serde_json::to_string(&event).unwrap();
@@ -1189,6 +1428,13 @@ fn enrichment_check_event_json_field_names_stable() {
     assert!(json.contains("\"is_revoked\""));
     assert!(json.contains("\"transitive\""));
     assert!(json.contains("\"trace_id\""));
+    assert!(json.contains("\"decision_id\""));
+    assert!(json.contains("\"policy_id\""));
+    assert!(json.contains("\"frontier_head_seq\""));
+    assert!(json.contains("\"frontier_chain_hash\""));
+    assert!(json.contains("\"revocation_id\""));
+    assert!(json.contains("\"outcome\""));
+    assert!(json.contains("\"error_code\""));
     assert!(json.contains("\"checked_at\""));
 }
 

@@ -2172,12 +2172,12 @@ impl CapabilityEscrowDecisionReceipt {
             error_code: &error_code,
             timestamp_ns,
         };
-        let payload_bytes = serde_json::to_vec(&payload).map_err(|err| {
-            CapabilityEscrowError::ReceiptEmissionFailed {
-                request_id: request_id.to_string(),
-                detail: err.to_string(),
-            }
-        })?;
+        let payload_bytes = serialize_policy_signing_payload(
+            PolicySignSurface::CapabilityEscrowReceipt,
+            request_id,
+            &payload,
+        )
+        .map_err(CapabilityEscrowError::from)?;
         let signature = signer.sign(&payload_bytes);
         Ok(Self {
             receipt_id,
@@ -2219,10 +2219,12 @@ impl CapabilityEscrowDecisionReceipt {
             error_code: &self.error_code,
             timestamp_ns: self.timestamp_ns,
         };
-        serde_json::to_vec(&payload).map_err(|err| CapabilityEscrowError::ReceiptEmissionFailed {
-            request_id: self.request_id.clone(),
-            detail: err.to_string(),
-        })
+        serialize_policy_signing_payload(
+            PolicySignSurface::CapabilityEscrowReceipt,
+            &self.request_id,
+            &payload,
+        )
+        .map_err(CapabilityEscrowError::from)
     }
 
     pub fn verify(&self, public_key: &DecisionPublicKey) -> bool {
@@ -4067,6 +4069,7 @@ struct ReceiptSigningPayload<'a> {
 pub enum PolicySignSurface {
     DecisionSigningKey,
     DeclassificationReceipt,
+    CapabilityEscrowReceipt,
     EmergencyGrant,
 }
 
@@ -4090,7 +4093,8 @@ impl PolicySignError {
         match self {
             Self::FailClosed { surface, .. } | Self::OversizedPayload { surface, .. } => {
                 match surface {
-                    PolicySignSurface::EmergencyGrant => ESCROW_RECEIPT_EMISSION_ERROR_CODE,
+                    PolicySignSurface::CapabilityEscrowReceipt
+                    | PolicySignSurface::EmergencyGrant => ESCROW_RECEIPT_EMISSION_ERROR_CODE,
                     PolicySignSurface::DecisionSigningKey
                     | PolicySignSurface::DeclassificationReceipt => {
                         DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE
@@ -10564,6 +10568,45 @@ mod enrichment_tests {
         "r".repeat(target_len - base_len)
     }
 
+    fn capability_escrow_receipt_payload_len(request_id: &str) -> usize {
+        let receipt_id = derive_escrow_receipt_id(
+            request_id,
+            7000,
+            CapabilityEscrowDecisionKind::Challenge.as_str(),
+            CapabilityEscrowState::Challenged.as_str(),
+        );
+        let contract_chain = Vec::new();
+        let conditions = Vec::new();
+        let error_code: Option<String> = None;
+        let payload = CapabilityEscrowReceiptSigningPayload {
+            receipt_id: &receipt_id,
+            request_id,
+            extension_id: "ext-escrow",
+            capability: Capability::NetClient,
+            decision: CapabilityEscrowDecisionKind::Challenge,
+            state: CapabilityEscrowState::Challenged,
+            trace_ref: "trace-escrow",
+            replay_seed: "seed-escrow",
+            decision_id: "decision-escrow",
+            policy_id: "policy-escrow",
+            active_witness_ref: "witness-escrow",
+            contract_chain: &contract_chain,
+            conditions: &conditions,
+            outcome: "escrowed",
+            error_code: &error_code,
+            timestamp_ns: 7000,
+        };
+        serde_json::to_vec(&payload)
+            .expect("test capability escrow payload should serialize")
+            .len()
+    }
+
+    fn request_id_for_capability_escrow_receipt_payload_len(target_len: usize) -> String {
+        let base_len = capability_escrow_receipt_payload_len("");
+        assert!(target_len >= base_len);
+        "e".repeat(target_len - base_len)
+    }
+
     #[test]
     fn cryptographic_decision_receipt_size_boundary_is_metamorphic() {
         let key = DecisionSigningKey::new([0xC7; 32]);
@@ -10606,6 +10649,182 @@ mod enrichment_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn capability_escrow_decision_receipt_size_boundary_is_enforced() {
+        let key = DecisionSigningKey::new([0xE5; 32]);
+        let cases = [
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES - 1, true),
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES, true),
+            (MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1, false),
+        ];
+
+        for (target_len, should_sign) in cases {
+            let request_id = request_id_for_capability_escrow_receipt_payload_len(target_len);
+            assert_eq!(
+                capability_escrow_receipt_payload_len(&request_id),
+                target_len
+            );
+
+            let result = CapabilityEscrowDecisionReceipt::new_signed(
+                &request_id,
+                "ext-escrow",
+                Capability::NetClient,
+                CapabilityEscrowDecisionKind::Challenge,
+                CapabilityEscrowState::Challenged,
+                "trace-escrow".to_string(),
+                "seed-escrow".to_string(),
+                "decision-escrow",
+                "policy-escrow",
+                "witness-escrow".to_string(),
+                vec![],
+                vec![],
+                "escrowed".to_string(),
+                None,
+                7000,
+                &key,
+            );
+
+            if should_sign {
+                let receipt = result.expect("payload at or below max should sign");
+                assert!(receipt.verify(&key.public_key()));
+            } else {
+                match result {
+                    Err(CapabilityEscrowError::ReceiptEmissionFailed {
+                        request_id: failed_request_id,
+                        detail,
+                    }) => {
+                        assert_eq!(failed_request_id, request_id);
+                        assert!(detail.contains("CapabilityEscrowReceipt"));
+                        assert!(detail.contains("too large"));
+                        assert!(
+                            detail.contains(&(MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1).to_string())
+                        );
+                    }
+                    other => panic!("expected receipt emission failure, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    fn expect_policy_sign_error<T>(
+        case_name: &str,
+        result: std::thread::Result<Result<T, PolicySignError>>,
+    ) -> PolicySignError {
+        match result {
+            Ok(Ok(_)) => panic!("{case_name} unexpectedly signed"),
+            Ok(Err(error)) => error,
+            Err(_) => panic!("{case_name} panicked instead of returning PolicySignError"),
+        }
+    }
+
+    #[test]
+    fn policy_signing_malformed_inputs_fail_closed_without_panics() {
+        let short_key = expect_policy_sign_error(
+            "short signing key",
+            std::panic::catch_unwind(|| DecisionSigningKey::try_from_bytes(&[0xAB; 31])),
+        );
+        assert_eq!(
+            short_key.error_code(),
+            DECLASSIFICATION_RECEIPT_EMISSION_ERROR_CODE
+        );
+        assert!(matches!(
+            short_key,
+            PolicySignError::FailClosed {
+                surface: PolicySignSurface::DecisionSigningKey,
+                ..
+            }
+        ));
+
+        let long_key = expect_policy_sign_error(
+            "long signing key",
+            std::panic::catch_unwind(|| DecisionSigningKey::try_from_bytes(&[0xAB; 33])),
+        );
+        assert!(matches!(
+            long_key,
+            PolicySignError::FailClosed {
+                surface: PolicySignSurface::DecisionSigningKey,
+                ..
+            }
+        ));
+
+        let key = DecisionSigningKey::new([0xC8; 32]);
+        let oversized_request_id =
+            request_id_for_approved_receipt_payload_len(MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1);
+        let oversized_payload = expect_policy_sign_error(
+            "oversized receipt payload",
+            std::panic::catch_unwind(|| {
+                CryptographicDecisionReceipt::new_signed(
+                    &oversized_request_id,
+                    DecisionVerdict::Approved { conditions: vec![] },
+                    vec![],
+                    vec![],
+                    500_000,
+                    4100,
+                    &key,
+                )
+            }),
+        );
+        assert!(matches!(
+            oversized_payload,
+            PolicySignError::OversizedPayload {
+                surface: PolicySignSurface::DeclassificationReceipt,
+                ..
+            }
+        ));
+
+        let corrupted_posterior = expect_policy_sign_error(
+            "corrupted posterior counter",
+            std::panic::catch_unwind(|| {
+                CryptographicDecisionReceipt::new_signed(
+                    "req-corrupt-posterior",
+                    DecisionVerdict::Approved { conditions: vec![] },
+                    vec![],
+                    vec![],
+                    GUARDPLANE_MAX_POSTERIOR_MICROS + 1,
+                    4200,
+                    &key,
+                )
+            }),
+        );
+        assert!(matches!(
+            corrupted_posterior,
+            PolicySignError::FailClosed {
+                surface: PolicySignSurface::DeclassificationReceipt,
+                ..
+            }
+        ));
+
+        let corrupted_invocation_counter = expect_policy_sign_error(
+            "corrupted emergency grant counter",
+            std::panic::catch_unwind(|| {
+                EmergencyGrantArtifact::new_signed(
+                    "req-corrupt-grant",
+                    "ext-a",
+                    Capability::HostCall,
+                    "operator approved".to_string(),
+                    "ops".to_string(),
+                    9000,
+                    0,
+                    true,
+                    true,
+                    8000,
+                    &key,
+                )
+            }),
+        );
+        assert_eq!(
+            corrupted_invocation_counter.error_code(),
+            ESCROW_RECEIPT_EMISSION_ERROR_CODE
+        );
+        assert!(matches!(
+            corrupted_invocation_counter,
+            PolicySignError::FailClosed {
+                surface: PolicySignSurface::EmergencyGrant,
+                ..
+            }
+        ));
     }
 
     #[test]

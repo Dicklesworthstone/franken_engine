@@ -221,7 +221,7 @@ fn rgc_063_doc_contains_required_sections() {
 fn rgc_063_contract_is_versioned_and_target_complete() {
     let contract = parse_contract();
     assert_eq!(contract.schema_version, MATRIX_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.1.2");
+    assert_eq!(contract.contract_version, "1.1.3");
     assert_eq!(contract.bead_id, "bd-1lsy.11.13");
     assert_eq!(contract.policy_id, "policy-rgc-cross-platform-matrix-v1");
 
@@ -505,6 +505,8 @@ fn rgc_063_gate_runner_and_operator_commands_are_wired() {
         contract.gate_runner.replay_wrapper,
         "scripts/e2e/rgc_cross_platform_matrix_replay.sh"
     );
+    assert!(contract.gate_runner.strict_mode.contains("mode=ci"));
+    assert!(contract.gate_runner.strict_mode.contains("mode=matrix"));
     assert!(
         contract
             .gate_runner
@@ -564,6 +566,23 @@ fn rgc_063_gate_runner_and_operator_commands_are_wired() {
         cmd.contains("RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT")
             && cmd.contains("rgc_cross_platform_matrix_replay.sh matrix")
     }));
+}
+
+#[test]
+fn rgc_063_ci_mode_enables_strict_matrix_by_default() {
+    let gate_script = load_gate_script();
+    assert!(
+        gate_script.contains("\"$mode\" == \"ci\""),
+        "ci mode must enable strict matrix evaluation by default"
+    );
+    assert!(
+        gate_script.contains("\"$mode\" == \"matrix\""),
+        "matrix mode must continue to enable strict matrix evaluation"
+    );
+    assert!(
+        gate_script.contains("RGC_CROSS_PLATFORM_REQUIRE_MATRIX"),
+        "custom wrappers should retain explicit strict-mode opt-in"
+    );
 }
 
 #[test]

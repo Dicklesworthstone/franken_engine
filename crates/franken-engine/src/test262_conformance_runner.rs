@@ -12,11 +12,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Instant;
 
 use chrono;
 use serde::{Deserialize, Serialize};
 
+use crate::HybridRouter;
+use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -333,6 +338,19 @@ pub struct Test262Runner {
     config: RunnerConfig,
 }
 
+#[derive(Debug, Clone)]
+struct DiscoveredTest {
+    report_path: PathBuf,
+    source: Option<String>,
+    discovery_error: Option<String>,
+    is_negative: bool,
+}
+
+#[derive(Debug, Default, Clone)]
+struct TestMetadata {
+    is_negative: bool,
+}
+
 impl Test262Runner {
     /// Create a new Test262 runner.
     pub fn new(config: RunnerConfig) -> Self {
@@ -344,22 +362,34 @@ impl Test262Runner {
         &self,
         security_epoch: SecurityEpoch,
     ) -> Result<ConformanceReport, String> {
-        // For MVP, create a mock report with expected structure
-        // In full implementation, this would discover and execute real Test262 tests
-        let mock_records = self.create_mock_test_records();
-        let total_discovered = if self.config.max_tests > 0 {
-            self.config.max_tests as u64 * 10 // Simulate larger discovered set
+        let discovered_tests = self.discover_tests()?;
+        if discovered_tests.is_empty() {
+            return Err(format!(
+                "no Test262 .js fixtures discovered under {}",
+                self.config.test262_path.display()
+            ));
+        }
+
+        let total_discovered = discovered_tests.len() as u64;
+        let max_tests = if self.config.max_tests == 0 {
+            discovered_tests.len()
         } else {
-            mock_records.len() as u64
+            self.config.max_tests.min(discovered_tests.len())
         };
 
-        let test262_commit = "mock-commit-hash".to_string(); // In real implementation, get from git
-        let is_sample = self.config.max_tests > 0 && self.config.max_tests < 10000;
+        let records: Vec<_> = discovered_tests
+            .iter()
+            .take(max_tests)
+            .map(|test| self.execute_test(test, security_epoch))
+            .collect();
+
+        let test262_commit = self.resolve_test262_revision(&discovered_tests);
+        let is_sample = records.len() < discovered_tests.len();
 
         let report = ConformanceReport::new(
             security_epoch,
             test262_commit,
-            mock_records,
+            records,
             total_discovered,
             is_sample,
         );
@@ -367,77 +397,215 @@ impl Test262Runner {
         Ok(report)
     }
 
-    /// Execute a single test file.
-    fn execute_test(&self, test_path: &Path) -> TestRecord {
-        let start_time = std::time::Instant::now();
+    fn discover_tests(&self) -> Result<Vec<DiscoveredTest>, String> {
+        let test_root = self.test_root()?;
+        let mut js_files = Vec::new();
+        collect_js_files(&test_root, &mut js_files)?;
+        js_files.sort();
 
-        // For MVP, simulate test execution with realistic results
-        // In full implementation, this would:
-        // 1. Read test file
-        // 2. Parse with Parser
-        // 3. Lower with LoweringPipeline
-        // 4. Execute with ExecutionOrchestrator
-        // 5. Compare with expected result
+        let mut discovered = Vec::new();
+        for absolute_path in js_files {
+            let report_path = absolute_path
+                .strip_prefix(&self.config.test262_path)
+                .unwrap_or(absolute_path.as_path())
+                .to_path_buf();
+            if !self.matches_pattern(&report_path) {
+                continue;
+            }
 
-        let result = self.simulate_test_result(test_path);
-        let duration_us = start_time.elapsed().as_micros() as u64;
-        let error_message = if result == TestResult::Error || result == TestResult::Fail {
-            Some(format!("Mock error for {}", test_path.display()))
-        } else {
-            None
-        };
+            let (source, discovery_error, metadata) = match fs::read_to_string(&absolute_path) {
+                Ok(source) => {
+                    let metadata = parse_test262_metadata(&source);
+                    (Some(source), None, metadata)
+                }
+                Err(error) => (
+                    None,
+                    Some(format!(
+                        "failed to read {}: {error}",
+                        absolute_path.display()
+                    )),
+                    TestMetadata::default(),
+                ),
+            };
 
-        TestRecord::new(
-            test_path.to_path_buf(),
-            result,
-            duration_us,
-            error_message,
-            false, // Mock: not negative test
-        )
+            if metadata.is_negative && !self.config.include_negative {
+                continue;
+            }
+
+            discovered.push(DiscoveredTest {
+                report_path,
+                source,
+                discovery_error,
+                is_negative: metadata.is_negative,
+            });
+        }
+
+        Ok(discovered)
     }
 
-    /// Simulate realistic test result distribution.
-    fn simulate_test_result(&self, test_path: &Path) -> TestResult {
-        // Create deterministic but realistic result distribution
-        let path_hash = test_path.to_string_lossy().len();
-        match path_hash % 100 {
-            0..=5 => TestResult::Pass,    // 6% pass (early implementation)
-            6..=25 => TestResult::Skip,   // 20% skip (unsupported syntax)
-            26..=45 => TestResult::Error, // 20% error (parse/lower/execute issues)
-            _ => TestResult::Fail,        // 54% fail (semantic issues)
+    fn test_root(&self) -> Result<PathBuf, String> {
+        if !self.config.test262_path.is_dir() {
+            return Err(format!(
+                "Test262 path does not exist or is not a directory: {}",
+                self.config.test262_path.display()
+            ));
+        }
+
+        let nested_test_dir = self.config.test262_path.join("test");
+        if nested_test_dir.is_dir() {
+            Ok(nested_test_dir)
+        } else {
+            Ok(self.config.test262_path.clone())
         }
     }
 
-    /// Create mock test records for MVP demonstration.
-    fn create_mock_test_records(&self) -> Vec<TestRecord> {
-        let mock_test_paths = [
-            "test/language/expressions/assignment/target-member-computed-simple.js",
-            "test/language/statements/for/S12.6.3_A1.js",
-            "test/language/expressions/function/scope-name-var-open-non-strict.js",
-            "test/built-ins/Array/prototype/forEach/15.4.4.18-7-c-i-1.js",
-            "test/built-ins/Object/create/15.2.3.5-4-1.js",
-            "test/built-ins/String/prototype/replace/S15.5.4.11_A1_T1.js",
-            "test/language/eval-code/direct/var-env-func-init-global-update-configurable.js",
-            "test/annexes/b/RegExp/prototype/compile/this-not-regexp.js",
-            "test/intl/Collator/prototype/compare/10.3.2_1_c.js",
-            "test/harness/assert.js",
-        ];
-
-        let max_tests = if self.config.max_tests > 0 {
-            self.config.max_tests.min(mock_test_paths.len())
-        } else {
-            mock_test_paths.len()
+    fn matches_pattern(&self, path: &Path) -> bool {
+        let Some(pattern) = self.config.pattern.as_deref() else {
+            return true;
         };
 
-        // Create the paths first, then map over them to avoid borrowing issues
-        let test_paths: Vec<_> = (0..max_tests)
-            .map(|i| PathBuf::from(mock_test_paths[i % mock_test_paths.len()]))
-            .collect();
+        path_matches_pattern(path, pattern)
+    }
 
-        test_paths
-            .iter()
-            .map(|path| self.execute_test(path))
-            .collect()
+    /// Execute a single discovered fixture through the native eval pipeline.
+    fn execute_test(&self, test: &DiscoveredTest, _security_epoch: SecurityEpoch) -> TestRecord {
+        let start_time = Instant::now();
+
+        let (result, error_message) = if let Some(discovery_error) = test.discovery_error.as_deref()
+        {
+            (TestResult::Error, Some(discovery_error.to_string()))
+        } else if let Some(source) = test.source.as_deref() {
+            let mut engine = HybridRouter::default();
+            match engine.eval(source) {
+                Ok(_) if test.is_negative => (
+                    TestResult::Fail,
+                    Some("negative Test262 fixture unexpectedly evaluated successfully".into()),
+                ),
+                Ok(_) => (TestResult::Pass, None),
+                Err(error) if test.is_negative => (TestResult::Pass, Some(error.to_string())),
+                Err(error) => (
+                    TestResult::Error,
+                    Some(format!("engine evaluation failed: {error}")),
+                ),
+            }
+        } else {
+            (
+                TestResult::Error,
+                Some("missing discovered source and discovery error".to_string()),
+            )
+        };
+
+        let duration_us = start_time.elapsed().as_micros() as u64;
+        let (result, error_message) =
+            if self.config.timeout_ms > 0 && duration_us / 1_000 > self.config.timeout_ms {
+                (
+                    TestResult::Error,
+                    Some(format!(
+                        "test exceeded timeout: {}ms > {}ms",
+                        duration_us / 1_000,
+                        self.config.timeout_ms
+                    )),
+                )
+            } else {
+                (result, error_message)
+            };
+
+        TestRecord::new(
+            test.report_path.clone(),
+            result,
+            duration_us,
+            error_message,
+            test.is_negative,
+        )
+    }
+
+    fn resolve_test262_revision(&self, discovered_tests: &[DiscoveredTest]) -> String {
+        if let Ok(output) = Command::new("git")
+            .arg("-C")
+            .arg(&self.config.test262_path)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .output()
+        {
+            if output.status.success() {
+                let revision = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !revision.is_empty() {
+                    return revision;
+                }
+            }
+        }
+
+        let mut digest_input = Vec::new();
+        for test in discovered_tests {
+            digest_input.extend_from_slice(test.report_path.to_string_lossy().as_bytes());
+            digest_input.push(0);
+            if let Some(source) = test.source.as_deref() {
+                digest_input.extend_from_slice(source.as_bytes());
+            }
+            digest_input.push(0xff);
+        }
+        format!(
+            "content-sha256:{}",
+            ContentHash::compute(&digest_input).to_hex()
+        )
+    }
+}
+
+fn collect_js_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(root)
+        .map_err(|error| format!("failed to read {}: {error}", root.display()))?;
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", root.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to stat {}: {error}", path.display()))?;
+        if file_type.is_dir() {
+            collect_js_files(&path, files)?;
+        } else if path.extension().is_some_and(|extension| extension == "js") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn path_matches_pattern(path: &Path, pattern: &str) -> bool {
+    let normalized_path = path.to_string_lossy().replace('\\', "/");
+    let pattern = pattern.trim().replace('\\', "/");
+    if pattern.is_empty() || pattern == "*.js" || pattern == "**/*.js" {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return normalized_path.contains(&pattern);
+    }
+
+    let mut cursor = 0;
+    for fragment in pattern.split('*').filter(|fragment| !fragment.is_empty()) {
+        let Some(offset) = normalized_path[cursor..].find(fragment) else {
+            return false;
+        };
+        cursor += offset + fragment.len();
+    }
+    true
+}
+
+fn parse_test262_metadata(source: &str) -> TestMetadata {
+    let metadata_block = source
+        .find("/*---")
+        .and_then(|start| {
+            source[start..]
+                .find("---*/")
+                .map(|end| &source[start..(start + end)])
+        })
+        .unwrap_or("");
+
+    TestMetadata {
+        is_negative: metadata_block
+            .lines()
+            .any(|line| line.trim_start().starts_with("negative:")),
     }
 }
 
@@ -448,6 +616,8 @@ impl Test262Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_result_as_str() {
@@ -575,45 +745,74 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_conformance_run() {
-        let config = RunnerConfig::default();
+    fn test_conformance_run_discovers_and_executes_fixture_files() {
+        let temp_dir = tempdir().unwrap();
+        let test_dir = temp_dir.path().join("test/language/literals");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(test_dir.join("numeric-literal.js"), "42").unwrap();
+
+        let config = RunnerConfig {
+            test262_path: temp_dir.path().to_path_buf(),
+            max_tests: 1,
+            ..RunnerConfig::default()
+        };
         let runner = Test262Runner::new(config);
         let epoch = SecurityEpoch::from_raw(1);
 
         let result = runner.run_conformance(epoch);
         assert!(result.is_ok());
-        // SAFETY: Test just verified result.is_ok(), so unwrap() cannot panic
         let report = result.unwrap();
-        assert!(report.overall.total_tests > 0);
+        assert_eq!(report.overall.total_tests, 1);
+        assert_eq!(report.total_discovered, 1);
         assert_eq!(report.security_epoch, epoch);
-        assert!(report.is_sample);
-        assert!(report.total_discovered >= report.overall.total_tests);
+        assert!(!report.is_sample);
+        assert_ne!(report.test262_commit, "mock-commit-hash");
+        assert_eq!(
+            report.test_records[0].path,
+            PathBuf::from("test/language/literals/numeric-literal.js")
+        );
     }
 
     #[test]
-    fn test_mock_test_result_distribution() {
-        let config = RunnerConfig::default();
+    fn test_conformance_run_errors_when_fixture_root_is_missing() {
+        let config = RunnerConfig {
+            test262_path: PathBuf::from("/definitely/missing/test262/root"),
+            ..RunnerConfig::default()
+        };
         let runner = Test262Runner::new(config);
 
-        // Test deterministic result distribution
-        let path1 = Path::new("test/same/path.js");
-        let path2 = Path::new("test/same/path.js");
-        let result1 = runner.simulate_test_result(path1);
-        let result2 = runner.simulate_test_result(path2);
-        assert_eq!(result1, result2); // Deterministic
+        let err = runner
+            .run_conformance(SecurityEpoch::from_raw(1))
+            .unwrap_err();
+        assert!(err.contains("Test262 path does not exist"));
+    }
 
-        // Test different paths give different results. Bind the String to
-        // a `let` so `Path::new(&s)` doesn't dangle on a temporary.
-        let different_results: Vec<_> = (0..20)
-            .map(|i| {
-                let s = format!("test/different/{}.js", i);
-                let path = Path::new(&s);
-                runner.simulate_test_result(path)
-            })
-            .collect();
+    #[test]
+    fn test_conformance_run_filters_negative_fixtures_from_real_metadata() {
+        let temp_dir = tempdir().unwrap();
+        let test_dir = temp_dir.path().join("test/language");
+        fs::create_dir_all(&test_dir).unwrap();
+        fs::write(test_dir.join("positive.js"), "42").unwrap();
+        fs::write(
+            test_dir.join("negative.js"),
+            "/*---\nnegative:\n  phase: parse\n  type: SyntaxError\n---*/\nlet",
+        )
+        .unwrap();
 
-        // Should have some variety in results
-        let unique_results: std::collections::HashSet<_> = different_results.into_iter().collect();
-        assert!(unique_results.len() > 1);
+        let config = RunnerConfig {
+            test262_path: temp_dir.path().to_path_buf(),
+            max_tests: 0,
+            include_negative: false,
+            ..RunnerConfig::default()
+        };
+        let runner = Test262Runner::new(config);
+        let report = runner.run_conformance(SecurityEpoch::from_raw(1)).unwrap();
+
+        assert_eq!(report.overall.total_tests, 1);
+        assert_eq!(
+            report.test_records[0].path,
+            PathBuf::from("test/language/positive.js")
+        );
+        assert!(!report.test_records[0].is_negative);
     }
 }

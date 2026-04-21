@@ -97,7 +97,7 @@ fuzz_target!(|data: &[u8]| {
             vec![
                 Ir3Instruction::LoadInt {
                     dst: 0,
-                    value: i32::from(data.get(1).copied().unwrap_or(0)),
+                    value: i64::from(data.get(1).copied().unwrap_or(0)),
                 },
                 object_tag_instruction(),
                 Ir3Instruction::Halt,

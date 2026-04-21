@@ -15,9 +15,9 @@ pub mod allocation_elision_gate;
 pub mod ambient_authority;
 pub mod anti_entropy;
 pub mod aot_entrygraph_compiler;
+pub mod architecture_inventory;
 pub mod array_fast_lane;
 pub mod artifact_compression_pipeline;
-pub mod architecture_inventory;
 pub mod assumptions_ledger;
 pub mod ast;
 pub mod asupersync_contract_matrix;
@@ -1647,10 +1647,7 @@ mod tests {
                 "// import x from \"pkg\"\n1 + 1;",
                 RouteReason::DefaultQuickJsPath,
             ),
-            (
-                "/* await job() */ 1 + 1;",
-                RouteReason::DefaultQuickJsPath,
-            ),
+            ("/* await job() */ 1 + 1;", RouteReason::DefaultQuickJsPath),
             (
                 "// await ignored\nimport x from \"pkg\";",
                 RouteReason::ContainsImportKeyword,

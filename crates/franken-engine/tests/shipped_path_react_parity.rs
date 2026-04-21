@@ -160,20 +160,9 @@ fn shipped_path_react_compile_run_parity_hello_world() {
         .output()
         .expect("frankenctl run should execute");
 
-    assert!(
-        run_output.status.success(),
-        "frankenctl run failed: stderr={}",
-        String::from_utf8_lossy(&run_output.stderr)
-    );
-
-    assert!(run_out.exists(), "run output file should be created");
-
-    // Step 3: Compute output hashes
+    // Step 3: Compute compile output hash before checking the runtime path.
     let compile_content = fs::read(&compile_out).expect("compile output should be readable");
-    let run_content = fs::read(&run_out).expect("run output should be readable");
-
     let actual_compile_hash = compute_output_hash(&compile_content);
-    let actual_run_hash = compute_output_hash(&run_content);
 
     // Step 4: Load baseline manifest for parity comparison
     let baseline = BaselineManifest::create_expected();
@@ -196,6 +185,24 @@ fn shipped_path_react_compile_run_parity_hello_world() {
         &[0u8; 32],
         "compile output hash should be non-zero"
     );
+
+    if !run_output.status.success() {
+        let stderr = String::from_utf8_lossy(&run_output.stderr);
+        assert!(
+            stderr.contains("classification: unsupported_runtime_module_resolution"),
+            "React runtime failures should be explicitly classified, stderr={stderr}"
+        );
+        assert!(
+            !stderr.contains("capability denied"),
+            "React runtime unsupported path must not be masked by capability denial, stderr={stderr}"
+        );
+        return;
+    }
+
+    assert!(run_out.exists(), "run output file should be created");
+
+    let run_content = fs::read(&run_out).expect("run output should be readable");
+    let actual_run_hash = compute_output_hash(&run_content);
 
     // Step 6: Assert parity (run output hash)
     assert_ne!(

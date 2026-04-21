@@ -861,10 +861,16 @@ impl ExecutionOrchestrator {
     }
 
     fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<RuntimeCapability> {
-        ir3.required_capabilities
+        let mut capabilities: BTreeSet<RuntimeCapability> = ir3
+            .required_capabilities
             .iter()
             .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
-            .collect()
+            .collect();
+        capabilities.extend([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        capabilities
     }
 
     fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
@@ -2170,6 +2176,22 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn internal_execution_capabilities_always_grant_execution_substrate() {
+        let mut ir3 = Ir3Module::new(ContentHash::compute(b"module"), "module.js");
+        ir3.required_capabilities
+            .push(crate::ir_contract::CapabilityTag(
+                "module:import".to_string(),
+            ));
+
+        let capabilities = ExecutionOrchestrator::internal_runtime_capabilities_for_module(&ir3);
+
+        assert!(capabilities.contains(&RuntimeCapability::VmDispatch));
+        assert!(capabilities.contains(&RuntimeCapability::HeapAllocate));
+        assert!(capabilities.contains(&RuntimeCapability::ModuleLoad));
+        assert!(!capabilities.contains(&RuntimeCapability::NetworkEgress));
     }
 
     fn package_with_source(source: &str) -> ExtensionPackage {

@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{NaiveDate, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::InterpreterError;
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
@@ -19,7 +20,7 @@ use frankenengine_engine::benchmark_e2e::{
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
 use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
@@ -2471,7 +2472,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let mut orchestrator = ExecutionOrchestrator::new(config);
     let result = orchestrator
         .execute(&package)
-        .map_err(|error| format!("run failed: {error}"))?;
+        .map_err(format_run_orchestrator_error)?;
 
     let output = RunCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
@@ -2499,6 +2500,29 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     }
     print_json(&output)?;
     Ok(0)
+}
+
+fn format_run_orchestrator_error(error: OrchestratorError) -> String {
+    let classification = classify_run_orchestrator_error(&error);
+    format!("run failed: {error}\nclassification: {classification}")
+}
+
+fn classify_run_orchestrator_error(error: &OrchestratorError) -> &'static str {
+    match error {
+        OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
+            reason, ..
+        }) if reason.contains("bare specifiers not supported") => {
+            "unsupported_runtime_module_resolution"
+        }
+        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {
+            "capability_denied"
+        }
+        OrchestratorError::Interpreter(_) => "interpreter_runtime_error",
+        OrchestratorError::Parse(_) => "parse_error",
+        OrchestratorError::Lowering(_) => "lowering_error",
+        OrchestratorError::TsNormalization(_) => "source_ingestion_error",
+        _ => "runtime_error",
+    }
 }
 
 fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {

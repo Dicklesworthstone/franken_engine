@@ -33,4 +33,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "parser_boundary"
+path = "fuzz_targets/parser_boundary.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

@@ -460,6 +460,7 @@ fn hex_digit(c: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn test_schema_id() -> SchemaId {
         SchemaId::from_definition(b"test-schema-v1")
@@ -467,6 +468,16 @@ mod tests {
 
     fn test_canonical_bytes() -> Vec<u8> {
         b"canonical-object-content-bytes".to_vec()
+    }
+
+    fn domain_strategy() -> impl Strategy<Value = ObjectDomain> {
+        prop::sample::select(ObjectDomain::ALL.to_vec())
+    }
+
+    fn ascii_zone_strategy() -> impl Strategy<Value = String> {
+        proptest::collection::vec(0x20u8..=0x7eu8, 0..32).prop_map(|bytes| {
+            String::from_utf8(bytes).expect("ASCII-only zone bytes should always decode")
+        })
     }
 
     // -- ObjectDomain --
@@ -710,6 +721,60 @@ mod tests {
         assert_eq!(id, restored);
     }
 
+    proptest! {
+        #[test]
+        fn prop_hex_roundtrip_preserves_derived_id(
+            domain in domain_strategy(),
+            zone in ascii_zone_strategy(),
+            schema_bytes in proptest::collection::vec(any::<u8>(), 0..64),
+            canonical_bytes in proptest::collection::vec(any::<u8>(), 1..128),
+        ) {
+            let schema = SchemaId::from_definition(&schema_bytes);
+            let id = derive_id(domain, &zone, &schema, &canonical_bytes).unwrap();
+            let restored = EngineObjectId::from_hex(&id.to_hex()).unwrap();
+
+            prop_assert_eq!(restored, id);
+            prop_assert!(verify_id(&id, domain, &zone, &schema, &canonical_bytes).is_ok());
+        }
+
+        #[test]
+        fn prop_tampered_content_fails_verification(
+            domain in domain_strategy(),
+            zone in ascii_zone_strategy(),
+            schema_bytes in proptest::collection::vec(any::<u8>(), 0..64),
+            canonical_bytes in proptest::collection::vec(any::<u8>(), 1..128),
+            delta in 1u8..=u8::MAX,
+        ) {
+            let schema = SchemaId::from_definition(&schema_bytes);
+            let id = derive_id(domain, &zone, &schema, &canonical_bytes).unwrap();
+            let mut tampered = canonical_bytes.clone();
+            tampered[0] ^= delta;
+
+            let err = verify_id(&id, domain, &zone, &schema, &tampered).unwrap_err();
+            prop_assert!(
+                matches!(err, IdError::IdMismatch { .. }),
+                "tampered content should invalidate the derived id"
+            );
+        }
+
+        #[test]
+        fn prop_zone_separation_is_sensitive(
+            domain in domain_strategy(),
+            zone_a in ascii_zone_strategy(),
+            zone_b in ascii_zone_strategy(),
+            schema_bytes in proptest::collection::vec(any::<u8>(), 0..64),
+            canonical_bytes in proptest::collection::vec(any::<u8>(), 1..128),
+        ) {
+            prop_assume!(zone_a != zone_b);
+
+            let schema = SchemaId::from_definition(&schema_bytes);
+            let id_a = derive_id(domain, &zone_a, &schema, &canonical_bytes).unwrap();
+            let id_b = derive_id(domain, &zone_b, &schema, &canonical_bytes).unwrap();
+
+            prop_assert_ne!(id_a, id_b);
+        }
+    }
+
     #[test]
     fn hex_decode_wrong_length() {
         let err = EngineObjectId::from_hex("abcd").unwrap_err();
@@ -789,11 +854,9 @@ mod tests {
         assert!(preimage.windows(zone.len()).any(|w| w == zone.as_bytes()));
 
         // Should contain schema ID bytes.
-        assert!(
-            preimage
-                .windows(OBJECT_ID_LEN)
-                .any(|w| w == schema.as_bytes())
-        );
+        assert!(preimage
+            .windows(OBJECT_ID_LEN)
+            .any(|w| w == schema.as_bytes()));
 
         // Should contain content.
         assert!(preimage.windows(content.len()).any(|w| w == content));
@@ -850,19 +913,15 @@ mod tests {
             IdError::EmptyCanonicalBytes.to_string(),
             "canonical bytes are empty"
         );
-        assert!(
-            IdError::InvalidHexLength {
-                expected: 64,
-                actual: 10
-            }
+        assert!(IdError::InvalidHexLength {
+            expected: 64,
+            actual: 10
+        }
+        .to_string()
+        .contains("64"));
+        assert!(IdError::InvalidHexChar { position: 5 }
             .to_string()
-            .contains("64")
-        );
-        assert!(
-            IdError::InvalidHexChar { position: 5 }
-                .to_string()
-                .contains("5")
-        );
+            .contains("5"));
     }
 
     // -- Serialization --

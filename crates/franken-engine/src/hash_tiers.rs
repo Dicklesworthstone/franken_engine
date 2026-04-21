@@ -19,6 +19,41 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+/// Errors from fallible hash APIs used by deterministic safe-mode callers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HashError {
+    /// A keyed hash primitive could not be initialized or executed.
+    KeyedHashUnavailable {
+        /// Algorithm requested by the caller.
+        algorithm: HashAlgorithm,
+        /// Stable diagnostic suitable for safe-mode evidence.
+        reason: String,
+    },
+    /// An externally supplied authenticity tag had the wrong length.
+    InvalidAuthenticityTagLength {
+        /// Required byte length.
+        expected: usize,
+        /// Supplied byte length.
+        actual: usize,
+    },
+}
+
+impl fmt::Display for HashError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyedHashUnavailable { algorithm, reason } => {
+                write!(f, "keyed hash unavailable for {algorithm}: {reason}")
+            }
+            Self::InvalidAuthenticityTagLength { expected, actual } => write!(
+                f,
+                "invalid authenticity tag length: expected {expected} bytes, got {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HashError {}
+
 // ---------------------------------------------------------------------------
 // Tier 1 — IntegrityHash (hot-path, non-cryptographic)
 // ---------------------------------------------------------------------------
@@ -125,6 +160,35 @@ impl AuthenticityHash {
     /// Compute a keyed authenticity hash (HMAC-SHA256) over the given bytes.
     pub fn compute_keyed(key: &[u8], data: &[u8]) -> Self {
         Self(keyed_hash(key, data))
+    }
+
+    /// Fallible keyed authenticity hash for callers that must fail closed.
+    pub fn try_compute_keyed(key: &[u8], data: &[u8]) -> Result<Self, HashError> {
+        Ok(Self(try_keyed_hash(key, data)?))
+    }
+
+    /// Construct an authenticity hash from an externally supplied 32-byte tag.
+    pub fn try_from_slice(bytes: &[u8]) -> Result<Self, HashError> {
+        let actual = bytes.len();
+        let bytes: [u8; 32] =
+            bytes
+                .try_into()
+                .map_err(|_| HashError::InvalidAuthenticityTagLength {
+                    expected: 32,
+                    actual,
+                })?;
+        Ok(Self(bytes))
+    }
+
+    /// Verify an externally supplied tag without panicking.
+    pub fn safe_keyed_verify(
+        key: &[u8],
+        data: &[u8],
+        candidate_tag: &[u8],
+    ) -> Result<bool, HashError> {
+        let candidate = Self::try_from_slice(candidate_tag)?;
+        let expected = Self::try_compute_keyed(key, data)?;
+        Ok(candidate.constant_time_eq(&expected))
     }
 
     /// Access the raw bytes.
@@ -293,13 +357,22 @@ fn collision_resistant_hash(input: &[u8]) -> [u8; 32] {
 
 /// Keyed hash: HMAC-SHA256 over the data.
 fn keyed_hash(key: &[u8], data: &[u8]) -> [u8; 32] {
+    try_keyed_hash(key, data).expect("HMAC-SHA256 accepts keys of any size")
+}
+
+/// Fallible keyed hash: HMAC-SHA256 over the data.
+fn try_keyed_hash(key: &[u8], data: &[u8]) -> Result<[u8; 32], HashError> {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC-SHA256 accepts keys of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(key).map_err(|err| HashError::KeyedHashUnavailable {
+            algorithm: HashAlgorithm::SipInspiredKeyed,
+            reason: format!("{err:?}"),
+        })?;
     mac.update(data);
     let digest = mac.finalize().into_bytes();
     let mut output = [0u8; 32];
     output.copy_from_slice(&digest);
-    output
+    Ok(output)
 }
 
 // ---------------------------------------------------------------------------

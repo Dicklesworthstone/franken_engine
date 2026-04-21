@@ -10431,6 +10431,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn function_returning_react_create_element_call_lowers_without_underflow() {
+        let create_element_call = Expression::Call {
+            callee: Box::new(Expression::Member {
+                object: Box::new(Expression::Identifier("React".into())),
+                property: Box::new(Expression::Identifier("createElement".into())),
+                computed: false,
+            }),
+            arguments: vec![
+                Expression::StringLiteral("h1".into()),
+                Expression::NullLiteral,
+                Expression::StringLiteral("React DOM Client Test".into()),
+            ],
+        };
+        let ir0 = stmt_ir0(vec![Statement::FunctionDeclaration(FunctionDeclaration {
+            name: Some("App".into()),
+            params: vec![],
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(create_element_call),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            is_async: false,
+            is_generator: false,
+            span: span(),
+        })]);
+
+        let context = LoweringContext::new("trace-react-return", "decision-react-return", "policy");
+        lower_ir0_to_ir3(&ir0, &context).expect("React createElement return should lower");
+    }
+
     // ================================================================
     // Additional edge cases
     // ================================================================

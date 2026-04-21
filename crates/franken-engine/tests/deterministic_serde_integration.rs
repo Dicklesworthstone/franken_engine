@@ -23,6 +23,7 @@ use frankenengine_engine::deterministic_serde::{
     CanonicalValue, SchemaDefinition, SchemaHash, SchemaRegistry, SerdeError, canonical_hash,
     decode_value, deserialize_with_schema, encode_value, serialize_with_schema,
 };
+use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -224,6 +225,48 @@ fn encoding_deterministic_across_10_runs() {
     for _ in 0..10 {
         assert_eq!(encode_value(&val), first);
     }
+}
+
+proptest! {
+    #[test]
+    fn mr_map_canonical_encoding_is_insertion_order_invariant(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
+        let entries: Vec<_> = bytes
+            .iter()
+            .copied()
+            .enumerate()
+            .map(canonical_map_entry)
+            .collect();
+        let forward = canonical_map_from_entries(entries.iter().cloned());
+        let reverse = canonical_map_from_entries(entries.iter().rev().cloned());
+
+        let forward_value = CanonicalValue::Map(forward);
+        let reverse_value = CanonicalValue::Map(reverse);
+
+        let forward_bytes = encode_value(&forward_value);
+        let reverse_bytes = encode_value(&reverse_value);
+
+        prop_assert_eq!(&forward_bytes, &reverse_bytes);
+        prop_assert_eq!(canonical_hash(&forward_value), canonical_hash(&reverse_value));
+        prop_assert_eq!(decode_value(&forward_bytes).unwrap(), forward_value);
+        prop_assert_eq!(decode_value(&reverse_bytes).unwrap(), reverse_value);
+    }
+}
+
+fn canonical_map_entry((index, byte): (usize, u8)) -> (String, CanonicalValue) {
+    let key = format!("k_{index:02}_{byte:02x}");
+    let value = CanonicalValue::Array(vec![
+        CanonicalValue::U64(u64::from(byte)),
+        CanonicalValue::Bool(byte % 2 == 0),
+        CanonicalValue::String(format!("v_{byte:02x}")),
+    ]);
+    (key, value)
+}
+
+fn canonical_map_from_entries<I>(entries: I) -> BTreeMap<String, CanonicalValue>
+where
+    I: IntoIterator<Item = (String, CanonicalValue)>,
+{
+    entries.into_iter().collect()
 }
 
 // ---------------------------------------------------------------------------

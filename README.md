@@ -303,7 +303,7 @@ See [`docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md`](./docs/SCIENTIFIC_CONTRIBUTIO
 
 ## RGC Docs and Help Surface Audit
 
-The docs and help surface audit ensures that README.md and frankenctl --help output accurately reflect the commands that actually parse and run in the shipped implementation. This audit prevents aspirational copy from diverging from runtime behavior.
+The docs and help surface audit ensures that README.md and planned CLI help output stay aligned with commands that are implemented before they are described as shipped. This audit prevents aspirational copy from diverging from runtime behavior.
 
 To verify the docs and help surface contract:
 
@@ -329,7 +329,7 @@ cd franken_engine
 cargo build --release --workspace
 ```
 
-The workspace currently publishes source for these crates:
+The workspace currently includes these crates:
 
 - `frankenengine-engine`
 - `frankenengine-extension-host`
@@ -398,7 +398,7 @@ roadmap/library surfaces until dedicated CLI beads land them.
 
 | Command | Purpose | Example |
 |---|---|---|
-| `frankenctl version` | Print the shipped CLI schema/binary version | `frankenctl version` |
+| `frankenctl version` | Print the planned CLI schema/binary version | `frankenctl version` |
 | `frankenctl compile` | Parse and lower source into a versioned compile artifact | `frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script` |
 | `frankenctl run` | Execute source through the orchestrator and emit an execution report | `frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json` |
 | `frankenctl doctor` | Summarize runtime diagnostics input and emit operator artifacts | `frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor` |

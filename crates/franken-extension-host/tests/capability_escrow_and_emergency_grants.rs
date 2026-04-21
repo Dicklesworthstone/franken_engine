@@ -570,6 +570,88 @@ fn emergency_grant_validation_rejects_invalid_fields() {
 }
 
 #[test]
+fn emergency_grant_without_mandatory_post_review_leaves_no_pending_review() {
+    let mut delegate = make_delegate("escrow-grant-no-post-review", &[Capability::FsRead]);
+
+    let _ = delegate
+        .dispatch_hostcall_with_escrow(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn".to_string()),
+            200,
+            &fctx(),
+            &lctx(),
+            Some("ops investigation"),
+        )
+        .expect("dispatch result");
+
+    let request_id = delegate
+        .capability_escrow_records()
+        .keys()
+        .next()
+        .cloned()
+        .expect("escrow request id");
+
+    let grant = delegate
+        .issue_emergency_capability_grant(
+            &request_id,
+            "ops@franken.engine",
+            "temporary mitigation without post review",
+            1_000,
+            1,
+            false,
+            true,
+            250,
+            &fctx(),
+        )
+        .expect("issue emergency grant");
+
+    assert!(
+        !delegate
+            .pending_emergency_post_reviews()
+            .contains(grant.grant_id.as_str())
+    );
+
+    let use_result = delegate
+        .dispatch_hostcall(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn-1".to_string()),
+            260,
+            &fctx(),
+            &lctx(),
+        )
+        .expect("emergency invocation");
+    assert_eq!(use_result.result, HostcallResult::Success);
+
+    let second_result = delegate
+        .dispatch_hostcall(
+            HostcallType::ProcessSpawn,
+            Capability::ProcessSpawn,
+            Labeled::system_generated("spawn-2".to_string()),
+            261,
+            &fctx(),
+            &lctx(),
+        )
+        .expect("grant exhaustion should re-escrow");
+    assert!(matches!(
+        second_result.result,
+        HostcallResult::Denied {
+            reason: DenialReason::CapabilityEscrowPending { .. }
+        }
+    ));
+    assert!(delegate.active_emergency_grants().is_empty());
+
+    let completion = delegate.complete_emergency_post_review(&grant.grant_id);
+    assert!(matches!(
+        completion,
+        Err(DelegateCellError::CapabilityEscrow(
+            CapabilityEscrowError::PostReviewNotPending { .. }
+        ))
+    ));
+}
+
+#[test]
 fn escrow_receipts_expose_replay_linkage_and_index_queries() {
     let mut delegate = make_low_penalty_delegate("escrow-receipt-replay", &[Capability::FsRead]);
 

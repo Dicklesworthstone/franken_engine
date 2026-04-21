@@ -997,6 +997,27 @@ fn extension_host_binding_scopes_same_session_binding_id_per_extension() {
         session_evidence_ids,
         vec![ext_a_session.as_str(), ext_b_session.as_str()]
     );
+    let session_bindings: Vec<(&str, &str)> = session_evidence
+        .iter()
+        .map(|entry| {
+            (
+                entry
+                    .metadata
+                    .get("extension_id")
+                    .map(String::as_str)
+                    .expect("session evidence should include extension_id"),
+                entry
+                    .metadata
+                    .get("session_binding_id")
+                    .map(String::as_str)
+                    .expect("session evidence should include caller session binding id"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        session_bindings,
+        vec![("ext-a", "sess-1"), ("ext-b", "sess-1")]
+    );
 
     binding
         .unload_extension("ext-a", &mut cx, CancelReason::Quarantine)

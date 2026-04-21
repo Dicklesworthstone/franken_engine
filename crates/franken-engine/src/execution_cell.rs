@@ -852,7 +852,14 @@ impl ExtensionHostBinding {
             .or_default()
             .push(session_cell_id.clone());
 
-        self.emit_evidence(
+        let mut metadata = BTreeMap::new();
+        metadata.insert("extension_id".to_string(), extension_id.to_string());
+        metadata.insert(
+            "session_binding_id".to_string(),
+            requested_session_id.clone(),
+        );
+
+        self.emit_evidence_with_metadata(
             &trace_id,
             &decision_id,
             &policy_id,
@@ -863,6 +870,7 @@ impl ExtensionHostBinding {
             CellKind::Session,
             RegionState::Running,
             0,
+            metadata,
         );
 
         Ok(session_cell_id)
@@ -1034,6 +1042,36 @@ impl ExtensionHostBinding {
         region_state: RegionState,
         budget_consumed_ms: u64,
     ) {
+        self.emit_evidence_with_metadata(
+            trace_id,
+            decision_id,
+            policy_id,
+            event,
+            outcome,
+            error_code,
+            cell_id,
+            cell_kind,
+            region_state,
+            budget_consumed_ms,
+            BTreeMap::new(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_evidence_with_metadata(
+        &mut self,
+        trace_id: &str,
+        decision_id: &str,
+        policy_id: &str,
+        event: &str,
+        outcome: &str,
+        error_code: Option<&str>,
+        cell_id: &str,
+        cell_kind: CellKind,
+        region_state: RegionState,
+        budget_consumed_ms: u64,
+        metadata: BTreeMap<String, String>,
+    ) {
         let seq = self.event_sequence;
         self.event_sequence = self.event_sequence.saturating_add(1);
         self.evidence_log.push(LifecycleEvidenceEntry {
@@ -1049,7 +1087,7 @@ impl ExtensionHostBinding {
             cell_kind,
             region_state,
             budget_consumed_ms,
-            metadata: BTreeMap::new(),
+            metadata,
         });
     }
 }
@@ -2066,6 +2104,20 @@ mod tests {
         assert_eq!(sess_evidence[0].decision_id, "d-1");
         assert_eq!(sess_evidence[0].policy_id, "p-1");
         assert_eq!(sess_evidence[0].cell_kind, CellKind::Session);
+        assert_eq!(
+            sess_evidence[0]
+                .metadata
+                .get("extension_id")
+                .map(String::as_str),
+            Some("ext-1")
+        );
+        assert_eq!(
+            sess_evidence[0]
+                .metadata
+                .get("session_binding_id")
+                .map(String::as_str),
+            Some("sess-1")
+        );
     }
 
     #[test]

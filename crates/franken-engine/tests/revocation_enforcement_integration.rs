@@ -87,6 +87,9 @@ fn revoke_target(
 ) {
     let rev = make_revocation(target_type, target_bytes);
     let sk = head_signing_key();
+    enforcer
+        .chain_mut()
+        .authorize_revocation_key(rev_signing_key().verification_key());
     enforcer.chain_mut().append(rev, &sk, "t-revoke").unwrap();
 }
 

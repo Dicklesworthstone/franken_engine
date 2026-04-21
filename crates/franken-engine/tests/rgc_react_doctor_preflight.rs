@@ -37,6 +37,8 @@ use serde_json::{Value, json};
 const CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-react-doctor-preflight.v1";
 const SUPPORT_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.react-doctor-support-contract.v1";
 const SUPPORT_REPRO_INDEX_SCHEMA_VERSION: &str = "franken-engine.react-support-repro-index.v1";
+const SUPPORT_CONTRACT_OUTPUT_ENV: &str = "RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_CONTRACT_PATH";
+const SUPPORT_REPRO_INDEX_OUTPUT_ENV: &str = "RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_REPRO_INDEX_PATH";
 const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_react_doctor_preflight_v1.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -302,6 +304,41 @@ fn build_support_contract_artifact() -> Value {
         ],
         "repro_index_schema_version": repro_index["schema_version"].clone()
     })
+}
+
+fn write_json_artifact(path: &Path, value: &Value) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|err| panic!("failed to create {}: {err}", parent.display()));
+    }
+    let encoded =
+        serde_json::to_string_pretty(value).expect("support artifact should encode to pretty json");
+    fs::write(path, encoded)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+}
+
+fn maybe_emit_support_artifacts_from_env() {
+    let support_contract_path = std::env::var(SUPPORT_CONTRACT_OUTPUT_ENV)
+        .ok()
+        .map(PathBuf::from);
+    let support_repro_index_path = std::env::var(SUPPORT_REPRO_INDEX_OUTPUT_ENV)
+        .ok()
+        .map(PathBuf::from);
+    if support_contract_path.is_none() && support_repro_index_path.is_none() {
+        return;
+    }
+
+    if let Some(path) = support_contract_path.as_deref() {
+        write_json_artifact(path, &build_support_contract_artifact());
+    }
+    if let Some(path) = support_repro_index_path.as_deref() {
+        write_json_artifact(path, &build_support_repro_index_artifact());
+    }
+}
+
+#[test]
+fn rgc_912b_emit_support_artifacts_for_runner() {
+    maybe_emit_support_artifacts_from_env();
 }
 
 #[test]
@@ -653,6 +690,9 @@ fn rgc_912b_runner_is_rch_backed_and_fail_closed() {
     for required in [
         "command -v rch",
         "rch exec",
+        SUPPORT_CONTRACT_OUTPUT_ENV,
+        SUPPORT_REPRO_INDEX_OUTPUT_ENV,
+        "rgc_912b_emit_support_artifacts_for_runner",
         "cargo check -p frankenengine-engine --test rgc_react_doctor_preflight --test react_doctor_preflight_integration --test react_doctor_preflight_enrichment_integration",
         "cargo test -p frankenengine-engine --test rgc_react_doctor_preflight --test react_doctor_preflight_integration --test react_doctor_preflight_enrichment_integration",
         "cargo clippy -p frankenengine-engine --test rgc_react_doctor_preflight --test react_doctor_preflight_integration --test react_doctor_preflight_enrichment_integration -- -D warnings",

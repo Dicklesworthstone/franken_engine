@@ -223,73 +223,14 @@ write_trace_ids() {
 EOF_TRACE
 }
 
-write_support_contract_artifact() {
-  cat >"${support_contract_path}" <<EOF_CONTRACT
-{
-  "schema_version": "franken-engine.react-doctor-support-contract.v1",
-  "bead_id": "bd-1lsy.10.12.2",
-  "policy_id": "RGC-912B",
-  "component": "react_doctor_preflight",
-  "generated_at_utc": "${timestamp}",
-  "passed": false,
-  "entries_analyzed": 3,
-  "blocker_count": 2,
-  "advisory_count": 1,
-  "guidance_count": 3,
-  "support_bundle_categories": [
-    "category_breakdown",
-    "doctor_checks",
-    "guidance",
-    "severity_breakdown"
-  ],
-  "dependency_routes": [
-    {
-      "bead_id": "bd-1lsy.9.7.3",
-      "policy_id": "RGC-807C",
-      "component": "react_mismatch_catalog"
-    },
-    {
-      "bead_id": "bd-1lsy.5.7.3",
-      "policy_id": "RGC-405C",
-      "component": "minimized_repro_extraction"
-    }
-  ],
-  "operator_surfaces": [
-    "react_doctor_support_contract.json",
-    "react_support_repro_index.json"
-  ]
-}
-EOF_CONTRACT
-}
-
-write_support_repro_index_artifact() {
-  cat >"${support_repro_index_path}" <<EOF_REPRO
-{
-  "schema_version": "franken-engine.react-support-repro-index.v1",
-  "bead_id": "bd-1lsy.10.12.2",
-  "policy_id": "RGC-912B",
-  "component": "react_doctor_preflight",
-  "generated_at_utc": "${timestamp}",
-  "upstream_catalog_bead_id": "bd-1lsy.9.7.3",
-  "upstream_repro_bead_id": "bd-1lsy.5.7.3",
-  "entries": [
-    {
-      "mismatch_entry_id": "ssr-config-error",
-      "domain": "server_side_render",
-      "severity": "error",
-      "target": "nodejs",
-      "owner_route": "react_integration",
-      "owner_route_bead": "bd-1lsy.5.7.3",
-      "triage_severity": "error",
-      "repro_input_id": "react-hydration-repro",
-      "repro_hash": "repro-react-hydration-repro",
-      "repro_command": "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci",
-      "recommended_action": "Route to the React integration lane and preserve the minimized fixture",
-      "source_reproduction": "fixtures/ssr-config-error.json"
-    }
-  ]
-}
-EOF_REPRO
+emit_support_artifacts() {
+  run_step \
+    "env RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_CONTRACT_PATH=${support_contract_path} RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_REPRO_INDEX_PATH=${support_repro_index_path} cargo test -p frankenengine-engine --test rgc_react_doctor_preflight rgc_912b_emit_support_artifacts_for_runner -- --exact --nocapture" \
+    0 \
+    env \
+    "RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_CONTRACT_PATH=${support_contract_path}" \
+    "RGC_REACT_DOCTOR_PREFLIGHT_SUPPORT_REPRO_INDEX_PATH=${support_repro_index_path}" \
+    cargo test -p frankenengine-engine --test rgc_react_doctor_preflight rgc_912b_emit_support_artifacts_for_runner -- --exact --nocapture
 }
 
 write_manifest() {
@@ -385,8 +326,7 @@ write_manifest() {
 
 write_trace_ids
 cp "${contract_json}" "${contract_copy_path}"
-write_support_contract_artifact
-write_support_repro_index_artifact
+emit_support_artifacts
 
 set +e
 run_mode

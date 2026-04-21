@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::baseline_interpreter::{
-    ExecutionResult, InterpreterConfig, InterpreterError, QuickJsLane, Value,
+    ExecutionResult, InterpreterConfig, InterpreterError, QuickJsLane, V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
@@ -125,6 +125,27 @@ fn run_value(
     let result: ExecutionResult =
         QuickJsLane::with_config(test_config()).execute(&module, "baseline-conformance")?;
     Ok(result.value)
+}
+
+#[test]
+fn default_execution_profiles_run_vm_dispatch_with_heap_allocation() {
+    let module = test_module(
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        Vec::new(),
+    );
+
+    let quickjs = QuickJsLane::new()
+        .execute(&module, "baseline-profile-quickjs")
+        .expect("QuickJsLane::new should grant VM dispatch and heap allocation");
+    assert!(matches!(quickjs.value, Value::Object(_)));
+
+    let v8 = V8Lane::new()
+        .execute(&module, "baseline-profile-v8")
+        .expect("V8Lane::new should grant VM dispatch and heap allocation");
+    assert!(matches!(v8.value, Value::Object(_)));
 }
 
 fn object_tag_instruction(value_reg: u32, dst: u32) -> Ir3Instruction {

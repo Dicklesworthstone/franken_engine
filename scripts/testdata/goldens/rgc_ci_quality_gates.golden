@@ -1,0 +1,50 @@
+=== RUN MANIFEST ===
+{
+  "component": "rgc_ci_quality_gates",
+  "scenario_id": "rgc-055",
+  "mode": "fmt",
+  "outcome": "fail",
+  "error_code": "FE-RGC-CI-QUALITY-GATE-0000",
+  "planned_lanes": [
+    "fmt"
+  ],
+  "failed_lanes": [
+    "fmt"
+  ]
+}
+=== CI GATE VERDICT ===
+{
+  "outcome": "fail",
+  "is_blocking": true,
+  "planned_lanes": [
+    "fmt"
+  ],
+  "failed_lanes": [
+    "fmt"
+  ],
+  "failure": {
+    "lane": "fmt",
+    "owner_hint": "runtime-core"
+  }
+}
+=== GATE HEALTH SUMMARY ===
+# RGC CI Quality Gates Summary
+
+- Outcome: `fail`
+- Mode: `fmt`
+- Failed lane: `fmt`
+- Owner hint: `runtime-core`
+- Replay command: `./scripts/e2e/rgc_ci_quality_gates_replay.sh fmt`
+
+## Lane Status
+- `fmt`: `fail`
+
+## Artifact Bundle
+- `run_manifest.json`
+- `events.jsonl`
+- `commands.txt`
+- `failure_summary.json`
+- `ci_gate_verdict.json`
+- `failure_routing_matrix.json`
+- `lane_repro_index.json`
+- `gate_health_summary.md`

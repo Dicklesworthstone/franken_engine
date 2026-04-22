@@ -68,6 +68,9 @@ jobs:
       - name: Run RGC CI quality gates
         run: ./scripts/run_rgc_ci_quality_gates.sh ci
 
+      - name: Test CI quality gates golden artifacts
+        run: ./scripts/test_ci_goldens.sh test
+
       - name: Upload matrix artifacts
         if: always()
         uses: actions/upload-artifact@v4

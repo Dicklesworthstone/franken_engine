@@ -1,0 +1,19 @@
+=== AUTHORITY GUARD MANIFEST ===
+{
+  "bead_id": "bd-11z7",
+  "mode": "ci",
+  "checks": [
+    "direct_upstream_imports",
+    "canonical_type_shadowing",
+    "forbidden_io_patterns",
+    "unit_tests"
+  ],
+  "passed": false
+}
+=== VIOLATIONS ===
+Direct import violations found
+crates/franken-extension-host/src/lib.rs:7834:        std::fs::read_to_string("../../scripts/run_guardplane_policy_actions_suite.sh")
+crates/franken-extension-host/src/lib.rs:8839:                std::fs::create_dir_all(parent).expect("create guardplane decision log parent");
+crates/franken-extension-host/src/lib.rs:8841:            std::fs::write(&path, guardplane_lines.join("\n") + "\n")
+crates/franken-extension-host/src/lib.rs:8848:                std::fs::create_dir_all(parent).expect("create containment workflow log parent");
+crates/franken-extension-host/src/lib.rs:8850:            std::fs::write(&path, containment_lines.join("\n") + "\n")

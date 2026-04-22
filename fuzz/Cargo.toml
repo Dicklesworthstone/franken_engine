@@ -54,4 +54,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "budgeted_optimization_growth"
+path = "fuzz_targets/budgeted_optimization_growth.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

@@ -41,6 +41,9 @@ jobs:
       - name: Enforce GA core delegate-cell guard
         run: ./scripts/check_ga_delegate_core_slots.sh ci
 
+      - name: Enforce extension-host ambient authority guard
+        run: ./scripts/check_extension_host_ambient_authority.sh ci
+
       - name: Enforce one-lever performance policy gate
         run: ./scripts/check_one_lever.sh ci
 

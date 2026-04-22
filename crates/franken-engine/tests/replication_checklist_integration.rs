@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::useless_vec)]
 //! Integration tests for replication_checklist.rs: Scientific reproducibility workflow validation
 //! Addresses MEDIUM SCIENTIFIC GAP per docs/UNTESTED_MODULES_AUDIT.md
 //!

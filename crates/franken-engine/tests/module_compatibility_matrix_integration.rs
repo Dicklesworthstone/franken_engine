@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::collapsible_if, clippy::approx_constant)]
 
 //! Integration tests for `module_compatibility_matrix` module.
 //! Exercises the public API from outside the crate boundary.

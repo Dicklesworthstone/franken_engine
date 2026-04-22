@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::ptr_arg)]
 //! Integration tests for `franken_benchmark_gate` binary — exercises the CLI
 //! and behavior-equivalence gating functionality against external baselines.
 

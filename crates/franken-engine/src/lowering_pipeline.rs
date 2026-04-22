@@ -11689,7 +11689,7 @@ mod tests {
 
     #[test]
     fn oversized_ast_fails_preallocation_budget_for_ops() {
-        use crate::ast::{ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ast::{ExpressionStatement, ParseGoal, SourceSpan, SyntaxTree};
         use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
 
         // Create an IR0 module with a large body that would exceed MAX_PREALLOC_OPS
@@ -11698,7 +11698,12 @@ mod tests {
         let large_body_size = 130_000; // Well over the threshold
 
         let large_body: Vec<Statement> = (0..large_body_size)
-            .map(|i| Statement::Expression(Expression::Literal(format!("stmt_{}", i))))
+            .map(|i| {
+                Statement::Expression(ExpressionStatement {
+                    expression: Expression::StringLiteral(format!("stmt_{}", i)),
+                    span: SourceSpan::new(0, 10, 1, 1, 1, 11),
+                })
+            })
             .collect();
 
         let ir0 = Ir0Module {
@@ -11711,7 +11716,7 @@ mod tests {
             tree: SyntaxTree {
                 goal: ParseGoal::Script,
                 body: large_body,
-                span: SourceSpan { start: 0, end: 100 },
+                span: SourceSpan::new(0, 100, 1, 1, 1, 101),
             },
         };
 
@@ -11730,7 +11735,7 @@ mod tests {
 
     #[test]
     fn oversized_ast_fails_preallocation_budget_for_bindings() {
-        use crate::ast::{ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ast::{ExpressionStatement, ParseGoal, SourceSpan, SyntaxTree};
         use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
 
         // Create an IR0 module with a large body that would exceed MAX_PREALLOC_BINDINGS
@@ -11739,7 +11744,12 @@ mod tests {
         let large_body_size = 65_000; // Well over the threshold
 
         let large_body: Vec<Statement> = (0..large_body_size)
-            .map(|i| Statement::Expression(Expression::Literal(format!("stmt_{}", i))))
+            .map(|i| {
+                Statement::Expression(ExpressionStatement {
+                    expression: Expression::StringLiteral(format!("stmt_{}", i)),
+                    span: SourceSpan::new(0, 10, 1, 1, 1, 11),
+                })
+            })
             .collect();
 
         let ir0 = Ir0Module {
@@ -11752,7 +11762,7 @@ mod tests {
             tree: SyntaxTree {
                 goal: ParseGoal::Script,
                 body: large_body,
-                span: SourceSpan { start: 0, end: 100 },
+                span: SourceSpan::new(0, 100, 1, 1, 1, 101),
             },
         };
 

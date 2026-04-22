@@ -733,7 +733,7 @@ mod tests {
             let id = derive_id(domain, &zone, &schema, &canonical_bytes).unwrap();
             let restored = EngineObjectId::from_hex(&id.to_hex()).unwrap();
 
-            prop_assert_eq!(restored, id);
+            prop_assert_eq!(&restored, &id);
             prop_assert!(verify_id(&id, domain, &zone, &schema, &canonical_bytes).is_ok());
         }
 

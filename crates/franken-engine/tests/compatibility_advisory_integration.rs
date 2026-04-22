@@ -2,7 +2,7 @@
 
 //! Integration tests for compatibility advisory builder.
 
-use frankenengine_engine::compatibility_advisory::{Advisory, AdvisoryBuilder};
+use frankenengine_engine::compatibility_advisory::AdvisoryBuilder;
 
 #[test]
 fn compatibility_advisory_end_to_end_workflow() {

@@ -3,6 +3,12 @@
 //! Tests cover corpus management, behavior-equivalence gating, provenance
 //! tracking, verdict computation, and deterministic evidence hashing.
 
+#![allow(
+    clippy::needless_borrows_for_generic_args,
+    clippy::comparison_to_empty,
+    clippy::len_zero
+)]
+
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;

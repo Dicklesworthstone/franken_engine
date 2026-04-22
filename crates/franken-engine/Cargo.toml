@@ -26,6 +26,14 @@ asupersync-integration = [
     "dep:franken-evidence",
 ]
 certified_rewrite_optimizer_integration = []
+# Opt-in re-enable of the baseline_interpreter in-source #[cfg(test)] module
+# that references a legacy lower-level API (`BaselineInterpreter::new`,
+# `Ir3Instruction::CallBuiltin{,Id}`, `execute_instruction`, `set_register`,
+# `test_ir3_module`, etc.). The module was broken at merge-base into main and
+# is tracked by bd-2j7uk; gating it keeps the lib-test target compilable while
+# the repair effort is pending. Enable with `--features legacy_lib_tests_bd_2j7uk`
+# to attempt to compile the legacy tests.
+legacy_lib_tests_bd_2j7uk = []
 
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate

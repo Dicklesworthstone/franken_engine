@@ -4,10 +4,13 @@
 //! functionality of the topology assessment framework.
 
 use frankenengine_engine::extension_host_topology_assessment::{
-    PromotionTrigger, SeamAssessment, TopologyPromotionAssessment, TopologyPromotionDecision,
-    TopologyPromotionSummary, TopologySeamId, TriggerAssessment, TriggerDisposition,
-    build_topology_promotion_assessment,
+    SeamAssessment, TopologyPromotionAssessment, TopologyPromotionDecision,
+    TopologyPromotionSummary, TopologySeamId, build_topology_promotion_assessment,
 };
+
+fn empty_summary() -> TopologyPromotionSummary {
+    TopologyPromotionSummary::from_seams(&[])
+}
 
 #[test]
 fn content_hash_boundary_collision_regression() {
@@ -15,7 +18,7 @@ fn content_hash_boundary_collision_regression() {
     // concatenated bytes now produce different hashes due to proper JSON serialization
 
     // Create base assessment
-    let mut assessment1 = TopologyPromotionAssessment {
+    let assessment1 = TopologyPromotionAssessment {
         schema_version: "1.0".to_string(),
         bead_id: "test-bead".to_string(),
         component: "test-component".to_string(),
@@ -26,20 +29,14 @@ fn content_hash_boundary_collision_regression() {
         required_prerequisites: vec!["ab".to_string(), "c".to_string()], // "ab" + "c"
         generated_from: vec!["source1".to_string()],
         seams: vec![],
-        summary: TopologyPromotionSummary {
-            targeted_seams: 0,
-            broader_promotion_seams: 0,
-            total_trigger_assessments: 0,
-            candidate_triggers: 0,
-            assessment_timestamp_utc: "2026-04-19T20:00:00Z".to_string(),
-        },
+        summary: empty_summary(),
         required_artifacts: vec!["artifact1".to_string()],
         verification_commands: vec!["command1".to_string()],
         content_hash: String::new(), // Will be computed
     };
 
     // Create assessment with different field boundary that would collide in old implementation
-    let mut assessment2 = TopologyPromotionAssessment {
+    let assessment2 = TopologyPromotionAssessment {
         schema_version: "1.0".to_string(),
         bead_id: "test-bead".to_string(),
         component: "test-component".to_string(),
@@ -50,13 +47,7 @@ fn content_hash_boundary_collision_regression() {
         required_prerequisites: vec!["a".to_string(), "bc".to_string()], // "a" + "bc" = same concatenation as "ab" + "c"
         generated_from: vec!["source1".to_string()],
         seams: vec![],
-        summary: TopologyPromotionSummary {
-            targeted_seams: 0,
-            broader_promotion_seams: 0,
-            total_trigger_assessments: 0,
-            candidate_triggers: 0,
-            assessment_timestamp_utc: "2026-04-19T20:00:00Z".to_string(),
-        },
+        summary: empty_summary(),
         required_artifacts: vec!["artifact1".to_string()],
         verification_commands: vec!["command1".to_string()],
         content_hash: String::new(), // Will be computed
@@ -88,7 +79,7 @@ fn content_hash_seam_boundary_collision() {
     let base_seam_data = SeamAssessment {
         seam_id: TopologySeamId::ExtensionLifecycleManager,
         source_files: vec![], // Will be varied
-        decision: TopologyPromotionDecision::Targeted,
+        decision: TopologyPromotionDecision::TargetedPromotion,
         rationale: "test rationale".to_string(),
         trigger_assessments: vec![],
         required_upstream_primitives: vec![],
@@ -100,7 +91,7 @@ fn content_hash_seam_boundary_collision() {
     };
 
     // Create assessment with different seam field boundaries
-    let mut assessment1 = TopologyPromotionAssessment {
+    let assessment1 = TopologyPromotionAssessment {
         schema_version: "1.0".to_string(),
         bead_id: "seam-test".to_string(),
         component: "test-component".to_string(),
@@ -115,19 +106,13 @@ fn content_hash_seam_boundary_collision() {
             expected_benefits: vec!["benefit".to_string(), "text".to_string()], // "benefit" + "text"
             ..base_seam_data.clone()
         }],
-        summary: TopologyPromotionSummary {
-            targeted_seams: 1,
-            broader_promotion_seams: 0,
-            total_trigger_assessments: 0,
-            candidate_triggers: 0,
-            assessment_timestamp_utc: "2026-04-19T20:00:00Z".to_string(),
-        },
+        summary: empty_summary(),
         required_artifacts: vec![],
         verification_commands: vec![],
         content_hash: String::new(),
     };
 
-    let mut assessment2 = TopologyPromotionAssessment {
+    let assessment2 = TopologyPromotionAssessment {
         schema_version: "1.0".to_string(),
         bead_id: "seam-test".to_string(),
         component: "test-component".to_string(),
@@ -142,13 +127,7 @@ fn content_hash_seam_boundary_collision() {
             expected_benefits: vec!["benefittext".to_string()], // Concatenated version
             ..base_seam_data.clone()
         }],
-        summary: TopologyPromotionSummary {
-            targeted_seams: 1,
-            broader_promotion_seams: 0,
-            total_trigger_assessments: 0,
-            candidate_triggers: 0,
-            assessment_timestamp_utc: "2026-04-19T20:00:00Z".to_string(),
-        },
+        summary: empty_summary(),
         required_artifacts: vec![],
         verification_commands: vec![],
         content_hash: String::new(),
@@ -180,7 +159,7 @@ fn content_hash_deterministic_for_identical_assessments() {
 
 #[test]
 fn content_hash_sensitivity_to_minor_changes() {
-    let mut assessment1 = build_topology_promotion_assessment();
+    let assessment1 = build_topology_promotion_assessment();
     let mut assessment2 = assessment1.clone();
 
     // Make a small change that should affect the hash
@@ -223,7 +202,7 @@ fn seam_assessment_basic_functionality() {
     );
     assert_eq!(
         assessment.targeted_seams().len(),
-        assessment.summary.targeted_seams,
+        assessment.summary.targeted_promotion_count,
         "Targeted seam count should match summary"
     );
 
@@ -246,32 +225,32 @@ fn topology_promotion_summary_consistency() {
 
     // Verify summary counts match actual seam contents
     let targeted_count = assessment.targeted_seams().len();
-    let broader_promotion_count = assessment.broader_promotion_seams().len();
-    let total_trigger_assessments: usize = assessment
+    let broader_promotion_count = assessment
         .seams
         .iter()
-        .map(|seam| seam.trigger_assessments.len())
-        .sum();
-    let candidate_triggers: usize = assessment
+        .filter(|seam| seam.decision == TopologyPromotionDecision::BroaderPromotion)
+        .count();
+    let candidate_trigger_total: usize = assessment
         .seams
         .iter()
         .map(|seam| seam.candidate_trigger_count())
         .sum();
 
     assert_eq!(
-        summary.targeted_seams, targeted_count,
-        "Summary targeted seam count should match actual"
+        summary.targeted_promotion_count, targeted_count,
+        "Summary targeted promotion count should match actual"
     );
     assert_eq!(
-        summary.broader_promotion_seams, broader_promotion_count,
-        "Summary broader promotion seam count should match actual"
+        summary.broader_promotion_count, broader_promotion_count,
+        "Summary broader promotion count should match actual"
     );
     assert_eq!(
-        summary.total_trigger_assessments, total_trigger_assessments,
-        "Summary trigger assessment count should match actual"
-    );
-    assert_eq!(
-        summary.candidate_triggers, candidate_triggers,
+        summary.promotion_candidate_trigger_count, candidate_trigger_total,
         "Summary candidate trigger count should match actual"
+    );
+    assert_eq!(
+        summary.total_seams,
+        assessment.seams.len(),
+        "Summary total seam count should match actual"
     );
 }

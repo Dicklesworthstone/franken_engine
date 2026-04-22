@@ -1,3 +1,9 @@
+#![allow(
+    dead_code,
+    clippy::needless_borrows_for_generic_args,
+    clippy::collapsible_if
+)]
+
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;

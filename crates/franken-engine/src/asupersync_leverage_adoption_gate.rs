@@ -494,7 +494,7 @@ mod tests {
         // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
         let gate = build_asupersync_leverage_adoption_gate().unwrap();
         assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
-        assert!(gate.is_stop());
+        assert!(!gate.is_go());
         assert!(gate.has_outstanding_child_artifacts());
         assert_eq!(gate.summary.mandatory_child_count, 8);
         assert!(gate.summary.satisfied_child_count < gate.summary.mandatory_child_count);

@@ -114,7 +114,7 @@ pub struct PropertyTestConfig {
 }
 
 /// Types of properties to verify
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PropertyType {
     /// Parser invariants (determinism, round-trip preservation)
     ParserInvariants,
@@ -138,7 +138,7 @@ pub struct MetamorphicTestConfig {
 }
 
 /// Rollout ladder stage
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RolloutStage {
     Shadow,
     Canary,
@@ -166,7 +166,7 @@ pub struct FaultInjectionConfig {
 }
 
 /// Types of faults to inject
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FaultType {
     NetworkPartition,
     NodeFailure,
@@ -1985,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_security_matrix_validation() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-002".to_string()).unwrap();
+        let gate = ProductionHardeningGateExecution::new("test-gate-002".to_string()).unwrap();
 
         // Test security matrix validation logic
         assert!(
@@ -2052,7 +2052,7 @@ mod tests {
 
     #[test]
     fn test_rollout_ladder_stages() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-005".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-005".to_string()).unwrap();
 
         // Verify we have all rollout stages
         let stages: BTreeSet<_> = gate.rollout_validation.iter().map(|r| &r.stage).collect();
@@ -2080,7 +2080,7 @@ mod tests {
 
     #[test]
     fn test_fault_injection_drill_types() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-006".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-006".to_string()).unwrap();
 
         // Verify we have all required fault types
         let fault_types: BTreeSet<_> = gate
@@ -2098,7 +2098,7 @@ mod tests {
 
     #[test]
     fn test_quarantine_drill_configuration() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-007".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-007".to_string()).unwrap();
 
         // Verify we have quarantine drills for different malicious extension types
         let extension_types: BTreeSet<_> = gate
@@ -2130,7 +2130,7 @@ mod tests {
 
     #[test]
     fn test_replay_audit_configuration() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-008".to_string());
+        let gate = ProductionHardeningGateExecution::new("test-gate-008".to_string()).unwrap();
 
         // Verify we have replay audits for different severity levels
         let severities: BTreeSet<_> = gate
@@ -2166,7 +2166,7 @@ mod tests {
 
     #[test]
     fn test_production_readiness_status_transitions() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-010".to_string());
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-010".to_string()).unwrap();
 
         assert_eq!(gate.status, ProductionReadinessStatus::NotStarted);
 
@@ -2186,7 +2186,7 @@ mod tests {
 
     #[test]
     fn test_validation_status_logic() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-011".to_string());
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-011".to_string()).unwrap();
 
         // Initially all validations should be pending
         assert!(!gate.all_validations_passed());
@@ -2231,7 +2231,7 @@ mod tests {
 
     #[test]
     fn test_evidence_artifact_tracking() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-013".to_string());
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-013".to_string()).unwrap();
 
         // Test evidence artifact collection
         gate.evidence_artifacts.insert(
@@ -2253,7 +2253,7 @@ mod tests {
 
     #[test]
     fn test_error_handling_and_failure_scenarios() {
-        let mut gate = ProductionHardeningGateExecution::new("test-gate-014".to_string());
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-014".to_string()).unwrap();
 
         // Test failure status
         gate.status = ProductionReadinessStatus::ProductionNotReady("Test failure".to_string());

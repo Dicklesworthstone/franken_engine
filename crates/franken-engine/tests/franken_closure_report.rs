@@ -167,8 +167,6 @@ fn test_closure_report_json_schema_validation() {
 #[test]
 fn test_verification_hash_consistency() {
     // Test that verification hash calculation is deterministic
-    use std::process::Command;
-
     // This is a simple test to ensure the concept is sound
     // In a real implementation, we'd validate the actual hash function
     let test_cases = vec![

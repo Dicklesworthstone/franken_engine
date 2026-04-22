@@ -1631,8 +1631,8 @@ fn test_receipt_hash_binds_passing_artifact_content() {
     assert!(cell2.mismatches.is_empty());
 
     // But the receipt input hashes should be different due to different artifact content
-    let report1 = evaluate_matrix(vec![cell1], &cfg, epoch()).unwrap();
-    let report2 = evaluate_matrix(vec![cell2], &cfg, epoch()).unwrap();
+    let report1 = evaluate_matrix(&[cell1], &cfg, &epoch(), 0).unwrap();
+    let report2 = evaluate_matrix(&[cell2], &cfg, &epoch(), 0).unwrap();
 
     assert_ne!(
         report1.receipt.input_hash, report2.receipt.input_hash,
@@ -1641,7 +1641,7 @@ fn test_receipt_hash_binds_passing_artifact_content() {
 
     // Verify same content produces same hash (determinism check)
     let cell1_dup = build_cell(WorkloadClass::PureJs, artifacts_a1, artifacts_b1, &cfg);
-    let report1_dup = evaluate_matrix(vec![cell1_dup], &cfg, epoch()).unwrap();
+    let report1_dup = evaluate_matrix(&[cell1_dup], &cfg, &epoch(), 0).unwrap();
 
     assert_eq!(
         report1.receipt.input_hash, report1_dup.receipt.input_hash,

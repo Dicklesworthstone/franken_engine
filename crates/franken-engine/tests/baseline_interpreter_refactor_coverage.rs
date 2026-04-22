@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::manual_range_contains)]
 //! Integration tests for baseline interpreter refactor commit f433744d.
 //!
 //! Tests the five major behavior changes that were introduced:

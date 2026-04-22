@@ -3,6 +3,8 @@
 //! Tests the binary integration between evidence bundles, the export binary,
 //! and cc_2's benchmark gate for publication-grade evidence with provenance.
 
+#![allow(clippy::needless_borrows_for_generic_args)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::process::Command;
@@ -10,7 +12,7 @@ use tempfile::TempDir;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
     BenchmarkRun, BundleConfig, EnvironmentSnapshot, EvidenceBundle, ParityTarget, ParityVerdict,
-    TimingStats, WorkloadCategory, WorkloadProvenance, export_bundle_json, export_bundle_toml,
+    WorkloadCategory, WorkloadProvenance, export_bundle_json, export_bundle_toml,
     export_report_json, export_report_toml, generate_report,
 };
 use frankenengine_engine::hash_tiers::ContentHash;

@@ -47,4 +47,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "ir3_instruction_fuzz"
+path = "fuzz_targets/ir3_instruction_fuzz.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

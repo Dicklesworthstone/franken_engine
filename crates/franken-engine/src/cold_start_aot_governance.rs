@@ -458,6 +458,43 @@ impl fmt::Display for GovernanceError {
     }
 }
 
+fn latest_evidence_epoch(evidence: &[ColdStartEvidence]) -> SecurityEpoch {
+    let latest = evidence
+        .iter()
+        .map(|entry| entry.epoch.as_u64())
+        .max()
+        .unwrap_or_default();
+    SecurityEpoch::from_raw(latest)
+}
+
+/// Validate that all evidence is fresh relative to the decision epoch.
+///
+/// The gate fails closed when any cache/AOT evidence predates the decision
+/// epoch by more than `config.max_staleness_epochs`.
+pub fn validate_evidence_freshness(
+    decision_epoch: SecurityEpoch,
+    evidence: &[ColdStartEvidence],
+    config: &GovernanceConfig,
+) -> Result<(), GovernanceError> {
+    if evidence.is_empty() {
+        return Ok(());
+    }
+
+    let decision_epoch = decision_epoch.as_u64();
+    let oldest_epoch = evidence
+        .iter()
+        .map(|entry| entry.epoch.as_u64())
+        .min()
+        .unwrap_or(decision_epoch);
+    let age_epochs = decision_epoch.saturating_sub(oldest_epoch);
+
+    if age_epochs > config.max_staleness_epochs {
+        return Err(GovernanceError::StaleEvidence { age_epochs });
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // ColdStartEvidence
 // ---------------------------------------------------------------------------
@@ -741,6 +778,27 @@ pub fn evaluate_cold_start(
     if evidence.is_empty() {
         return Err(GovernanceError::EmptyEvidence);
     }
+
+    evaluate_cold_start_at_epoch(latest_evidence_epoch(evidence), evidence, parity, config)
+}
+
+/// Evaluate cold-start governance relative to an explicit decision epoch.
+///
+/// Use this entry point for artifact emission and rollout decisions so stale
+/// cache/AOT evidence cannot authorize a fresh startup-win claim.
+pub fn evaluate_cold_start_at_epoch(
+    decision_epoch: SecurityEpoch,
+    evidence: &[ColdStartEvidence],
+    parity: &[ParityResult],
+    config: &GovernanceConfig,
+) -> Result<GovernanceVerdict, GovernanceError> {
+    validate_config(config)?;
+
+    if evidence.is_empty() {
+        return Err(GovernanceError::EmptyEvidence);
+    }
+
+    validate_evidence_freshness(decision_epoch, evidence, config)?;
 
     // Aggregate sample count.
     let total_samples: u64 = evidence
@@ -1147,6 +1205,40 @@ mod tests {
         let mut cfg = default_config();
         cfg.max_divergence = FIXED_ONE + 1;
         assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn test_validate_evidence_freshness_accepts_fresh_batch() {
+        let cfg = default_config();
+        let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
+        assert!(validate_evidence_freshness(ep(20), &evidence, &cfg).is_ok());
+    }
+
+    #[test]
+    fn test_validate_evidence_freshness_rejects_stale_batch() {
+        let cfg = default_config();
+        let evidence = vec![make_evidence(StartupPathKind::AotRestored, 1000, 700, 50)];
+        let err = validate_evidence_freshness(ep(21), &evidence, &cfg).unwrap_err();
+        assert_eq!(err, GovernanceError::StaleEvidence { age_epochs: 11 });
+    }
+
+    #[test]
+    fn test_evaluate_at_epoch_rejects_stale_evidence() {
+        let cfg = default_config();
+        let evidence = vec![make_evidence(StartupPathKind::AotRestored, 1000, 700, 50)];
+        let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
+        let err = evaluate_cold_start_at_epoch(ep(21), &evidence, &parity, &cfg).unwrap_err();
+        assert_eq!(err, GovernanceError::StaleEvidence { age_epochs: 11 });
+    }
+
+    #[test]
+    fn test_evaluate_batch_rejects_mixed_epoch_staleness() {
+        let cfg = default_config();
+        let stale = ColdStartEvidence::new(StartupPathKind::WarmCache, 1000, 800, 50, ep(10));
+        let fresh = ColdStartEvidence::new(StartupPathKind::AotRestored, 1000, 700, 50, ep(21));
+        let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
+        let err = evaluate_cold_start(&[stale, fresh], &parity, &cfg).unwrap_err();
+        assert_eq!(err, GovernanceError::StaleEvidence { age_epochs: 11 });
     }
 
     // -- compute_speedup --

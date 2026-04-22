@@ -190,13 +190,12 @@ fn test_uniform_distribution_fails_representativeness() -> ConformanceResult {
 
     // Create uniform workload - same execution time for all entries
     for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
-        let entry = BenchmarkEntry {
-            workload_id: format!("uniform_{i}"),
-            family: *family,
-            execution_time_ns: 100_000, // Uniform time - no diversity
-            tags: BTreeMap::from([("same_tag".to_string(), "same_value".to_string())]),
-            content_hash: ContentHash::compute(format!("uniform_{i}").as_bytes()),
-        };
+        let entry = BenchmarkEntry::new(
+            format!("uniform_{i}"),
+            *family,
+            100_000, // Uniform complexity - no diversity
+            BTreeSet::from(["same_tag".to_string()]),
+        );
         if let Err(e) = board.add_entry(entry) {
             return ConformanceResult::Fail {
                 reason: format!("Failed to add uniform entry: {e}"),
@@ -241,13 +240,12 @@ fn test_single_tag_fails_diversity() -> ConformanceResult {
 
     // Create entries with only one tag - no diversity
     for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
-        let entry = BenchmarkEntry {
-            workload_id: format!("single_tag_{i}"),
-            family: *family,
-            execution_time_ns: (i as u64 + 1) * 50_000, // Varied execution time
-            tags: BTreeMap::from([("only_tag".to_string(), "only_value".to_string())]),
-            content_hash: ContentHash::compute(format!("single_tag_{i}").as_bytes()),
-        };
+        let entry = BenchmarkEntry::new(
+            format!("single_tag_{i}"),
+            *family,
+            (i as u64 + 1) * 50_000, // Varied complexity
+            BTreeSet::from(["only_tag".to_string()]),
+        );
         if let Err(e) = board.add_entry(entry) {
             return ConformanceResult::Fail {
                 reason: format!("Failed to add single-tag entry: {e}"),
@@ -266,7 +264,7 @@ fn test_single_tag_fails_diversity() -> ConformanceResult {
     let tag_diversity_score = report
         .representativeness_scores
         .iter()
-        .find(|score| score.metric == RepresentativenessMetric::TagDiversity)
+        .find(|score| score.metric == RepresentativenessMetric::FeatureEntropy)
         .map(|score| score.score_millionths);
 
     if let Some(score) = tag_diversity_score {
@@ -280,7 +278,7 @@ fn test_single_tag_fails_diversity() -> ConformanceResult {
         }
     } else {
         return ConformanceResult::Fail {
-            reason: "TagDiversity metric missing from representativeness scores".to_string(),
+            reason: "FeatureEntropy metric missing from representativeness scores".to_string(),
         };
     }
 
@@ -293,16 +291,15 @@ fn test_representativeness_passed_requires_floor() -> ConformanceResult {
     // Create good coverage but configure impossibly high threshold
     for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
         for variant in 0..3 {
-            let entry = BenchmarkEntry {
-                workload_id: format!("diverse_{i}_{variant}"),
-                family: *family,
-                execution_time_ns: (variant as u64 + 1) * 100_000,
-                tags: BTreeMap::from([
-                    ("category".to_string(), format!("cat_{}", variant % 2)),
-                    ("complexity".to_string(), format!("level_{}", variant)),
+            let entry = BenchmarkEntry::new(
+                format!("diverse_{i}_{variant}"),
+                *family,
+                (variant as u64 + 1) * 100_000, // Varied complexity
+                BTreeSet::from([
+                    format!("cat_{}", variant % 2),
+                    format!("level_{}", variant),
                 ]),
-                content_hash: ContentHash::compute(format!("diverse_{i}_{variant}").as_bytes()),
-            };
+            );
             if let Err(e) = board.add_entry(entry) {
                 return ConformanceResult::Fail {
                     reason: format!("Failed to add diverse entry: {e}"),
@@ -340,15 +337,12 @@ fn test_passes_gate_requires_both_conditions() -> ConformanceResult {
     // Create workload that satisfies publication verdict but fails representativeness
     for (i, family) in WorkloadFamily::ALL.iter().enumerate().take(8) {
         for entries in 0..5 {
-            let entry = BenchmarkEntry {
-                workload_id: format!("verdict_pass_{i}_{entries}"),
-                family: *family,
-                execution_time_ns: 100_000, // Uniform - bad representativeness
-                tags: BTreeMap::from([("uniform_tag".to_string(), "same".to_string())]),
-                content_hash: ContentHash::compute(
-                    format!("verdict_pass_{i}_{entries}").as_bytes(),
-                ),
-            };
+            let entry = BenchmarkEntry::new(
+                format!("verdict_pass_{i}_{entries}"),
+                *family,
+                100_000, // Uniform complexity - bad representativeness
+                BTreeSet::from(["uniform_tag".to_string()]),
+            );
             if let Err(e) = board.add_entry(entry) {
                 return ConformanceResult::Fail {
                     reason: format!("Failed to add entry: {e}"),
@@ -398,23 +392,21 @@ fn test_content_hash_includes_representativeness() -> ConformanceResult {
 
     // Create two boards with different representativeness characteristics
     for (i, family) in WorkloadFamily::ALL.iter().enumerate().take(4) {
-        // Uniform board - same execution time
-        let uniform_entry = BenchmarkEntry {
-            workload_id: format!("uniform_{i}"),
-            family: *family,
-            execution_time_ns: 100_000,
-            tags: BTreeMap::from([("type".to_string(), "uniform".to_string())]),
-            content_hash: ContentHash::compute(format!("uniform_{i}").as_bytes()),
-        };
+        // Uniform board - same complexity
+        let uniform_entry = BenchmarkEntry::new(
+            format!("uniform_{i}"),
+            *family,
+            100_000,
+            BTreeSet::from(["type_uniform".to_string()]),
+        );
 
-        // Diverse board - varied execution time
-        let diverse_entry = BenchmarkEntry {
-            workload_id: format!("diverse_{i}"),
-            family: *family,
-            execution_time_ns: (i as u64 + 1) * 100_000,
-            tags: BTreeMap::from([("type".to_string(), format!("diverse_{i}"))]),
-            content_hash: ContentHash::compute(format!("diverse_{i}").as_bytes()),
-        };
+        // Diverse board - varied complexity
+        let diverse_entry = BenchmarkEntry::new(
+            format!("diverse_{i}"),
+            *family,
+            (i as u64 + 1) * 100_000,
+            BTreeSet::from([format!("type_diverse_{i}")]),
+        );
 
         if let Err(e) = uniform_board.add_entry(uniform_entry) {
             return ConformanceResult::Fail {
@@ -467,7 +459,7 @@ fn run_conformance_suite() -> (u32, u32, u32) {
     for case in BENCHMARK_CI_CONFORMANCE_CASES {
         let result = (case.test_fn)();
 
-        let (verdict_str, is_pass) = match &result {
+        let (verdict_str, _is_pass) = match &result {
             ConformanceResult::Pass => {
                 pass += 1;
                 ("PASS", true)
@@ -580,13 +572,12 @@ fn representativeness_bypass_detection_regression() {
     // Verify this actually creates a bypass
     let mut board = SaturationBoard::new();
     for (i, family) in WorkloadFamily::ALL.iter().enumerate().take(3) {
-        let entry = BenchmarkEntry {
-            workload_id: format!("bypass_test_{i}"),
-            family: *family,
-            execution_time_ns: 100_000, // Uniform - should fail representativeness
-            tags: BTreeMap::from([("bypass".to_string(), "uniform".to_string())]),
-            content_hash: ContentHash::compute(format!("bypass_test_{i}").as_bytes()),
-        };
+        let entry = BenchmarkEntry::new(
+            format!("bypass_test_{i}"),
+            *family,
+            100_000, // Uniform complexity - should fail representativeness
+            BTreeSet::from(["bypass_uniform".to_string()]),
+        );
         board.add_entry(entry).unwrap();
     }
 

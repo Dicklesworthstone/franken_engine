@@ -308,7 +308,8 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> Result<EvaluatedArti
     let observability_delta = build_observability_delta(&governance_config);
     let evidence = build_cold_start_evidence(epoch);
     let parity_results = build_parity_results();
-    let governance_verdict = cold_start_aot_governance::evaluate_cold_start(
+    let governance_verdict = cold_start_aot_governance::evaluate_cold_start_at_epoch(
+        epoch,
         &evidence,
         &parity_results,
         &governance_config,

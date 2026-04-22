@@ -11,7 +11,17 @@ fn ep(n: u64) -> SecurityEpoch {
 }
 
 fn ev(path: StartupPathKind, baseline: u64, candidate: u64, samples: u64) -> ColdStartEvidence {
-    ColdStartEvidence::new(path, baseline, candidate, samples, ep(10))
+    ev_at(path, baseline, candidate, samples, 10)
+}
+
+fn ev_at(
+    path: StartupPathKind,
+    baseline: u64,
+    candidate: u64,
+    samples: u64,
+    epoch: u64,
+) -> ColdStartEvidence {
+    ColdStartEvidence::new(path, baseline, candidate, samples, ep(epoch))
 }
 
 fn parity(kind: ParityCheckKind, passed: bool, div: u64) -> ParityResult {
@@ -799,6 +809,27 @@ fn test_evaluate_insufficient_samples_error() {
         }
         other => panic!("expected InsufficientSamples, got {other}"),
     }
+}
+
+#[test]
+fn test_evaluate_at_epoch_rejects_stale_aot_evidence() {
+    let c = cfg();
+    let evidence = vec![ev_at(StartupPathKind::AotRestored, 1000, 700, 50, 10)];
+    let par = vec![parity(ParityCheckKind::SemanticParity, true, 0)];
+    let err = evaluate_cold_start_at_epoch(ep(21), &evidence, &par, &c).unwrap_err();
+    assert_eq!(err, GovernanceError::StaleEvidence { age_epochs: 11 });
+}
+
+#[test]
+fn test_evaluate_rejects_mixed_epoch_batch_staleness() {
+    let c = cfg();
+    let evidence = vec![
+        ev_at(StartupPathKind::WarmCache, 1000, 800, 50, 10),
+        ev_at(StartupPathKind::AotRestored, 1000, 700, 50, 21),
+    ];
+    let par = vec![parity(ParityCheckKind::SemanticParity, true, 0)];
+    let err = evaluate_cold_start(&evidence, &par, &c).unwrap_err();
+    assert_eq!(err, GovernanceError::StaleEvidence { age_epochs: 11 });
 }
 
 #[test]

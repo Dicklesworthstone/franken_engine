@@ -15161,6 +15161,21 @@ impl InterpreterCore {
             .unwrap_or(Value::Undefined))
     }
 
+    #[cfg(test)]
+    fn checked_test_builtin_args(start: u32, len: usize) -> Result<RegRange, InterpreterError> {
+        let count = u32::try_from(len).map_err(|_| InterpreterError::TypeError {
+            expected: "u32-bounded builtin argument count".to_string(),
+            got: format!("{len} arguments"),
+        })?;
+        if count > 0 && start.checked_add(count - 1).is_none() {
+            return Err(InterpreterError::TypeError {
+                expected: "u32-bounded builtin argument register range".to_string(),
+                got: format!("{len} arguments starting at r{start}"),
+            });
+        }
+        Ok(RegRange { start, count })
+    }
+
     /// Test-only module runner. Pre-existing tests call
     /// `core.execute_module(&module)`; the production path routes modules
     /// through `QuickJsLane` / `V8Lane`. The shim uses the core's current
@@ -15184,13 +15199,20 @@ impl InterpreterCore {
         args: Vec<Value>,
     ) -> Result<Value, InterpreterError> {
         let start = 0u32;
+        let args_range = Self::checked_test_builtin_args(start, args.len())?;
         for (i, v) in args.iter().enumerate() {
-            self.set_register(start + i as u32, v.clone())?;
+            let offset = u32::try_from(i).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded builtin argument register".to_string(),
+                got: format!("argument index {i}"),
+            })?;
+            let register = start
+                .checked_add(offset)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "u32-bounded builtin argument register".to_string(),
+                    got: format!("r{start} + argument index {i}"),
+                })?;
+            self.set_register(register, v.clone())?;
         }
-        let args_range = RegRange {
-            start,
-            count: args.len() as u32,
-        };
         self.dispatch_builtin_hostcall(cap, args_range, None)
     }
 
@@ -16386,6 +16408,25 @@ mod active_builtin_regressions {
             .expect("test array length write should succeed");
 
         (array_id, object_id)
+    }
+
+    #[test]
+    fn execute_builtin_call_rejects_u32_register_range_overflow() {
+        let too_many_args = usize::try_from(u64::from(u32::MAX) + 1)
+            .expect("64-bit test target should represent u32::MAX + 1");
+        let err = InterpreterCore::checked_test_builtin_args(0, too_many_args)
+            .expect_err("test builtin arg count overflow should fail closed");
+        assert!(
+            matches!(err, InterpreterError::TypeError { ref expected, .. }
+                if expected == "u32-bounded builtin argument count")
+        );
+
+        let err = InterpreterCore::checked_test_builtin_args(u32::MAX, 2)
+            .expect_err("test builtin register range overflow should fail closed");
+        assert!(
+            matches!(err, InterpreterError::TypeError { ref expected, .. }
+                if expected == "u32-bounded builtin argument register range")
+        );
     }
 
     #[test]

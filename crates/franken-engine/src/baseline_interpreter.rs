@@ -15205,12 +15205,13 @@ impl InterpreterCore {
                 expected: "u32-bounded builtin argument register".to_string(),
                 got: format!("argument index {i}"),
             })?;
-            let register = start
-                .checked_add(offset)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "u32-bounded builtin argument register".to_string(),
-                    got: format!("r{start} + argument index {i}"),
-                })?;
+            let register =
+                start
+                    .checked_add(offset)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "u32-bounded builtin argument register".to_string(),
+                        got: format!("r{start} + argument index {i}"),
+                    })?;
             self.set_register(register, v.clone())?;
         }
         self.dispatch_builtin_hostcall(cap, args_range, None)

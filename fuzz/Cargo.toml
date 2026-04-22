@@ -40,4 +40,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "ir_lowering_fuzz"
+path = "fuzz_targets/ir_lowering_fuzz.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

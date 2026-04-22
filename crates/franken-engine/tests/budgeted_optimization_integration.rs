@@ -680,6 +680,15 @@ fn optimization_error_display() {
         .to_string()
         .contains("bad")
     );
+    assert!(
+        OptimizationError::InvalidCampaignState {
+            campaign_id: "c1".into(),
+            expected: CampaignStatus::Extracting,
+            actual: CampaignStatus::Failed,
+        }
+        .to_string()
+        .contains("expected extracting, got failed")
+    );
 }
 
 #[test]
@@ -796,6 +805,54 @@ fn stack_record_saturation() {
     // Global budget should have been consumed
     let time = stack.global_budget().get(BudgetKind::TimeMs).unwrap();
     assert_eq!(time.current_value, 200); // elapsed_ms from snapshot
+}
+
+#[test]
+fn stack_non_success_saturation_fails_closed() {
+    let mut stack = BudgetedOptimizationStack::new();
+    stack.register_campaign(make_campaign("c1")).unwrap();
+    let mut snapshot = make_egraph_snapshot();
+    snapshot.outcome = SaturationOutcome::PolicyStopped;
+
+    stack.record_saturation("c1", snapshot).unwrap();
+
+    let campaign = stack.get_campaign("c1").unwrap();
+    assert_eq!(campaign.status, CampaignStatus::Failed);
+    assert!(campaign.extraction_result.is_none());
+    assert!(stack.events().iter().any(|event| {
+        event.kind == OptimizationEventKind::CampaignFailed
+            && event.detail.contains("outcome=policy_stopped")
+    }));
+
+    let err = stack
+        .record_extraction("c1", make_extraction_result())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        OptimizationError::InvalidCampaignState { .. }
+    ));
+}
+
+#[test]
+fn stack_pathological_saturation_growth_fails_closed() {
+    let mut stack = BudgetedOptimizationStack::new();
+    stack.register_campaign(make_campaign("c1")).unwrap();
+    stack
+        .record_saturation("c1", make_egraph_snapshot())
+        .unwrap();
+    let mut pathological = make_egraph_snapshot();
+    pathological.node_count = 50_506;
+    pathological.iteration_count = 15;
+
+    stack.record_saturation("c1", pathological).unwrap();
+
+    let campaign = stack.get_campaign("c1").unwrap();
+    assert_eq!(campaign.status, CampaignStatus::Failed);
+    assert!(stack.events().iter().any(|event| {
+        event.kind == OptimizationEventKind::CampaignFailed
+            && event.detail.contains("pathological_growth")
+            && event.detail.contains("node_growth_rate=10001")
+    }));
 }
 
 #[test]

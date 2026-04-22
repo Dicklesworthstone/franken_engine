@@ -61,6 +61,7 @@ build_targets() {
   run_step "cargo fuzz build handshake_replay" cargo fuzz build handshake_replay
   run_step "cargo fuzz build token_verification" cargo fuzz build token_verification
   run_step "cargo fuzz build parser_boundary" cargo fuzz build parser_boundary
+  run_step "cargo fuzz build ir_lowering_fuzz" cargo fuzz build ir_lowering_fuzz
 }
 
 run_fuzz_targets() {
@@ -72,6 +73,8 @@ run_fuzz_targets() {
     cargo fuzz run token_verification -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
   run_step "cargo fuzz run parser_boundary -- -max_total_time=$fuzz_time_seconds -rss_limit_mb=$rss_limit_mb -runs=0" \
     cargo fuzz run parser_boundary -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
+  run_step "cargo fuzz run ir_lowering_fuzz -- -max_total_time=$fuzz_time_seconds -rss_limit_mb=$rss_limit_mb -runs=0" \
+    cargo fuzz run ir_lowering_fuzz -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
 }
 
 run_mode() {
@@ -153,7 +156,7 @@ write_manifest() {
       echo "    \"${commands_run[$idx]}\"${comma}"
     done
     echo '  ],'
-    echo '  "targets": ["decode_dos","handshake_replay","token_verification","parser_boundary"],'
+    echo '  "targets": ["decode_dos","handshake_replay","token_verification","parser_boundary","ir_lowering_fuzz"],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","

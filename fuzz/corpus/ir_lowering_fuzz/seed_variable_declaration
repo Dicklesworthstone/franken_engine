@@ -1,0 +1,3 @@
+let x = 10;
+const y = "hello";
+var z = true;

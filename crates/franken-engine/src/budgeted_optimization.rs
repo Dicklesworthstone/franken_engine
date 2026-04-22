@@ -317,6 +317,13 @@ impl fmt::Display for SaturationOutcome {
     }
 }
 
+impl SaturationOutcome {
+    /// Whether saturation reached a fixed point and may proceed to extraction.
+    pub fn is_successful(self) -> bool {
+        matches!(self, Self::Saturated)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EGraphSnapshot — snapshot of e-graph state
 // ---------------------------------------------------------------------------
@@ -647,8 +654,17 @@ impl OptimizationCampaign {
 
     /// Record saturation result.
     pub fn record_saturation(&mut self, snapshot: EGraphSnapshot) {
+        let pathological_growth = self
+            .egraph_snapshot
+            .as_ref()
+            .is_some_and(|baseline| snapshot.is_pathological_growth(baseline));
+        let saturated = snapshot.outcome.is_successful() && !pathological_growth;
         self.egraph_snapshot = Some(snapshot);
-        self.status = CampaignStatus::Extracting;
+        self.status = if saturated {
+            CampaignStatus::Extracting
+        } else {
+            CampaignStatus::Failed
+        };
     }
 
     /// Record extraction result.
@@ -697,6 +713,12 @@ pub enum OptimizationError {
     UnsoundRewrite { rule_id: String },
     /// Rollback failed.
     RollbackFailed { campaign_id: String, detail: String },
+    /// Campaign was in the wrong lifecycle state for the requested transition.
+    InvalidCampaignState {
+        campaign_id: String,
+        expected: CampaignStatus,
+        actual: CampaignStatus,
+    },
 }
 
 impl fmt::Display for OptimizationError {
@@ -723,6 +745,14 @@ impl fmt::Display for OptimizationError {
                 campaign_id,
                 detail,
             } => write!(f, "rollback failed for {campaign_id}: {detail}"),
+            Self::InvalidCampaignState {
+                campaign_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "invalid campaign state for {campaign_id}: expected {expected}, got {actual}"
+            ),
         }
     }
 }
@@ -873,12 +903,17 @@ impl BudgetedOptimizationStack {
         self.global_budget
             .consume(BudgetKind::RewriteApplications, snapshot.rewrite_count);
 
-        campaign.record_saturation(snapshot);
-        self.emit_event(
-            OptimizationEventKind::SaturationCompleted,
-            Some(campaign_id),
-            "",
-        );
+        let (event_kind, event_detail) = {
+            let detail =
+                Self::saturation_failure_detail(campaign.egraph_snapshot.as_ref(), &snapshot);
+            campaign.record_saturation(snapshot);
+            if let Some(detail) = detail {
+                (OptimizationEventKind::CampaignFailed, detail)
+            } else {
+                (OptimizationEventKind::SaturationCompleted, String::new())
+            }
+        };
+        self.emit_event(event_kind, Some(campaign_id), &event_detail);
         Ok(())
     }
 
@@ -892,6 +927,13 @@ impl BudgetedOptimizationStack {
             .campaigns
             .get_mut(campaign_id)
             .ok_or_else(|| OptimizationError::DuplicateCampaign(campaign_id.to_string()))?;
+        if campaign.status != CampaignStatus::Extracting {
+            return Err(OptimizationError::InvalidCampaignState {
+                campaign_id: campaign_id.to_string(),
+                expected: CampaignStatus::Extracting,
+                actual: campaign.status,
+            });
+        }
         campaign.record_extraction(result);
         self.emit_event(
             OptimizationEventKind::ExtractionCompleted,
@@ -1071,6 +1113,27 @@ impl BudgetedOptimizationStack {
             campaign_id: campaign_id.map(|s| s.to_string()),
             detail: detail.to_string(),
         });
+    }
+
+    fn saturation_failure_detail(
+        baseline: Option<&EGraphSnapshot>,
+        snapshot: &EGraphSnapshot,
+    ) -> Option<String> {
+        if !snapshot.outcome.is_successful() {
+            return Some(format!(
+                "saturation_failed_closed: outcome={}",
+                snapshot.outcome
+            ));
+        }
+        baseline
+            .filter(|baseline| snapshot.is_pathological_growth(baseline))
+            .map(|baseline| {
+                format!(
+                    "saturation_failed_closed: pathological_growth node_growth_rate={} threshold={}",
+                    snapshot.node_growth_rate(baseline),
+                    PATHOLOGICAL_GROWTH_THRESHOLD
+                )
+            })
     }
 }
 
@@ -1575,6 +1638,56 @@ mod tests {
     }
 
     #[test]
+    fn stack_non_success_saturation_fails_closed() {
+        let mut s = BudgetedOptimizationStack::new();
+        s.register_campaign(make_campaign("c1")).unwrap();
+        let mut snapshot = make_egraph_snapshot();
+        snapshot.outcome = SaturationOutcome::NodeLimitReached;
+
+        s.record_saturation("c1", snapshot).unwrap();
+
+        let c = s.get_campaign("c1").unwrap();
+        assert_eq!(c.status, CampaignStatus::Failed);
+        assert!(c.extraction_result.is_none());
+        assert!(
+            s.events()
+                .iter()
+                .any(|event| event.kind == OptimizationEventKind::CampaignFailed
+                    && event.detail.contains("outcome=node_limit_reached"))
+        );
+        let err = s
+            .record_extraction("c1", make_extraction_result())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            OptimizationError::InvalidCampaignState { .. }
+        ));
+    }
+
+    #[test]
+    fn stack_pathological_growth_saturation_fails_closed() {
+        let mut s = BudgetedOptimizationStack::new();
+        s.register_campaign(make_campaign("c1")).unwrap();
+        s.record_saturation("c1", make_egraph_snapshot()).unwrap();
+        let mut pathological = make_egraph_snapshot();
+        pathological.node_count = 50_506;
+        pathological.iteration_count = 15;
+        pathological.outcome = SaturationOutcome::Saturated;
+
+        s.record_saturation("c1", pathological).unwrap();
+
+        let c = s.get_campaign("c1").unwrap();
+        assert_eq!(c.status, CampaignStatus::Failed);
+        assert!(
+            s.events()
+                .iter()
+                .any(|event| event.kind == OptimizationEventKind::CampaignFailed
+                    && event.detail.contains("pathological_growth")
+                    && event.detail.contains("node_growth_rate=10001"))
+        );
+    }
+
+    #[test]
     fn stack_record_extraction() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1")).unwrap();
@@ -1782,6 +1895,11 @@ mod tests {
             OptimizationError::DuplicateRule("r1".to_string()),
             OptimizationError::DuplicateCampaign("c1".to_string()),
             OptimizationError::CampaignLimitExceeded { count: 65, max: 64 },
+            OptimizationError::InvalidCampaignState {
+                campaign_id: "c1".to_string(),
+                expected: CampaignStatus::Extracting,
+                actual: CampaignStatus::Failed,
+            },
         ];
         let mut displays = BTreeSet::new();
         for err in &errors {
@@ -2120,13 +2238,18 @@ mod tests {
                 campaign_id: "c1".to_string(),
                 detail: "disk full".to_string(),
             },
+            OptimizationError::InvalidCampaignState {
+                campaign_id: "c1".to_string(),
+                expected: CampaignStatus::Extracting,
+                actual: CampaignStatus::Failed,
+            },
         ];
         for e in &errors {
             let json = serde_json::to_string(e).unwrap();
             let back: OptimizationError = serde_json::from_str(&json).unwrap();
             assert_eq!(e, &back);
         }
-        assert_eq!(errors.len(), 8);
+        assert_eq!(errors.len(), 9);
     }
 
     #[test]

@@ -25,6 +25,9 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Golden artifact test outputs (transient diff files)
+tests/golden/*.actual
+
 # Runtime SQLite databases
 storage.sqlite3
 *.sqlite3-wal

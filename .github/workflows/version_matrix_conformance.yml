@@ -62,6 +62,9 @@ jobs:
       - name: Run version-matrix lane script
         run: ./scripts/run_version_matrix_lane.sh ci
 
+      - name: Run RGC CI quality gates
+        run: ./scripts/run_rgc_ci_quality_gates.sh ci
+
       - name: Upload matrix artifacts
         if: always()
         uses: actions/upload-artifact@v4

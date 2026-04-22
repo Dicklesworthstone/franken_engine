@@ -16347,6 +16347,81 @@ fn percent_decode_utf8(encoded: &str) -> Result<String, &'static str> {
     String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 sequence")
 }
 
+#[cfg(test)]
+mod active_builtin_regressions {
+    use super::*;
+
+    fn test_quickjs_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config
+    }
+
+    fn test_core() -> InterpreterCore {
+        InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    fn mixed_sort_fixture(core: &mut InterpreterCore) -> (ObjectId, ObjectId) {
+        let array_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test array allocation should succeed");
+        let object_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test object allocation should succeed");
+
+        for (index, value) in [
+            (0, Value::Int(3)),
+            (1, Value::Str("banana".to_string())),
+            (2, Value::Bool(false)),
+            (4, Value::Float(Float64::new(1.5))),
+            (5, Value::Object(object_id)),
+        ] {
+            core.set_object_property(array_id, index.to_string(), value)
+                .expect("test array element write should succeed");
+        }
+        core.set_object_property(array_id, "length".to_string(), Value::Int(6))
+            .expect("test array length write should succeed");
+
+        (array_id, object_id)
+    }
+
+    #[test]
+    fn array_prototype_sort_builtin_dispatch_deduplication_regression() {
+        for builtin_id in [28_u32, 248_u32, 385_u32] {
+            let mut core = test_core();
+            let (array_id, object_id) = mixed_sort_fixture(&mut core);
+            core.registers[0] = Value::Object(array_id);
+
+            assert_eq!(
+                core.builtin_name_from_id(builtin_id),
+                Some("builtin:ArrayPrototypeSort".to_string())
+            );
+            assert_eq!(
+                core.call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                    .expect("ArrayPrototypeSort builtin ID should execute"),
+                Value::Object(array_id)
+            );
+
+            let properties = &core
+                .heap
+                .get(array_id.0 as usize)
+                .expect("sorted test array should remain allocated")
+                .properties;
+            assert!(
+                matches!(properties.get("0"), Some(Value::Float(value)) if value.inner() == 1.5)
+            );
+            assert_eq!(properties.get("1"), Some(&Value::Int(3)));
+            assert_eq!(properties.get("2"), Some(&Value::Object(object_id)));
+            assert_eq!(properties.get("3"), Some(&Value::Str("banana".to_string())));
+            assert_eq!(properties.get("4"), Some(&Value::Bool(false)));
+            assert_eq!(properties.get("5"), Some(&Value::Undefined));
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

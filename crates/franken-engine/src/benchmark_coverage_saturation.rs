@@ -65,6 +65,9 @@ pub const DEFAULT_MIN_SATURATION_SCORE_MILLIONTHS: u64 = 700_000;
 /// Default minimum feature diversity per family.
 pub const DEFAULT_MIN_FEATURE_DIVERSITY: u64 = 2;
 
+/// Default minimum score for every representativeness metric.
+pub const DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS: u64 = 300_000;
+
 /// Maximum entries per board.
 pub const MAX_ENTRIES_PER_BOARD: usize = 4096;
 
@@ -540,6 +543,8 @@ pub struct SaturationConfig {
     /// Set of families that must be present on the board. If empty, all
     /// families in `WorkloadFamily::ALL` are required.
     pub target_families: BTreeSet<WorkloadFamily>,
+    /// Minimum score required for every representativeness metric.
+    pub min_representativeness_score_millionths: u64,
     /// Current epoch for staleness checks in reports.
     pub current_epoch: SecurityEpoch,
 }
@@ -554,6 +559,8 @@ impl SaturationConfig {
             min_saturation_score_millionths: DEFAULT_MIN_SATURATION_SCORE_MILLIONTHS,
             min_feature_diversity: DEFAULT_MIN_FEATURE_DIVERSITY,
             target_families,
+            min_representativeness_score_millionths:
+                DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS,
             current_epoch: SecurityEpoch::from_raw(1),
         }
     }
@@ -567,6 +574,7 @@ impl SaturationConfig {
             min_saturation_score_millionths: 850_000,
             min_feature_diversity: 4,
             target_families,
+            min_representativeness_score_millionths: 500_000,
             current_epoch: SecurityEpoch::from_raw(1),
         }
     }
@@ -579,6 +587,7 @@ impl SaturationConfig {
             min_saturation_score_millionths: 300_000,
             min_feature_diversity: 1,
             target_families: BTreeSet::new(),
+            min_representativeness_score_millionths: 0,
             current_epoch: SecurityEpoch::from_raw(1),
         }
     }
@@ -724,6 +733,10 @@ pub struct SaturationReport {
     pub overall_saturation_millionths: u64,
     /// Representativeness scores.
     pub representativeness_scores: Vec<RepresentativenessScore>,
+    /// Minimum score required for every representativeness metric.
+    pub min_representativeness_score_millionths: u64,
+    /// Whether every representativeness metric meets the configured floor.
+    pub representativeness_passed: bool,
     /// Epoch at which the report was generated.
     pub epoch: SecurityEpoch,
     /// Content hash of the report (excludes this field).
@@ -733,7 +746,7 @@ pub struct SaturationReport {
 impl SaturationReport {
     /// Whether the report passes the gate.
     pub fn passes_gate(&self) -> bool {
-        self.verdict.allows_publication()
+        self.verdict.allows_publication() && self.representativeness_passed
     }
 
     /// Number of families that block the gate.
@@ -992,6 +1005,10 @@ impl SaturationBoard {
 
         // Compute representativeness scores.
         let representativeness_scores = self.compute_representativeness(config, &family_coverages);
+        let representativeness_passed = Self::representativeness_passes_floor(
+            &representativeness_scores,
+            config.min_representativeness_score_millionths,
+        );
 
         // Determine verdict.
         let verdict =
@@ -1004,6 +1021,9 @@ impl SaturationBoard {
             total_entries,
             covered_families,
             overall_saturation_millionths,
+            &representativeness_scores,
+            config.min_representativeness_score_millionths,
+            representativeness_passed,
             config.current_epoch,
         );
 
@@ -1018,9 +1038,22 @@ impl SaturationBoard {
             uncovered_families,
             overall_saturation_millionths,
             representativeness_scores,
+            min_representativeness_score_millionths: config.min_representativeness_score_millionths,
+            representativeness_passed,
             epoch: config.current_epoch,
             content_hash,
         }
+    }
+
+    /// Check that the representativeness score set is complete and above the floor.
+    fn representativeness_passes_floor(
+        scores: &[RepresentativenessScore],
+        min_score_millionths: u64,
+    ) -> bool {
+        scores.len() == RepresentativenessMetric::ALL.len()
+            && scores
+                .iter()
+                .all(|score| score.score_millionths >= min_score_millionths)
     }
 
     /// Determine the verdict from coverage data.
@@ -1189,6 +1222,9 @@ impl SaturationBoard {
         total_entries: u64,
         covered_families: u64,
         overall_saturation: u64,
+        representativeness_scores: &[RepresentativenessScore],
+        min_representativeness_score: u64,
+        representativeness_passed: bool,
         epoch: SecurityEpoch,
     ) -> ContentHash {
         let mut buf = Vec::new();
@@ -1198,12 +1234,19 @@ impl SaturationBoard {
         append_u64(&mut buf, total_entries);
         append_u64(&mut buf, covered_families);
         append_u64(&mut buf, overall_saturation);
+        append_u64(&mut buf, min_representativeness_score);
+        append_u64(&mut buf, if representativeness_passed { 1 } else { 0 });
         append_u64(&mut buf, epoch.as_u64());
         for (family, coverage) in family_coverages {
             append_str(&mut buf, family.as_str());
             append_u64(&mut buf, coverage.entry_count);
             append_u64(&mut buf, coverage.saturation_score_millionths);
             append_str(&mut buf, coverage.coverage_status.as_str());
+        }
+        for score in representativeness_scores {
+            append_str(&mut buf, score.metric.as_str());
+            append_u64(&mut buf, score.score_millionths);
+            append_str(&mut buf, &score.detail);
         }
         compute_digest(&buf)
     }
@@ -1357,8 +1400,10 @@ mod tests {
     fn constants_defaults_valid() {
         assert_eq!(DEFAULT_MIN_ENTRIES_PER_FAMILY, 3);
         assert_eq!(DEFAULT_MIN_FAMILIES_COVERED, 8);
+        assert_eq!(DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS, 300_000);
         const {
             assert!(DEFAULT_MIN_SATURATION_SCORE_MILLIONTHS <= MILLIONTHS);
+            assert!(DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS <= MILLIONTHS);
             assert!(DEFAULT_MIN_FEATURE_DIVERSITY >= 1);
         }
     }
@@ -1661,6 +1706,10 @@ mod tests {
         assert!(config.min_entries_per_family >= default.min_entries_per_family);
         assert!(config.min_saturation_score_millionths >= default.min_saturation_score_millionths);
         assert!(config.min_feature_diversity >= default.min_feature_diversity);
+        assert!(
+            config.min_representativeness_score_millionths
+                >= default.min_representativeness_score_millionths
+        );
     }
 
     #[test]
@@ -1669,6 +1718,10 @@ mod tests {
         let default = default_config();
         assert!(config.min_entries_per_family <= default.min_entries_per_family);
         assert!(config.min_families_covered <= default.min_families_covered);
+        assert!(
+            config.min_representativeness_score_millionths
+                <= default.min_representativeness_score_millionths
+        );
     }
 
     #[test]
@@ -1916,6 +1969,43 @@ mod tests {
     }
 
     #[test]
+    fn report_content_hash_changes_with_representativeness_scores() {
+        let mut uniform = SaturationBoard::new();
+        let mut varied = SaturationBoard::new();
+        for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
+            let family_tag = format!("tag_{}", family.as_str());
+            uniform
+                .add_entry(make_entry_with_tags(
+                    &format!("uniform_{i}"),
+                    *family,
+                    100,
+                    &[&family_tag],
+                ))
+                .unwrap();
+            varied
+                .add_entry(make_entry_with_tags(
+                    &format!("varied_{i}"),
+                    *family,
+                    (i as u64 + 1) * 100,
+                    &[&family_tag],
+                ))
+                .unwrap();
+        }
+        let mut config = relaxed_config();
+        config.min_families_covered = WorkloadFamily::COUNT as u64;
+        config.target_families = WorkloadFamily::ALL.iter().copied().collect();
+
+        let uniform_report = uniform.evaluate(&config);
+        let varied_report = varied.evaluate(&config);
+
+        assert_ne!(
+            uniform_report.representativeness_scores,
+            varied_report.representativeness_scores
+        );
+        assert_ne!(uniform_report.content_hash, varied_report.content_hash);
+    }
+
+    #[test]
     fn report_uncovered_families_listed() {
         let mut board = SaturationBoard::new();
         let entry = make_entry("only_one", WorkloadFamily::BranchHeavy, 100);
@@ -1964,6 +2054,40 @@ mod tests {
             .find(|s| s.metric == RepresentativenessMetric::CorpusRatio)
             .unwrap();
         assert_eq!(corpus.score_millionths, MILLIONTHS);
+    }
+
+    #[test]
+    fn report_fails_gate_when_representativeness_floor_is_not_met() {
+        let mut board = SaturationBoard::new();
+        for (i, family) in WorkloadFamily::ALL.iter().enumerate() {
+            board
+                .add_entry(make_entry_with_tags(
+                    &format!("flat_{i}"),
+                    *family,
+                    100,
+                    &["same_tag"],
+                ))
+                .unwrap();
+        }
+        let mut config = relaxed_config();
+        config.min_families_covered = WorkloadFamily::COUNT as u64;
+        config.min_entries_per_family = 1;
+        config.min_saturation_score_millionths = 0;
+        config.min_representativeness_score_millionths = 300_000;
+        config.target_families = WorkloadFamily::ALL.iter().copied().collect();
+
+        let report = board.evaluate(&config);
+
+        assert!(report.verdict.allows_publication());
+        assert!(!report.representativeness_passed);
+        assert!(!report.passes_gate());
+        assert_eq!(report.min_representativeness_score_millionths, 300_000);
+        assert!(
+            report
+                .representativeness_scores
+                .iter()
+                .any(|score| score.score_millionths < 300_000)
+        );
     }
 
     #[test]

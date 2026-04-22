@@ -1351,6 +1351,16 @@ mod tests {
         SaturationConfig::default_config()
     }
 
+    fn representativeness_scores(values: &[u64]) -> Vec<RepresentativenessScore> {
+        RepresentativenessMetric::ALL
+            .iter()
+            .zip(values.iter())
+            .map(|(metric, value)| {
+                RepresentativenessScore::new(*metric, *value, format!("{metric} test score"))
+            })
+            .collect()
+    }
+
     fn populate_board_all_families(entries_per_family: u64) -> SaturationBoard {
         let mut board = SaturationBoard::new();
         for family in WorkloadFamily::ALL {
@@ -1526,6 +1536,46 @@ mod tests {
             let back: RepresentativenessMetric = serde_json::from_str(&json).unwrap();
             assert_eq!(*m, back);
         }
+    }
+
+    #[test]
+    fn representativeness_floor_rejects_empty_scores() {
+        assert!(!SaturationBoard::representativeness_passes_floor(
+            &[],
+            300_000
+        ));
+    }
+
+    #[test]
+    fn representativeness_floor_rejects_partial_scores() {
+        let scores = representativeness_scores(&[400_000, 400_000, 400_000]);
+        assert!(!SaturationBoard::representativeness_passes_floor(
+            &scores, 300_000
+        ));
+    }
+
+    #[test]
+    fn representativeness_floor_accepts_complete_scores_at_threshold() {
+        let scores = representativeness_scores(&[300_000, 300_000, 300_000, 300_000]);
+        assert!(SaturationBoard::representativeness_passes_floor(
+            &scores, 300_000
+        ));
+    }
+
+    #[test]
+    fn representativeness_floor_rejects_any_score_below_threshold() {
+        let scores = representativeness_scores(&[300_000, 299_999, 300_000, 300_000]);
+        assert!(!SaturationBoard::representativeness_passes_floor(
+            &scores, 300_000
+        ));
+    }
+
+    #[test]
+    fn representativeness_floor_accepts_complete_scores_above_threshold() {
+        let scores = representativeness_scores(&[400_000, 500_000, 600_000, 700_000]);
+        assert!(SaturationBoard::representativeness_passes_floor(
+            &scores, 300_000
+        ));
     }
 
     // -----------------------------------------------------------------------

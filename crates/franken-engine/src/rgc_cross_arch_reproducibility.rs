@@ -346,7 +346,7 @@ impl CrossArchController {
             reference_event_count: reference_trace.events.len(),
             config: self.config.clone(),
             reference_trace_hash,
-            comparison_hash,
+            comparison_hash: None,
             target_matrix_summary,
             drift_artifact_paths,
             normalization_artifact_links,

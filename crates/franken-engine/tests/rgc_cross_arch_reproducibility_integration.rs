@@ -373,7 +373,7 @@ fn verify_cross_arch_reproducibility_success() {
 
 #[test]
 fn verify_cross_arch_reproducibility_multiple_iterations() {
-    // Test that multiple iterations are actually executed
+    // Test that different iterations produce different evidence
     let result_1 = verify_cross_arch_reproducibility("multi-iteration-test-1", 1);
     let result_3 = verify_cross_arch_reproducibility("multi-iteration-test-3", 3);
 
@@ -383,9 +383,48 @@ fn verify_cross_arch_reproducibility_multiple_iterations() {
     let comparison_1 = result_1.unwrap();
     let comparison_3 = result_3.unwrap();
 
-    // Both should be perfect, but 3 iterations tests more scenarios
+    // Both should be perfect, but verify different iterations produce distinguishable results
     assert!(comparison_1.traces_identical);
     assert!(comparison_3.traces_identical);
+
+    // The function should exercise multiple iterations, producing different trace counts
+    // This proves iterations parameter is actually honored
+    assert_ne!(comparison_1.matching_events, comparison_3.matching_events,
+        "1 vs 3 iterations should produce different matching event counts");
+}
+
+#[test]
+fn verify_cross_arch_reproducibility_zero_iterations_fails() {
+    // Test that 0 iterations fails closed
+    let result = verify_cross_arch_reproducibility("zero-iterations-test", 0);
+    assert!(result.is_err());
+
+    if let Err(error) = result {
+        assert!(matches!(error, frankenengine_engine::rgc_cross_arch_reproducibility::CrossArchError::NoIterationsSpecified));
+    }
+}
+
+#[test]
+fn verify_cross_arch_reproducibility_exercises_target_architectures() {
+    // Test with custom config to verify target architectures are exercised
+    use frankenengine_engine::rgc_cross_arch_reproducibility::*;
+
+    let config = CrossArchConfig {
+        target_architectures: vec![ArchitectureId::X86_64, ArchitectureId::Aarch64],
+        replay_iterations: 2,
+        capture_fp_divergences: true,
+        strict_determinism: true,
+        max_divergent_events: 0,
+    };
+
+    let result = verify_cross_arch_reproducibility_with_config("arch-matrix-test", config);
+    assert!(result.is_ok());
+
+    let comparison = result.unwrap();
+    // Should exercise both x86_64 and aarch64 architectures in matrix
+    // Even if current arch is one of them, it should test cross-arch differences
+    assert!(comparison.matching_events > 0, "Should have executed cross-architecture comparisons");
+}
     assert_eq!(comparison_1.assessment, ReproducibilityAssessment::Perfect);
     assert_eq!(comparison_3.assessment, ReproducibilityAssessment::Perfect);
 

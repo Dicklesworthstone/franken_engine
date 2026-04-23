@@ -243,6 +243,8 @@ pub enum LoweringPipelineError {
     ValueStackUnderflow,
     #[error("Lowering preallocation budget exceeded: requested {requested} but limit is {limit}")]
     AllocationBudgetExceeded { requested: usize, limit: usize },
+    #[error("Too many arguments for hostcall: {count} exceeds maximum {max}")]
+    TooManyArguments { count: usize, max: usize },
 }
 
 #[allow(dead_code)]
@@ -5629,6 +5631,13 @@ fn lower_expression_to_ir1(
                 && name == "require"
                 && !binding_lookup.contains_key(name.as_str())
             {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
                 for arg in arguments {
                     lower_expression_to_ir1(
                         arg,
@@ -5642,7 +5651,7 @@ fn lower_expression_to_ir1(
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: "module:require".to_string(),
-                    arg_count: arguments.len() as u32,
+                    arg_count: arg_count as u32,
                 });
                 return Ok(());
             }
@@ -5661,9 +5670,16 @@ fn lower_expression_to_ir1(
                         label_counter,
                     )?;
                 }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
                 ops.push(Ir1Op::HostCall {
                     capability: "hostcall.invoke".to_string(),
-                    arg_count: arguments.len() as u32,
+                    arg_count: arg_count as u32,
                 });
                 return Ok(());
             }
@@ -5733,8 +5749,15 @@ fn lower_expression_to_ir1(
                             label_counter,
                         )?;
                     }
+                    let arg_count = arguments.len();
+                    if arg_count > u32::MAX as usize {
+                        return Err(LoweringPipelineError::TooManyArguments {
+                            count: arg_count,
+                            max: u32::MAX as usize,
+                        });
+                    }
                     ops.push(Ir1Op::CallMethod {
-                        arg_count: arguments.len() as u32,
+                        arg_count: arg_count as u32,
                     });
                 }
             } else {
@@ -5758,8 +5781,15 @@ fn lower_expression_to_ir1(
                         label_counter,
                     )?;
                 }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
                 ops.push(Ir1Op::Call {
-                    arg_count: arguments.len() as u32,
+                    arg_count: arg_count as u32,
                 });
             }
         }
@@ -5943,8 +5973,15 @@ fn lower_expression_to_ir1(
                     label_counter,
                 )?;
             }
+            let arg_count = arguments.len();
+            if arg_count > u32::MAX as usize {
+                return Err(LoweringPipelineError::TooManyArguments {
+                    count: arg_count,
+                    max: u32::MAX as usize,
+                });
+            }
             ops.push(Ir1Op::Call {
-                arg_count: arguments.len() as u32,
+                arg_count: arg_count as u32,
             });
             ops.push(Ir1Op::StoreBinding {
                 binding_id: result_binding,
@@ -6301,8 +6338,15 @@ fn lower_expression_to_ir1(
                     label_counter,
                 )?;
             }
+            let arg_count = arguments.len();
+            if arg_count > u32::MAX as usize {
+                return Err(LoweringPipelineError::TooManyArguments {
+                    count: arg_count,
+                    max: u32::MAX as usize,
+                });
+            }
             ops.push(Ir1Op::Construct {
-                arg_count: arguments.len() as u32,
+                arg_count: arg_count as u32,
             });
         }
         Expression::TemplateLiteral {

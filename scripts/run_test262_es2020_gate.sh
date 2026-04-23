@@ -108,6 +108,14 @@ run_test() {
     canonical_hwm_path="$runner_canonical_hwm_path"
   fi
 
+  # Check gate result for release blocking
+  local gate_blocked="$(rg -o 'test262 blocked=.*' "$runner_log_path" | tail -n 1 | sed 's/.*test262 blocked=//')"
+  if [[ "$gate_blocked" == "true" ]]; then
+    echo "==> RELEASE BLOCKED: test262 ES2020 conformance gate failed" >&2
+    echo "==> See gate output in: ${runner_log_path}" >&2
+    return 1
+  fi
+
   if [[ -z "$runner_manifest_path" || -z "$runner_evidence_path" || -z "$runner_hwm_path" ]]; then
     echo "runner artifact discovery failed from ${runner_log_path}" >&2
     return 1
@@ -152,9 +160,12 @@ write_manifest() {
   if [[ "$exit_code" -eq 0 ]]; then
     outcome="pass"
     error_code="null"
+  elif [[ -n "$failed_log_path" ]] && rg -q "test262 blocked=true" "$failed_log_path"; then
+    outcome="blocked"
+    error_code='"FE-T262-1005"'
   else
     outcome="fail"
-    error_code='"FE-T262-1005"'
+    error_code='"FE-T262-1008"'
   fi
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"

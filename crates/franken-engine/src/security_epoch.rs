@@ -58,9 +58,7 @@ impl fmt::Debug for SecurityEpoch {
             3 => "generation-current",
             _ => "generation-unknown",
         };
-        f.debug_tuple("SecurityEpoch")
-            .field(&opaque_label)
-            .finish()
+        f.debug_tuple("SecurityEpoch").field(&opaque_label).finish()
     }
 }
 

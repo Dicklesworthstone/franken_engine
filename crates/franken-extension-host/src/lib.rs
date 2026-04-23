@@ -670,12 +670,21 @@ pub fn with_computed_content_hash(
 }
 
 #[cfg(test)]
+/// Add deterministic Ed25519 signed supply-chain provenance to a test manifest.
+/// Uses a fixed signing key for reproducible test results.
+/// This produces proper 32-byte Ed25519 public key hex and 64-byte signatures
+/// over deterministic content hashes (not fake provenance fixtures).
 fn with_test_signed_supply_chain_provenance(mut manifest: ExtensionManifest) -> ExtensionManifest {
+    // Use deterministic signing key for reproducible tests
     let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
     let verifying_key = signing_key.verifying_key();
+
+    // Set trust chain ref to proper Ed25519 public key hex (32 bytes = 64 hex chars)
     manifest.trust_chain_ref = Some(bytes_to_hex(&verifying_key.to_bytes()));
     manifest.publisher_signature = None;
     manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+
+    // Generate proper Ed25519 signature over content hash (64 bytes)
     manifest.publisher_signature =
         Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
     manifest
@@ -6709,6 +6718,47 @@ const fn guardplane_action_from_posterior(posterior_micros: u64) -> GuardplanePo
     }
 }
 
+/// Create a test signed manifest fixture with deterministic Ed25519 provenance
+/// This replaces fake signatures with proper cryptographic fixtures
+#[cfg(test)]
+fn create_test_signed_manifest_fixture(
+    name: &str,
+    version: &str,
+    entrypoint: &str,
+    capabilities: &[Capability],
+) -> ExtensionManifest {
+    // Use deterministic but different keys for different test fixtures
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update(version.as_bytes());
+        hasher.update(entrypoint.as_bytes());
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
+    let mut manifest = ExtensionManifest {
+        name: name.to_string(),
+        version: version.to_string(),
+        entrypoint: entrypoint.to_string(),
+        capabilities: capabilities.iter().copied().collect(),
+        publisher_signature: None,
+        content_hash: [0; 32],
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
+        min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6780,6 +6830,101 @@ mod tests {
         assert_eq!(
             validate_manifest(&manifest),
             Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    // ── Regression tests for tampered signatures ──────────────────────────
+    // These tests prevent drift back to fake provenance fixtures
+
+    #[test]
+    fn signed_manifest_rejects_fake_short_signature() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        // Replace valid Ed25519 signature with fake short bytes
+        manifest.publisher_signature = Some(vec![1, 2, 3, 4]);
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn signed_manifest_rejects_non_crypto_trust_chain() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        // Replace valid Ed25519 public key hex with non-crypto string
+        manifest.trust_chain_ref = Some("fake/chain/ref".to_string());
+        // Recompute content hash so it passes hash validation but fails on signature
+        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn signed_manifest_rejects_wrong_length_signature() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        // Replace with wrong-length signature (not 64 bytes)
+        manifest.publisher_signature = Some(vec![0xFF; 32]);
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn signed_manifest_rejects_signature_for_different_content() {
+        // Create two different manifests with valid signatures
+        // Use capabilities that satisfy lattice requirements
+        let manifest_a = signed_manifest(&[Capability::FsRead]);
+        let manifest_b = signed_manifest(&[Capability::FsRead, Capability::FsWrite]);
+
+        // Cross-contaminate: use signature from A for content of B
+        let mut contaminated = manifest_b;
+        contaminated.publisher_signature = manifest_a.publisher_signature.clone();
+        contaminated.trust_chain_ref = manifest_a.trust_chain_ref.clone();
+
+        assert_eq!(
+            validate_manifest(&contaminated),
+            Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn development_manifest_has_explicit_hash_only_coverage() {
+        // Ensure development manifests explicitly use hash-only trust (no signatures)
+        let dev_manifest = development_manifest(&[Capability::FsRead]);
+
+        // Development manifests must have no signature or trust chain
+        assert!(dev_manifest.publisher_signature.is_none());
+        assert!(dev_manifest.trust_chain_ref.is_none());
+
+        // But must have valid content hash
+        assert_ne!(dev_manifest.content_hash, [0; 32]);
+
+        // And should be valid for development trust level WITH explicit config override
+        let dev_config = ExtensionHostConfig {
+            allow_development_trust: true,
+            ..ExtensionHostConfig::default()
+        };
+        assert_eq!(
+            validate_provenance_with_config(
+                &dev_manifest,
+                ManifestTrustLevel::Development,
+                &dev_config
+            ),
+            Ok(())
+        );
+
+        // But rejected for signed supply chain trust level
+        assert_eq!(
+            validate_provenance(&dev_manifest, ManifestTrustLevel::SignedSupplyChain),
+            Err(ManifestValidationError::MissingPublisherSignature)
+        );
+
+        // And development trust should be disabled by default (explicit behavior)
+        assert_eq!(
+            validate_provenance(&dev_manifest, ManifestTrustLevel::Development),
+            Err(ManifestValidationError::DevelopmentTrustDisabled)
         );
     }
 
@@ -10496,16 +10641,8 @@ mod enrichment_tests {
 
     #[test]
     fn extension_manifest_inferred_trust_level_with_signature() {
-        let manifest = ExtensionManifest {
-            name: "ext".to_string(),
-            version: "1.0.0".to_string(),
-            entrypoint: "index.js".to_string(),
-            capabilities: BTreeSet::new(),
-            publisher_signature: Some(vec![1, 2]),
-            content_hash: [0; 32],
-            trust_chain_ref: None,
-            min_engine_version: "0.1.0".to_string(),
-        };
+        // Use proper Ed25519 signature fixture instead of fake [1, 2] bytes
+        let manifest = create_test_signed_manifest_fixture("ext", "1.0.0", "index.js", &[]);
         assert_eq!(
             manifest.inferred_trust_level(),
             ManifestTrustLevel::SignedSupplyChain
@@ -10514,18 +10651,16 @@ mod enrichment_tests {
 
     #[test]
     fn extension_manifest_inferred_trust_level_with_trust_chain() {
-        let manifest = ExtensionManifest {
-            name: "ext".to_string(),
-            version: "1.0.0".to_string(),
-            entrypoint: "index.js".to_string(),
-            capabilities: BTreeSet::new(),
-            publisher_signature: None,
-            content_hash: [0; 32],
-            trust_chain_ref: Some("chain/pub".to_string()),
-            min_engine_version: "0.1.0".to_string(),
+        // Use proper Ed25519 public key hex instead of fake "chain/pub" string
+        let manifest = create_test_signed_manifest_fixture("ext", "1.0.0", "index.js", &[]);
+        let mut manifest_with_chain_only = ExtensionManifest {
+            publisher_signature: None, // Remove signature but keep trust chain
+            ..manifest
         };
+        manifest_with_chain_only.content_hash =
+            compute_content_hash(&manifest_with_chain_only).expect("content hash");
         assert_eq!(
-            manifest.inferred_trust_level(),
+            manifest_with_chain_only.inferred_trust_level(),
             ManifestTrustLevel::SignedSupplyChain
         );
     }
@@ -11348,18 +11483,13 @@ mod enrichment_tests {
 
     #[test]
     fn extension_manifest_serde_round_trip() {
-        let manifest = ExtensionManifest {
-            name: "test-ext".to_string(),
-            version: "2.0.0".to_string(),
-            entrypoint: "dist/main.js".to_string(),
-            capabilities: [Capability::FsRead, Capability::FsWrite]
-                .into_iter()
-                .collect(),
-            publisher_signature: Some(vec![0xAB, 0xCD]),
-            content_hash: [0x42; 32],
-            trust_chain_ref: Some("chain/test".to_string()),
-            min_engine_version: "0.1.0".to_string(),
-        };
+        // Use proper Ed25519 fixtures instead of fake [0xAB, 0xCD] signature and "chain/test" ref
+        let manifest = create_test_signed_manifest_fixture(
+            "test-ext",
+            "2.0.0",
+            "dist/main.js",
+            &[Capability::FsRead, Capability::FsWrite],
+        );
         let json = to_json(&manifest);
         let back: ExtensionManifest = from_json(&json);
         assert_eq!(manifest, back);
@@ -12198,16 +12328,13 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn delegate_cell_manifest_serde_round_trip() {
-        let base = ExtensionManifest {
-            name: "del-ext".to_string(),
-            version: "1.0.0".to_string(),
-            entrypoint: "dist/del.js".to_string(),
-            capabilities: [Capability::FsRead].into_iter().collect(),
-            publisher_signature: Some(vec![1, 2]),
-            content_hash: [0x42; 32],
-            trust_chain_ref: Some("chain/del".to_string()),
-            min_engine_version: "0.1.0".to_string(),
-        };
+        // Use proper Ed25519 fixtures instead of fake [1, 2] signature and "chain/del" ref
+        let base = create_test_signed_manifest_fixture(
+            "del-ext",
+            "1.0.0",
+            "dist/del.js",
+            &[Capability::FsRead],
+        );
         let manifest = DelegateCellManifest {
             base_manifest: base,
             delegation_scope: DelegationScope::ConfigUpdate,

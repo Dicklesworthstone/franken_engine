@@ -1,23 +1,54 @@
+use ed25519_dalek::{Signer, SigningKey};
 use frankenengine_extension_host::{
     BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
     ExtensionLifecycleManager, ExtensionManifest, ExtensionState, LifecycleContext,
     LifecycleTransition, ResourceBudget, compute_content_hash,
 };
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Create proper Ed25519 signed manifest for lifecycle manager integration tests
+/// Replaces fake signatures with deterministic Ed25519 provenance
 fn manifest() -> ExtensionManifest {
+    // Use deterministic key for lifecycle manager integration tests
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(b"integration-ext");
+        hasher.update(b"1.0.0");
+        hasher.update(b"dist/main.js");
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
     let mut manifest = ExtensionManifest {
         name: "integration-ext".to_string(),
         version: "1.0.0".to_string(),
         entrypoint: "dist/main.js".to_string(),
         capabilities: BTreeSet::from([Capability::FsRead, Capability::FsWrite]),
-        publisher_signature: Some(vec![9, 8, 7, 6]),
+        publisher_signature: None,
         content_hash: [0; 32],
-        trust_chain_ref: Some("chain/integration".to_string()),
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
         min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
     };
+
     manifest.content_hash = compute_content_hash(&manifest).expect("hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
     manifest
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
 }
 
 #[test]

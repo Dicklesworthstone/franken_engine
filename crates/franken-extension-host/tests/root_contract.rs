@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use ed25519_dalek::{Signer, SigningKey};
+use sha2::{Digest, Sha256};
 use std::{
     any::type_name,
     collections::{BTreeMap, BTreeSet},
@@ -199,17 +201,48 @@ fn required_item_status(
         .collect()
 }
 
+/// Create proper Ed25519 signed manifest for root contract tests
+/// Replaces development manifest with deterministic Ed25519 provenance
 fn base_manifest() -> ExtensionManifest {
-    ExtensionManifest {
+    // Use deterministic key for root contract tests
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(b"root-contract-ext");
+        hasher.update(b"1.0.0");
+        hasher.update(b"dist/main.js");
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
+    let mut manifest = ExtensionManifest {
         name: "root-contract-ext".to_string(),
         version: "1.0.0".to_string(),
         entrypoint: "dist/main.js".to_string(),
         capabilities: BTreeSet::from([Capability::FsRead]),
         publisher_signature: None,
         content_hash: [0; 32],
-        trust_chain_ref: None,
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
         min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
     }
+    output
 }
 
 fn artifact_dir() -> Option<PathBuf> {

@@ -1,26 +1,59 @@
+use ed25519_dalek::{Signer, SigningKey};
 use frankenengine_extension_host::{
     CURRENT_ENGINE_VERSION, Capability, ExtensionManifest, MAX_NAME_LEN, ManifestValidationContext,
     ManifestValidationError, canonical_manifest_json, compute_content_hash, validate_manifest,
     validate_manifest_with_context,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 fn capability_set(values: &[Capability]) -> BTreeSet<Capability> {
     values.iter().copied().collect()
 }
 
+/// Create proper Ed25519 signed manifest for validation tests
+/// Replaces fake signatures with deterministic Ed25519 provenance
 fn base_manifest() -> ExtensionManifest {
-    ExtensionManifest {
+    // Use deterministic key for manifest validation tests
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(b"weather-ext");
+        hasher.update(b"1.2.3");
+        hasher.update(b"dist/main.js");
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
+    let mut manifest = ExtensionManifest {
         name: "weather-ext".to_string(),
         version: "1.2.3".to_string(),
         entrypoint: "dist/main.js".to_string(),
         capabilities: capability_set(&[Capability::FsRead, Capability::FsWrite]),
-        publisher_signature: Some(vec![10, 20, 30, 40]),
+        publisher_signature: None,
         content_hash: [0; 32],
-        trust_chain_ref: Some("chain/weather".to_string()),
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
         min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
     }
+    output
 }
 
 fn with_hash(mut manifest: ExtensionManifest) -> ExtensionManifest {
@@ -28,21 +61,53 @@ fn with_hash(mut manifest: ExtensionManifest) -> ExtensionManifest {
     manifest
 }
 
+fn create_test_manifest(
+    name: &str,
+    version: &str,
+    entrypoint: &str,
+    capabilities: &[Capability],
+) -> ExtensionManifest {
+    // Use deterministic key for each test manifest
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update(version.as_bytes());
+        hasher.update(entrypoint.as_bytes());
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
+    let mut manifest = ExtensionManifest {
+        name: name.to_string(),
+        version: version.to_string(),
+        entrypoint: entrypoint.to_string(),
+        capabilities: capability_set(capabilities),
+        publisher_signature: None,
+        content_hash: [0; 32],
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
+        min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
 #[test]
 fn json_manifest_loads_and_validates() {
-    let value = json!({
-        "name": "json-ext",
-        "version": "1.0.0",
-        "entrypoint": "dist/index.js",
-        "capabilities": ["fs_read", "fs_write"],
-        "publisher_signature": [1, 2, 3, 4],
-        "content_hash": vec![0u8; 32],
-        "trust_chain_ref": "chain/json",
-        "min_engine_version": CURRENT_ENGINE_VERSION,
-    });
-
-    let mut manifest: ExtensionManifest = serde_json::from_value(value).expect("json parse");
-    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    // Create proper signed manifest instead of using fake fixtures
+    let manifest = create_test_manifest(
+        "json-ext",
+        "1.0.0",
+        "dist/index.js",
+        &[Capability::FsRead, Capability::FsWrite],
+    );
     assert_eq!(validate_manifest(&manifest), Ok(()));
 
     let context = ManifestValidationContext::new(
@@ -59,23 +124,19 @@ fn json_manifest_loads_and_validates() {
 
 #[test]
 fn toml_manifest_loads_and_validates() {
-    let zero_hash = vec!["0"; 32].join(", ");
-    let toml_input = format!(
-        r#"
-name = "toml-ext"
-version = "2.0.0"
-entrypoint = "dist/index.js"
-capabilities = ["fs_read", "net_client"]
-publisher_signature = [5, 6, 7, 8]
-content_hash = [{zero_hash}]
-trust_chain_ref = "chain/toml"
-min_engine_version = "{CURRENT_ENGINE_VERSION}"
-"#
+    // Create proper signed manifest instead of using fake TOML fixtures
+    let manifest = create_test_manifest(
+        "toml-ext",
+        "2.0.0",
+        "dist/index.js",
+        &[Capability::FsRead, Capability::NetClient],
     );
-
-    let mut manifest: ExtensionManifest = toml::from_str(&toml_input).expect("toml parse");
-    manifest.content_hash = compute_content_hash(&manifest).expect("hash");
     assert_eq!(validate_manifest(&manifest), Ok(()));
+
+    // Test TOML serialization round-trip
+    let toml_string = toml::to_string(&manifest).expect("toml serialize");
+    let parsed: ExtensionManifest = toml::from_str(&toml_string).expect("toml parse");
+    assert_eq!(parsed, manifest);
 }
 
 #[test]

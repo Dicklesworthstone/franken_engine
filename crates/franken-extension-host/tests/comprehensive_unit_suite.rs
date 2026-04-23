@@ -3,6 +3,8 @@
 //! bd-2yc1: Covers all major public APIs with emphasis on edge cases,
 //! error variants, lattice operations, and decision contract chains.
 
+use ed25519_dalek::{Signer, SigningKey};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 use frankenengine_extension_host::*;
@@ -11,9 +13,16 @@ use frankenengine_extension_host::*;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Create a valid signed manifest for comprehensive unit tests
+/// Uses proper Ed25519 signatures instead of fake provenance
 fn valid_manifest() -> ExtensionManifest {
-    ExtensionManifest {
-        name: "test-extension".to_string(),
+    create_proper_signed_manifest("test-extension", "1.0.0", "main.js", &[Capability::FsRead])
+}
+
+/// Create development manifest for tests that specifically need unsigned manifests
+fn development_manifest() -> ExtensionManifest {
+    let mut manifest = ExtensionManifest {
+        name: "dev-extension".to_string(),
         version: "1.0.0".to_string(),
         entrypoint: "main.js".to_string(),
         capabilities: BTreeSet::from([Capability::FsRead]),
@@ -21,15 +30,66 @@ fn valid_manifest() -> ExtensionManifest {
         content_hash: [0u8; 32],
         trust_chain_ref: None,
         min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest
+}
+
+fn create_proper_signed_manifest(
+    name: &str,
+    version: &str,
+    entrypoint: &str,
+    capabilities: &[Capability],
+) -> ExtensionManifest {
+    // Use deterministic key for comprehensive unit tests
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(name.as_bytes());
+        hasher.update(version.as_bytes());
+        hasher.update(entrypoint.as_bytes());
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
+    let mut manifest = ExtensionManifest {
+        name: name.to_string(),
+        version: version.to_string(),
+        entrypoint: entrypoint.to_string(),
+        capabilities: capabilities.iter().copied().collect(),
+        publisher_signature: None,
+        content_hash: [0; 32],
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
+        min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+    };
+
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
     }
+    output
 }
 
 fn signed_manifest() -> ExtensionManifest {
-    ExtensionManifest {
-        publisher_signature: Some(vec![1, 2, 3, 4]),
-        trust_chain_ref: Some("chain-ref-1".to_string()),
-        ..valid_manifest()
-    }
+    // Already properly signed, so just return a different one
+    create_proper_signed_manifest(
+        "signed-extension",
+        "2.0.0",
+        "signed.js",
+        &[Capability::FsRead, Capability::FsWrite],
+    )
 }
 
 fn lifecycle_ctx<'a>() -> LifecycleContext<'a> {
@@ -244,7 +304,7 @@ fn capability_as_str_all_variants() {
 
 #[test]
 fn manifest_development_trust_no_signature() {
-    let m = valid_manifest();
+    let m = development_manifest();
     assert_eq!(m.inferred_trust_level(), ManifestTrustLevel::Development);
 }
 
@@ -283,8 +343,14 @@ fn provenance_signed_requires_trust_chain_ref() {
 
 #[test]
 fn provenance_development_allows_missing_signature() {
-    let m = valid_manifest();
-    assert!(validate_provenance(&m, ManifestTrustLevel::Development).is_ok());
+    let m = development_manifest();
+    let dev_config = ExtensionHostConfig {
+        allow_development_trust: true,
+        ..ExtensionHostConfig::default()
+    };
+    assert!(
+        validate_provenance_with_config(&m, ManifestTrustLevel::Development, &dev_config).is_ok()
+    );
 }
 
 // ---------------------------------------------------------------------------

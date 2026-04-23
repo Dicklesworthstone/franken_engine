@@ -2,6 +2,7 @@
 // delegation scope handling, guardplane penalty accumulation, event recording,
 // and idempotent lifetime-expiry behavior.
 
+use ed25519_dalek::{Signer, SigningKey};
 use frankenengine_extension_host::{
     BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DecisionSigningKey,
     DeclassificationDenialReason, DeclassificationOutcome, DeclassificationPurpose,
@@ -12,21 +13,52 @@ use frankenengine_extension_host::{
     LifecycleTransition, MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET,
     MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES, ResourceBudget, SecrecyLevel,
 };
+use sha2::{Digest, Sha256};
 
+/// Create proper Ed25519 signed manifest for delegate edge case tests
+/// Replaces fake signatures with deterministic Ed25519 provenance
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
     use frankenengine_extension_host::compute_content_hash;
+
+    // Use deterministic key for delegate edge tests
+    let key_seed = {
+        let mut hasher = Sha256::new();
+        hasher.update(b"delegate-edge");
+        hasher.update(b"1.0.0");
+        hasher.update(b"dist/delegate.js");
+        let hash = hasher.finalize();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&hash[..32]);
+        seed
+    };
+
+    let signing_key = SigningKey::from_bytes(&key_seed);
+    let verifying_key = signing_key.verifying_key();
+
     let mut manifest = ExtensionManifest {
         name: "delegate-edge".to_string(),
         version: "1.0.0".to_string(),
         entrypoint: "dist/delegate.js".to_string(),
         capabilities: capabilities.iter().copied().collect(),
-        publisher_signature: Some(vec![10, 20, 30]),
+        publisher_signature: None,
         content_hash: [0; 32],
-        trust_chain_ref: Some("chain/edge-test".to_string()),
+        trust_chain_ref: Some(bytes_to_hex(&verifying_key.to_bytes())),
         min_engine_version: frankenengine_extension_host::CURRENT_ENGINE_VERSION.to_string(),
     };
+
     manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
     manifest
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
 }
 
 fn delegate_manifest(caps: &[Capability], max_lifetime_ns: u64) -> DelegateCellManifest {

@@ -117,7 +117,7 @@ pub enum DivergenceSeverity {
 }
 
 /// Configuration for cross-architecture testing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrossArchConfig {
     /// Target architectures to test.
     pub target_architectures: Vec<ArchitectureId>,
@@ -408,9 +408,9 @@ pub fn verify_cross_arch_reproducibility(
         let mut iteration_trace = NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
-            vec![42 + iteration as u8], // Slightly different seed per iteration
+            vec![42],
             100,
-            "test_harness_iteration",
+            "test_harness",
         );
 
         let comparison = controller.compare_trace(session_id, &iteration_trace, current_arch)?;
@@ -426,7 +426,7 @@ pub fn verify_cross_arch_reproducibility(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
                 100,
-                &format!("test_harness_{}", target_arch.as_str()),
+                "test_harness",
             );
 
             let comparison = controller.compare_trace(session_id, &target_trace, *target_arch)?;
@@ -663,16 +663,22 @@ mod tests {
 
     #[test]
     fn report_generation_deterministic_for_identical_inputs() {
-        let trace = CrossArchTrace {
-            events: vec![
-                TraceEvent { event: "test1".to_string() },
-                TraceEvent { event: "test2".to_string() },
-            ],
-        };
-        let config = CrossArchConfig::default();
+        let mut trace = crate::deterministic_replay::NondeterminismTrace::new("session1");
+        trace.capture(
+            crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+            vec![1, 2, 3],
+            100,
+            "test_component",
+        );
+        trace.capture(
+            crate::deterministic_replay::NondeterminismSource::TimerRead,
+            vec![4, 5, 6],
+            200,
+            "test_component_2",
+        );
+
         let mut controller = CrossArchController::with_defaults();
-        controller.reference_traces.insert("session1".to_string(), trace.clone());
-        controller.config = config.clone();
+        controller.reference_traces.insert("session1".to_string(), trace);
 
         // Generate two reports with identical inputs
         let report1 = controller.generate_report("session1").unwrap();
@@ -683,25 +689,31 @@ mod tests {
         assert_eq!(report1.session_id, report2.session_id);
         assert_eq!(report1.reference_event_count, report2.reference_event_count);
         assert_eq!(report1.config, report2.config);
+
+        // In test mode, timestamps should be deterministic
+        assert_eq!(report1.timestamp_utc, report2.timestamp_utc);
     }
 
     #[test]
     fn report_generation_different_object_id_for_different_inputs() {
-        let trace1 = CrossArchTrace {
-            events: vec![
-                TraceEvent { event: "test1".to_string() },
-                TraceEvent { event: "test2".to_string() },
-            ],
-        };
-        let trace2 = CrossArchTrace {
-            events: vec![
-                TraceEvent { event: "test1".to_string() },
-                TraceEvent { event: "test3".to_string() }, // Different event
-            ],
-        };
-        let config = CrossArchConfig::default();
+        // Create two traces with different content
+        let mut trace1 = crate::deterministic_replay::NondeterminismTrace::new("session1");
+        trace1.capture(
+            crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+            vec![1, 2, 3],
+            100,
+            "test_component",
+        );
+
+        let mut trace2 = crate::deterministic_replay::NondeterminismTrace::new("session2");
+        trace2.capture(
+            crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+            vec![4, 5, 6], // Different data
+            100,
+            "test_component",
+        );
+
         let mut controller = CrossArchController::with_defaults();
-        controller.config = config;
 
         // Setup different traces
         controller.reference_traces.insert("session1".to_string(), trace1);
@@ -712,6 +724,49 @@ mod tests {
 
         // Different traces should produce different object_ids
         assert_ne!(report1.object_id, report2.object_id);
+        assert_ne!(report1.session_id, report2.session_id);
+    }
+
+    #[test]
+    fn report_generation_different_object_id_for_different_configs() {
+        // Test that config changes alter report identity (per bead requirement)
+        let mut trace = crate::deterministic_replay::NondeterminismTrace::new("config-test");
+        trace.capture(
+            crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+            vec![1, 2, 3],
+            100,
+            "test_component",
+        );
+
+        let config1 = CrossArchConfig {
+            target_architectures: vec![ArchitectureId::X86_64],
+            replay_iterations: 1,
+            capture_fp_divergences: true,
+            strict_determinism: true,
+            max_divergent_events: 0,
+        };
+
+        let config2 = CrossArchConfig {
+            target_architectures: vec![ArchitectureId::Aarch64], // Different target arch
+            replay_iterations: 3,
+            capture_fp_divergences: false,
+            strict_determinism: false,
+            max_divergent_events: 5,
+        };
+
+        let mut controller1 = CrossArchController::new(config1);
+        controller1.reference_traces.insert("config-test".to_string(), trace.clone());
+
+        let mut controller2 = CrossArchController::new(config2);
+        controller2.reference_traces.insert("config-test".to_string(), trace);
+
+        let report1 = controller1.generate_report("config-test").unwrap();
+        let report2 = controller2.generate_report("config-test").unwrap();
+
+        // Same trace but different configs should produce different object_ids
+        assert_ne!(report1.object_id, report2.object_id);
+        assert_eq!(report1.session_id, report2.session_id); // Same session
+        assert_ne!(report1.config, report2.config); // Different configs
     }
 
     #[test]

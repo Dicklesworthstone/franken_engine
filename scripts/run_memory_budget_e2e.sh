@@ -96,14 +96,30 @@ fn ${test_name}() {
 }
 EOF
 
-    # For now, simulate the test result since we don't have the full integration yet
-    if [[ "$expected_result" == "pass" ]]; then
+    # Execute the actual test instead of simulating results
+    local test_exit_code=0
+    if timeout 30 cargo test --test memory_budget_e2e_generated -- "${test_name}" --nocapture 2>&1; then
+        test_exit_code=0
+    else
+        test_exit_code=$?
+    fi
+
+    # Evaluate real test result against expectation
+    if [[ "$expected_result" == "pass" && $test_exit_code -eq 0 ]]; then
         test_status="pass"
         ((passed_tests++))
-    else
+    elif [[ "$expected_result" == "fail" && $test_exit_code -ne 0 ]]; then
         test_status="fail"
         error_type="$expected_error_type"
         ((passed_tests++))  # Expected failure counts as success
+    else
+        test_status="unexpected"
+        if [[ "$expected_result" == "pass" ]]; then
+            error_type="unexpected_failure"
+        else
+            error_type="unexpected_success"
+        fi
+        ((failed_tests++))
     fi
 
     local end_time=$(date +%s%3N)

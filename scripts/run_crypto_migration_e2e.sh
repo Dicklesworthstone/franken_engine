@@ -157,8 +157,13 @@ fn main() {
     }
 }'
 
-    # For now, simulate successful round-trip
-    echo "round-trip-success:abc123def456"
+    # Execute the actual round-trip test instead of simulating
+    if timeout 30 cargo test --lib signature_preimage::tests::test_content_hash_round_trip 2>/dev/null; then
+        echo "round-trip-success:$(date +%s%N | sha256sum | cut -c1-24)"
+    else
+        echo "round-trip-failure:test-execution-failed"
+        return 1
+    fi
 }
 
 # Test 2: AuthenticityHash keyed HMAC

@@ -291,7 +291,8 @@ impl CrossArchController {
             .ok_or(CrossArchError::MissingReferenceTrace)?;
 
         // Compute reference trace hash for deterministic identity
-        let reference_trace_hash = ContentHash::compute(&serde_json::to_vec(reference_trace).unwrap_or_default());
+        let reference_trace_hash =
+            ContentHash::compute(&serde_json::to_vec(reference_trace).unwrap_or_default());
 
         // Create deterministic content hash for reproducible object_id derivation
         let content_hash = {
@@ -447,7 +448,8 @@ pub fn verify_cross_arch_reproducibility(
     // Run multiple iterations on current architecture
     for iteration in 0..iterations {
         // Create iteration-specific trace
-        let mut iteration_trace = NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
+        let mut iteration_trace =
+            NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
             vec![42],
@@ -463,7 +465,8 @@ pub fn verify_cross_arch_reproducibility(
     for target_arch in &controller.config.target_architectures {
         if *target_arch != current_arch {
             // For cross-arch testing, create target-specific trace
-            let mut target_trace = NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
+            let mut target_trace =
+                NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
             target_trace.capture(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
@@ -546,7 +549,9 @@ pub fn verify_cross_arch_reproducibility_with_config(
 
     // Fail closed if no target architectures specified
     if config.target_architectures.is_empty() {
-        return Err(CrossArchError::Configuration("No target architectures specified".to_string()));
+        return Err(CrossArchError::Configuration(
+            "No target architectures specified".to_string(),
+        ));
     }
 
     // Create reference trace on current architecture
@@ -568,7 +573,8 @@ pub fn verify_cross_arch_reproducibility_with_config(
     // Run multiple iterations on current architecture
     for iteration in 0..config.replay_iterations {
         // Create iteration-specific trace
-        let mut iteration_trace = NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
+        let mut iteration_trace =
+            NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
             vec![42 + iteration as u8], // Slightly different seed per iteration
@@ -584,7 +590,8 @@ pub fn verify_cross_arch_reproducibility_with_config(
     for target_arch in &config.target_architectures {
         if *target_arch != current_arch {
             // For cross-arch testing, create target-specific trace
-            let mut target_trace = NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
+            let mut target_trace =
+                NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
             target_trace.capture(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
@@ -720,7 +727,9 @@ mod tests {
         );
 
         let mut controller = CrossArchController::with_defaults();
-        controller.reference_traces.insert("session1".to_string(), trace);
+        controller
+            .reference_traces
+            .insert("session1".to_string(), trace);
 
         // Generate two reports with identical inputs
         let report1 = controller.generate_report("session1").unwrap();
@@ -758,8 +767,12 @@ mod tests {
         let mut controller = CrossArchController::with_defaults();
 
         // Setup different traces
-        controller.reference_traces.insert("session1".to_string(), trace1);
-        controller.reference_traces.insert("session2".to_string(), trace2);
+        controller
+            .reference_traces
+            .insert("session1".to_string(), trace1);
+        controller
+            .reference_traces
+            .insert("session2".to_string(), trace2);
 
         let report1 = controller.generate_report("session1").unwrap();
         let report2 = controller.generate_report("session2").unwrap();
@@ -797,10 +810,14 @@ mod tests {
         };
 
         let mut controller1 = CrossArchController::new(config1);
-        controller1.reference_traces.insert("config-test".to_string(), trace.clone());
+        controller1
+            .reference_traces
+            .insert("config-test".to_string(), trace.clone());
 
         let mut controller2 = CrossArchController::new(config2);
-        controller2.reference_traces.insert("config-test".to_string(), trace);
+        controller2
+            .reference_traces
+            .insert("config-test".to_string(), trace);
 
         let report1 = controller1.generate_report("config-test").unwrap();
         let report2 = controller2.generate_report("config-test").unwrap();
@@ -816,7 +833,10 @@ mod tests {
         // 0 iterations should fail closed
         let result = verify_cross_arch_reproducibility("test-session", 0);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CrossArchError::NoIterationsSpecified));
+        assert!(matches!(
+            result.unwrap_err(),
+            CrossArchError::NoIterationsSpecified
+        ));
     }
 
     #[test]

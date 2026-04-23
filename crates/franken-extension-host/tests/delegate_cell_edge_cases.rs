@@ -3,14 +3,14 @@
 // and idempotent lifetime-expiry behavior.
 
 use frankenengine_extension_host::{
-    BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DeclassificationDenialReason,
-    DeclassificationOutcome, DeclassificationPurpose, DeclassificationRequest, DelegateCellError,
-    DelegateCellEvidence, DelegateCellFactory, DelegateCellManifest, DelegateCellPolicy,
-    DelegationScope, ExtensionManifest, ExtensionState, FlowEnforcementContext, FlowLabel,
-    GuardplaneDecisionLogEntry, GuardplanePolicyAction, HostcallResult, HostcallSinkPolicy,
-    HostcallType, IntegrityLevel, Labeled, LifecycleContext, LifecycleTransition,
-    MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET, MAX_DELEGATE_LIFETIME_NS,
-    MAX_DELEGATE_MEMORY_BUDGET_BYTES, ResourceBudget, SecrecyLevel,
+    BudgetExhaustionPolicy, CancellationConfig, Capability, DataRef, DecisionSigningKey,
+    DeclassificationDenialReason, DeclassificationOutcome, DeclassificationPurpose,
+    DeclassificationRequest, DelegateCellError, DelegateCellEvidence, DelegateCellFactory,
+    DelegateCellManifest, DelegateCellPolicy, DelegationScope, ExtensionManifest, ExtensionState,
+    FlowEnforcementContext, FlowLabel, GuardplaneDecisionLogEntry, GuardplanePolicyAction,
+    HostcallResult, HostcallSinkPolicy, HostcallType, IntegrityLevel, Labeled, LifecycleContext,
+    LifecycleTransition, MAX_DELEGATE_CPU_BUDGET_NS, MAX_DELEGATE_HOSTCALL_BUDGET,
+    MAX_DELEGATE_LIFETIME_NS, MAX_DELEGATE_MEMORY_BUDGET_BYTES, ResourceBudget, SecrecyLevel,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -51,7 +51,12 @@ fn valid_budget() -> ResourceBudget {
 }
 
 fn factory() -> DelegateCellFactory {
-    DelegateCellFactory::default()
+    DelegateCellFactory {
+        sink_policy: HostcallSinkPolicy::default(),
+        cancellation_config: CancellationConfig::default(),
+        policy: DelegateCellPolicy::default(),
+        decision_signing_key: DecisionSigningKey::new([0xE3; 32]),
+    }
 }
 
 fn run_mixed_guardplane_sequence(
@@ -525,7 +530,7 @@ fn posterior_is_capped_at_one_million_micros() {
     };
     let fac = DelegateCellFactory {
         policy,
-        ..DelegateCellFactory::default()
+        ..factory()
     };
     let mut delegate = fac
         .create_delegate_cell(
@@ -874,12 +879,12 @@ fn successful_hostcall_records_allowed_event() {
 }
 
 // ---------------------------------------------------------------------------
-// DelegateCellFactory default values
+// DelegateCellFactory baseline values
 // ---------------------------------------------------------------------------
 
 #[test]
-fn factory_default_uses_default_policy_values() {
-    let fac = DelegateCellFactory::default();
+fn factory_helper_uses_default_policy_values() {
+    let fac = factory();
     let expected = DelegateCellPolicy::default();
     assert_eq!(fac.policy, expected);
     assert_eq!(fac.sink_policy, HostcallSinkPolicy::default());
@@ -894,7 +899,7 @@ fn custom_factory_policy_propagates_to_delegate_guardplane() {
     };
     let fac = DelegateCellFactory {
         policy,
-        ..DelegateCellFactory::default()
+        ..factory()
     };
     let delegate = fac
         .create_delegate_cell(

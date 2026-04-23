@@ -1,7 +1,8 @@
 use frankenengine_extension_host::{
-    Capability, DataRef, DeclassificationGateway, DeclassificationOutcome, DeclassificationPurpose,
-    DeclassificationRequest, DenialReason, FlowEnforcementContext, FlowLabel, HostcallDispatcher,
-    HostcallResult, HostcallSinkPolicy, HostcallType, IntegrityLevel, Labeled, SecrecyLevel,
+    Capability, DataRef, DecisionSigningKey, DeclassificationGateway, DeclassificationOutcome,
+    DeclassificationPurpose, DeclassificationRequest, DenialReason, FlowEnforcementContext,
+    FlowLabel, HostcallDispatcher, HostcallResult, HostcallSinkPolicy, HostcallType,
+    IntegrityLevel, Labeled, SecrecyLevel,
 };
 use serde_json::json;
 use std::{
@@ -49,7 +50,8 @@ fn assert_untrusted_network_send_is_denied<T: Clone>(extension_id: &str, payload
 }
 
 fn approved_public_label() -> FlowLabel {
-    let mut gateway = DeclassificationGateway::default();
+    let mut gateway =
+        DeclassificationGateway::with_default_contracts(DecisionSigningKey::new([0xE4; 32]));
     let caps: BTreeSet<Capability> = [Capability::Declassify, Capability::NetClient]
         .into_iter()
         .collect();

@@ -58,6 +58,23 @@ fn manifest_ctx<'a>() -> ManifestValidationContext<'a> {
     ManifestValidationContext::new("trace-01", "decision-01", "policy-01", "ext-01")
 }
 
+fn test_decision_signing_key() -> DecisionSigningKey {
+    DecisionSigningKey::new([0xE5; 32])
+}
+
+fn test_declassification_gateway() -> DeclassificationGateway {
+    DeclassificationGateway::with_default_contracts(test_decision_signing_key())
+}
+
+fn test_delegate_cell_factory() -> DelegateCellFactory {
+    DelegateCellFactory {
+        sink_policy: HostcallSinkPolicy::default(),
+        cancellation_config: CancellationConfig::default(),
+        policy: DelegateCellPolicy::default(),
+        decision_signing_key: test_decision_signing_key(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Manifest Validation — Error Variants
 // ---------------------------------------------------------------------------
@@ -973,14 +990,14 @@ fn hostcall_dispatch_rejects_public_system_generated_spoof_on_sink() {
 
 #[test]
 fn declassification_gateway_default_creates() {
-    let gw = DeclassificationGateway::default();
+    let gw = test_declassification_gateway();
     assert!(gw.receipt_log().receipts().is_empty());
     assert!(gw.events().is_empty());
 }
 
 #[test]
 fn declassification_denied_missing_capability() {
-    let mut gw = DeclassificationGateway::default();
+    let mut gw = test_declassification_gateway();
     let caps = BTreeSet::from([Capability::FsRead]); // No Declassify capability
     let fctx = flow_ctx();
 
@@ -1002,7 +1019,7 @@ fn declassification_denied_missing_capability() {
 
 #[test]
 fn declassification_approved_with_correct_capability() {
-    let mut gw = DeclassificationGateway::default();
+    let mut gw = test_declassification_gateway();
     let caps = BTreeSet::from([Capability::Declassify]);
     let fctx = flow_ctx();
 
@@ -1023,7 +1040,7 @@ fn declassification_approved_with_correct_capability() {
 
 #[test]
 fn declassification_receipt_signature_verifies() {
-    let signing_key = DecisionSigningKey::default();
+    let signing_key = test_decision_signing_key();
     let public_key = signing_key.public_key();
     let mut gw = DeclassificationGateway::with_default_contracts(signing_key);
     let caps = BTreeSet::from([Capability::Declassify]);
@@ -1048,7 +1065,7 @@ fn declassification_receipt_signature_verifies() {
 
 #[test]
 fn declassification_denied_empty_justification() {
-    let mut gw = DeclassificationGateway::default();
+    let mut gw = test_declassification_gateway();
     let caps = BTreeSet::from([Capability::Declassify]);
     let fctx = flow_ctx();
 
@@ -1069,7 +1086,7 @@ fn declassification_denied_empty_justification() {
 
 #[test]
 fn declassification_no_op_same_label() {
-    let mut gw = DeclassificationGateway::default();
+    let mut gw = test_declassification_gateway();
     let caps = BTreeSet::from([Capability::Declassify]);
     let fctx = flow_ctx();
 
@@ -1126,7 +1143,7 @@ fn rate_limit_contract_within_limit() {
 
 #[test]
 fn delegate_cell_factory_creates_cell() {
-    let factory = DelegateCellFactory::default();
+    let factory = test_delegate_cell_factory();
     let manifest = DelegateCellManifest {
         base_manifest: valid_manifest(),
         delegation_scope: DelegationScope::DiagnosticCollection,
@@ -1153,7 +1170,7 @@ fn delegate_cell_factory_creates_cell() {
 
 #[test]
 fn delegate_cell_invalid_budget_rejected() {
-    let factory = DelegateCellFactory::default();
+    let factory = test_delegate_cell_factory();
     let manifest = DelegateCellManifest {
         base_manifest: valid_manifest(),
         delegation_scope: DelegationScope::ConfigUpdate,
@@ -1177,7 +1194,7 @@ fn delegate_cell_invalid_budget_rejected() {
 
 #[test]
 fn delegate_cell_lifetime_check() {
-    let factory = DelegateCellFactory::default();
+    let factory = test_delegate_cell_factory();
     let manifest = DelegateCellManifest {
         base_manifest: valid_manifest(),
         delegation_scope: DelegationScope::DiagnosticCollection,
@@ -1208,7 +1225,7 @@ fn delegate_cell_lifetime_check() {
 
 #[test]
 fn delegate_cell_lifecycle_transitions() {
-    let factory = DelegateCellFactory::default();
+    let factory = test_delegate_cell_factory();
     let manifest = DelegateCellManifest {
         base_manifest: valid_manifest(),
         delegation_scope: DelegationScope::ModuleReplacement,
@@ -1364,7 +1381,7 @@ fn cancellation_config_clamped() {
 
 #[test]
 fn decision_signing_key_sign_and_verify() {
-    let key = DecisionSigningKey::default();
+    let key = test_decision_signing_key();
     let public = key.public_key();
     let payload = b"test payload";
     let sig = key.sign(payload);
@@ -1373,7 +1390,7 @@ fn decision_signing_key_sign_and_verify() {
 
 #[test]
 fn decision_signing_key_wrong_payload_fails() {
-    let key = DecisionSigningKey::default();
+    let key = test_decision_signing_key();
     let public = key.public_key();
     let sig = key.sign(b"original");
     assert!(!public.verify(b"tampered", &sig));
@@ -1396,7 +1413,7 @@ fn decision_receipt_log_append_only() {
         conditions: vec![],
         posterior_at_decision_micros: 500_000,
         timestamp_ns: 1_000_000,
-        signature: [0u8; 32],
+        signature: vec![0u8; 64],
     };
     log.append(receipt);
     assert_eq!(log.receipts().len(), 1);

@@ -10839,6 +10839,67 @@ mod enrichment_tests {
         assert!(!receipt.verify(&key_b.public_key()));
     }
 
+    #[test]
+    fn signed_security_artifacts_reject_forged_signatures() {
+        let key = DecisionSigningKey::new([0x31; 32]);
+        let pubkey = key.public_key();
+
+        let mut declassification_receipt = CryptographicDecisionReceipt::new_signed(
+            "req-forged-declass",
+            DecisionVerdict::Approved { conditions: vec![] },
+            vec!["contract-a".to_string()],
+            vec![],
+            250_000,
+            4100,
+            &key,
+        )
+        .expect("declassification receipt should sign");
+        assert!(declassification_receipt.verify(&pubkey));
+        declassification_receipt.signature = vec![0xA5; 64];
+        assert!(!declassification_receipt.verify(&pubkey));
+
+        let mut escrow_receipt = CapabilityEscrowDecisionReceipt::new_signed(
+            "req-forged-escrow",
+            "ext-forged",
+            Capability::NetClient,
+            CapabilityEscrowDecisionKind::Challenge,
+            CapabilityEscrowState::Challenged,
+            "trace-forged".to_string(),
+            "seed-forged".to_string(),
+            "decision-forged",
+            "policy-forged",
+            "witness-forged".to_string(),
+            vec!["escrow-contract".to_string()],
+            vec![],
+            "escrowed".to_string(),
+            None,
+            4200,
+            &key,
+        )
+        .expect("capability escrow receipt should sign");
+        assert!(escrow_receipt.verify(&pubkey));
+        escrow_receipt.signature = vec![0x5A; 64];
+        assert!(!escrow_receipt.verify(&pubkey));
+
+        let mut emergency_grant = EmergencyGrantArtifact::new_signed(
+            "req-forged-grant",
+            "ext-forged",
+            Capability::FsWrite,
+            "incident response".to_string(),
+            "ops-lead".to_string(),
+            10_000,
+            2,
+            true,
+            true,
+            5000,
+            &key,
+        )
+        .expect("emergency grant should sign");
+        assert!(emergency_grant.verify(&pubkey));
+        emergency_grant.signature = vec![0xC3; 64];
+        assert!(!emergency_grant.verify(&pubkey));
+    }
+
     fn approved_receipt_payload_len(request_id: &str) -> usize {
         let verdict = DecisionVerdict::Approved { conditions: vec![] };
         let contract_chain = Vec::new();

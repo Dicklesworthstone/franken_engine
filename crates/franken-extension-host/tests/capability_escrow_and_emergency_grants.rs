@@ -1,9 +1,10 @@
 use frankenengine_extension_host::{
-    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, Capability, CapabilityEscrowDecisionKind,
-    CapabilityEscrowError, CapabilityEscrowReceiptQuery, CapabilityEscrowRoute,
-    CapabilityEscrowState, DelegateCell, DelegateCellError, DelegateCellFactory,
-    DelegateCellManifest, DelegationScope, DenialReason, ExtensionManifest, ExtensionState,
-    FlowEnforcementContext, HostcallResult, HostcallType, Labeled, LifecycleContext,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
+    CapabilityEscrowDecisionKind, CapabilityEscrowError, CapabilityEscrowReceiptQuery,
+    CapabilityEscrowRoute, CapabilityEscrowState, DecisionSigningKey, DelegateCell,
+    DelegateCellError, DelegateCellFactory, DelegateCellManifest, DelegateCellPolicy,
+    DelegationScope, DenialReason, ExtensionManifest, ExtensionState, FlowEnforcementContext,
+    HostcallResult, HostcallSinkPolicy, HostcallType, Labeled, LifecycleContext,
     LifecycleTransition, ResourceBudget, compute_content_hash,
 };
 
@@ -47,8 +48,17 @@ fn budget() -> ResourceBudget {
     ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 1_000)
 }
 
+fn factory() -> DelegateCellFactory {
+    DelegateCellFactory {
+        sink_policy: HostcallSinkPolicy::default(),
+        cancellation_config: CancellationConfig::default(),
+        policy: DelegateCellPolicy::default(),
+        decision_signing_key: DecisionSigningKey::new([0xE1; 32]),
+    }
+}
+
 fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
-    DelegateCellFactory::default()
+    factory()
         .create_delegate_cell(
             delegate_id,
             delegate_manifest(capabilities, 1_000_000_000_000),
@@ -61,7 +71,7 @@ fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell
 }
 
 fn make_low_penalty_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
-    let mut factory = DelegateCellFactory::default();
+    let mut factory = factory();
     factory.policy.initial_posterior_micros = 0;
     factory.policy.capability_escalation_penalty_micros = 10_000;
     factory
@@ -454,7 +464,7 @@ fn expired_emergency_grants_cannot_bypass_escrow() {
 
 #[test]
 fn expired_delegate_cannot_issue_emergency_capability_grant() {
-    let mut delegate = DelegateCellFactory::default()
+    let mut delegate = factory()
         .create_delegate_cell(
             "escrow-expired-delegate-grant",
             delegate_manifest(&[Capability::FsRead], 150),

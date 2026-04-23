@@ -9,12 +9,12 @@ use std::{
 
 use frankenengine_extension_host::{
     BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
-    CapabilityEscrowGateway, DEFAULT_TERMINATION_GRACE_PERIOD_NS, DelegateCellFactory,
-    ExtensionHostConfig, ExtensionLifecycleManager, ExtensionManifest, ExtensionState, FlowLabel,
-    HostcallDispatcher, HostcallSinkPolicy, LifecycleTransition, MAX_DELEGATE_LIFETIME_NS,
-    MAX_NAME_LEN, ManifestValidationContext, ResourceBudget, allowed_lifecycle_transitions,
-    compute_content_hash, lifecycle_target_state, validate_manifest,
-    validate_manifest_with_context, with_computed_content_hash,
+    CapabilityEscrowGateway, DEFAULT_TERMINATION_GRACE_PERIOD_NS, DecisionSigningKey,
+    DelegateCellFactory, DelegateCellPolicy, ExtensionHostConfig, ExtensionLifecycleManager,
+    ExtensionManifest, ExtensionState, FlowLabel, HostcallDispatcher, HostcallSinkPolicy,
+    LifecycleTransition, MAX_DELEGATE_LIFETIME_NS, MAX_NAME_LEN, ManifestValidationContext,
+    ResourceBudget, allowed_lifecycle_transitions, compute_content_hash, lifecycle_target_state,
+    validate_manifest, validate_manifest_with_context, with_computed_content_hash,
 };
 use serde::{Deserialize, Serialize};
 
@@ -359,8 +359,14 @@ fn extension_host_root_required_exports_are_live_and_compilable() {
     let dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
     assert!(dispatcher.violation_events().is_empty());
 
-    let _escrow_gateway = CapabilityEscrowGateway::default();
-    let _delegate_factory = DelegateCellFactory::default();
+    let decision_signing_key = DecisionSigningKey::new([0xE6; 32]);
+    let _escrow_gateway = CapabilityEscrowGateway::with_default_contracts(decision_signing_key);
+    let _delegate_factory = DelegateCellFactory {
+        sink_policy: HostcallSinkPolicy::default(),
+        cancellation_config: CancellationConfig::default(),
+        policy: DelegateCellPolicy::default(),
+        decision_signing_key,
+    };
     let _flow_label = FlowLabel::default();
 
     for exported_type in [

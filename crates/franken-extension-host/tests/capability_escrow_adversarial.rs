@@ -1,9 +1,10 @@
 use frankenengine_extension_host::{
-    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, Capability, CapabilityEscrowDecisionKind,
-    CapabilityEscrowState, DelegateCell, DelegateCellFactory, DelegateCellManifest,
-    DelegationScope, DenialReason, EscrowFloodProtectionContract, ExtensionManifest,
-    FlowEnforcementContext, HostcallResult, HostcallType, Labeled, LifecycleContext,
-    ResourceBudget, compute_content_hash,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
+    CapabilityEscrowDecisionKind, CapabilityEscrowState, DecisionSigningKey, DelegateCell,
+    DelegateCellFactory, DelegateCellManifest, DelegateCellPolicy, DelegationScope, DenialReason,
+    EscrowFloodProtectionContract, ExtensionManifest, FlowEnforcementContext, HostcallResult,
+    HostcallSinkPolicy, HostcallType, Labeled, LifecycleContext, ResourceBudget,
+    compute_content_hash,
 };
 
 fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -50,8 +51,17 @@ fn budget() -> ResourceBudget {
     ResourceBudget::new(1_000_000_000, 64 * 1024 * 1024, 2_000)
 }
 
+fn factory() -> DelegateCellFactory {
+    DelegateCellFactory {
+        sink_policy: HostcallSinkPolicy::default(),
+        cancellation_config: CancellationConfig::default(),
+        policy: DelegateCellPolicy::default(),
+        decision_signing_key: DecisionSigningKey::new([0xE2; 32]),
+    }
+}
+
 fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
-    DelegateCellFactory::default()
+    factory()
         .create_delegate_cell(
             delegate_id,
             delegate_manifest(capabilities, 2_000_000_000_000),
@@ -64,7 +74,7 @@ fn make_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell
 }
 
 fn make_low_penalty_delegate(delegate_id: &str, capabilities: &[Capability]) -> DelegateCell {
-    let mut factory = DelegateCellFactory::default();
+    let mut factory = factory();
     factory.policy.initial_posterior_micros = 0;
     factory.policy.capability_escalation_penalty_micros = 10_000;
     factory

@@ -5961,7 +5961,13 @@ mod tests {
 
     #[test]
     fn verify_schema_version_preserves_ir_level_in_error() {
-        for level in [IrLevel::Ir0, IrLevel::Ir1, IrLevel::Ir2, IrLevel::Ir3, IrLevel::Ir4] {
+        for level in [
+            IrLevel::Ir0,
+            IrLevel::Ir1,
+            IrLevel::Ir2,
+            IrLevel::Ir3,
+            IrLevel::Ir4,
+        ] {
             let bad_version = IrSchemaVersion {
                 major: IrSchemaVersion::CURRENT.major + 1,
                 minor: 0,

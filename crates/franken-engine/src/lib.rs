@@ -2478,6 +2478,10 @@ mod tests {
         let start = std::time::Instant::now();
         let _result = bound_error_message(&huge);
         let duration = start.elapsed();
-        assert!(duration.as_millis() < 100, "Bounding should be fast, took {:?}", duration);
+        assert!(
+            duration.as_millis() < 100,
+            "Bounding should be fast, took {:?}",
+            duration
+        );
     }
 }

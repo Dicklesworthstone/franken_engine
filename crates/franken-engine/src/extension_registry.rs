@@ -888,7 +888,11 @@ impl ExtensionRegistry {
     /// This is more efficient than calling `publisher_owns_scope` multiple times
     /// as it reduces BTreeMap traversal overhead from O(n log n) to O(n + m log m)
     /// where n is the number of scopes to check and m is the size of scope_owners.
-    pub fn publisher_owns_scopes(&self, publisher_id: &EngineObjectId, scopes: &[&str]) -> Vec<bool> {
+    pub fn publisher_owns_scopes(
+        &self,
+        publisher_id: &EngineObjectId,
+        scopes: &[&str],
+    ) -> Vec<bool> {
         scopes
             .iter()
             .map(|scope| {
@@ -2910,9 +2914,7 @@ mod tests {
             .collect();
 
         // Convert to comparable format (both Option<&EngineObjectId>)
-        let batched_comparable: Vec<Option<&EngineObjectId>> = batched_owners
-            .into_iter()
-            .collect();
+        let batched_comparable: Vec<Option<&EngineObjectId>> = batched_owners.into_iter().collect();
 
         assert_eq!(
             batched_comparable, individual_owners,

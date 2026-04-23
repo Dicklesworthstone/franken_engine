@@ -5061,12 +5061,24 @@ expiry_date = "2030-01-01"
         let missing_fields = [
             ("asset_id", create_asset_missing_field("asset_id")),
             ("source_donor", create_asset_missing_field("source_donor")),
-            ("semantic_domain", create_asset_missing_field("semantic_domain")),
-            ("normative_reference", create_asset_missing_field("normative_reference")),
+            (
+                "semantic_domain",
+                create_asset_missing_field("semantic_domain"),
+            ),
+            (
+                "normative_reference",
+                create_asset_missing_field("normative_reference"),
+            ),
             ("fixture_path", create_asset_missing_field("fixture_path")),
             ("fixture_hash", create_asset_missing_field("fixture_hash")),
-            ("expected_output_path", create_asset_missing_field("expected_output_path")),
-            ("expected_output_hash", create_asset_missing_field("expected_output_hash")),
+            (
+                "expected_output_path",
+                create_asset_missing_field("expected_output_path"),
+            ),
+            (
+                "expected_output_hash",
+                create_asset_missing_field("expected_output_hash"),
+            ),
             ("import_date", create_asset_missing_field("import_date")),
         ];
 
@@ -5120,14 +5132,21 @@ expiry_date = "2030-01-01"
             let manifest_path = temp_dir.path().join("manifest.json");
 
             let result = manifest.validate_and_resolve(&manifest_path);
-            assert!(result.is_err(), "should fail for invalid {} value", field_name);
+            assert!(
+                result.is_err(),
+                "should fail for invalid {} value",
+                field_name
+            );
 
             let err = result.unwrap_err();
             if let ConformanceManifestError::InvalidFieldValue { field, value } = &err {
                 assert_eq!(*field, field_name);
                 assert!(value.contains(invalid_value));
             } else {
-                panic!("expected InvalidFieldValue error for {}, got {:?}", field_name, err);
+                panic!(
+                    "expected InvalidFieldValue error for {}, got {:?}",
+                    field_name, err
+                );
             }
         }
     }
@@ -5137,7 +5156,7 @@ expiry_date = "2030-01-01"
         // Test invalid category/outcome/evidence combinations
         let invalid_combinations = [
             ("benign", "block", "flow_violation"), // benign should allow, not block
-            ("exfil", "allow", "none"), // exfil should block, not allow
+            ("exfil", "allow", "none"),            // exfil should block, not allow
             ("declassify", "allow", "flow_violation"), // declassify should declassify, not allow
         ];
 
@@ -5170,15 +5189,22 @@ expiry_date = "2030-01-01"
             let manifest_path = temp_dir.path().join("manifest.json");
 
             let result = manifest.validate_and_resolve(&manifest_path);
-            assert!(result.is_err(), "should fail for invalid combination {}/{}/{}", category, outcome, evidence);
+            assert!(
+                result.is_err(),
+                "should fail for invalid combination {}/{}/{}",
+                category,
+                outcome,
+                evidence
+            );
 
             let err = result.unwrap_err();
             if let ConformanceManifestError::InvalidIfcExpectation {
                 asset_id,
                 category: err_cat,
                 expected_outcome: err_out,
-                expected_evidence_type: err_ev
-            } = &err {
+                expected_evidence_type: err_ev,
+            } = &err
+            {
                 assert_eq!(asset_id, "test-invalid-ifc");
                 assert_eq!(err_cat, category);
                 assert_eq!(err_out, outcome);
@@ -5225,7 +5251,12 @@ expiry_date = "2030-01-01"
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        if let ConformanceManifestError::AssetIo { asset_id, path, source } = &err {
+        if let ConformanceManifestError::AssetIo {
+            asset_id,
+            path,
+            source,
+        } = &err
+        {
             assert_eq!(asset_id, "test-missing-fixture");
             assert!(path.to_string_lossy().contains("nonexistent_fixture.bin"));
             assert_eq!(source.kind(), io::ErrorKind::NotFound);
@@ -5282,7 +5313,12 @@ expiry_date = "2030-01-01"
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        if let ConformanceManifestError::FixtureHashMismatch { asset_id, expected, actual } = &err {
+        if let ConformanceManifestError::FixtureHashMismatch {
+            asset_id,
+            expected,
+            actual,
+        } = &err
+        {
             assert_eq!(asset_id, "test-hash-mismatch");
             assert_eq!(expected, "wrong_hash");
             assert_eq!(actual, &actual_fixture_hash);
@@ -5340,7 +5376,12 @@ expiry_date = "2030-01-01"
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        if let ConformanceManifestError::ExpectedOutputHashMismatch { asset_id, expected, actual } = &err {
+        if let ConformanceManifestError::ExpectedOutputHashMismatch {
+            asset_id,
+            expected,
+            actual,
+        } = &err
+        {
             assert_eq!(asset_id, "test-expected-hash-mismatch");
             assert_eq!(expected, "wrong_expected_hash");
             assert_eq!(actual, &actual_expected_hash);
@@ -5366,7 +5407,10 @@ expiry_date = "2030-01-01"
         let result2 = manifest.validate_and_resolve(&manifest_path);
 
         assert!(result1.is_err() && result2.is_err());
-        assert_eq!(result1.unwrap_err().to_string(), result2.unwrap_err().to_string());
+        assert_eq!(
+            result1.unwrap_err().to_string(),
+            result2.unwrap_err().to_string()
+        );
     }
 
     // Helper functions for test data creation
@@ -5393,15 +5437,51 @@ expiry_date = "2030-01-01"
 
     fn create_asset_missing_field(missing_field: &str) -> ConformanceAssetRecord {
         ConformanceAssetRecord {
-            asset_id: if missing_field == "asset_id" { "".to_string() } else { "test-asset".to_string() },
-            source_donor: if missing_field == "source_donor" { "".to_string() } else { "test-donor".to_string() },
-            semantic_domain: if missing_field == "semantic_domain" { "".to_string() } else { "test-domain".to_string() },
-            normative_reference: if missing_field == "normative_reference" { "".to_string() } else { "test-ref".to_string() },
-            fixture_path: if missing_field == "fixture_path" { "".to_string() } else { "fixture.bin".to_string() },
-            fixture_hash: if missing_field == "fixture_hash" { "".to_string() } else { "deadbeef".to_string() },
-            expected_output_path: if missing_field == "expected_output_path" { "".to_string() } else { "expected.bin".to_string() },
-            expected_output_hash: if missing_field == "expected_output_hash" { "".to_string() } else { "cafebabe".to_string() },
-            import_date: if missing_field == "import_date" { "".to_string() } else { "2026-04-23".to_string() },
+            asset_id: if missing_field == "asset_id" {
+                "".to_string()
+            } else {
+                "test-asset".to_string()
+            },
+            source_donor: if missing_field == "source_donor" {
+                "".to_string()
+            } else {
+                "test-donor".to_string()
+            },
+            semantic_domain: if missing_field == "semantic_domain" {
+                "".to_string()
+            } else {
+                "test-domain".to_string()
+            },
+            normative_reference: if missing_field == "normative_reference" {
+                "".to_string()
+            } else {
+                "test-ref".to_string()
+            },
+            fixture_path: if missing_field == "fixture_path" {
+                "".to_string()
+            } else {
+                "fixture.bin".to_string()
+            },
+            fixture_hash: if missing_field == "fixture_hash" {
+                "".to_string()
+            } else {
+                "deadbeef".to_string()
+            },
+            expected_output_path: if missing_field == "expected_output_path" {
+                "".to_string()
+            } else {
+                "expected.bin".to_string()
+            },
+            expected_output_hash: if missing_field == "expected_output_hash" {
+                "".to_string()
+            } else {
+                "cafebabe".to_string()
+            },
+            import_date: if missing_field == "import_date" {
+                "".to_string()
+            } else {
+                "2026-04-23".to_string()
+            },
             category: None,
             source_labels: vec![],
             sink_clearances: vec![],
@@ -5411,7 +5491,10 @@ expiry_date = "2030-01-01"
         }
     }
 
-    fn create_invalid_ifc_asset(invalid_field: &str, invalid_value: &str) -> ConformanceAssetRecord {
+    fn create_invalid_ifc_asset(
+        invalid_field: &str,
+        invalid_value: &str,
+    ) -> ConformanceAssetRecord {
         ConformanceAssetRecord {
             asset_id: "test-invalid-ifc".to_string(),
             source_donor: "test".to_string(),
@@ -5422,12 +5505,36 @@ expiry_date = "2030-01-01"
             expected_output_path: "expected.bin".to_string(),
             expected_output_hash: "cafebabe".to_string(),
             import_date: "2026-04-23".to_string(),
-            category: Some(if invalid_field == "category" { invalid_value.to_string() } else { "benign".to_string() }),
-            source_labels: if invalid_field == "source_labels" { vec![invalid_value.to_string()] } else { vec!["credential".to_string()] },
-            sink_clearances: if invalid_field == "sink_clearances" { vec![invalid_value.to_string()] } else { vec!["network_egress".to_string()] },
-            flow_path_type: Some(if invalid_field == "flow_path_type" { invalid_value.to_string() } else { "direct".to_string() }),
-            expected_outcome: Some(if invalid_field == "expected_outcome" { invalid_value.to_string() } else { "allow".to_string() }),
-            expected_evidence_type: Some(if invalid_field == "expected_evidence_type" { invalid_value.to_string() } else { "none".to_string() }),
+            category: Some(if invalid_field == "category" {
+                invalid_value.to_string()
+            } else {
+                "benign".to_string()
+            }),
+            source_labels: if invalid_field == "source_labels" {
+                vec![invalid_value.to_string()]
+            } else {
+                vec!["credential".to_string()]
+            },
+            sink_clearances: if invalid_field == "sink_clearances" {
+                vec![invalid_value.to_string()]
+            } else {
+                vec!["network_egress".to_string()]
+            },
+            flow_path_type: Some(if invalid_field == "flow_path_type" {
+                invalid_value.to_string()
+            } else {
+                "direct".to_string()
+            }),
+            expected_outcome: Some(if invalid_field == "expected_outcome" {
+                invalid_value.to_string()
+            } else {
+                "allow".to_string()
+            }),
+            expected_evidence_type: Some(if invalid_field == "expected_evidence_type" {
+                invalid_value.to_string()
+            } else {
+                "none".to_string()
+            }),
         }
     }
 }

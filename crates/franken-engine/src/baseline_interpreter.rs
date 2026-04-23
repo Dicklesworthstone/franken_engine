@@ -15972,6 +15972,24 @@ impl InterpreterCore {
 // Lane wrappers
 // ---------------------------------------------------------------------------
 
+/// Object-safe execution engine abstraction for substitutable interpreter lanes.
+pub trait ExecutionEngine {
+    /// Execute an IR3 module with the engine's default hook configuration.
+    fn execute(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+    ) -> Result<ExecutionResult, InterpreterError>;
+
+    /// Execute an IR3 module with an optional containment hook.
+    fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<ExecutionResult, InterpreterError>;
+}
+
 /// Deterministic execution profile: conservative budgets and replay-stable defaults.
 pub struct QuickJsLane {
     config: InterpreterConfig,
@@ -16022,6 +16040,25 @@ impl QuickJsLane {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+impl ExecutionEngine for QuickJsLane {
+    fn execute(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        QuickJsLane::execute(self, module, trace_id)
+    }
+
+    fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        QuickJsLane::execute_with_hook(self, module, trace_id, hook)
     }
 }
 
@@ -16083,6 +16120,25 @@ impl V8Lane {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+impl ExecutionEngine for V8Lane {
+    fn execute(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        V8Lane::execute(self, module, trace_id)
+    }
+
+    fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<ExecutionResult, InterpreterError> {
+        V8Lane::execute_with_hook(self, module, trace_id, hook)
     }
 }
 
@@ -16544,6 +16600,25 @@ mod active_builtin_regressions {
 
 // ---------------------------------------------------------------------------
 // Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod execution_engine_contract_tests {
+    use super::*;
+
+    fn accepts_engine_trait_object(_engine: &dyn ExecutionEngine) -> bool {
+        true
+    }
+
+    #[test]
+    fn lane_wrappers_are_swappable_execution_engines() {
+        assert!(accepts_engine_trait_object(&QuickJsLane::new()));
+        assert!(accepts_engine_trait_object(&V8Lane::new()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy tests
 // ---------------------------------------------------------------------------
 //
 // This legacy in-source test module was written against an older lower-level

@@ -1987,6 +1987,17 @@ mod tests {
     }
 
     #[test]
+    fn test_governance_artifact_inventory_hash_is_order_independent() {
+        let inventory = module_index_governance_artifact_inventory();
+        let mut reordered = inventory.clone();
+        reordered.requirements.reverse();
+        reordered.seal();
+
+        assert_eq!(reordered.required_names(), inventory.required_names());
+        assert_eq!(reordered.content_hash, inventory.content_hash);
+    }
+
+    #[test]
     fn test_governance_artifact_inventory_fails_closed_when_artifacts_are_missing() {
         let inventory = module_index_governance_artifact_inventory();
         let mut present = inventory.required_names();

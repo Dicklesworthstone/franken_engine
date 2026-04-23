@@ -1933,7 +1933,15 @@ impl InterpreterCore {
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        // Check VmDispatch capability before executing
+        self.ensure_vm_dispatch_capability()?;
+        let entry_specifier = self.prepare_execution(module)?;
+        let result = self.run_top_level_execution(module);
+        self.record_execution_outcome(&entry_specifier, &result);
+        self.last_post_run_seed = Some(self.capture_execution_seed());
+        self.finish_execution_result(result)
+    }
+
+    fn ensure_vm_dispatch_capability(&self) -> Result<(), InterpreterError> {
         if !self
             .config
             .granted_capabilities
@@ -1944,6 +1952,10 @@ impl InterpreterCore {
             });
         }
 
+        Ok(())
+    }
+
+    fn prepare_execution(&mut self, module: &Ir3Module) -> Result<String, InterpreterError> {
         let current_seed = self.capture_execution_seed();
         let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
             (Some(previous_pre_run), Some(previous_post_run))
@@ -1962,6 +1974,10 @@ impl InterpreterCore {
 
         self.push_event("execution_started", "ok", None);
 
+        Ok(entry_specifier)
+    }
+
+    fn run_top_level_execution(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         let result = self.run_loop(module);
 
         // Drain any pending microtasks enqueued during execution
@@ -1972,14 +1988,22 @@ impl InterpreterCore {
         // (macrotasks like timers, with microtask draining after each).
         self.run_event_loop_until_idle();
 
-        if let Some(record) = self.module_state.modules.get_mut(&entry_specifier) {
-            record.status = match &result {
+        result
+    }
+
+    fn record_execution_outcome(
+        &mut self,
+        entry_specifier: &str,
+        result: &Result<Value, InterpreterError>,
+    ) {
+        if let Some(record) = self.module_state.modules.get_mut(entry_specifier) {
+            record.status = match result {
                 Ok(_) | Err(InterpreterError::Halted) => ModuleRuntimeStatus::Evaluated,
                 Err(err) => ModuleRuntimeStatus::Failed(err.to_string()),
             };
         }
 
-        match &result {
+        match result {
             Ok(_) => self.push_event("execution_completed", "ok", None),
             Err(InterpreterError::Halted) => {
                 self.push_event("execution_halted", "ok", None);
@@ -1998,8 +2022,12 @@ impl InterpreterCore {
                 self.push_event("execution_failed", "fail", Some(&format!("{e}")));
             }
         }
-        self.last_post_run_seed = Some(self.capture_execution_seed());
+    }
 
+    fn finish_execution_result(
+        &mut self,
+        result: Result<Value, InterpreterError>,
+    ) -> Result<ExecutionResult, InterpreterError> {
         match result {
             Ok(v) => {
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
@@ -2614,15 +2642,10 @@ impl InterpreterCore {
             self.restore_module_execution(snapshot);
             return Err(err);
         }
-        let result = self.run_loop(module);
-        self.drain_microtasks();
+        let result = self.run_nested_module_execution(module);
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
-        match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
-            Err(err) => Err(err),
-        }
+        result
     }
 
     fn evaluate_cjs_ir3(
@@ -2652,13 +2675,7 @@ impl InterpreterCore {
             record.cjs_module_object = Some(cjs_context.module_object);
         }
         self.active_cjs_context = Some(cjs_context.clone());
-        let result = self.run_loop(module);
-        self.drain_microtasks();
-        let eval_outcome = match result {
-            Ok(_) => Ok(()),
-            Err(InterpreterError::Halted) => Ok(()),
-            Err(err) => Err(err),
-        };
+        let eval_outcome = self.run_nested_module_execution(module);
         let finalize_outcome = if eval_outcome.is_ok() {
             self.finalize_cjs_exports(&cjs_context)
         } else {
@@ -2676,6 +2693,15 @@ impl InterpreterCore {
         self.restore_module_execution(snapshot);
         self.active_cjs_context = previous_cjs_context;
         eval_outcome.and(finalize_outcome).and(loaded_outcome)
+    }
+
+    fn run_nested_module_execution(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
+        let result = self.run_loop(module);
+        self.drain_microtasks();
+        match result {
+            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 
     fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
@@ -16502,6 +16528,22 @@ mod active_builtin_regressions {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn halted_test_module() -> Ir3Module {
+        Ir3Module {
+            header: crate::ir_contract::IrHeader {
+                schema_version: crate::ir_contract::IrSchemaVersion::CURRENT,
+                level: crate::ir_contract::IrLevel::Ir3,
+                source_hash: None,
+                source_label: "pipeline-test".to_string(),
+            },
+            instructions: vec![Ir3Instruction::Halt],
+            constant_pool: Vec::new(),
+            function_table: Vec::new(),
+            specialization: None,
+            required_capabilities: Vec::new(),
+        }
+    }
+
     fn mixed_sort_fixture(core: &mut InterpreterCore) -> (ObjectId, ObjectId) {
         let array_id = core
             .alloc_object_with_prototype(None)
@@ -16524,6 +16566,36 @@ mod active_builtin_regressions {
             .expect("test array length write should succeed");
 
         (array_id, object_id)
+    }
+
+    #[test]
+    fn execute_pipeline_preserves_completion_artifacts() {
+        let mut core = test_core();
+
+        let result = core
+            .execute(&halted_test_module())
+            .expect("halt is normal execution completion");
+
+        assert_eq!(result.value, Value::Undefined);
+        assert!(result.instructions_executed > 0);
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| event.event == "execution_started" && event.outcome == "ok")
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| event.event == "execution_halted" && event.outcome == "ok")
+        );
+        assert!(
+            result
+                .witness_events
+                .iter()
+                .any(|event| event.kind == WitnessEventKind::ExecutionCompleted)
+        );
     }
 
     #[test]

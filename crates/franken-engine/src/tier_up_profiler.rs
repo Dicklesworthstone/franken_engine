@@ -577,7 +577,7 @@ pub fn evaluate_tier_up_safety(
                 return SafetyEvaluation {
                     tier_up_decision,
                     regression_measurements: Vec::new(),
-                    active_overrides: valid_overrides,
+                    active_overrides: valid_overrides.clone(),
                     safety_verdict: if override_obj.forced_tier.is_some() {
                         SafetyVerdict::ForcedOverride
                     } else {
@@ -604,7 +604,7 @@ pub fn evaluate_tier_up_safety(
         if measurement.exceeds_policy_threshold(regret_policy) {
             return SafetyEvaluation {
                 tier_up_decision,
-                regression_measurements: vec![measurement],
+                regression_measurements: vec![measurement.clone()],
                 active_overrides: valid_overrides,
                 safety_verdict: SafetyVerdict::BlockedRegression,
                 safety_reasoning: format!(

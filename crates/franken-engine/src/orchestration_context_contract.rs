@@ -281,45 +281,65 @@ pub struct DerivationRule {
 impl DerivationRule {
     /// Create a derivation rule with defaults.
     pub fn new(rule_id: String) -> Self {
-        let mut rule = Self {
+        Self::from_fields(
             rule_id,
-            max_child_fraction_millionths: 900_000, // 90%
-            cleanup_fraction_millionths: DEFAULT_CLEANUP_FRACTION_MILLIONTHS,
-            require_trace_derivation: true,
-            max_depth: MAX_DERIVATION_DEPTH,
-            content_hash: ContentHash::compute(b"placeholder"),
-        };
-        rule.content_hash = rule.compute_hash();
-        rule
+            900_000,
+            DEFAULT_CLEANUP_FRACTION_MILLIONTHS,
+            true,
+            MAX_DERIVATION_DEPTH,
+        )
     }
 
     /// Create a strict rule (50% child, 10% cleanup, depth 16).
     pub fn strict(rule_id: String) -> Self {
-        let mut rule = Self {
+        Self::from_fields(
             rule_id,
-            max_child_fraction_millionths: 500_000, // 50%
-            cleanup_fraction_millionths: DEFAULT_CLEANUP_FRACTION_MILLIONTHS,
-            require_trace_derivation: true,
-            max_depth: 16,
-            content_hash: ContentHash::compute(b"placeholder"),
-        };
-        rule.content_hash = rule.compute_hash();
-        rule
+            500_000,
+            DEFAULT_CLEANUP_FRACTION_MILLIONTHS,
+            true,
+            16,
+        )
     }
 
-    fn compute_hash(&self) -> ContentHash {
+    fn from_fields(
+        rule_id: String,
+        max_child_fraction_millionths: u64,
+        cleanup_fraction_millionths: u64,
+        require_trace_derivation: bool,
+        max_depth: u32,
+    ) -> Self {
+        let content_hash = Self::compute_hash_fields(
+            &rule_id,
+            max_child_fraction_millionths,
+            cleanup_fraction_millionths,
+            require_trace_derivation,
+            max_depth,
+        );
+        Self {
+            rule_id,
+            max_child_fraction_millionths,
+            cleanup_fraction_millionths,
+            require_trace_derivation,
+            max_depth,
+            content_hash,
+        }
+    }
+
+    fn compute_hash_fields(
+        rule_id: &str,
+        max_child_fraction_millionths: u64,
+        cleanup_fraction_millionths: u64,
+        require_trace_derivation: bool,
+        max_depth: u32,
+    ) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(COMPONENT.as_bytes());
         hasher.update(b":rule:");
-        hasher.update(self.rule_id.as_bytes());
-        hasher.update(self.max_child_fraction_millionths.to_le_bytes());
-        hasher.update(self.cleanup_fraction_millionths.to_le_bytes());
-        hasher.update(if self.require_trace_derivation {
-            b"t"
-        } else {
-            b"f"
-        });
-        hasher.update(self.max_depth.to_le_bytes());
+        hasher.update(rule_id.as_bytes());
+        hasher.update(max_child_fraction_millionths.to_le_bytes());
+        hasher.update(cleanup_fraction_millionths.to_le_bytes());
+        hasher.update(if require_trace_derivation { b"t" } else { b"f" });
+        hasher.update(max_depth.to_le_bytes());
         let result = hasher.finalize();
         ContentHash::compute(&result)
     }
@@ -1309,6 +1329,19 @@ mod tests {
         let r1 = DerivationRule::new("test".to_string());
         let r2 = DerivationRule::new("test".to_string());
         assert_eq!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn derivation_rule_constructors_do_not_emit_placeholder_hash() {
+        let placeholder_hash = ContentHash::compute(b"placeholder");
+        assert_ne!(
+            DerivationRule::new("default-no-placeholder".to_string()).content_hash,
+            placeholder_hash
+        );
+        assert_ne!(
+            DerivationRule::strict("strict-no-placeholder".to_string()).content_hash,
+            placeholder_hash
+        );
     }
 
     // -- Serde round-trip tests --

@@ -47,9 +47,11 @@ pub const COMPONENT: &str = "stdlib_workload_verification";
 /// Fixed-point millionths unit.
 const MILLIONTHS: u64 = 1_000_000;
 
-fn serialize_for_identity<T: Serialize>(value: &T, _context: &str) -> String {
-    // SAFETY: serde_json::to_string only fails on writer errors, not possible with String
-    serde_json::to_string(value).unwrap()
+fn serialize_for_identity<T: Serialize + fmt::Debug>(value: &T, context: &str) -> String {
+    match serde_json::to_string(value) {
+        Ok(serialized) => serialized,
+        Err(error) => format!("serialization_error:{context}:{error}:{value:?}"),
+    }
 }
 
 /// Minimum passing verification rate to consider a workload suite healthy.
@@ -809,6 +811,29 @@ mod tests {
     #[test]
     fn test_component() {
         assert_eq!(COMPONENT, "stdlib_workload_verification");
+    }
+
+    #[derive(Debug)]
+    struct FailingIdentitySerialize;
+
+    impl serde::Serialize for FailingIdentitySerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom(
+                "intentional identity serialization failure",
+            ))
+        }
+    }
+
+    #[test]
+    fn test_identity_serialization_falls_back_without_panic() {
+        let serialized = serialize_for_identity(&FailingIdentitySerialize, "test identity");
+
+        assert!(serialized.contains("serialization_error:test identity"));
+        assert!(serialized.contains("intentional identity serialization failure"));
+        assert!(serialized.contains("FailingIdentitySerialize"));
     }
 
     // --- MutationContract ---

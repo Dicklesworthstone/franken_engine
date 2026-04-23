@@ -2976,6 +2976,43 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
     Ok(())
 }
 
+/// Verify that an IR header's schema version is compatible with the current version.
+///
+/// This implements semantic versioning compatibility rules:
+/// - Major version must match exactly (breaking changes)
+/// - Minor version can be forward-compatible (current >= header)
+/// - Patch version is ignored for compatibility
+pub fn verify_schema_version(header: &IrHeader) -> Result<(), IrError> {
+    let current = IrSchemaVersion::CURRENT;
+    let provided = &header.schema_version;
+
+    // Major version must match exactly
+    if current.major != provided.major {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "incompatible major version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    // Current minor version must be >= provided minor version (forward compatibility)
+    if current.minor < provided.minor {
+        return Err(IrError::new(
+            IrErrorCode::SchemaVersionMismatch,
+            format!(
+                "unsupported future minor version: current {}, provided {}",
+                current, provided
+            ),
+            header.level,
+        ));
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Structured events
 // ---------------------------------------------------------------------------
@@ -5748,5 +5785,223 @@ mod tests {
         } else {
             panic!("expected Map from FlowAnnotation::canonical_value");
         }
+    }
+
+    // -- Schema Version Validation Tests (bd-2dsh9) --
+
+    #[test]
+    fn verify_schema_version_current_passes() {
+        let header = IrHeader {
+            schema_version: IrSchemaVersion::CURRENT,
+            level: IrLevel::Ir1,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        assert!(verify_schema_version(&header).is_ok());
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_major_version_bump() {
+        let future_major = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major + 1,
+            minor: IrSchemaVersion::CURRENT.minor,
+            patch: IrSchemaVersion::CURRENT.patch,
+        };
+
+        let header = IrHeader {
+            schema_version: future_major,
+            level: IrLevel::Ir2,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result = verify_schema_version(&header);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(err.message.contains("incompatible major version"));
+        assert_eq!(err.level, IrLevel::Ir2);
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_old_major_version() {
+        let old_major = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major.saturating_sub(1),
+            minor: 0,
+            patch: 0,
+        };
+
+        let header = IrHeader {
+            schema_version: old_major,
+            level: IrLevel::Ir0,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result = verify_schema_version(&header);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(err.message.contains("incompatible major version"));
+    }
+
+    #[test]
+    fn verify_schema_version_rejects_future_minor_version() {
+        let future_minor = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major,
+            minor: IrSchemaVersion::CURRENT.minor + 1,
+            patch: IrSchemaVersion::CURRENT.patch,
+        };
+
+        let header = IrHeader {
+            schema_version: future_minor,
+            level: IrLevel::Ir3,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result = verify_schema_version(&header);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(err.message.contains("unsupported future minor version"));
+        assert_eq!(err.level, IrLevel::Ir3);
+    }
+
+    #[test]
+    fn verify_schema_version_accepts_old_minor_version() {
+        let old_minor = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major,
+            minor: IrSchemaVersion::CURRENT.minor.saturating_sub(1),
+            patch: 0,
+        };
+
+        let header = IrHeader {
+            schema_version: old_minor,
+            level: IrLevel::Ir1,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        // Should pass - forward compatibility allows old minor versions
+        assert!(verify_schema_version(&header).is_ok());
+    }
+
+    #[test]
+    fn verify_schema_version_ignores_patch_differences() {
+        let different_patch = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major,
+            minor: IrSchemaVersion::CURRENT.minor,
+            patch: IrSchemaVersion::CURRENT.patch + 100,
+        };
+
+        let header = IrHeader {
+            schema_version: different_patch,
+            level: IrLevel::Ir4,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        // Should pass - patch versions are ignored for compatibility
+        assert!(verify_schema_version(&header).is_ok());
+    }
+
+    #[test]
+    fn verify_schema_version_extreme_version_values() {
+        // Test with extreme version numbers to ensure no overflow/underflow
+        let extreme_version = IrSchemaVersion {
+            major: u32::MAX,
+            minor: u32::MAX,
+            patch: u32::MAX,
+        };
+
+        let header = IrHeader {
+            schema_version: extreme_version,
+            level: IrLevel::Ir2,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result = verify_schema_version(&header);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code, IrErrorCode::SchemaVersionMismatch);
+        assert!(err.message.contains("incompatible major version"));
+    }
+
+    #[test]
+    fn verify_schema_version_error_message_format() {
+        let bad_version = IrSchemaVersion {
+            major: 99,
+            minor: 88,
+            patch: 77,
+        };
+
+        let header = IrHeader {
+            schema_version: bad_version,
+            level: IrLevel::Ir1,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result = verify_schema_version(&header);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+
+        // Verify error message contains specific version numbers
+        assert!(err.message.contains("99.88.77"));
+        assert!(err.message.contains("0.1.0")); // current version
+
+        // Verify error can be displayed and contains IR level
+        let display = err.to_string();
+        assert!(display.contains("ir1"));
+        assert!(display.contains("IR_SCHEMA_VERSION_MISMATCH"));
+    }
+
+    #[test]
+    fn verify_schema_version_preserves_ir_level_in_error() {
+        for level in [IrLevel::Ir0, IrLevel::Ir1, IrLevel::Ir2, IrLevel::Ir3, IrLevel::Ir4] {
+            let bad_version = IrSchemaVersion {
+                major: IrSchemaVersion::CURRENT.major + 1,
+                minor: 0,
+                patch: 0,
+            };
+
+            let header = IrHeader {
+                schema_version: bad_version,
+                level,
+                source_hash: None,
+                source_label: "test".to_string(),
+            };
+
+            let result = verify_schema_version(&header);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.level, level);
+        }
+    }
+
+    #[test]
+    fn verify_schema_version_deterministic_error_messages() {
+        // Ensure error messages are deterministic (no timestamps, random values, etc.)
+        let bad_version = IrSchemaVersion {
+            major: 42,
+            minor: 13,
+            patch: 7,
+        };
+
+        let header = IrHeader {
+            schema_version: bad_version,
+            level: IrLevel::Ir2,
+            source_hash: None,
+            source_label: "test".to_string(),
+        };
+
+        let result1 = verify_schema_version(&header);
+        let result2 = verify_schema_version(&header);
+
+        assert!(result1.is_err() && result2.is_err());
+        assert_eq!(result1.unwrap_err().message, result2.unwrap_err().message);
     }
 }

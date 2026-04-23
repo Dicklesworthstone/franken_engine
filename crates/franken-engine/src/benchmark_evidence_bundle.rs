@@ -1847,4 +1847,343 @@ mod tests {
         assert!(parsed.get("verdict").is_some());
         assert!(parsed.get("workload_stats").is_some());
     }
+
+    // ---------------------------------------------------------------------------
+    // Golden File Tests for Evidence Bundle Serialization
+    // ---------------------------------------------------------------------------
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Helper to get golden file path for a test case
+    fn evidence_golden_path(test_name: &str) -> PathBuf {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("tests");
+        path.push("goldens");
+        path.push("evidence");
+        path.push(format!("{}.json", test_name));
+        path
+    }
+
+    /// Helper to check if we should update golden files
+    fn should_update_evidence_goldens() -> bool {
+        std::env::var("UPDATE_GOLDENS").is_ok()
+    }
+
+    /// Assert evidence bundle golden file matches current serialization
+    fn assert_evidence_bundle_golden(bundle: &EvidenceBundle, test_name: &str) {
+        let golden_file = evidence_golden_path(test_name);
+
+        // Serialize to deterministic JSON
+        let actual_json = serde_json::to_string_pretty(bundle)
+            .expect("Evidence bundle should serialize to JSON");
+
+        if should_update_evidence_goldens() {
+            // Update mode: write new golden file
+            if let Some(parent) = golden_file.parent() {
+                fs::create_dir_all(parent)
+                    .expect("Should be able to create evidence golden directory");
+            }
+            fs::write(&golden_file, &actual_json)
+                .expect("Should be able to write evidence golden file");
+            eprintln!("[GOLDEN] Updated: {}", golden_file.display());
+            return;
+        }
+
+        // Compare mode: check against existing golden
+        let expected_json = fs::read_to_string(&golden_file)
+            .unwrap_or_else(|_| panic!(
+                "Evidence golden file missing: {}\n\
+                 Run with UPDATE_GOLDENS=1 to create it\n\
+                 Then review and commit: git diff tests/goldens/",
+                golden_file.display()
+            ));
+
+        if actual_json != expected_json {
+            // Write actual for easy diffing
+            let actual_path = golden_file.with_extension("actual.json");
+            fs::write(&actual_path, &actual_json)
+                .expect("Should be able to write actual evidence output");
+
+            panic!(
+                "EVIDENCE GOLDEN MISMATCH: {test_name}\n\n\
+                 Expected: {}\n\
+                 Actual:   {}\n\n\
+                 To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
+                 To review: diff {} {}",
+                golden_file.display(),
+                actual_path.display(),
+                golden_file.display(),
+                actual_path.display(),
+            );
+        }
+    }
+
+    /// Create minimal/empty evidence bundle for golden testing
+    fn create_minimal_evidence_bundle() -> EvidenceBundle {
+        let epoch = SecurityEpoch::from_raw(1);
+        EvidenceBundle::new("minimal-bundle-001".to_string(), epoch)
+    }
+
+    /// Create evidence bundle with successful benchmark runs
+    fn create_passing_evidence_bundle() -> EvidenceBundle {
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut bundle = EvidenceBundle::new("passing-bundle-001".to_string(), epoch);
+
+        // Add workload provenance
+        bundle.provenances.push(WorkloadProvenance {
+            workload_id: "workload-fibonacci".to_string(),
+            name: "Fibonacci Recursive".to_string(),
+            category: WorkloadCategory::Compute,
+            source: "https://github.com/example/benchmarks".to_string(),
+            pinned_version: "v1.2.3".to_string(),
+            corpus_hash: ContentHash::compute(b"fibonacci-workload"),
+            corpus_size_bytes: 1024,
+        });
+
+        bundle.provenances.push(WorkloadProvenance {
+            workload_id: "workload-sorting".to_string(),
+            name: "QuickSort Array".to_string(),
+            category: WorkloadCategory::Memory,
+            source: "https://github.com/example/benchmarks".to_string(),
+            pinned_version: "v1.2.3".to_string(),
+            corpus_hash: ContentHash::compute(b"sorting-workload"),
+            corpus_size_bytes: 2048,
+        });
+
+        // Add benchmark runs
+        bundle.runs.push(BenchmarkRun {
+            run_id: "run-fib-001".to_string(),
+            workload_id: "workload-fibonacci".to_string(),
+            duration_us: 15_000, // 15ms
+            peak_memory_bytes: 1_048_576, // 1MB
+            gc_pause_us: 200,
+            environment: BenchmarkEnvironment {
+                cpu_model: "Intel i7-10700K".to_string(),
+                core_count: 8,
+                memory_gb: 16,
+                os_version: "Ubuntu 22.04.3 LTS".to_string(),
+                runtime_version: "Node.js v18.17.1".to_string(),
+                compiler_version: "V8 11.3.244.8".to_string(),
+                optimization_level: "O2".to_string(),
+                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
+            },
+            is_warmup: false,
+        });
+
+        bundle.runs.push(BenchmarkRun {
+            run_id: "run-fib-002".to_string(),
+            workload_id: "workload-fibonacci".to_string(),
+            duration_us: 14_800, // 14.8ms
+            peak_memory_bytes: 1_048_576, // 1MB
+            gc_pause_us: 180,
+            environment: BenchmarkEnvironment {
+                cpu_model: "Intel i7-10700K".to_string(),
+                core_count: 8,
+                memory_gb: 16,
+                os_version: "Ubuntu 22.04.3 LTS".to_string(),
+                runtime_version: "Node.js v18.17.1".to_string(),
+                compiler_version: "V8 11.3.244.8".to_string(),
+                optimization_level: "O2".to_string(),
+                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
+            },
+            is_warmup: false,
+        });
+
+        bundle.runs.push(BenchmarkRun {
+            run_id: "run-sort-001".to_string(),
+            workload_id: "workload-sorting".to_string(),
+            duration_us: 8_500, // 8.5ms
+            peak_memory_bytes: 2_097_152, // 2MB
+            gc_pause_us: 350,
+            environment: BenchmarkEnvironment {
+                cpu_model: "Intel i7-10700K".to_string(),
+                core_count: 8,
+                memory_gb: 16,
+                os_version: "Ubuntu 22.04.3 LTS".to_string(),
+                runtime_version: "Node.js v18.17.1".to_string(),
+                compiler_version: "V8 11.3.244.8".to_string(),
+                optimization_level: "O2".to_string(),
+                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
+            },
+            is_warmup: false,
+        });
+
+        // Add parity verdicts
+        bundle.parity_verdicts.push(ParityVerdict {
+            workload_id: "workload-fibonacci".to_string(),
+            target: ParityTarget::Baseline,
+            output_equivalent: true,
+            performance_ratio_millionths: 1_050_000, // 5% faster
+            behavioral_differences: 0,
+        });
+
+        bundle.parity_verdicts.push(ParityVerdict {
+            workload_id: "workload-sorting".to_string(),
+            target: ParityTarget::Baseline,
+            output_equivalent: true,
+            performance_ratio_millionths: 980_000, // 2% slower
+            behavioral_differences: 0,
+        });
+
+        // Set reference environment from first run
+        bundle.reference_environment = Some(bundle.runs[0].environment.clone());
+
+        // Update status to Complete
+        bundle.status = BundleStatus::Complete;
+
+        bundle
+    }
+
+    /// Create evidence bundle with failure markers
+    fn create_failing_evidence_bundle() -> EvidenceBundle {
+        let epoch = SecurityEpoch::from_raw(2);
+        let mut bundle = EvidenceBundle::new("failing-bundle-001".to_string(), epoch);
+
+        // Add workload provenance
+        bundle.provenances.push(WorkloadProvenance {
+            workload_id: "workload-regression".to_string(),
+            name: "Regression Test Case".to_string(),
+            category: WorkloadCategory::Regression,
+            source: "https://github.com/example/regression-tests".to_string(),
+            pinned_version: "v2.0.1".to_string(),
+            corpus_hash: ContentHash::compute(b"regression-workload"),
+            corpus_size_bytes: 512,
+        });
+
+        // Add benchmark runs showing performance regression
+        bundle.runs.push(BenchmarkRun {
+            run_id: "run-regr-001".to_string(),
+            workload_id: "workload-regression".to_string(),
+            duration_us: 45_000, // 45ms (slow)
+            peak_memory_bytes: 4_194_304, // 4MB (high memory usage)
+            gc_pause_us: 2_000, // 2ms GC pause (high)
+            environment: BenchmarkEnvironment {
+                cpu_model: "Intel i7-10700K".to_string(),
+                core_count: 8,
+                memory_gb: 16,
+                os_version: "Ubuntu 22.04.3 LTS".to_string(),
+                runtime_version: "Node.js v18.17.1".to_string(),
+                compiler_version: "V8 11.3.244.8".to_string(),
+                optimization_level: "O2".to_string(),
+                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
+            },
+            is_warmup: false,
+        });
+
+        // Add failing parity verdict
+        bundle.parity_verdicts.push(ParityVerdict {
+            workload_id: "workload-regression".to_string(),
+            target: ParityTarget::Baseline,
+            output_equivalent: false, // Output differs from baseline
+            performance_ratio_millionths: 300_000, // 70% slower
+            behavioral_differences: 5, // Multiple behavioral differences
+        });
+
+        // Add environment drift
+        bundle.environment_drifts.push(EnvironmentDrift {
+            field_name: "runtime_version".to_string(),
+            expected_value: "Node.js v18.17.0".to_string(),
+            actual_value: "Node.js v18.17.1".to_string(),
+            severity: DriftSeverity::Minor,
+        });
+
+        // Set reference environment from first run
+        bundle.reference_environment = Some(bundle.runs[0].environment.clone());
+
+        // Status remains Complete even with failures
+        bundle.status = BundleStatus::Complete;
+
+        bundle
+    }
+
+    #[test]
+    fn golden_minimal_evidence_bundle() {
+        let bundle = create_minimal_evidence_bundle();
+        assert_evidence_bundle_golden(&bundle, "minimal_bundle");
+    }
+
+    #[test]
+    fn golden_passing_evidence_bundle() {
+        let bundle = create_passing_evidence_bundle();
+        assert_evidence_bundle_golden(&bundle, "passing_bundle_with_multiple_workloads");
+    }
+
+    #[test]
+    fn golden_failing_evidence_bundle() {
+        let bundle = create_failing_evidence_bundle();
+        assert_evidence_bundle_golden(&bundle, "failing_bundle_with_regression");
+    }
+
+    #[test]
+    fn golden_evidence_bundle_with_complex_parity() {
+        let epoch = SecurityEpoch::from_raw(3);
+        let mut bundle = EvidenceBundle::new("complex-parity-bundle-001".to_string(), epoch);
+
+        // Add workload with mixed parity results
+        bundle.provenances.push(WorkloadProvenance {
+            workload_id: "workload-mixed".to_string(),
+            name: "Mixed Results Workload".to_string(),
+            category: WorkloadCategory::Stress,
+            source: "https://github.com/example/stress-tests".to_string(),
+            pinned_version: "v3.1.4".to_string(),
+            corpus_hash: ContentHash::compute(b"mixed-workload"),
+            corpus_size_bytes: 8192,
+        });
+
+        // Add run
+        bundle.runs.push(BenchmarkRun {
+            run_id: "run-mixed-001".to_string(),
+            workload_id: "workload-mixed".to_string(),
+            duration_us: 25_500, // 25.5ms
+            peak_memory_bytes: 3_145_728, // 3MB
+            gc_pause_us: 500,
+            environment: BenchmarkEnvironment {
+                cpu_model: "AMD Ryzen 9 5900X".to_string(),
+                core_count: 12,
+                memory_gb: 32,
+                os_version: "Ubuntu 22.04.4 LTS".to_string(),
+                runtime_version: "Node.js v20.10.0".to_string(),
+                compiler_version: "V8 11.8.172.17".to_string(),
+                optimization_level: "O3".to_string(),
+                environment_hash: ContentHash::compute(b"env-amd-ubuntu"),
+            },
+            is_warmup: false,
+        });
+
+        // Add parity verdict with edge case values
+        bundle.parity_verdicts.push(ParityVerdict {
+            workload_id: "workload-mixed".to_string(),
+            target: ParityTarget::Reference,
+            output_equivalent: true,
+            performance_ratio_millionths: 1_000_000, // Exactly the same performance
+            behavioral_differences: 1, // Minor behavioral difference but equivalent output
+        });
+
+        bundle.reference_environment = Some(bundle.runs[0].environment.clone());
+        bundle.status = BundleStatus::Complete;
+
+        assert_evidence_bundle_golden(&bundle, "complex_parity_edge_cases");
+    }
+
+    #[test]
+    fn golden_evidence_bundle_deterministic_serialization() {
+        // Test that multiple serializations of the same bundle produce identical output
+        let bundle = create_passing_evidence_bundle();
+
+        let json1 = serde_json::to_string_pretty(&bundle)
+            .expect("First serialization should succeed");
+        let json2 = serde_json::to_string_pretty(&bundle)
+            .expect("Second serialization should succeed");
+
+        assert_eq!(json1, json2, "Evidence bundle serialization must be deterministic");
+
+        // Also test round-trip stability
+        let deserialized: EvidenceBundle = serde_json::from_str(&json1)
+            .expect("Deserialization should succeed");
+        let json3 = serde_json::to_string_pretty(&deserialized)
+            .expect("Re-serialization should succeed");
+
+        assert_eq!(json1, json3, "Evidence bundle round-trip must be stable");
+    }
 }

@@ -48,7 +48,7 @@ fn sidecar_processes_simple_react_component() {
     // Create a simple React component
     let react_code = r#"
 function HelloWorld(props) {
-    return <div>Hello from FrankenReact!</div>;
+    return <div>Real JSX content</div>;
 }
 
 function App() {
@@ -93,6 +93,8 @@ function App() {
     assert!(result_json.contains("component_count"));
     assert!(result_json.contains("dom_operations"));
     assert!(result_json.contains("performance_metrics"));
+    assert!(result_json.contains("Real JSX content"));
+    assert!(!result_json.contains("ExampleComponent"));
 
     // Verify trace content
     let trace = fs::read_to_string(output_dir.join("execution_trace.txt"))
@@ -237,7 +239,7 @@ function ComponentWithAttributes() {
     // Verify we have CreateElement operations
     let has_create_element = ops_array
         .iter()
-        .any(|op| op.get("type").and_then(|t| t.as_str()) == Some("CreateElement"));
+        .any(|op| op.get("type").and_then(|t| t.as_str()) == Some("create_element"));
     assert!(has_create_element, "Should have CreateElement operations");
 }
 

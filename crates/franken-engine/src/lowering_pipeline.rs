@@ -4616,7 +4616,10 @@ pub fn lower_ir2_to_ir3(
                     name: inner_name,
                     free_vars: inner_fv,
                     is_generator: inner_gen,
-                } if !inner_body.is_empty() => {
+                } => {
+                    if inner_body.is_empty() {
+                        unreachable!("Empty DeclareFunction should not reach function body lowering");
+                    }
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
@@ -4746,10 +4749,6 @@ pub fn lower_ir2_to_ir3(
                 // Hostcall operations should be handled at module level, not function level
                 Ir1Op::HostCall { .. } => {
                     unreachable!("HostCall operations should be handled at module level, not in function bodies");
-                }
-                // Empty function declarations (already handled above with guard condition)
-                Ir1Op::DeclareFunction { body_ops, .. } if body_ops.is_empty() => {
-                    unreachable!("Empty DeclareFunction should not reach function body lowering");
                 }
             }
         }
@@ -12300,5 +12299,60 @@ mod tests {
                 other
             ),
         }
+    }
+
+    #[test]
+    fn function_body_match_arms_handle_all_valid_ir1_ops() {
+        // Regression test for bd-2zyj5: Ensure catch-all replacement doesn't break existing functionality
+        // Test that LoadLiteral (one of the explicitly handled operations) works correctly in function bodies
+        use crate::ast::{FunctionDeclaration, FunctionParam, ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
+
+        let function_with_literal = Statement::FunctionDeclaration(FunctionDeclaration {
+            name: Some("testFunc".to_string()),
+            params: vec![],
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(Expression::NumericLiteral(42)),
+                span: span(),
+            })],
+            is_generator: false,
+            span: span(),
+        });
+
+        let ir0 = Ir0Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir0,
+                source_hash: None,
+                source_label: "regression_test_bd_2zyj5".to_string(),
+            },
+            tree: SyntaxTree {
+                goal: ParseGoal::Script,
+                body: vec![function_with_literal],
+                span: span(),
+            },
+        };
+
+        // This should successfully lower through all IR levels without hitting unreachable!() paths
+        let ir1_result = lower_ir0_to_ir1(&ir0);
+        assert!(ir1_result.is_ok(), "IR0->IR1 lowering should succeed with explicit match arms");
+
+        let ir1 = ir1_result.unwrap().module;
+        let ir2_result = lower_ir1_to_ir2(&ir1);
+        assert!(ir2_result.is_ok(), "IR1->IR2 lowering should succeed");
+
+        let ir2 = ir2_result.unwrap().module;
+        let ir3_result = lower_ir2_to_ir3(&ir2);
+        assert!(ir3_result.is_ok(), "IR2->IR3 lowering should succeed without hitting unreachable!() for handled operations");
+
+        // Verify that IR3 contains proper instructions for the literal and return
+        let ir3 = ir3_result.unwrap().module;
+        assert!(!ir3.instructions.is_empty(), "IR3 should contain lowered instructions");
+
+        // Should contain at least a LoadInt instruction for the literal 42
+        assert!(
+            ir3.instructions.iter().any(|instr| matches!(instr, Ir3Instruction::LoadInt { value: 42, .. })),
+            "IR3 should contain LoadInt instruction for literal 42"
+        );
     }
 }

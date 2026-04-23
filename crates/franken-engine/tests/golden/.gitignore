@@ -1,0 +1,4 @@
+# Golden file testing artifacts
+*.actual
+
+# Only commit .golden files, not temporary comparison files

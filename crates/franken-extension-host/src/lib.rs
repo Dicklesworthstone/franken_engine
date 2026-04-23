@@ -669,6 +669,18 @@ pub fn with_computed_content_hash(
     Ok(manifest)
 }
 
+#[cfg(test)]
+fn with_test_signed_supply_chain_provenance(mut manifest: ExtensionManifest) -> ExtensionManifest {
+    let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+    let verifying_key = signing_key.verifying_key();
+    manifest.trust_chain_ref = Some(bytes_to_hex(&verifying_key.to_bytes()));
+    manifest.publisher_signature = None;
+    manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+    manifest.publisher_signature =
+        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    manifest
+}
+
 /// Validate provenance requirements based on trust level.
 pub fn validate_provenance(
     manifest: &ExtensionManifest,
@@ -6706,18 +6718,16 @@ mod tests {
     }
 
     fn signed_manifest(capabilities: &[Capability]) -> ExtensionManifest {
-        let mut manifest = ExtensionManifest {
+        with_test_signed_supply_chain_provenance(ExtensionManifest {
             name: "weather-ext".to_string(),
             version: "1.2.3".to_string(),
             entrypoint: "dist/index.js".to_string(),
             capabilities: capability_set(capabilities),
-            publisher_signature: Some(vec![1, 2, 3, 4]),
+            publisher_signature: None,
             content_hash: [0; 32],
-            trust_chain_ref: Some("chain/weather-team".to_string()),
+            trust_chain_ref: None,
             min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
-        };
-        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
-        manifest
+        })
     }
 
     fn development_manifest(capabilities: &[Capability]) -> ExtensionManifest {
@@ -6760,6 +6770,16 @@ mod tests {
         assert_eq!(
             validate_manifest(&manifest),
             Err(ManifestValidationError::MissingPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn signed_supply_chain_rejects_tampered_signature() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        manifest.publisher_signature.as_mut().expect("signature")[0] ^= 0xFF;
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
 
@@ -6840,7 +6860,7 @@ mod tests {
     fn validate_manifest_with_config_accepts_relaxed_name_limit() {
         let mut manifest = signed_manifest(&[Capability::FsRead]);
         manifest.name = "x".repeat(MAX_NAME_LEN + 1);
-        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+        manifest = with_test_signed_supply_chain_provenance(manifest);
         let config = ExtensionHostConfig {
             max_name_len: MAX_NAME_LEN + 1,
             ..ExtensionHostConfig::default()
@@ -6976,20 +6996,18 @@ mod lifecycle_tests {
     use std::thread;
 
     fn lifecycle_manifest() -> ExtensionManifest {
-        let mut manifest = ExtensionManifest {
+        with_test_signed_supply_chain_provenance(ExtensionManifest {
             name: "lifecycle-ext".to_string(),
             version: "1.0.0".to_string(),
             entrypoint: "dist/main.js".to_string(),
             capabilities: [Capability::FsRead, Capability::FsWrite]
                 .into_iter()
                 .collect(),
-            publisher_signature: Some(vec![1, 2, 3, 4]),
+            publisher_signature: None,
             content_hash: [0; 32],
-            trust_chain_ref: Some("chain/lifecycle".to_string()),
+            trust_chain_ref: None,
             min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
-        };
-        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
-        manifest
+        })
     }
 
     fn context() -> LifecycleContext<'static> {
@@ -7961,18 +7979,16 @@ mod delegate_cell_tests {
     const GUARDPLANE_REPLAY_COMMAND_SPACE_SENTINEL: &str = "__FRANKEN_ENGINE_SPACE__";
 
     fn delegate_base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
-        let mut manifest = ExtensionManifest {
+        with_test_signed_supply_chain_provenance(ExtensionManifest {
             name: "delegate-ext".to_string(),
             version: "1.0.0".to_string(),
             entrypoint: "dist/delegate.js".to_string(),
             capabilities: capabilities.iter().copied().collect(),
-            publisher_signature: Some(vec![1, 2, 3, 4]),
+            publisher_signature: None,
             content_hash: [0; 32],
-            trust_chain_ref: Some("chain/delegate".to_string()),
+            trust_chain_ref: None,
             min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
-        };
-        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
-        manifest
+        })
     }
 
     fn delegate_manifest(
@@ -11358,14 +11374,18 @@ mod enrichment_tests {
             version: "1.0.0".to_string(),
             entrypoint: "dist/index.js".to_string(),
             capabilities: [Capability::FsRead].into_iter().collect(),
-            publisher_signature: Some(vec![1, 2, 3]),
+            publisher_signature: None,
             content_hash: [0; 32],
-            trust_chain_ref: Some("chain/hash".to_string()),
+            trust_chain_ref: None,
             min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
         };
         let hashed = with_computed_content_hash(manifest).expect("compute hash");
+        let config = ExtensionHostConfig {
+            allow_development_trust: true,
+            ..ExtensionHostConfig::default()
+        };
         assert_ne!(hashed.content_hash, [0; 32]);
-        assert_eq!(validate_manifest(&hashed), Ok(()));
+        assert_eq!(validate_manifest_with_config(&hashed, &config), Ok(()));
     }
 
     // ── CapabilityEscrowReceiptQuery ────────────────────────────────────

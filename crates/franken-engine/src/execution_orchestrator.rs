@@ -861,16 +861,10 @@ impl ExecutionOrchestrator {
     }
 
     fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<RuntimeCapability> {
-        let mut capabilities: BTreeSet<RuntimeCapability> = ir3
-            .required_capabilities
+        ir3.required_capabilities
             .iter()
             .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
-            .collect();
-        capabilities.extend([
-            RuntimeCapability::VmDispatch,
-            RuntimeCapability::HeapAllocate,
-        ]);
-        capabilities
+            .collect()
     }
 
     fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
@@ -2181,11 +2175,23 @@ mod tests {
     }
 
     #[test]
-    fn internal_execution_capabilities_always_grant_execution_substrate() {
+    fn internal_execution_capabilities_are_explicit_not_synthetic() {
         let mut ir3 = Ir3Module::new(ContentHash::compute(b"module"), "module.js");
+
+        let empty_capabilities =
+            ExecutionOrchestrator::internal_runtime_capabilities_for_module(&ir3);
+        assert!(!empty_capabilities.contains(&RuntimeCapability::VmDispatch));
+        assert!(!empty_capabilities.contains(&RuntimeCapability::HeapAllocate));
+
         ir3.required_capabilities
             .push(crate::ir_contract::CapabilityTag(
                 "module:import".to_string(),
+            ));
+        ir3.required_capabilities
+            .push(crate::ir_contract::CapabilityTag("vm_dispatch".to_string()));
+        ir3.required_capabilities
+            .push(crate::ir_contract::CapabilityTag(
+                "heap_allocate".to_string(),
             ));
 
         let capabilities = ExecutionOrchestrator::internal_runtime_capabilities_for_module(&ir3);

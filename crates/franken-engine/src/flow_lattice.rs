@@ -2126,7 +2126,7 @@ mod tests {
             Clearance::SealedSink,
             Clearance::NeverSink,
         ];
-        let set: std::collections::BTreeSet<String> = all.iter().map(|c| format!("{c}")).collect();
+        let set: std::collections::BTreeSet<String> = all.iter().map(|c| c.to_string()).collect();
         assert_eq!(set.len(), all.len());
     }
 
@@ -2139,7 +2139,7 @@ mod tests {
             LabelClass::Secret,
             LabelClass::TopSecret,
         ];
-        let set: std::collections::BTreeSet<String> = all.iter().map(|l| format!("{l}")).collect();
+        let set: std::collections::BTreeSet<String> = all.iter().map(|l| l.to_string()).collect();
         assert_eq!(set.len(), all.len());
     }
 

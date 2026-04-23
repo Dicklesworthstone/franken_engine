@@ -12359,4 +12359,235 @@ mod tests {
             "IR3 should contain LoadInt instruction for literal 42"
         );
     }
+
+    // -- Metamorphic Statement Reordering Tests (bd-uz6fe) --
+
+    #[test]
+    fn statement_reordering_equivalence_independent_variable_declarations() {
+        // Test that reordering independent statements produces IR that differs only in explicit order
+        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression};
+
+        // Create fixture with independent variable declarations (no data dependencies)
+        let stmt_a = Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Let,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::Identifier("a".to_string()),
+                initializer: Some(Expression::NumericLiteral(1)),
+            }],
+            span: span(),
+        });
+
+        let stmt_b = Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Let,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::Identifier("b".to_string()),
+                initializer: Some(Expression::NumericLiteral(2)),
+            }],
+            span: span(),
+        });
+
+        let stmt_c = Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::Identifier("c".to_string()),
+                initializer: Some(Expression::NumericLiteral(3)),
+            }],
+            span: span(),
+        });
+
+        // Original order: [a, b, c]
+        let ir0_original = stmt_ir0(vec![stmt_a.clone(), stmt_b.clone(), stmt_c.clone()]);
+        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
+
+        // Permuted order: [c, a, b]
+        let ir0_permuted = stmt_ir0(vec![stmt_c.clone(), stmt_a.clone(), stmt_b.clone()]);
+        let result_permuted = lower_ir0_to_ir1(&ir0_permuted).expect("permuted order should lower successfully");
+
+        // Both should have the same number of bindings (variables declared)
+        assert_eq!(
+            result_original.module.scopes[0].bindings.len(),
+            result_permuted.module.scopes[0].bindings.len(),
+            "Both orderings should declare the same number of bindings"
+        );
+
+        // Collect binding names from both results
+        let original_binding_names: std::collections::BTreeSet<String> = result_original.module.scopes[0]
+            .bindings
+            .iter()
+            .map(|binding| binding.name.clone())
+            .collect();
+
+        let permuted_binding_names: std::collections::BTreeSet<String> = result_permuted.module.scopes[0]
+            .bindings
+            .iter()
+            .map(|binding| binding.name.clone())
+            .collect();
+
+        // The same bindings should be declared in both orderings
+        assert_eq!(
+            original_binding_names,
+            permuted_binding_names,
+            "Both orderings should declare the same binding names"
+        );
+
+        // Verify specific expected bindings are present
+        assert!(original_binding_names.contains("a"), "Binding 'a' should be declared");
+        assert!(original_binding_names.contains("b"), "Binding 'b' should be declared");
+        assert!(original_binding_names.contains("c"), "Binding 'c' should be declared");
+
+        // Both should have the same number of ops (excluding order-dependent details)
+        assert_eq!(
+            result_original.module.ops.len(),
+            result_permuted.module.ops.len(),
+            "Both orderings should generate the same number of IR1 operations"
+        );
+
+        // Normalize and compare canonical forms to verify semantic equivalence
+        let original_canonical = result_original.module.canonical_value();
+        let permuted_canonical = result_permuted.module.canonical_value();
+
+        // The canonical forms should be identical (canonicalization sorts bindings deterministically)
+        assert_eq!(
+            original_canonical,
+            permuted_canonical,
+            "Canonical forms should be identical for equivalent statement orderings"
+        );
+    }
+
+    #[test]
+    fn statement_reordering_equivalence_mixed_independent_statements() {
+        // Test with mixed statement types (variables and expressions) that are independent
+        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression, ExpressionStatement};
+
+        let var_stmt = Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::Identifier("x".to_string()),
+                initializer: Some(Expression::NumericLiteral(10)),
+            }],
+            span: span(),
+        });
+
+        let expr_stmt1 = Statement::Expression(ExpressionStatement {
+            expression: Expression::NumericLiteral(100),
+            span: span(),
+        });
+
+        let expr_stmt2 = Statement::Expression(ExpressionStatement {
+            expression: Expression::StringLiteral("test".to_string()),
+            span: span(),
+        });
+
+        // Original order: [var, expr1, expr2]
+        let ir0_original = stmt_ir0(vec![var_stmt.clone(), expr_stmt1.clone(), expr_stmt2.clone()]);
+        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original mixed order should lower successfully");
+
+        // Permuted order: [expr2, var, expr1]
+        let ir0_permuted = stmt_ir0(vec![expr_stmt2.clone(), var_stmt.clone(), expr_stmt1.clone()]);
+        let result_permuted = lower_ir0_to_ir1(&ir0_permuted).expect("permuted mixed order should lower successfully");
+
+        // Should have same binding structure
+        assert_eq!(
+            result_original.module.scopes[0].bindings.len(),
+            result_permuted.module.scopes[0].bindings.len(),
+            "Mixed statement orderings should declare the same number of bindings"
+        );
+
+        // Verify the variable binding is present in both
+        let original_has_x = result_original.module.scopes[0]
+            .bindings
+            .iter()
+            .any(|binding| binding.name == "x");
+        let permuted_has_x = result_permuted.module.scopes[0]
+            .bindings
+            .iter()
+            .any(|binding| binding.name == "x");
+
+        assert!(original_has_x && permuted_has_x, "Variable 'x' should be declared in both orderings");
+
+        // Canonical forms should be equivalent for semantic independence
+        let original_canonical = result_original.module.canonical_value();
+        let permuted_canonical = result_permuted.module.canonical_value();
+
+        assert_eq!(
+            original_canonical,
+            permuted_canonical,
+            "Mixed independent statements should have equivalent canonical forms regardless of order"
+        );
+    }
+
+    #[test]
+    fn statement_reordering_preserves_operation_count() {
+        // Test that reordering doesn't change the total operation count
+        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression};
+
+        let stmts: Vec<Statement> = (0..5)
+            .map(|i| {
+                Statement::VariableDeclaration(VariableDeclaration {
+                    kind: VariableDeclarationKind::Let,
+                    declarations: vec![VariableDeclarator {
+                        pattern: BindingPattern::Identifier(format!("var_{}", i)),
+                        initializer: Some(Expression::NumericLiteral(i)),
+                    }],
+                    span: span(),
+                })
+            })
+            .collect();
+
+        // Original order: [0, 1, 2, 3, 4]
+        let ir0_original = stmt_ir0(stmts.clone());
+        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
+
+        // Reverse order: [4, 3, 2, 1, 0]
+        let mut stmts_reversed = stmts.clone();
+        stmts_reversed.reverse();
+        let ir0_reversed = stmt_ir0(stmts_reversed);
+        let result_reversed = lower_ir0_to_ir1(&ir0_reversed).expect("reversed order should lower successfully");
+
+        // Operation counts should be identical
+        assert_eq!(
+            result_original.module.ops.len(),
+            result_reversed.module.ops.len(),
+            "Statement reordering should preserve total operation count"
+        );
+
+        // Binding counts should be identical
+        assert_eq!(
+            result_original.module.scopes[0].bindings.len(),
+            result_reversed.module.scopes[0].bindings.len(),
+            "Statement reordering should preserve total binding count"
+        );
+
+        // All variable names should be present in both
+        let original_names: std::collections::BTreeSet<String> = result_original.module.scopes[0]
+            .bindings
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
+
+        let reversed_names: std::collections::BTreeSet<String> = result_reversed.module.scopes[0]
+            .bindings
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
+
+        assert_eq!(
+            original_names,
+            reversed_names,
+            "Statement reordering should preserve all declared variable names"
+        );
+
+        // Verify specific variables are present
+        for i in 0..5 {
+            let var_name = format!("var_{}", i);
+            assert!(
+                original_names.contains(&var_name),
+                "Variable '{}' should be declared in original order", var_name
+            );
+            assert!(
+                reversed_names.contains(&var_name),
+                "Variable '{}' should be declared in reversed order", var_name
+            );
+        }
+    }
 }

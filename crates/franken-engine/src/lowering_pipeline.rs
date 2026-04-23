@@ -836,7 +836,183 @@ pub fn lower_ir0_to_ir1(
                     }
                 }
             },
-            _ => {
+            Statement::VariableDeclaration(variable_declaration) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Expression(expression_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Block(block_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::If(if_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::For(for_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::While(while_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::DoWhile(do_while_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Return(return_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Throw(throw_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::TryCatch(try_catch_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Switch(switch_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Break(break_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::Continue(continue_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::FunctionDeclaration(function_declaration) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::ClassDeclaration(class_declaration) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::ForIn(for_in_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
+            Statement::ForOf(for_of_statement) => {
                 lower_statement_to_ir1(
                     statement,
                     &mut ir1.ops,

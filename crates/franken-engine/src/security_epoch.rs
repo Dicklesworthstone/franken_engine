@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// updates, remote durability or trust configuration changes.
 ///
 /// The epoch value **never decreases** within a runtime instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SecurityEpoch(u64);
 
 impl SecurityEpoch {
@@ -49,9 +49,31 @@ impl SecurityEpoch {
     }
 }
 
+impl fmt::Debug for SecurityEpoch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Use opaque labels in debug output to prevent information disclosure
+        let opaque_label = match self.0 {
+            1 => "generation-legacy",
+            2 => "generation-standard",
+            3 => "generation-current",
+            _ => "generation-unknown",
+        };
+        f.debug_tuple("SecurityEpoch")
+            .field(&opaque_label)
+            .finish()
+    }
+}
+
 impl fmt::Display for SecurityEpoch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "epoch:{}", self.0)
+        // Use opaque labels instead of raw epoch numbers to prevent information disclosure
+        let opaque_label = match self.0 {
+            1 => "generation-legacy",
+            2 => "generation-standard",
+            3 => "generation-current",
+            _ => "generation-unknown",
+        };
+        write!(f, "epoch:{}", opaque_label)
     }
 }
 

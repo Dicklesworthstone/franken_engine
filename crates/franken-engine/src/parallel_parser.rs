@@ -851,6 +851,24 @@ impl fmt::Display for TranscriptReplayError {
     }
 }
 
+impl AsRef<str> for TranscriptReplayError {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::PlanHashMismatch { .. } => "plan hash mismatch",
+            Self::WorkerCountMismatch { .. } => "worker count mismatch",
+            Self::InvalidExecutionOrderLength { .. } => "execution order length mismatch",
+            Self::InvalidDispatchCount { .. } => "dispatch count mismatch",
+            Self::InvalidChunkReference { .. } => "invalid chunk reference",
+            Self::DuplicateChunkReference { .. } => "duplicate chunk reference in transcript",
+            Self::MissingChunkReference { .. } => "missing chunk reference in transcript",
+            Self::DispatchStepMismatch { .. } => "dispatch step mismatch",
+            Self::DispatchChunkMismatch { .. } => "dispatch chunk mismatch",
+            Self::WorkerSlotOutOfRange { .. } => "worker slot out of range",
+            Self::TranscriptHashMismatch { .. } => "transcript hash mismatch",
+        }
+    }
+}
+
 /// Replay and validate a scheduler transcript against a chunk plan.
 ///
 /// Returns the replay execution order if all transcript invariants hold.
@@ -1016,6 +1034,19 @@ impl fmt::Display for FailoverTriggerClass {
     }
 }
 
+impl AsRef<str> for FailoverTriggerClass {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::TranscriptDivergence => "transcript-divergence",
+            Self::WitnessMismatch => "witness-mismatch",
+            Self::SafetyPolicyViolation => "safety-policy-violation",
+            Self::ParityMismatch => "parity-mismatch",
+            Self::ResourceLimit => "resource-limit",
+        }
+    }
+}
+
 /// Classified failover trigger with deterministic detail payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailoverTrigger {
@@ -1039,6 +1070,17 @@ impl fmt::Display for FailoverState {
             Self::TriggerClassified => write!(f, "trigger-classified"),
             Self::SerialFallbackRequested => write!(f, "serial-fallback-requested"),
             Self::SerialFallbackCompleted => write!(f, "serial-fallback-completed"),
+        }
+    }
+}
+
+impl AsRef<str> for FailoverState {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::ParallelAttempted => "parallel-attempted",
+            Self::TriggerClassified => "trigger-classified",
+            Self::SerialFallbackRequested => "serial-fallback-requested",
+            Self::SerialFallbackCompleted => "serial-fallback-completed",
         }
     }
 }
@@ -1135,6 +1177,16 @@ impl fmt::Display for BackpressureLevel {
             Self::Normal => write!(f, "normal"),
             Self::Elevated => write!(f, "elevated"),
             Self::Critical => write!(f, "critical"),
+        }
+    }
+}
+
+impl AsRef<str> for BackpressureLevel {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Normal => "normal",
+            Self::Elevated => "elevated",
+            Self::Critical => "critical",
         }
     }
 }
@@ -3826,7 +3878,7 @@ mod tests {
         ];
         let mut set = std::collections::BTreeSet::new();
         for v in &variants {
-            set.insert(v.to_string());
+            set.insert(v.as_ref());
         }
         assert_eq!(set.len(), variants.len());
     }
@@ -3841,7 +3893,7 @@ mod tests {
         ];
         let mut set = std::collections::BTreeSet::new();
         for v in &variants {
-            set.insert(v.to_string());
+            set.insert(v.as_ref());
         }
         assert_eq!(set.len(), variants.len());
     }
@@ -3855,7 +3907,7 @@ mod tests {
         ];
         let mut set = std::collections::BTreeSet::new();
         for v in &variants {
-            set.insert(v.to_string());
+            set.insert(v.as_ref());
         }
         assert_eq!(set.len(), variants.len());
     }
@@ -4173,7 +4225,7 @@ mod tests {
         ];
         let mut set = std::collections::BTreeSet::new();
         for v in &variants {
-            set.insert(v.to_string());
+            set.insert(v.as_ref());
         }
         assert_eq!(set.len(), variants.len());
     }

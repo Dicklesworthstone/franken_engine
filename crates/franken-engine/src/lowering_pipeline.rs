@@ -1137,7 +1137,17 @@ fn reserve_root_scope_bindings(
                     declared.insert(name.clone());
                 }
             }
-            _ => {}
+            // Statements that don't introduce root-level bindings
+            Statement::Export(_) => {
+                // Export statements re-export existing bindings but don't create new ones
+            }
+            Statement::Expression(_) | Statement::Block(_) | Statement::If(_)
+            | Statement::For(_) | Statement::While(_) | Statement::DoWhile(_)
+            | Statement::Return(_) | Statement::Throw(_) | Statement::TryCatch(_)
+            | Statement::Switch(_) | Statement::Break(_) | Statement::Continue(_)
+            | Statement::ForIn(_) | Statement::ForOf(_) => {
+                // These statements don't introduce bindings at root scope
+            }
         }
     }
 
@@ -4681,8 +4691,66 @@ pub fn lower_ir2_to_ir3(
                         .push(Ir3Instruction::Move { dst, src: current });
                     fn_value_stack.push(dst);
                 }
-                // Fallthrough: unhandled ops in function bodies become nops.
-                _ => {}
+                // Operations that should not appear in function bodies
+                Ir1Op::ImportModule { .. } => {
+                    unreachable!("ImportModule operations should only appear at module level, not in function bodies");
+                }
+                Ir1Op::ExportBinding { .. } => {
+                    unreachable!("ExportBinding operations should only appear at module level, not in function bodies");
+                }
+                // Control flow operations not yet supported in function bodies
+                Ir1Op::JumpIfNullish { .. } => {
+                    unreachable!("JumpIfNullish not yet implemented in function body lowering");
+                }
+                // Property operations not yet supported
+                Ir1Op::DeleteProperty { .. } => {
+                    unreachable!("DeleteProperty not yet implemented in function body lowering");
+                }
+                // Template literals not yet supported
+                Ir1Op::TemplateLiteral { .. } => {
+                    unreachable!("TemplateLiteral not yet implemented in function body lowering");
+                }
+                // Constructor calls not yet supported
+                Ir1Op::Construct { .. } => {
+                    unreachable!("Construct not yet implemented in function body lowering");
+                }
+                // Exception handling not yet supported in function bodies
+                Ir1Op::BeginTry { .. } => {
+                    unreachable!("BeginTry not yet implemented in function body lowering");
+                }
+                Ir1Op::EndTry => {
+                    unreachable!("EndTry not yet implemented in function body lowering");
+                }
+                Ir1Op::EnterFinally => {
+                    unreachable!("EnterFinally not yet implemented in function body lowering");
+                }
+                Ir1Op::EndFinally => {
+                    unreachable!("EndFinally not yet implemented in function body lowering");
+                }
+                // Iterator protocol not yet supported in function bodies
+                Ir1Op::ForInInit => {
+                    unreachable!("ForInInit not yet implemented in function body lowering");
+                }
+                Ir1Op::ForInNext { .. } => {
+                    unreachable!("ForInNext not yet implemented in function body lowering");
+                }
+                Ir1Op::ForOfInit => {
+                    unreachable!("ForOfInit not yet implemented in function body lowering");
+                }
+                Ir1Op::ForOfNext { .. } => {
+                    unreachable!("ForOfNext not yet implemented in function body lowering");
+                }
+                Ir1Op::IteratorClose { .. } => {
+                    unreachable!("IteratorClose not yet implemented in function body lowering");
+                }
+                // Hostcall operations should be handled at module level, not function level
+                Ir1Op::HostCall { .. } => {
+                    unreachable!("HostCall operations should be handled at module level, not in function bodies");
+                }
+                // Empty function declarations (already handled above with guard condition)
+                Ir1Op::DeclareFunction { body_ops, .. } if body_ops.is_empty() => {
+                    unreachable!("Empty DeclareFunction should not reach function body lowering");
+                }
             }
         }
 

@@ -82,6 +82,7 @@ const CODE_BUNDLE_CONTEXT_MISMATCH: &str = "FE-TPV-BUNDLE-0003";
 const CODE_BUNDLE_REMOTE_EXEC: &str = "FE-TPV-BUNDLE-0004";
 const CODE_BUNDLE_DIGEST_MISMATCH: &str = "FE-TPV-BUNDLE-0005";
 const CODE_BUNDLE_SCHEMA_MISMATCH: &str = "FE-TPV-BUNDLE-0006";
+const CODE_UNSUPPORTED_PLACEHOLDER_COMMAND: &str = "FE-FRANKENCTL-UNSUPPORTED-PLACEHOLDER";
 const BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION: &str = "franken-engine.env.v1";
 const BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.manifest.v1";
 const BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
@@ -2084,12 +2085,27 @@ fn parse_gates_command(args: &[String]) -> Result<CommandSpec, String> {
             }))
         }
         "signature-drift" => {
-            let out_dir = PathBuf::from("artifacts/gates/signature_drift");
+            let mut out_dir: Option<PathBuf> = None;
+            let mut config: Option<PathBuf> = None;
+
+            let mut index = 1; // Skip "signature-drift"
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--out-dir" => {
+                        out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?))
+                    }
+                    "--config" => {
+                        config = Some(PathBuf::from(next_arg(args, &mut index, "--config")?))
+                    }
+                    flag => return Err(format!("unknown signature-drift flag `{flag}`")),
+                }
+                index += 1;
+            }
+
+            let out_dir = out_dir
+                .ok_or_else(|| "gates signature-drift requires --out-dir <dir>".to_string())?;
             Ok(CommandSpec::Gates(GatesArgs {
-                mode: GatesMode::SignatureDrift {
-                    out_dir,
-                    config: None,
-                },
+                mode: GatesMode::SignatureDrift { out_dir, config },
             }))
         }
         other => Err(format!("unknown gates subcommand `{other}`")),
@@ -4706,33 +4722,13 @@ fn execute_gates(args: GatesArgs) -> Result<i32, String> {
                 ))
             }
         }
-        GatesMode::SignatureDrift { out_dir, config: _ } => {
-            std::fs::create_dir_all(&out_dir)
-                .map_err(|e| format!("Failed to create output directory: {e}"))?;
-
-            // TODO: Implement full signature drift analysis
-            // This should analyze cryptographic signature stability across gate validation
-            // and generate drift reports with threshold warnings
-
-            // Generate basic drift analysis report
+        GatesMode::SignatureDrift { out_dir, config } => {
             let report_path = out_dir.join("signature_drift_analysis.json");
-            let placeholder_report = serde_json::json!({
-                "analysis_type": "signature_drift",
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "gates_analyzed": 0,
-                "drift_detected": false,
-                "status": "placeholder_implementation",
-                "note": "Basic implementation - full signature drift analysis pending"
-            });
-
-            std::fs::write(&report_path, serde_json::to_string_pretty(&placeholder_report)
-                .map_err(|e| format!("Failed to serialize report: {e}"))?)
-                .map_err(|e| format!("Failed to write report: {e}"))?;
-
-            println!("📊 Signature drift analysis completed");
-            println!("📁 Report: {}", report_path.display());
-            println!("ℹ️  Note: Using placeholder implementation - full analysis pending");
-            Ok(0)
+            Err(fail_closed_placeholder_command(
+                "gates signature-drift",
+                Some(&report_path),
+                config.as_deref(),
+            ))
         }
         _ => Err(
             "Unsupported gates subcommand. Use 'frankenctl help gates' to see available commands."
@@ -4776,37 +4772,12 @@ fn execute_reports(args: ReportsArgs) -> Result<i32, String> {
             }
         }
         ReportsMode::LoweringGap { out } => {
-            // TODO: Implement comprehensive lowering gap analysis
-            // This should analyze gaps between IR levels (IR0->IR1->IR2->IR3)
-            // and report unsupported constructs, optimization opportunities
-
             let output_path = out.unwrap_or_else(|| PathBuf::from("lowering_gap_report.json"));
-
-            // Generate basic gap analysis report
-            let placeholder_report = serde_json::json!({
-                "analysis_type": "lowering_gap",
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "ir_levels_analyzed": ["IR0", "IR1", "IR2", "IR3"],
-                "gaps_detected": [],
-                "coverage_percentage": 95.0,
-                "status": "placeholder_implementation",
-                "note": "Basic implementation - full lowering gap analysis pending"
-            });
-
-            // Create parent directory if needed
-            if let Some(parent) = output_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create output directory: {e}"))?;
-            }
-
-            std::fs::write(&output_path, serde_json::to_string_pretty(&placeholder_report)
-                .map_err(|e| format!("Failed to serialize report: {e}"))?)
-                .map_err(|e| format!("Failed to write report: {e}"))?;
-
-            println!("📊 IR lowering gap analysis completed");
-            println!("📁 Report: {}", output_path.display());
-            println!("ℹ️  Note: Using placeholder implementation - full analysis pending");
-            Ok(0)
+            Err(fail_closed_placeholder_command(
+                "reports lowering-gap",
+                Some(&output_path),
+                None,
+            ))
         }
         _ => {
             Err("Unsupported reports subcommand. Use 'frankenctl help reports' to see available commands.".to_string())
@@ -4847,45 +4818,41 @@ fn execute_test(args: TestArgs) -> Result<i32, String> {
                 Err(format!("Test262 runner failed with exit code: {code}"))
             }
         }
-        TestMode::Lockstep { config: _, out } => {
-            // TODO: Implement comprehensive lockstep deterministic testing
-            // This should run the same test suite across multiple execution contexts
-            // and verify bit-exact deterministic results
-
+        TestMode::Lockstep { config, out } => {
             let output_path = out.unwrap_or_else(|| PathBuf::from("lockstep_test_results.json"));
-
-            // Generate basic lockstep test report
-            let placeholder_report = serde_json::json!({
-                "test_type": "lockstep_deterministic",
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "execution_contexts": ["baseline", "deterministic", "throughput"],
-                "tests_executed": 0,
-                "deterministic_violations": 0,
-                "pass_rate": 100.0,
-                "status": "placeholder_implementation",
-                "note": "Basic implementation - full lockstep testing pending"
-            });
-
-            // Create parent directory if needed
-            if let Some(parent) = output_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create output directory: {e}"))?;
-            }
-
-            std::fs::write(&output_path, serde_json::to_string_pretty(&placeholder_report)
-                .map_err(|e| format!("Failed to serialize report: {e}"))?)
-                .map_err(|e| format!("Failed to write report: {e}"))?;
-
-            println!("🔒 Lockstep deterministic testing completed");
-            println!("📁 Report: {}", output_path.display());
-            println!("ℹ️  Note: Using placeholder implementation - full lockstep testing pending");
-            Ok(0)
+            Err(fail_closed_placeholder_command(
+                "test lockstep",
+                Some(&output_path),
+                config.as_deref(),
+            ))
         }
         _ => Err(
             "Unsupported test subcommand. Use 'frankenctl help test' to see available commands."
                 .to_string(),
         ),
     }
+}
+
+fn fail_closed_placeholder_command(
+    command: &str,
+    output_path: Option<&Path>,
+    config_path: Option<&Path>,
+) -> String {
+    let mut details = vec![format!(
+        "{CODE_UNSUPPORTED_PLACEHOLDER_COMMAND}: {command} is not implemented; refusing to emit placeholder success artifacts"
+    )];
+
+    if let Some(output_path) = output_path {
+        details.push(format!(
+            "no placeholder artifact was written to {}",
+            output_path.display()
+        ));
+    }
+    if let Some(config_path) = config_path {
+        details.push(format!("config requested: {}", config_path.display()));
+    }
+
+    details.join("; ")
 }
 
 fn execute_synth(args: SynthArgs) -> Result<i32, String> {
@@ -7312,6 +7279,88 @@ mod tests {
         } else {
             panic!("expected Gates command");
         }
+    }
+
+    #[test]
+    fn parse_gates_signature_drift_command_parses_advertised_flags() {
+        let args = vec![
+            "gates".to_string(),
+            "signature-drift".to_string(),
+            "--out-dir".to_string(),
+            "test/gates/signature".to_string(),
+            "--config".to_string(),
+            "signature-drift.json".to_string(),
+        ];
+        let result = parse_command(&args).expect("should parse valid signature-drift command");
+        if let CommandSpec::Gates(gates_args) = result {
+            if let GatesMode::SignatureDrift { out_dir, config } = gates_args.mode {
+                assert_eq!(out_dir, PathBuf::from("test/gates/signature"));
+                assert_eq!(config, Some(PathBuf::from("signature-drift.json")));
+            } else {
+                panic!("expected SignatureDrift mode");
+            }
+        } else {
+            panic!("expected Gates command");
+        }
+    }
+
+    #[test]
+    fn parse_gates_signature_drift_command_requires_out_dir() {
+        let args = vec!["gates".to_string(), "signature-drift".to_string()];
+        let error = parse_command(&args).expect_err("missing out-dir should fail");
+        assert_eq!(error, "gates signature-drift requires --out-dir <dir>");
+    }
+
+    #[test]
+    fn placeholder_analysis_commands_fail_closed_without_writing_artifacts() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "frankenctl-placeholder-fail-closed-{}",
+            current_unix_ns()
+        ));
+
+        let signature_out_dir = temp_root.join("signature");
+        let signature_config = temp_root.join("signature-config.json");
+        let signature_report = signature_out_dir.join("signature_drift_analysis.json");
+        let signature_error = execute_gates(GatesArgs {
+            mode: GatesMode::SignatureDrift {
+                out_dir: signature_out_dir.clone(),
+                config: Some(signature_config.clone()),
+            },
+        })
+        .expect_err("signature-drift should fail closed");
+        assert!(signature_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
+        assert!(signature_error.contains("gates signature-drift"));
+        assert!(signature_error.contains(signature_report.display().to_string().as_str()));
+        assert!(signature_error.contains(signature_config.display().to_string().as_str()));
+        assert!(!signature_out_dir.exists());
+        assert!(!signature_report.exists());
+
+        let lowering_report = temp_root.join("lowering-gap.json");
+        let lowering_error = execute_reports(ReportsArgs {
+            mode: ReportsMode::LoweringGap {
+                out: Some(lowering_report.clone()),
+            },
+        })
+        .expect_err("lowering-gap should fail closed");
+        assert!(lowering_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
+        assert!(lowering_error.contains("reports lowering-gap"));
+        assert!(lowering_error.contains(lowering_report.display().to_string().as_str()));
+        assert!(!lowering_report.exists());
+
+        let lockstep_report = temp_root.join("lockstep.json");
+        let lockstep_config = temp_root.join("lockstep-config.json");
+        let lockstep_error = execute_test(TestArgs {
+            mode: TestMode::Lockstep {
+                config: Some(lockstep_config.clone()),
+                out: Some(lockstep_report.clone()),
+            },
+        })
+        .expect_err("lockstep should fail closed");
+        assert!(lockstep_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
+        assert!(lockstep_error.contains("test lockstep"));
+        assert!(lockstep_error.contains(lockstep_report.display().to_string().as_str()));
+        assert!(lockstep_error.contains(lockstep_config.display().to_string().as_str()));
+        assert!(!lockstep_report.exists());
     }
 
     #[test]

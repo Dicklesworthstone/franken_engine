@@ -198,6 +198,61 @@ fn test_runtime_parser_security_lane_integration() {
 }
 
 #[test]
+fn test_suite_runner_counts_validation_mismatches() {
+    let config = TestHarnessConfig {
+        mode: TestExecutionMode::Integration,
+        deterministic_seed: 246810,
+        timeout_millis: 30000,
+        artifact_dir: PathBuf::from("target/test_harness_validation_mismatches"),
+        isolation: TestIsolationLevel::Complete,
+    };
+
+    let mut runner = TestSuiteRunner::new(config);
+
+    let suite = TestSuite {
+        suite_id: "validation_mismatch_accounting".to_string(),
+        runtime_tests: vec![
+            RuntimeTestSpec {
+                test_id: "runtime_valid_success".to_string(),
+                source_complexity: SourceComplexity::Simple,
+                data_size: 2,
+                expected_outcome: TestOutcome::Success,
+            },
+            RuntimeTestSpec {
+                test_id: "runtime_wrong_expectation".to_string(),
+                source_complexity: SourceComplexity::Simple,
+                data_size: 2,
+                expected_outcome: TestOutcome::Failure,
+            },
+        ],
+        parser_tests: vec![ParserTestSpec {
+            test_id: "parser_expected_validation_failure".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            syntax_features: Vec::new(),
+            expected_outcome: TestOutcome::Failure,
+        }],
+        security_tests: vec![SecurityTestSpec {
+            test_id: "security_expected_validation_failure".to_string(),
+            threat_vectors: vec![
+                ThreatVector::CodeInjection,
+                ThreatVector::PrototypePollution,
+                ThreatVector::PathTraversal,
+            ],
+            security_level: SecurityLevel::Critical,
+            expected_outcome: TestOutcome::Failure,
+        }],
+    };
+
+    let result = runner.execute_test_suite(suite);
+
+    assert_eq!(result.total_tests, 4);
+    assert_eq!(result.passed_tests, 3);
+    assert_eq!(result.failed_tests, 1);
+    assert_eq!(result.results[1].test_id, "runtime_wrong_expectation");
+    assert!(!result.results[1].success);
+}
+
+#[test]
 fn test_test_fixture_generator_integration() {
     let mut generator = TestFixtureGenerator::new(123789);
 

@@ -50,15 +50,18 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 | Cross-repo constitution | Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
 | Evidence-first operations | Every published performance and security claim ships with reproducible artifact bundles |
 
-## Planned CLI Contract Example
+## CLI Contract
 
-The `frankenctl` examples below document the intended operator contract. The
-current repository does not ship a `frankenctl` binary; build and verification
-today happen through the Rust workspace crates and the release binaries listed
-in [Installation](#installation).
+The shipped `frankenctl` CLI provides core execution surfaces and selective 
+operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`, 
+`verify`, `benchmark`, `replay`, `react`, `gates`, `reports`, `test`, `synth`, 
+`orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) 
+for production guidance.
+
+The `frankenctl` examples below document the operator contract:
 
 ```bash
-# 1) Verify the future CLI binary once it exists
+# 1) Verify the CLI binary and schema version
 frankenctl version
 
 # 2) Create a tiny source file and artifact directory
@@ -338,10 +341,11 @@ The workspace currently includes these crates:
 
 The source tree currently defines these release binaries:
 
+- `frankenctl` (main CLI binary)
 - `franken-react-sidecar`
 - `franken-benchmark-evidence-export`
 
-There is no root `install.sh`, `frankenengine-cli` Cargo package, `frankenctl` binary, or prebuilt Linux/macOS/Windows binary bundle in this repository at this time.
+There is no root `install.sh`, prebuilt Linux/macOS/Windows binary bundle, or separate `frankenengine-cli` Cargo package in this repository at this time.
 
 ### Optional Operator Stack
 
@@ -392,13 +396,11 @@ frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace
 
 ## Command Reference
 
-The command table below is the planned `frankenctl` contract. The current
-repository does not build a `frankenctl` binary; treat these commands as
-roadmap/library surfaces until dedicated CLI beads land them.
+The command table below documents the `frankenctl` contract and available command surfaces.
 
 | Command | Purpose | Example |
 |---|---|---|
-| `frankenctl version` | Print the planned CLI schema/binary version | `frankenctl version` |
+| `frankenctl version` | Print CLI schema and binary version | `frankenctl version` |
 | `frankenctl compile` | Parse and lower source into a versioned compile artifact | `frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script` |
 | `frankenctl run` | Execute source through the orchestrator and emit an execution report | `frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json` |
 | `frankenctl doctor` | Summarize runtime diagnostics input and emit operator artifacts | `frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor` |

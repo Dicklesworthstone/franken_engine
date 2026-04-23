@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::too_many_arguments)]
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use std::fmt;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +32,11 @@ pub struct ExtensionHostConfig {
     pub max_entrypoint_len: usize,
     /// Maximum trust chain reference length.
     pub max_trust_chain_ref_len: usize,
+    /// Explicitly allow unsigned development manifests.
+    ///
+    /// This must stay false for production validation so unsigned manifests do
+    /// not silently bypass supply-chain provenance checks.
+    pub allow_development_trust: bool,
 }
 
 impl Default for ExtensionHostConfig {
@@ -41,6 +46,7 @@ impl Default for ExtensionHostConfig {
             max_version_len: MAX_VERSION_LEN,
             max_entrypoint_len: MAX_ENTRYPOINT_LEN,
             max_trust_chain_ref_len: MAX_TRUST_CHAIN_REF_LEN,
+            allow_development_trust: false,
         }
     }
 }
@@ -172,6 +178,8 @@ pub enum ManifestValidationError {
         actual: usize,
     },
     CanonicalSerialization(String),
+    InvalidPublisherSignature,
+    DevelopmentTrustDisabled,
 }
 
 impl ManifestValidationError {
@@ -187,6 +195,8 @@ impl ManifestValidationError {
             Self::InvalidContentHash => "FE-MANIFEST-0008",
             Self::CanonicalSerialization(_) => "FE-MANIFEST-0009",
             Self::FieldTooLong { .. } => "FE-MANIFEST-0010",
+            Self::InvalidPublisherSignature => "FE-MANIFEST-0011",
+            Self::DevelopmentTrustDisabled => "FE-MANIFEST-0012",
         }
     }
 
@@ -219,6 +229,12 @@ impl ManifestValidationError {
             }
             Self::FieldTooLong { field, max, actual } => {
                 format!("field `{field}` exceeds max length {max} (actual {actual})")
+            }
+            Self::InvalidPublisherSignature => {
+                "publisher signature verification failed".to_string()
+            }
+            Self::DevelopmentTrustDisabled => {
+                "development trust manifests require explicit policy override".to_string()
             }
         }
     }
@@ -515,6 +531,63 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     output
 }
 
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for chunk in hex.as_bytes().chunks(2) {
+        let hex_byte = std::str::from_utf8(chunk).ok()?;
+        let byte = u8::from_str_radix(hex_byte, 16).ok()?;
+        bytes.push(byte);
+    }
+    Some(bytes)
+}
+
+fn verify_manifest_signature(
+    manifest: &ExtensionManifest,
+    trust_chain_ref: &str,
+    publisher_signature: &[u8],
+) -> bool {
+    // Parse trust_chain_ref as hex-encoded Ed25519 public key (32 bytes)
+    let public_key_bytes = match hex_to_bytes(trust_chain_ref) {
+        Some(bytes) if bytes.len() == 32 => bytes,
+        _ => return false,
+    };
+
+    // Create Ed25519 verifying key
+    let public_key_array: [u8; 32] = match public_key_bytes.try_into() {
+        Ok(array) => array,
+        Err(_) => return false,
+    };
+
+    let verifying_key = match VerifyingKey::from_bytes(&public_key_array) {
+        Ok(key) => key,
+        Err(_) => return false,
+    };
+
+    // Compute content hash to sign
+    let content_hash = match compute_content_hash(manifest) {
+        Ok(hash) => hash,
+        Err(_) => return false,
+    };
+
+    // Verify signature against content hash
+    if publisher_signature.len() != 64 {
+        return false;
+    }
+
+    let signature_array: [u8; 64] = match publisher_signature.try_into() {
+        Ok(array) => array,
+        Err(_) => return false,
+    };
+
+    let signature = Signature::from_bytes(&signature_array);
+
+    verifying_key.verify(&content_hash, &signature).is_ok()
+}
+
 /// Canonical deterministic manifest serialization (sorted keys, compact output).
 pub fn canonical_manifest_json(
     manifest: &ExtensionManifest,
@@ -601,6 +674,14 @@ pub fn validate_provenance(
     manifest: &ExtensionManifest,
     trust_level: ManifestTrustLevel,
 ) -> Result<(), ManifestValidationError> {
+    validate_provenance_with_config(manifest, trust_level, &ExtensionHostConfig::default())
+}
+
+pub fn validate_provenance_with_config(
+    manifest: &ExtensionManifest,
+    trust_level: ManifestTrustLevel,
+    config: &ExtensionHostConfig,
+) -> Result<(), ManifestValidationError> {
     let has_signature = manifest
         .publisher_signature
         .as_deref()
@@ -614,6 +695,9 @@ pub fn validate_provenance(
 
     match trust_level {
         ManifestTrustLevel::Development => {
+            if !config.allow_development_trust {
+                return Err(ManifestValidationError::DevelopmentTrustDisabled);
+            }
             if (has_signature || has_trust_chain) && !hash_matches {
                 return Err(ManifestValidationError::InvalidContentHash);
             }
@@ -627,6 +711,14 @@ pub fn validate_provenance(
             }
             if !hash_matches {
                 return Err(ManifestValidationError::InvalidContentHash);
+            }
+
+            // Verify the publisher signature cryptographically
+            let signature_bytes = manifest.publisher_signature.as_ref().unwrap();
+            let trust_chain_ref = manifest.trust_chain_ref.as_ref().unwrap().trim();
+
+            if !verify_manifest_signature(manifest, trust_chain_ref, signature_bytes) {
+                return Err(ManifestValidationError::InvalidPublisherSignature);
             }
         }
     }
@@ -704,7 +796,7 @@ pub fn validate_manifest_with_config(
 
     validate_engine_version(&manifest.min_engine_version)?;
     validate_capability_lattice(&manifest.capabilities)?;
-    validate_provenance(manifest, manifest.inferred_trust_level())?;
+    validate_provenance_with_config(manifest, manifest.inferred_trust_level(), config)?;
     Ok(())
 }
 
@@ -3633,9 +3725,10 @@ impl CapabilityEscrowGateway {
     }
 }
 
-impl Default for CapabilityEscrowGateway {
-    fn default() -> Self {
-        Self::with_default_contracts(DecisionSigningKey::default())
+#[cfg(test)]
+impl CapabilityEscrowGateway {
+    pub fn test_default() -> Self {
+        Self::with_default_contracts(DecisionSigningKey::test_key())
     }
 }
 
@@ -4108,25 +4201,6 @@ pub struct DecisionSigningKey {
     bytes: [u8; 32],
 }
 
-impl Default for DecisionSigningKey {
-    /// Generate a random signing key for testing only.
-    /// DO NOT USE IN PRODUCTION - keys should be explicitly generated.
-    fn default() -> Self {
-        // Generate a deterministic but non-hardcoded test key
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        "test-key-seed-for-default".hash(&mut hasher);
-        let seed = hasher.finish().to_le_bytes();
-        let mut key_bytes = [0u8; 32];
-        for i in 0..4 {
-            key_bytes[i*8..(i+1)*8].copy_from_slice(&seed);
-        }
-        Self { bytes: key_bytes }
-    }
-}
-
 impl DecisionSigningKey {
     pub const fn new(bytes: [u8; 32]) -> Self {
         Self { bytes }
@@ -4143,10 +4217,28 @@ impl DecisionSigningKey {
         Ok(Self::new(key_bytes))
     }
 
+    #[cfg(test)]
+    pub fn test_key() -> Self {
+        // Generate a deterministic test key for unit tests only
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        "test-key-seed-for-default".hash(&mut hasher);
+        let seed = hasher.finish().to_le_bytes();
+        let mut key_bytes = [0u8; 32];
+        for i in 0..4 {
+            key_bytes[i * 8..(i + 1) * 8].copy_from_slice(&seed);
+        }
+        Self { bytes: key_bytes }
+    }
+
     pub fn public_key(self) -> DecisionPublicKey {
         let signing_key = SigningKey::from_bytes(&self.bytes);
         let verifying_key = signing_key.verifying_key();
-        DecisionPublicKey { bytes: verifying_key.to_bytes() }
+        DecisionPublicKey {
+            bytes: verifying_key.to_bytes(),
+        }
     }
 
     pub fn sign(&self, payload: &[u8]) -> Vec<u8> {
@@ -4745,9 +4837,10 @@ impl DeclassificationGateway {
     }
 }
 
-impl Default for DeclassificationGateway {
-    fn default() -> Self {
-        Self::with_default_contracts(DecisionSigningKey::default())
+#[cfg(test)]
+impl DeclassificationGateway {
+    pub fn test_default() -> Self {
+        Self::with_default_contracts(DecisionSigningKey::test_key())
     }
 }
 
@@ -6453,7 +6546,7 @@ impl DelegateCell {
 }
 
 /// Factory ensuring delegate cells are created through full security policy path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DelegateCellFactory {
     pub sink_policy: HostcallSinkPolicy,
     pub cancellation_config: CancellationConfig,
@@ -6462,6 +6555,16 @@ pub struct DelegateCellFactory {
 }
 
 impl DelegateCellFactory {
+    #[cfg(test)]
+    pub fn test_default() -> Self {
+        Self {
+            sink_policy: HostcallSinkPolicy::default(),
+            cancellation_config: CancellationConfig::default(),
+            policy: DelegateCellPolicy::default(),
+            decision_signing_key: DecisionSigningKey::test_key(),
+        }
+    }
+
     pub fn create_delegate_cell(
         &self,
         delegate_id: impl Into<String>,
@@ -6617,6 +6720,21 @@ mod tests {
         manifest
     }
 
+    fn development_manifest(capabilities: &[Capability]) -> ExtensionManifest {
+        let mut manifest = ExtensionManifest {
+            name: "dev-ext".to_string(),
+            version: "0.1.0".to_string(),
+            entrypoint: "src/index.js".to_string(),
+            capabilities: capability_set(capabilities),
+            publisher_signature: None,
+            content_hash: [0; 32],
+            trust_chain_ref: None,
+            min_engine_version: CURRENT_ENGINE_VERSION.to_string(),
+        };
+        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+        manifest
+    }
+
     #[test]
     fn signed_manifest_validates_with_matching_hash() {
         let manifest = signed_manifest(&[Capability::FsRead, Capability::FsWrite]);
@@ -6653,6 +6771,27 @@ mod tests {
             validate_manifest(&manifest),
             Err(ManifestValidationError::InvalidContentHash)
         );
+    }
+
+    #[test]
+    fn development_trust_is_rejected_by_default() {
+        let manifest = development_manifest(&[Capability::FsRead]);
+
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::DevelopmentTrustDisabled)
+        );
+    }
+
+    #[test]
+    fn development_trust_requires_explicit_config_override() {
+        let manifest = development_manifest(&[Capability::FsRead]);
+        let config = ExtensionHostConfig {
+            allow_development_trust: true,
+            ..ExtensionHostConfig::default()
+        };
+
+        assert_eq!(validate_manifest_with_config(&manifest, &config), Ok(()));
     }
 
     #[test]
@@ -7439,7 +7578,7 @@ mod declassification_tests {
 
     #[test]
     fn requester_capability_contract_denies_without_declassify() {
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let request = make_request(
             "req-cap-1",
             "ext-a",
@@ -7482,7 +7621,7 @@ mod declassification_tests {
         let target = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated);
         let caps = requester_capabilities(true);
 
-        let mut denied_gateway = DeclassificationGateway::default();
+        let mut denied_gateway = DeclassificationGateway::test_default();
         let denied = denied_gateway.evaluate_request(
             make_request(
                 "req-distance-denied",
@@ -7504,7 +7643,7 @@ mod declassification_tests {
             }
         ));
 
-        let mut approved_gateway = DeclassificationGateway::default();
+        let mut approved_gateway = DeclassificationGateway::test_default();
         let approved = approved_gateway.evaluate_request(
             make_request(
                 "req-distance-approved",
@@ -7523,7 +7662,7 @@ mod declassification_tests {
 
     #[test]
     fn purpose_validity_contract_enforces_target_level_constraints() {
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let outcome = gateway.evaluate_request(
             make_request(
                 "req-purpose-1",
@@ -7555,7 +7694,7 @@ mod declassification_tests {
             Box::new(PurposeValidityContract),
             Box::new(RateLimitContract::new(2, 1_000)),
         ];
-        let mut gateway = DeclassificationGateway::new(DecisionSigningKey::default(), contracts);
+        let mut gateway = DeclassificationGateway::new(DecisionSigningKey::test_key(), contracts);
         let caps = requester_capabilities(true);
         let base_current = FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated);
         let base_target = FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated);
@@ -7640,7 +7779,7 @@ mod declassification_tests {
             Box::new(AlwaysDenyContract),
             Box::new(PurposeValidityContract),
         ];
-        let mut gateway = DeclassificationGateway::new(DecisionSigningKey::default(), contracts);
+        let mut gateway = DeclassificationGateway::new(DecisionSigningKey::test_key(), contracts);
         let outcome = gateway.evaluate_request(
             make_request(
                 "req-chain-1",
@@ -7671,7 +7810,7 @@ mod declassification_tests {
 
     #[test]
     fn decision_receipts_are_signed_and_append_only() {
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let caps = requester_capabilities(true);
         let current = FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated);
         let target = FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated);
@@ -7719,7 +7858,7 @@ mod declassification_tests {
     #[test]
     fn integration_declassification_then_hostcall_egress() {
         let mut dispatcher = HostcallDispatcher::new(HostcallSinkPolicy::default());
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let caps = requester_capabilities(true);
 
         let secret_payload = Labeled::new(
@@ -7774,7 +7913,7 @@ mod declassification_tests {
 
     #[test]
     fn declassification_events_emit_required_stable_fields() {
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let _ = gateway.evaluate_request(
             make_request(
                 "req-event-1",
@@ -7891,7 +8030,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn factory_creates_delegate_with_full_lifecycle_and_guardplane_registration() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let delegate = factory
             .create_delegate_cell(
                 "delegate-a",
@@ -7929,7 +8068,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn out_of_envelope_hostcall_enters_escrow_and_updates_guardplane() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-b",
@@ -7974,7 +8113,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn delegate_flow_violation_matches_extension_flow_enforcement_shape() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-c",
@@ -8024,7 +8163,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn delegate_lifetime_expiry_forces_containment() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-d",
@@ -8060,7 +8199,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn escrow_flood_denial_reports_hard_denial_to_callers() {
-        let mut factory = DelegateCellFactory::default();
+        let mut factory = DelegateCellFactory::test_default();
         factory.policy.initial_posterior_micros = 0;
         factory.policy.capability_escalation_penalty_micros = 10_000;
         let mut delegate = factory
@@ -8112,7 +8251,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn delegate_declassification_path_produces_receipts_and_denial_evidence() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut allowed_delegate = factory
             .create_delegate_cell(
                 "delegate-e",
@@ -8201,7 +8340,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn non_running_delegate_cannot_dispatch_hostcalls() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-inactive-hostcall",
@@ -8242,7 +8381,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn non_running_delegate_cannot_request_declassification() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-inactive-declass",
@@ -8356,7 +8495,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn guardplane_policy_actions_progress_from_challenge_to_quarantine() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-g",
@@ -8473,7 +8612,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn quarantine_mesh_targets_are_sorted_and_recorded() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-mesh",
@@ -8572,7 +8711,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn quarantine_mesh_partial_failures_are_recorded() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-mesh-partial",
@@ -8652,7 +8791,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn quarantine_mesh_total_failure_is_recorded() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-mesh-failed",
@@ -8719,7 +8858,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn guardplane_safe_mode_fallback_is_fail_closed() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-h",
@@ -8764,7 +8903,7 @@ mod delegate_cell_tests {
 
     #[test]
     fn guardplane_policy_action_logs_can_emit_jsonl_artifacts() {
-        let factory = DelegateCellFactory::default();
+        let factory = DelegateCellFactory::test_default();
         let mut delegate = factory
             .create_delegate_cell(
                 "delegate-artifacts",
@@ -9837,9 +9976,9 @@ mod enrichment_tests {
     // ── DecisionSigningKey / DecisionPublicKey ──────────────────────────
 
     #[test]
-    fn signing_key_default_is_deterministic() {
-        let a = DecisionSigningKey::default();
-        let b = DecisionSigningKey::default();
+    fn signing_key_test_key_is_deterministic() {
+        let a = DecisionSigningKey::test_key();
+        let b = DecisionSigningKey::test_key();
         assert_eq!(a, b);
     }
 
@@ -9952,6 +10091,14 @@ mod enrichment_tests {
             }
             .error_code(),
             "FE-MANIFEST-0010"
+        );
+        assert_eq!(
+            ManifestValidationError::InvalidPublisherSignature.error_code(),
+            "FE-MANIFEST-0011"
+        );
+        assert_eq!(
+            ManifestValidationError::DevelopmentTrustDisabled.error_code(),
+            "FE-MANIFEST-0012"
         );
     }
 
@@ -10636,7 +10783,7 @@ mod enrichment_tests {
     fn decision_receipt_log_append_and_retrieve() {
         let mut log = DecisionReceiptLog::default();
         assert!(log.receipts().is_empty());
-        let key = DecisionSigningKey::default();
+        let key = DecisionSigningKey::test_key();
         let receipt = CryptographicDecisionReceipt::new_signed(
             "req-1",
             DecisionVerdict::Approved {
@@ -10993,7 +11140,7 @@ mod enrichment_tests {
     fn declassification_gateway_fails_closed_on_oversized_receipt_payload() {
         let oversized_request_id =
             request_id_for_approved_receipt_payload_len(MAX_POLICY_SIGNING_PAYLOAD_BYTES + 1);
-        let mut gateway = DeclassificationGateway::default();
+        let mut gateway = DeclassificationGateway::test_default();
         let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
         let context = FlowEnforcementContext::new("trace-oversized", "decision-oversized", "p");
 
@@ -11292,7 +11439,7 @@ mod enrichment_tests {
 
     #[test]
     fn emergency_grant_artifact_is_expired() {
-        let key = DecisionSigningKey::default();
+        let key = DecisionSigningKey::test_key();
         let artifact = EmergencyGrantArtifact::new_signed(
             "req-1",
             "ext-a",
@@ -12055,7 +12202,7 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn declassification_gateway_default_evaluates_approved_request() {
-        let mut gw = DeclassificationGateway::default();
+        let mut gw = DeclassificationGateway::test_default();
         let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
         let context = FlowEnforcementContext::new("t", "d", "p");
         let outcome = gw.evaluate_request(
@@ -12081,7 +12228,7 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn declassification_gateway_rejects_empty_justification() {
-        let mut gw = DeclassificationGateway::default();
+        let mut gw = DeclassificationGateway::test_default();
         let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
         let context = FlowEnforcementContext::new("t", "d", "p");
         let outcome = gw.evaluate_request(
@@ -12110,7 +12257,7 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn declassification_gateway_rejects_no_declassification_required() {
-        let mut gw = DeclassificationGateway::default();
+        let mut gw = DeclassificationGateway::test_default();
         let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
         let context = FlowEnforcementContext::new("t", "d", "p");
         let outcome = gw.evaluate_request(
@@ -12139,7 +12286,7 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn declassification_gateway_rejects_missing_capability() {
-        let mut gw = DeclassificationGateway::default();
+        let mut gw = DeclassificationGateway::test_default();
         let caps: BTreeSet<Capability> = [Capability::FsRead].into_iter().collect();
         let context = FlowEnforcementContext::new("t", "d", "p");
         let outcome = gw.evaluate_request(
@@ -12401,7 +12548,7 @@ mod enrichment_batch2_tests {
 
     #[test]
     fn capability_escrow_gateway_empty_completeness() {
-        let gw = CapabilityEscrowGateway::default();
+        let gw = CapabilityEscrowGateway::test_default();
         let report = gw.receipt_completeness_report();
         assert!(report.complete);
         assert_eq!(report.receipts, 0);

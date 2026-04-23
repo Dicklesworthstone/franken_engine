@@ -1189,11 +1189,10 @@ fn build_environment(
     matrix: &AsupersyncContractCompatMatrix,
 ) -> BundleEnvironment {
     let repo_root = repo_root_from_manifest_dir();
-    let package_versions: BTreeMap<String, String> = matrix
-        .releases
-        .iter()
-        .map(|release| (release.package_name.clone(), release.release_id.clone()))
-        .collect();
+    let mut package_versions = BTreeMap::new();
+    for release in &matrix.releases {
+        package_versions.insert(release.package_name.clone(), release.release_id.clone());
+    }
     BundleEnvironment {
         schema_version: SCHEMA_VERSION.to_string(),
         repo_root: repo_root.display().to_string(),

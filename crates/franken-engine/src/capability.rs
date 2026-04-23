@@ -59,6 +59,12 @@ pub enum RuntimeCapability {
     FsWrite,
     /// Load modules (require/import).
     ModuleLoad,
+    /// Console output operations (log, error, warn, info).
+    Console,
+    /// Timer operations (setTimeout, setInterval, clearTimeout, clearInterval).
+    Timer,
+    /// Built-in JavaScript operations (Array.prototype.*, Object.*, etc.).
+    Builtin,
 }
 
 impl fmt::Display for RuntimeCapability {
@@ -81,6 +87,9 @@ impl fmt::Display for RuntimeCapability {
             Self::FsRead => "fs_read",
             Self::FsWrite => "fs_write",
             Self::ModuleLoad => "module_load",
+            Self::Console => "console",
+            Self::Timer => "timer",
+            Self::Builtin => "builtin",
         };
         f.write_str(name)
     }
@@ -119,6 +128,18 @@ impl RuntimeCapability {
             "fs" | "fs:read" | "fs.read" => Some(Self::FsRead),
             "fs:write" | "fs.write" => Some(Self::FsWrite),
             "module:require" | "module:import" | "module.import" => Some(Self::ModuleLoad),
+
+            // Map console hostcalls to Console capability
+            tag if tag.starts_with("console:") => Some(Self::Console),
+
+            // Map timer hostcalls to Timer capability
+            tag if tag.starts_with("timer:") => Some(Self::Timer),
+
+            // Map builtin hostcalls to Builtin capability
+            tag if tag.starts_with("builtin:") => Some(Self::Builtin),
+
+            // Map number hostcalls to Builtin capability (number operations are built-ins)
+            tag if tag.starts_with("number:") => Some(Self::Builtin),
 
             // Unknown / internal tags — not mapped
             _ => None,
@@ -191,6 +212,9 @@ impl CapabilityProfile {
                 FsRead,
                 FsWrite,
                 ModuleLoad,
+                Console,
+                Timer,
+                Builtin,
             ]),
         }
     }
@@ -200,7 +224,15 @@ impl CapabilityProfile {
         use RuntimeCapability::*;
         Self {
             kind: ProfileKind::EngineCore,
-            capabilities: BTreeSet::from([VmDispatch, GcInvoke, IrLowering, HeapAllocate]),
+            capabilities: BTreeSet::from([
+                VmDispatch,
+                GcInvoke,
+                IrLowering,
+                HeapAllocate,
+                Console,
+                Timer,
+                Builtin
+            ]),
         }
     }
 

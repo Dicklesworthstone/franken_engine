@@ -1293,7 +1293,10 @@ pub enum InterpreterError {
     /// Require specifier register did not contain a string.
     RequireSpecifierNotString { got: String },
     /// Module resolution failed.
-    ModuleResolutionFailed { specifier: String, reason: ModuleResolutionFailureReason },
+    ModuleResolutionFailed {
+        specifier: String,
+        reason: ModuleResolutionFailureReason,
+    },
     /// Failed to read module source from disk.
     ModuleReadFailed { specifier: String, error: String },
     /// Failed to parse module source.
@@ -2190,7 +2193,9 @@ impl InterpreterCore {
                 .or_else(|| self.config.module_root.as_ref().map(PathBuf::from))
                 .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other("no module root available for relative import".to_string()),
+                    reason: ModuleResolutionFailureReason::Other(
+                        "no module root available for relative import".to_string(),
+                    ),
                 })?;
             Ok(base.join(specifier))
         } else if specifier.starts_with('/') {
@@ -2216,7 +2221,9 @@ impl InterpreterCore {
                 .canonicalize()
                 .map_err(|error| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other(format!("failed to canonicalize module path: {error}")),
+                    reason: ModuleResolutionFailureReason::Other(format!(
+                        "failed to canonicalize module path: {error}"
+                    )),
                 })?;
         Ok(canonical.display().to_string())
     }
@@ -2235,7 +2242,9 @@ impl InterpreterCore {
                 .canonicalize()
                 .map_err(|error| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other(format!("failed to canonicalize module path: {error}")),
+                    reason: ModuleResolutionFailureReason::Other(format!(
+                        "failed to canonicalize module path: {error}"
+                    )),
                 })?;
         Ok(canonical.display().to_string())
     }
@@ -4017,9 +4026,9 @@ impl InterpreterCore {
                     if !is_promise_cap {
                         // Map the CapabilityTag string to a typed RuntimeCapability.
                         // Tags that map to a RuntimeCapability are checked against
-                        // the granted set.  Tags with no mapping are internal
-                        // dispatch tags (ifc.*, hostcall.*) emitted by the
-                        // trusted lowering pipeline and pass through.
+                        // the granted set. Most hostcalls now map to capabilities
+                        // (console, timer, builtin, etc.). Only truly internal
+                        // dispatch tags (ifc.*, hostcall.*) pass through unchecked.
                         if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0)
                             && !self.config.granted_capabilities.contains(&required_cap)
                         {
@@ -15147,13 +15156,11 @@ impl InterpreterCore {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     fn builtin_name_from_id(&self, func_idx: u32) -> Option<String> {
         self.map_function_index_to_builtin_capability(func_idx)
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     fn call_builtin_by_id(
         &mut self,
         func_idx: u32,
@@ -15169,8 +15176,7 @@ impl InterpreterCore {
     /// historical `call_builtin(cap, args)` name; the current dispatcher lives
     /// on `dispatch_builtin_hostcall(cap, args, module)`. We forward with
     /// `module = None` to keep those tests compiling.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn call_builtin(&mut self, cap: &str, args: RegRange) -> Result<Value, InterpreterError> {
         self.dispatch_builtin_hostcall(cap, args, None)
     }
@@ -15179,8 +15185,7 @@ impl InterpreterCore {
     /// registers via a `set_register(i, v)` method that no longer exists;
     /// registers are now a public `Vec<Value>` field. Returns `Result` so the
     /// legacy `.unwrap()` pattern at call sites keeps compiling.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn set_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         let idx = reg as usize;
         if idx >= self.registers.len() {
@@ -15192,8 +15197,7 @@ impl InterpreterCore {
 
     /// Test-only register accessor. Paired with `set_register`. Returns
     /// `Result` to match the legacy `.unwrap()` pattern.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn read_register(&self, reg: u32) -> Result<Value, InterpreterError> {
         Ok(self
             .registers
@@ -15238,8 +15242,7 @@ impl InterpreterCore {
     /// `core.execute_module(&module)`; the production path routes modules
     /// through `QuickJsLane` / `V8Lane`. The shim uses the core's current
     /// config and trace id to execute the module against a fresh `QuickJsLane`.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn execute_module(&self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
         QuickJsLane::with_config(self.config.clone()).execute(module, &self.trace_id)
     }
@@ -15249,8 +15252,7 @@ impl InterpreterCore {
     /// values; the production dispatcher reads arguments from registers.
     /// The shim stages arguments into the register file, dispatches, and
     /// returns the result.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn execute_builtin_call(
         &mut self,
         cap: &str,
@@ -15279,8 +15281,7 @@ impl InterpreterCore {
     /// `core.execute_instruction(instr)` to test per-op behavior in
     /// isolation; wraps the instruction in a minimal module and routes it
     /// through the lane dispatcher.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn execute_instruction(
         &self,
         instr: Ir3Instruction,
@@ -15309,8 +15310,7 @@ impl InterpreterCore {
     /// stable, per-core synthetic index based on the current number of
     /// registered async functions — tests only use the returned value as an
     /// opaque handle for `Value::Function(idx)`.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn allocate_function(
         &mut self,
         _name: &str,

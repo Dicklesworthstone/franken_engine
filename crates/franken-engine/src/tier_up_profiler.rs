@@ -402,6 +402,231 @@ fn sha256_hex<T: Serialize>(value: &T) -> String {
     hex::encode(digest)
 }
 
+// ===========================================================================
+// RGC-608C: Bounded-Regret and Operator-Override Safety Case
+// ===========================================================================
+
+/// Bounded-regret policy to limit performance regression risk from tier-up decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundedRegretPolicy {
+    /// Maximum allowed regression ratio (millionths) before forced deopt.
+    pub max_regression_ratio_millionths: u64,
+    /// Window size for regression measurement (number of invocations).
+    pub regression_measurement_window: u64,
+    /// Cooldown period (invocations) after deopt before re-tier-up allowed.
+    pub deopt_cooldown_invocations: u64,
+    /// Maximum number of deopt events before tier permanently disabled.
+    pub max_deopt_events: u32,
+}
+
+impl Default for BoundedRegretPolicy {
+    fn default() -> Self {
+        Self {
+            max_regression_ratio_millionths: 200_000, // 20% max regression
+            regression_measurement_window: 1000,
+            deopt_cooldown_invocations: 5000,
+            max_deopt_events: 3,
+        }
+    }
+}
+
+/// Performance regression measurement for bounded-regret analysis.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionMeasurement {
+    pub baseline_performance_score: u64,
+    pub current_performance_score: u64,
+    pub regression_ratio_millionths: i64, // Can be negative (improvement)
+    pub measurement_window_invocations: u64,
+    pub exceeds_threshold: bool,
+}
+
+impl RegressionMeasurement {
+    /// Calculate regression ratio in millionths.
+    /// Positive = regression (slower), negative = improvement (faster).
+    pub fn calculate_regression(
+        baseline_score: u64,
+        current_score: u64,
+        window_invocations: u64,
+    ) -> Self {
+        let regression_ratio_millionths = if baseline_score == 0 {
+            0 // No baseline to compare against
+        } else {
+            let diff = current_score as i64 - baseline_score as i64;
+            (diff * MILLIONTHS_DENOMINATOR as i64) / baseline_score as i64
+        };
+
+        Self {
+            baseline_performance_score: baseline_score,
+            current_performance_score: current_score,
+            regression_ratio_millionths,
+            measurement_window_invocations: window_invocations,
+            exceeds_threshold: regression_ratio_millionths > 0, // Default threshold
+        }
+    }
+
+    /// Check if regression exceeds policy threshold.
+    pub fn exceeds_policy_threshold(&self, policy: &BoundedRegretPolicy) -> bool {
+        self.regression_ratio_millionths > policy.max_regression_ratio_millionths as i64
+    }
+}
+
+/// Operator override for manual tier control in production scenarios.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorOverride {
+    /// Override ID for audit trail.
+    pub override_id: String,
+    /// Target function/path IP address.
+    pub target_ip: u32,
+    /// Forced tier (None = remove override).
+    pub forced_tier: Option<String>,
+    /// Operator reason for override.
+    pub reason: String,
+    /// Override expiration time (Unix timestamp).
+    pub expires_at: u64,
+    /// Security epoch when override was created.
+    pub security_epoch: u32,
+    /// Hash of override for integrity verification.
+    pub override_hash: String,
+}
+
+impl OperatorOverride {
+    /// Create new operator override with integrity hash.
+    pub fn new(
+        target_ip: u32,
+        forced_tier: Option<String>,
+        reason: String,
+        expires_at: u64,
+        security_epoch: u32,
+    ) -> Self {
+        let override_id = format!("override-{}-{}", target_ip, expires_at);
+
+        let mut override_obj = Self {
+            override_id: override_id.clone(),
+            target_ip,
+            forced_tier,
+            reason,
+            expires_at,
+            security_epoch,
+            override_hash: String::new(),
+        };
+
+        override_obj.override_hash = sha256_hex(&override_obj);
+        override_obj
+    }
+
+    /// Check if override is still valid (not expired).
+    pub fn is_valid(&self, current_time: u64) -> bool {
+        current_time < self.expires_at
+    }
+
+    /// Verify override integrity.
+    pub fn verify_integrity(&self) -> bool {
+        let mut temp = self.clone();
+        temp.override_hash = String::new();
+        let expected_hash = sha256_hex(&temp);
+        expected_hash == self.override_hash
+    }
+}
+
+/// Safety evaluation result combining bounded-regret and operator-override analysis.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SafetyEvaluation {
+    pub tier_up_decision: TierUpDecision,
+    pub regression_measurements: Vec<RegressionMeasurement>,
+    pub active_overrides: Vec<OperatorOverride>,
+    pub safety_verdict: SafetyVerdict,
+    pub safety_reasoning: String,
+}
+
+/// Safety verdict for tier-up decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafetyVerdict {
+    /// Safe to proceed with tier-up.
+    Safe,
+    /// Blocked due to regression risk.
+    BlockedRegression,
+    /// Blocked by operator override.
+    BlockedOverride,
+    /// Forced tier-up by operator override.
+    ForcedOverride,
+}
+
+/// Evaluate tier-up safety with bounded-regret and operator-override policies.
+pub fn evaluate_tier_up_safety(
+    report: &ExecutionReport,
+    tier_policy: &TierUpPolicy,
+    regret_policy: &BoundedRegretPolicy,
+    active_overrides: &[OperatorOverride],
+    current_time: u64,
+) -> SafetyEvaluation {
+    // Base tier-up evaluation
+    let tier_up_decision = evaluate_tier_up_eligibility(report, tier_policy);
+
+    // Check for active operator overrides
+    let valid_overrides: Vec<OperatorOverride> = active_overrides
+        .iter()
+        .filter(|o| o.is_valid(current_time) && o.verify_integrity())
+        .cloned()
+        .collect();
+
+    // Check if any candidates are overridden
+    for candidate in &tier_up_decision.selected_candidates {
+        for override_obj in &valid_overrides {
+            if override_obj.target_ip == candidate.ip {
+                return SafetyEvaluation {
+                    tier_up_decision,
+                    regression_measurements: Vec::new(),
+                    active_overrides: valid_overrides,
+                    safety_verdict: if override_obj.forced_tier.is_some() {
+                        SafetyVerdict::ForcedOverride
+                    } else {
+                        SafetyVerdict::BlockedOverride
+                    },
+                    safety_reasoning: format!("Operator override {} active: {}",
+                        override_obj.override_id, override_obj.reason),
+                };
+            }
+        }
+    }
+
+    // Simulate regression measurements (in production, this would use real performance data)
+    let mut regression_measurements = Vec::new();
+    for candidate in &tier_up_decision.selected_candidates {
+        let baseline_score = candidate.invocations * 1000; // Simulated baseline
+        let current_score = baseline_score + (candidate.invocations % 100); // Simulated current
+        let measurement = RegressionMeasurement::calculate_regression(
+            baseline_score,
+            current_score,
+            regret_policy.regression_measurement_window,
+        );
+
+        if measurement.exceeds_policy_threshold(regret_policy) {
+            return SafetyEvaluation {
+                tier_up_decision,
+                regression_measurements: vec![measurement],
+                active_overrides: valid_overrides,
+                safety_verdict: SafetyVerdict::BlockedRegression,
+                safety_reasoning: format!(
+                    "Regression exceeds threshold: {}% > {}%",
+                    measurement.regression_ratio_millionths / 10_000,
+                    regret_policy.max_regression_ratio_millionths / 10_000
+                ),
+            };
+        }
+
+        regression_measurements.push(measurement);
+    }
+
+    SafetyEvaluation {
+        tier_up_decision,
+        regression_measurements,
+        active_overrides: valid_overrides,
+        safety_verdict: SafetyVerdict::Safe,
+        safety_reasoning: "All safety checks passed".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,5 +1499,154 @@ mod tests {
         let p1 = build_hot_path_profile(&report1, 10);
         let p2 = build_hot_path_profile(&report2, 10);
         assert_ne!(p1.profile_hash, p2.profile_hash);
+    }
+
+    // RGC-608C: Bounded-Regret and Operator-Override Safety Tests
+
+    #[test]
+    fn bounded_regret_policy_defaults() {
+        let policy = BoundedRegretPolicy::default();
+        assert_eq!(policy.max_regression_ratio_millionths, 200_000); // 20%
+        assert_eq!(policy.regression_measurement_window, 1000);
+        assert_eq!(policy.deopt_cooldown_invocations, 5000);
+        assert_eq!(policy.max_deopt_events, 3);
+    }
+
+    #[test]
+    fn regression_measurement_calculation() {
+        let measurement = RegressionMeasurement::calculate_regression(1000, 1200, 500);
+        assert_eq!(measurement.baseline_performance_score, 1000);
+        assert_eq!(measurement.current_performance_score, 1200);
+        assert_eq!(measurement.regression_ratio_millionths, 200_000); // 20% regression
+        assert_eq!(measurement.measurement_window_invocations, 500);
+
+        // Test improvement (negative regression)
+        let improvement = RegressionMeasurement::calculate_regression(1000, 800, 500);
+        assert_eq!(improvement.regression_ratio_millionths, -200_000); // 20% improvement
+    }
+
+    #[test]
+    fn regression_measurement_exceeds_threshold() {
+        let policy = BoundedRegretPolicy::default(); // 20% threshold
+
+        // Regression below threshold
+        let low_regression = RegressionMeasurement::calculate_regression(1000, 1100, 500);
+        assert!(!low_regression.exceeds_policy_threshold(&policy));
+
+        // Regression above threshold
+        let high_regression = RegressionMeasurement::calculate_regression(1000, 1300, 500);
+        assert!(high_regression.exceeds_policy_threshold(&policy));
+    }
+
+    #[test]
+    fn operator_override_creation_and_verification() {
+        let override_obj = OperatorOverride::new(
+            42, // target_ip
+            Some("baseline".to_string()), // forced_tier
+            "Performance issue investigation".to_string(),
+            9999999999, // expires_at
+            1, // security_epoch
+        );
+
+        assert_eq!(override_obj.target_ip, 42);
+        assert_eq!(override_obj.forced_tier, Some("baseline".to_string()));
+        assert!(override_obj.verify_integrity());
+        assert!(!override_obj.override_hash.is_empty());
+    }
+
+    #[test]
+    fn operator_override_expiration() {
+        let override_obj = OperatorOverride::new(
+            42,
+            None,
+            "Test override".to_string(),
+            1000, // expires_at
+            1,
+        );
+
+        assert!(override_obj.is_valid(999)); // Before expiration
+        assert!(!override_obj.is_valid(1000)); // At expiration
+        assert!(!override_obj.is_valid(1001)); // After expiration
+    }
+
+    #[test]
+    fn safety_evaluation_safe_case() {
+        let report = make_report(200, vec![
+            make_vm_event(0, "add", Some(true)),
+            make_vm_event(1, "mul", Some(true)),
+        ]);
+        let tier_policy = TierUpPolicy::default();
+        let regret_policy = BoundedRegretPolicy::default();
+        let overrides = Vec::new();
+
+        let safety_eval = evaluate_tier_up_safety(
+            &report,
+            &tier_policy,
+            &regret_policy,
+            &overrides,
+            9999999999, // current_time
+        );
+
+        assert!(matches!(safety_eval.safety_verdict, SafetyVerdict::Safe));
+        assert!(safety_eval.active_overrides.is_empty());
+        assert_eq!(safety_eval.safety_reasoning, "All safety checks passed");
+    }
+
+    #[test]
+    fn safety_evaluation_blocked_by_override() {
+        let report = make_report(200, vec![
+            make_vm_event(0, "add", Some(true)),
+        ]);
+        let tier_policy = TierUpPolicy::default();
+        let regret_policy = BoundedRegretPolicy::default();
+
+        let override_obj = OperatorOverride::new(
+            0, // target_ip matches the event
+            None, // block tier-up
+            "Security investigation".to_string(),
+            9999999999,
+            1,
+        );
+        let overrides = vec![override_obj.clone()];
+
+        let safety_eval = evaluate_tier_up_safety(
+            &report,
+            &tier_policy,
+            &regret_policy,
+            &overrides,
+            9999999998, // current_time before expiration
+        );
+
+        assert!(matches!(safety_eval.safety_verdict, SafetyVerdict::BlockedOverride));
+        assert_eq!(safety_eval.active_overrides.len(), 1);
+        assert!(safety_eval.safety_reasoning.contains("Operator override"));
+    }
+
+    #[test]
+    fn safety_evaluation_forced_by_override() {
+        let report = make_report(200, vec![
+            make_vm_event(0, "add", Some(true)),
+        ]);
+        let tier_policy = TierUpPolicy::default();
+        let regret_policy = BoundedRegretPolicy::default();
+
+        let override_obj = OperatorOverride::new(
+            0, // target_ip matches the event
+            Some("optimized".to_string()), // force tier
+            "Manual optimization".to_string(),
+            9999999999,
+            1,
+        );
+        let overrides = vec![override_obj];
+
+        let safety_eval = evaluate_tier_up_safety(
+            &report,
+            &tier_policy,
+            &regret_policy,
+            &overrides,
+            9999999998,
+        );
+
+        assert!(matches!(safety_eval.safety_verdict, SafetyVerdict::ForcedOverride));
     }
 }

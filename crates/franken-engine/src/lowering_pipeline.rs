@@ -12590,4 +12590,321 @@ mod tests {
             );
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Golden File Tests for IR Lowering Pipeline Output
+    // ---------------------------------------------------------------------------
+
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Helper to get golden file path for a test case
+    fn golden_path(test_name: &str) -> PathBuf {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("tests");
+        path.push("goldens");
+        path.push("ir");
+        path.push(format!("{}.json", test_name));
+        path
+    }
+
+    /// Helper to check if we should update golden files
+    fn should_update_goldens() -> bool {
+        std::env::var("UPDATE_GOLDENS").is_ok()
+    }
+
+    /// Helper to run full lowering pipeline and serialize output deterministically
+    fn run_lowering_pipeline_for_golden(ir0: &Ir0Module, test_name: &str) -> LoweringPipelineOutput {
+        let context = LoweringContext {
+            trace_id: format!("golden_test_{}", test_name),
+            decision_id: format!("decision_{}", test_name),
+            policy_id: format!("policy_{}", test_name),
+            session_id: format!("session_{}", test_name),
+            security_epoch: crate::security_epoch::SecurityEpoch::from_raw(1),
+            start_time_epoch_ms: 1640995200000, // Fixed timestamp for determinism
+        };
+
+        lower_ir0_to_ir3(ir0, &context)
+            .expect("Lowering pipeline should succeed for golden test")
+    }
+
+    /// Assert golden file matches current pipeline output
+    fn assert_golden_ir_output(ir0: &Ir0Module, test_name: &str) {
+        let golden_file = golden_path(test_name);
+
+        // Run the lowering pipeline
+        let output = run_lowering_pipeline_for_golden(ir0, test_name);
+
+        // Serialize to deterministic JSON
+        let actual_json = serde_json::to_string_pretty(&output)
+            .expect("IR output should serialize to JSON");
+
+        if should_update_goldens() {
+            // Update mode: write new golden file
+            if let Some(parent) = golden_file.parent() {
+                fs::create_dir_all(parent)
+                    .expect("Should be able to create golden directory");
+            }
+            fs::write(&golden_file, &actual_json)
+                .expect("Should be able to write golden file");
+            eprintln!("[GOLDEN] Updated: {}", golden_file.display());
+            return;
+        }
+
+        // Compare mode: check against existing golden
+        let expected_json = fs::read_to_string(&golden_file)
+            .unwrap_or_else(|_| panic!(
+                "Golden file missing: {}\n\
+                 Run with UPDATE_GOLDENS=1 to create it\n\
+                 Then review and commit: git diff tests/goldens/",
+                golden_file.display()
+            ));
+
+        if actual_json != expected_json {
+            // Write actual for easy diffing
+            let actual_path = golden_file.with_extension("actual.json");
+            fs::write(&actual_path, &actual_json)
+                .expect("Should be able to write actual output");
+
+            panic!(
+                "GOLDEN MISMATCH: {test_name}\n\n\
+                 Expected: {}\n\
+                 Actual:   {}\n\n\
+                 To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
+                 To review: diff {} {}",
+                golden_file.display(),
+                actual_path.display(),
+                golden_file.display(),
+                actual_path.display(),
+            );
+        }
+    }
+
+    /// Create IR0 for simple arithmetic expression
+    fn arithmetic_ir0() -> Ir0Module {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Expression(ExpressionStatement {
+                expression: Expression::BinaryExpression(BinaryExpression {
+                    left: Box::new(Expression::NumericLiteral(42)),
+                    operator: BinaryOperator::Add,
+                    right: Box::new(Expression::NumericLiteral(7)),
+                    span: span(),
+                }),
+                span: span(),
+            })],
+            span: span(),
+        };
+        Ir0Module::from_syntax_tree(tree, "arithmetic.js")
+    }
+
+    /// Create IR0 for if-else conditional
+    fn conditional_ir0() -> Ir0Module {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::If(IfStatement {
+                test: Expression::BinaryExpression(BinaryExpression {
+                    left: Box::new(Expression::Identifier(Identifier {
+                        name: "x".to_string(),
+                        span: span(),
+                    })),
+                    operator: BinaryOperator::GreaterThan,
+                    right: Box::new(Expression::NumericLiteral(0)),
+                    span: span(),
+                }),
+                consequent: Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::StringLiteral("positive".to_string()),
+                    span: span(),
+                })),
+                alternate: Some(Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::StringLiteral("non-positive".to_string()),
+                    span: span(),
+                }))),
+                span: span(),
+            })],
+            span: span(),
+        };
+        Ir0Module::from_syntax_tree(tree, "conditional.js")
+    }
+
+    /// Create IR0 for function declaration
+    fn function_declaration_ir0() -> Ir0Module {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::Function(FunctionDeclaration {
+                name: Identifier {
+                    name: "add".to_string(),
+                    span: span(),
+                },
+                params: vec![
+                    FormalParameter {
+                        pattern: BindingPattern::Identifier(Identifier {
+                            name: "a".to_string(),
+                            span: span(),
+                        }),
+                        default_value: None,
+                        span: span(),
+                    },
+                    FormalParameter {
+                        pattern: BindingPattern::Identifier(Identifier {
+                            name: "b".to_string(),
+                            span: span(),
+                        }),
+                        default_value: None,
+                        span: span(),
+                    },
+                ],
+                body: ArrowBody::Block(BlockStatement {
+                    body: vec![Statement::Return(ReturnStatement {
+                        argument: Some(Expression::BinaryExpression(BinaryExpression {
+                            left: Box::new(Expression::Identifier(Identifier {
+                                name: "a".to_string(),
+                                span: span(),
+                            })),
+                            operator: BinaryOperator::Add,
+                            right: Box::new(Expression::Identifier(Identifier {
+                                name: "b".to_string(),
+                                span: span(),
+                            })),
+                            span: span(),
+                        })),
+                        span: span(),
+                    })],
+                    span: span(),
+                }),
+                generator: false,
+                async_: false,
+                span: span(),
+            })],
+            span: span(),
+        };
+        Ir0Module::from_syntax_tree(tree, "function.js")
+    }
+
+    /// Create IR0 for variable declarations
+    fn variable_declarations_ir0() -> Ir0Module {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![
+                Statement::VariableDeclaration(VariableDeclaration {
+                    kind: VariableDeclarationKind::Let,
+                    declarations: vec![VariableDeclarator {
+                        id: BindingPattern::Identifier(Identifier {
+                            name: "x".to_string(),
+                            span: span(),
+                        }),
+                        initializer: Some(Expression::NumericLiteral(10)),
+                        span: span(),
+                    }],
+                    span: span(),
+                }),
+                Statement::VariableDeclaration(VariableDeclaration {
+                    kind: VariableDeclarationKind::Const,
+                    declarations: vec![VariableDeclarator {
+                        id: BindingPattern::Identifier(Identifier {
+                            name: "message".to_string(),
+                            span: span(),
+                        }),
+                        initializer: Some(Expression::StringLiteral("Hello, world!".to_string())),
+                        span: span(),
+                    }],
+                    span: span(),
+                }),
+            ],
+            span: span(),
+        };
+        Ir0Module::from_syntax_tree(tree, "variables.js")
+    }
+
+    /// Create IR0 for simple loop (for statement)
+    fn loop_ir0() -> Ir0Module {
+        let tree = SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::For(ForStatement {
+                init: Some(VariableDeclaration {
+                    kind: VariableDeclarationKind::Let,
+                    declarations: vec![VariableDeclarator {
+                        id: BindingPattern::Identifier(Identifier {
+                            name: "i".to_string(),
+                            span: span(),
+                        }),
+                        initializer: Some(Expression::NumericLiteral(0)),
+                        span: span(),
+                    }],
+                    span: span(),
+                }),
+                test: Some(Expression::BinaryExpression(BinaryExpression {
+                    left: Box::new(Expression::Identifier(Identifier {
+                        name: "i".to_string(),
+                        span: span(),
+                    })),
+                    operator: BinaryOperator::LessThan,
+                    right: Box::new(Expression::NumericLiteral(5)),
+                    span: span(),
+                })),
+                update: Some(Expression::UpdateExpression(UpdateExpression {
+                    operator: UpdateOperator::Increment,
+                    argument: Box::new(Expression::Identifier(Identifier {
+                        name: "i".to_string(),
+                        span: span(),
+                    })),
+                    prefix: false,
+                    span: span(),
+                })),
+                body: Box::new(Statement::Expression(ExpressionStatement {
+                    expression: Expression::CallExpression(CallExpression {
+                        callee: Box::new(Expression::Identifier(Identifier {
+                            name: "console".to_string(),
+                            span: span(),
+                        })),
+                        arguments: vec![CallArgument::Expression(Expression::Identifier(Identifier {
+                            name: "i".to_string(),
+                            span: span(),
+                        }))],
+                        span: span(),
+                    }),
+                    span: span(),
+                })),
+                span: span(),
+            })],
+            span: span(),
+        };
+        Ir0Module::from_syntax_tree(tree, "loop.js")
+    }
+
+    #[test]
+    fn golden_arithmetic_lowering() {
+        let ir0 = arithmetic_ir0();
+        assert_golden_ir_output(&ir0, "arithmetic_expression");
+    }
+
+    #[test]
+    fn golden_conditional_lowering() {
+        let ir0 = conditional_ir0();
+        assert_golden_ir_output(&ir0, "if_else_statement");
+    }
+
+    #[test]
+    fn golden_function_declaration_lowering() {
+        let ir0 = function_declaration_ir0();
+        assert_golden_ir_output(&ir0, "function_declaration");
+    }
+
+    #[test]
+    fn golden_variable_declarations_lowering() {
+        let ir0 = variable_declarations_ir0();
+        assert_golden_ir_output(&ir0, "variable_declarations");
+    }
+
+    #[test]
+    fn golden_loop_lowering() {
+        let ir0 = loop_ir0();
+        assert_golden_ir_output(&ir0, "for_loop_statement");
+    }
+
+    #[test]
+    fn golden_simple_literal_lowering() {
+        let ir0 = script_ir0(); // Reuse existing simple literal test
+        assert_golden_ir_output(&ir0, "numeric_literal");
+    }
 }

@@ -288,6 +288,9 @@ impl CrossArchController {
             .get(session_id)
             .ok_or(CrossArchError::MissingReferenceTrace)?;
 
+        // Compute reference trace hash for deterministic identity
+        let reference_trace_hash = ContentHash::compute(&serde_json::to_vec(reference_trace).unwrap_or_default());
+
         // Create deterministic content hash for reproducible object_id derivation
         let content_hash = {
             let mut content = Vec::new();
@@ -295,6 +298,7 @@ impl CrossArchController {
             content.extend_from_slice(&reference_trace.events.len().to_le_bytes());
             content.extend_from_slice(&serde_json::to_vec(&self.config).unwrap_or_default());
             content.extend_from_slice(&ArchitectureId::current().to_string().as_bytes());
+            content.extend_from_slice(reference_trace_hash.as_bytes());
             ContentHash::compute(&content).as_bytes().to_vec()
         };
 
@@ -313,12 +317,37 @@ impl CrossArchController {
             chrono::Utc::now().to_rfc3339()
         };
 
+        // Generate target architecture matrix summary
+        let target_matrix_summary = vec![
+            ArchitectureId::current().to_string(),
+            format!("reference_events_{}", reference_trace.events.len()),
+            format!("replay_iterations_{}", self.config.replay_iterations),
+        ];
+
+        // Generate drift artifact paths (deterministic based on session)
+        let drift_artifact_paths = vec![
+            format!("cross_arch_drift_report_{}.json", session_id),
+            format!("replay_normalization_report_{}.json", session_id),
+            format!("environment_fingerprint_matrix_{}.json", session_id),
+        ];
+
+        // Generate normalization artifact links
+        let normalization_artifact_links = vec![
+            format!("replay_repro_manifest_{}.lock", session_id),
+            format!("trace_normalization_{}.json", session_id),
+        ];
+
         Ok(CrossArchReport {
             object_id,
             session_id: session_id.to_string(),
             reference_arch: ArchitectureId::current(),
             reference_event_count: reference_trace.events.len(),
             config: self.config.clone(),
+            reference_trace_hash,
+            comparison_hash,
+            target_matrix_summary,
+            drift_artifact_paths,
+            normalization_artifact_links,
             timestamp_utc,
         })
     }
@@ -366,7 +395,17 @@ pub struct CrossArchReport {
     pub reference_event_count: usize,
     /// Configuration used for testing.
     pub config: CrossArchConfig,
-    /// Timestamp when report was generated.
+    /// Canonical hash of reference trace content.
+    pub reference_trace_hash: ContentHash,
+    /// Hash of cross-architecture comparison results.
+    pub comparison_hash: Option<ContentHash>,
+    /// Target architecture matrix summary.
+    pub target_matrix_summary: Vec<String>,
+    /// Drift artifact file paths for reproducibility.
+    pub drift_artifact_paths: Vec<String>,
+    /// Normalization artifact manifest links.
+    pub normalization_artifact_links: Vec<String>,
+    /// Timestamp when report was generated (non-identity metadata).
     pub timestamp_utc: String,
 }
 

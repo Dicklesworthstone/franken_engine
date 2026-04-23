@@ -321,6 +321,8 @@ pub enum FleetSimulatorError {
     MessageBusError { message: String },
     #[error("Convergence error: {error}")]
     ConvergenceError { error: String },
+    #[error("Unsupported message payload in fleet simulator bus: {payload_kind}")]
+    UnsupportedMessagePayload { payload_kind: &'static str },
 }
 
 impl FleetSimulator {
@@ -512,20 +514,50 @@ impl FleetSimulator {
             } => {
                 self.transition_instance_state(target_id, *new_state, reason.clone())?;
             }
-            MessagePayload::Protocol(_protocol_message) => {
-                // Handle protocol message (placeholder for now)
+            MessagePayload::Protocol(_) => {
+                return Err(FleetSimulatorError::UnsupportedMessagePayload {
+                    payload_kind: "protocol",
+                });
             }
-            MessagePayload::QuarantineDecision { .. } => {
-                // Quarantine decision dispatch handled by higher-level driver.
+            MessagePayload::QuarantineDecision {
+                extension_id,
+                reason,
+                evidence_hash,
+                originator_instance,
+                lamport_timestamp,
+            } => {
+                self.process_quarantine_decision(
+                    extension_id.clone(),
+                    reason.clone(),
+                    evidence_hash.clone(),
+                    originator_instance.clone(),
+                    *lamport_timestamp,
+                    target_id.clone(),
+                )?;
             }
-            MessagePayload::QuarantineAck { .. } => {
-                // Quarantine ack dispatch handled by higher-level driver.
+            MessagePayload::QuarantineAck {
+                extension_id,
+                evidence_hash,
+                acknowledging_instance,
+                lamport_timestamp,
+                ..
+            } => {
+                self.process_quarantine_ack(
+                    extension_id.clone(),
+                    evidence_hash.clone(),
+                    acknowledging_instance.clone(),
+                    *lamport_timestamp,
+                )?;
             }
-            MessagePayload::ConvergenceEvent(_event) => {
-                // Handle convergence event (placeholder for now)
+            MessagePayload::ConvergenceEvent(_) => {
+                return Err(FleetSimulatorError::UnsupportedMessagePayload {
+                    payload_kind: "convergence_event",
+                });
             }
-            MessagePayload::QuorumCheckpoint(_checkpoint) => {
-                // Handle quorum checkpoint (placeholder for now)
+            MessagePayload::QuorumCheckpoint(_) => {
+                return Err(FleetSimulatorError::UnsupportedMessagePayload {
+                    payload_kind: "quorum_checkpoint",
+                });
             }
         }
 
@@ -680,18 +712,29 @@ impl FleetSimulator {
         let decision_timestamp = self.lamport_clock;
 
         // Create quarantine record
+        let mut acknowledgments = BTreeMap::new();
+        acknowledgments.insert(originator_instance.clone(), decision_timestamp);
+
         let record = QuarantineRecord {
             extension_id: extension_id.clone(),
             reason: reason.clone(),
             evidence_hash: evidence_hash.clone(),
             originator_instance: originator_instance.clone(),
             decision_timestamp,
-            acknowledgments: BTreeMap::new(),
+            acknowledgments,
             converged: false,
         };
 
         self.quarantined_extensions
             .insert(evidence_hash.clone(), record);
+
+        if self.instances.contains_key(&originator_instance) {
+            self.transition_instance_state(
+                &originator_instance,
+                InstanceState::Quarantined,
+                format!("Originated quarantine decision for extension {extension_id}"),
+            )?;
+        }
 
         // Broadcast to all instances
         let message_id = ContentHash::compute(
@@ -1366,5 +1409,34 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(fleet.is_extension_quarantined("partition_evidence"));
+    }
+
+    #[test]
+    fn test_quarantine_bus_dispatch_enforces_and_converges() {
+        let mut fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let instance_ids = fleet.instance_ids();
+        let originator = instance_ids[0].clone();
+        let evidence_hash = "bus_dispatch_evidence".to_string();
+
+        fleet
+            .broadcast_quarantine_decision(
+                "bus_dispatch_ext".to_string(),
+                "Bus dispatch regression".to_string(),
+                evidence_hash.clone(),
+                originator.clone(),
+            )
+            .unwrap();
+
+        fleet.run_simulation_steps(16).unwrap();
+
+        assert!(fleet.is_quarantine_converged(&evidence_hash));
+        for instance_id in instance_ids {
+            assert_eq!(
+                fleet.get_instance(&instance_id).unwrap().state,
+                InstanceState::Quarantined,
+                "{instance_id} should enforce the queued quarantine decision"
+            );
+        }
+        assert_eq!(fleet.get_quarantine_stats().total_acknowledgments, 3);
     }
 }

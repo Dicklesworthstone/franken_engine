@@ -1189,7 +1189,7 @@ fn build_environment(
     matrix: &AsupersyncContractCompatMatrix,
 ) -> BundleEnvironment {
     let repo_root = repo_root_from_manifest_dir();
-    let package_versions = matrix
+    let package_versions: BTreeMap<String, String> = matrix
         .releases
         .iter()
         .map(|release| (release.package_name.clone(), release.release_id.clone()))

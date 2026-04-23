@@ -1,5 +1,7 @@
 #![no_main]
 
+use std::hint::black_box;
+
 use frankenengine_engine::cold_start_aot_governance::{
     BenchmarkVerdict, ColdStartEvidence, GovernanceConfig, GovernanceError, GovernanceVerdict,
     ParityCheckKind, ParityResult, RollbackTrigger, StartupPathKind, evaluate_cold_start_at_epoch,
@@ -37,8 +39,8 @@ fuzz_target!(|data: &[u8]| {
         check_verdict_invariants(&verdict, &evidence, &config);
         let receipt = produce_receipt(decision_epoch, &evidence, &parity, &verdict);
         let receipt_again = produce_receipt(decision_epoch, &evidence, &parity, &verdict);
-        // Check receipt determinism without panicking
-        let _ = receipt == receipt_again;
+        // Check receipt determinism without panicking - use black_box to prevent optimization
+        black_box(receipt == receipt_again);
 
         if let Ok(verdict_json) = serde_json::to_string(&verdict) {
             if let Ok(restored_verdict) = serde_json::from_str::<GovernanceVerdict>(&verdict_json) {
@@ -50,8 +52,8 @@ fuzz_target!(|data: &[u8]| {
         }
 
         if let Ok(receipt_json) = serde_json::to_string(&receipt) {
-            let _ = serde_json::from_str::<frankenengine_engine::cold_start_aot_governance::DecisionReceipt>(&receipt_json);
-            // Skip receipt comparison to avoid panics on deserialization failures
+            // Check receipt deserialization without panicking - use black_box to prevent optimization
+            black_box(serde_json::from_str::<frankenengine_engine::cold_start_aot_governance::DecisionReceipt>(&receipt_json));
         }
     }
 });
@@ -115,8 +117,8 @@ fn check_deterministic(
     verdict: &Result<GovernanceVerdict, GovernanceError>,
 ) {
     let repeated = evaluate_cold_start_at_epoch(decision_epoch, evidence, parity, config);
-    // Check determinism without panicking
-    let _ = verdict == &repeated;
+    // Check determinism without panicking - use black_box to prevent optimization
+    black_box(verdict == &repeated);
 }
 
 fn check_error_precedence(
@@ -126,14 +128,14 @@ fn check_error_precedence(
     verdict: &Result<GovernanceVerdict, GovernanceError>,
 ) {
     if evidence.is_empty() {
-        // Check error type without panicking
-        let _ = matches!(verdict, Err(GovernanceError::EmptyEvidence));
+        // Check error type without panicking - use black_box to prevent optimization
+        black_box(matches!(verdict, Err(GovernanceError::EmptyEvidence)));
         return;
     }
 
     if let Err(stale) = validate_evidence_freshness(decision_epoch, evidence, config) {
-        // Check error precedence without panicking
-        let _ = verdict == &Err(stale);
+        // Check error precedence without panicking - use black_box to prevent optimization
+        black_box(verdict == &Err(stale));
         return;
     }
 
@@ -142,11 +144,11 @@ fn check_error_precedence(
         .map(|entry| entry.sample_count)
         .fold(0_u64, u64::saturating_add);
     if total_samples < config.min_benchmark_samples {
-        // Check insufficient samples error without panicking
-        let _ = matches!(
+        // Check insufficient samples error without panicking - use black_box to prevent optimization
+        black_box(matches!(
             verdict,
             Err(GovernanceError::InsufficientSamples { .. })
-        );
+        ));
     }
 }
 
@@ -157,27 +159,27 @@ fn check_verdict_invariants(
 ) {
     match verdict {
         GovernanceVerdict::Approved => {
-            // Check invariants without panicking - silently ignore violations in fuzz mode
-            let _ = verdict.allows_publication();
-            let _ = verdict.requires_rollback();
-            let _ = evidence
+            // Check invariants without panicking - use black_box to prevent optimization
+            black_box(verdict.allows_publication());
+            black_box(verdict.requires_rollback());
+            black_box(evidence
                 .iter()
-                .any(|entry| entry.verdict(config) == BenchmarkVerdict::Faster);
-            let _ = evidence
+                .any(|entry| entry.verdict(config) == BenchmarkVerdict::Faster));
+            black_box(evidence
                 .iter()
-                .all(|entry| entry.verdict(config) != BenchmarkVerdict::Slower);
+                .all(|entry| entry.verdict(config) != BenchmarkVerdict::Slower));
         }
         GovernanceVerdict::Blocked { reasons } => {
-            // Check without panicking
-            let _ = reasons.is_empty();
-            let _ = verdict.allows_publication();
-            let _ = verdict.requires_rollback();
+            // Check without panicking - use black_box to prevent optimization
+            black_box(reasons.is_empty());
+            black_box(verdict.allows_publication());
+            black_box(verdict.requires_rollback());
         }
         GovernanceVerdict::Rollback { triggers } => {
-            // Check without panicking
-            let _ = triggers.is_empty();
-            let _ = verdict.allows_publication();
-            let _ = verdict.requires_rollback();
+            // Check without panicking - use black_box to prevent optimization
+            black_box(triggers.is_empty());
+            black_box(verdict.allows_publication());
+            black_box(verdict.requires_rollback());
             check_expected_rollback_triggers(triggers, evidence, config);
         }
     }
@@ -193,8 +195,8 @@ fn check_expected_rollback_triggers(
             && entry.speedup_millionths.unsigned_abs() > config.max_regression_millionths
     });
     if performance_regression {
-        // Check trigger presence without panicking
-        let _ = triggers.contains(&RollbackTrigger::PerformanceRegression);
+        // Check trigger presence without panicking - use black_box to prevent optimization
+        black_box(triggers.contains(&RollbackTrigger::PerformanceRegression));
     }
 
     let observability_mismatch = config.require_observability_proof
@@ -202,8 +204,8 @@ fn check_expected_rollback_triggers(
             .iter()
             .any(|entry| entry.path_kind.is_optimised() && entry.sample_count == 0);
     if observability_mismatch {
-        // Check trigger presence without panicking
-        let _ = triggers.contains(&RollbackTrigger::ObservabilityMismatch);
+        // Check trigger presence without panicking - use black_box to prevent optimization
+        black_box(triggers.contains(&RollbackTrigger::ObservabilityMismatch));
     }
 }
 

@@ -655,10 +655,24 @@ pub fn evaluate_publication_gate(
     bundle: &EvidenceBundle,
     config: &BundleConfig,
 ) -> PublicationGateVerdict {
+    evaluate_publication_gate_inputs(
+        &bundle.cells,
+        &bundle.coverage_stats,
+        bundle.creation_epoch,
+        config,
+    )
+}
+
+fn evaluate_publication_gate_inputs(
+    cells: &[CellEvidence],
+    coverage_stats: &CoverageStats,
+    creation_epoch: SecurityEpoch,
+    config: &BundleConfig,
+) -> PublicationGateVerdict {
     let mut reasons = Vec::new();
 
     // 1. Check required cells are present.
-    let present_ids: BTreeSet<&str> = bundle.cells.iter().map(|c| c.cell_id.as_str()).collect();
+    let present_ids: BTreeSet<&str> = cells.iter().map(|c| c.cell_id.as_str()).collect();
     for req in &config.required_cell_ids {
         if !present_ids.contains(req.as_str()) {
             reasons.push(BlockReason::MissingCell {
@@ -668,7 +682,7 @@ pub fn evaluate_publication_gate(
     }
 
     // 2. Check individual cell statuses.
-    for cell in &bundle.cells {
+    for cell in cells {
         match cell.status {
             CellStatus::Red => {
                 reasons.push(BlockReason::RedCell {
@@ -696,10 +710,10 @@ pub fn evaluate_publication_gate(
 
     // 3. Check yellow cells if require_all_green.
     if config.require_all_green {
-        let yellow_exists = bundle.cells.iter().any(|c| c.status == CellStatus::Yellow);
+        let yellow_exists = cells.iter().any(|c| c.status == CellStatus::Yellow);
         if yellow_exists {
             // In strict mode, yellow cells contribute to insufficient coverage.
-            let green_fraction = bundle.coverage_stats.coverage_fraction_millionths;
+            let green_fraction = coverage_stats.coverage_fraction_millionths;
             if green_fraction < config.min_coverage_fraction_millionths {
                 reasons.push(BlockReason::InsufficientCoverage {
                     coverage_fraction_millionths: green_fraction,
@@ -710,23 +724,22 @@ pub fn evaluate_publication_gate(
     }
 
     // 4. Check overall coverage fraction.
-    if bundle.coverage_stats.coverage_fraction_millionths < config.min_coverage_fraction_millionths
-    {
+    if coverage_stats.coverage_fraction_millionths < config.min_coverage_fraction_millionths {
         // Avoid duplicate if already pushed from yellow check.
         let already_pushed = reasons
             .iter()
             .any(|r| matches!(r, BlockReason::InsufficientCoverage { .. }));
         if !already_pushed {
             reasons.push(BlockReason::InsufficientCoverage {
-                coverage_fraction_millionths: bundle.coverage_stats.coverage_fraction_millionths,
+                coverage_fraction_millionths: coverage_stats.coverage_fraction_millionths,
                 required_millionths: config.min_coverage_fraction_millionths,
             });
         }
     }
 
     // 5. Check staleness.
-    let current_epoch = bundle.creation_epoch.as_u64();
-    for cell in &bundle.cells {
+    let current_epoch = creation_epoch.as_u64();
+    for cell in cells {
         let cell_epoch = cell.evidence_epoch.as_u64();
         if current_epoch > cell_epoch {
             let gap = current_epoch - cell_epoch;
@@ -831,21 +844,7 @@ pub fn assemble_bundle(
 
     let bundle_id = bundle_id.into();
     let coverage_stats = compute_coverage_stats(cells);
-
-    // Build a temporary bundle to evaluate the gate.
-    let temp_verdict = PublicationGateVerdict::Approved; // placeholder
-    let temp_hash = ContentHash::compute(b"temp");
-    let temp_bundle = EvidenceBundle {
-        bundle_id: bundle_id.clone(),
-        schema_version: SCHEMA_VERSION.to_string(),
-        cells: cells.to_vec(),
-        verdict: temp_verdict,
-        coverage_stats: coverage_stats.clone(),
-        creation_epoch,
-        bundle_hash: temp_hash,
-    };
-
-    let verdict = evaluate_publication_gate(&temp_bundle, config);
+    let verdict = evaluate_publication_gate_inputs(cells, &coverage_stats, creation_epoch, config);
 
     let bundle_hash =
         compute_bundle_hash(&bundle_id, cells, &verdict, creation_epoch, &coverage_stats);
@@ -1401,6 +1400,26 @@ mod tests {
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("bundle-red", &cells, &config, epoch()).unwrap();
         assert!(bundle.verdict.is_blocked());
+    }
+
+    #[test]
+    fn assemble_verdict_matches_direct_gate_inputs() {
+        let cells = vec![green_cell("a"), red_cell("b"), stale_cell("c")];
+        let mut config = BundleConfig::permissive();
+        config.max_staleness_epochs = 5;
+        let stats = compute_coverage_stats(&cells);
+        let direct_verdict = evaluate_publication_gate_inputs(&cells, &stats, epoch(), &config);
+
+        let bundle = assemble_bundle("bundle-direct-gate", &cells, &config, epoch()).unwrap();
+
+        assert_eq!(bundle.verdict, direct_verdict);
+        assert!(validate_bundle_integrity(&bundle).is_ok());
+        if let PublicationGateVerdict::Blocked { reasons } = &bundle.verdict {
+            assert!(reasons.iter().any(|r| r.tag() == "red_cell"));
+            assert!(reasons.iter().any(|r| r.tag() == "stale_evidence"));
+        } else {
+            panic!("expected direct gate inputs to block red and stale evidence");
+        }
     }
 
     #[test]

@@ -576,7 +576,7 @@ pub fn verify_cross_arch_reproducibility_with_config(
     for iteration in 0..config.replay_iterations {
         // Create iteration-specific trace
         let mut iteration_trace =
-            NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
+            NondeterminismTrace::new(format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
             vec![42 + iteration as u8], // Slightly different seed per iteration
@@ -598,7 +598,7 @@ pub fn verify_cross_arch_reproducibility_with_config(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
                 100,
-                &format!("test_harness_{}", target_arch.as_str()),
+                format!("test_harness_{}", target_arch.as_str()),
             );
 
             let comparison = controller.compare_trace(session_id, &target_trace, *target_arch)?;

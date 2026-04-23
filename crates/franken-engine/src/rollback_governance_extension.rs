@@ -190,6 +190,7 @@ pub struct DemotionAppealRequest {
 
 impl DemotionAppealRequest {
     /// Create a new appeal request with validation.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_new(
         appeal_id: String,
         target_demotion_id: String,
@@ -315,6 +316,7 @@ pub struct GovernanceVote {
 
 impl GovernanceVote {
     /// Create and sign a governance vote.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_signed(
         signing_key: &SigningKey,
         voter_id: String,
@@ -473,11 +475,9 @@ impl GovernanceReview {
             .map(|v| v.weight_millionths)
             .sum();
 
-        let approval_ratio_millionths = if total_weight > 0 {
-            (approval_weight * 1_000_000) / total_weight
-        } else {
-            0
-        };
+        let approval_ratio_millionths = (approval_weight * 1_000_000)
+            .checked_div(total_weight)
+            .unwrap_or(0);
 
         let threshold_met = approval_ratio_millionths >= self.approval_threshold_millionths;
         (approval_weight, total_weight, threshold_met)
@@ -588,6 +588,7 @@ pub struct QuarantineLevelChange {
 
 impl EnhancedQuarantineRecord {
     /// Create a new quarantine record.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         quarantine_id: String,
         entity_id: String,

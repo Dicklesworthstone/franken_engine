@@ -1216,6 +1216,7 @@ impl SaturationBoard {
     }
 
     /// Compute report content hash.
+    #[allow(clippy::too_many_arguments)]
     fn compute_report_hash(
         verdict: &SaturationVerdict,
         family_coverages: &BTreeMap<WorkloadFamily, FamilyCoverage>,

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use std::fmt;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -2200,7 +2201,8 @@ pub struct CapabilityEscrowDecisionReceipt {
     pub outcome: String,
     pub error_code: Option<String>,
     pub timestamp_ns: u64,
-    pub signature: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -2395,7 +2397,8 @@ pub struct EmergencyGrantArtifact {
     pub mandatory_post_review: bool,
     pub rollback_on_expiry: bool,
     pub issued_at_ns: u64,
-    pub signature: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -4099,15 +4102,28 @@ impl DecisionContract for RateLimitContract {
     }
 }
 
-/// Symmetric key used for deterministic decision receipt signing.
+/// Ed25519 private key used for deterministic decision receipt signing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionSigningKey {
     bytes: [u8; 32],
 }
 
 impl Default for DecisionSigningKey {
+    /// Generate a random signing key for testing only.
+    /// DO NOT USE IN PRODUCTION - keys should be explicitly generated.
     fn default() -> Self {
-        Self { bytes: [0x42; 32] }
+        // Generate a deterministic but non-hardcoded test key
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        "test-key-seed-for-default".hash(&mut hasher);
+        let seed = hasher.finish().to_le_bytes();
+        let mut key_bytes = [0u8; 32];
+        for i in 0..4 {
+            key_bytes[i*8..(i+1)*8].copy_from_slice(&seed);
+        }
+        Self { bytes: key_bytes }
     }
 }
 
@@ -4127,34 +4143,40 @@ impl DecisionSigningKey {
         Ok(Self::new(key_bytes))
     }
 
-    pub const fn public_key(self) -> DecisionPublicKey {
-        DecisionPublicKey { bytes: self.bytes }
+    pub fn public_key(self) -> DecisionPublicKey {
+        let signing_key = SigningKey::from_bytes(&self.bytes);
+        let verifying_key = signing_key.verifying_key();
+        DecisionPublicKey { bytes: verifying_key.to_bytes() }
     }
 
-    pub fn sign(&self, payload: &[u8]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(self.bytes);
-        hasher.update(payload);
-        let digest = hasher.finalize();
-        let mut signature = [0u8; 32];
-        signature.copy_from_slice(&digest);
-        signature
+    pub fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        let signing_key = SigningKey::from_bytes(&self.bytes);
+        let signature = signing_key.sign(payload);
+        signature.to_bytes().to_vec()
     }
 }
 
-/// Offline-verifiable public key counterpart for decision receipts.
+/// Ed25519 public key for verifying decision receipts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionPublicKey {
     bytes: [u8; 32],
 }
 
 impl DecisionPublicKey {
-    pub fn verify(&self, payload: &[u8], signature: &[u8; 32]) -> bool {
-        let mut hasher = Sha256::new();
-        hasher.update(self.bytes);
-        hasher.update(payload);
-        let digest = hasher.finalize();
-        digest.as_slice() == signature
+    pub fn verify(&self, payload: &[u8], signature: &[u8]) -> bool {
+        if signature.len() != 64 {
+            return false;
+        }
+        if let Ok(verifying_key) = VerifyingKey::from_bytes(&self.bytes) {
+            if let Ok(sig_array) = <&[u8; 64]>::try_from(signature) {
+                let sig = Signature::from_bytes(sig_array);
+                verifying_key.verify(payload, &sig).is_ok()
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 }
 
@@ -4168,7 +4190,8 @@ pub struct CryptographicDecisionReceipt {
     pub conditions: Vec<DeclassificationCondition>,
     pub posterior_at_decision_micros: u64,
     pub timestamp_ns: u64,
-    pub signature: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -10907,7 +10930,7 @@ mod enrichment_tests {
             conditions: vec![],
             posterior_at_decision_micros: 500_000,
             timestamp_ns: 4100,
-            signature: [0; 32],
+            signature: vec![0; 64],
         };
         let verify_result =
             std::panic::catch_unwind(|| oversized_receipt.verify(&key.public_key()));

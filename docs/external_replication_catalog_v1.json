@@ -5,6 +5,8 @@
   "generated_by": "bd-2501.2",
   "generated_at_utc": "2026-04-02T04:15:00Z",
   "minimum_claim_count": 2,
+  "ready_external_replication_claims": 2,
+  "external_replication_catalog_threshold_met": true,
   "claims": [
     {
       "claim_id": "benchmark_peer_claim_bundle",

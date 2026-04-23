@@ -698,7 +698,7 @@ pub fn validate_provenance_with_config(
             if !config.allow_development_trust {
                 return Err(ManifestValidationError::DevelopmentTrustDisabled);
             }
-            if (has_signature || has_trust_chain) && !hash_matches {
+            if !hash_matches {
                 return Err(ManifestValidationError::InvalidContentHash);
             }
         }
@@ -6792,6 +6792,21 @@ mod tests {
         };
 
         assert_eq!(validate_manifest_with_config(&manifest, &config), Ok(()));
+    }
+
+    #[test]
+    fn development_trust_rejects_content_hash_mismatch_with_override() {
+        let mut manifest = development_manifest(&[Capability::FsRead]);
+        manifest.content_hash[0] ^= 0xFF;
+        let config = ExtensionHostConfig {
+            allow_development_trust: true,
+            ..ExtensionHostConfig::default()
+        };
+
+        assert_eq!(
+            validate_manifest_with_config(&manifest, &config),
+            Err(ManifestValidationError::InvalidContentHash)
+        );
     }
 
     #[test]

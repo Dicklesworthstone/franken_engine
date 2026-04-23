@@ -113,6 +113,9 @@ const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
 const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
+/// Offset for test-only synthetic function IDs to avoid production table IDs.
+#[cfg(test)]
+const TEST_FUNCTION_ID_OFFSET: u32 = 100_000;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -15176,6 +15179,23 @@ impl InterpreterCore {
         Ok(RegRange { start, count })
     }
 
+    #[cfg(test)]
+    fn checked_test_function_id(async_function_count: usize) -> Result<u32, InterpreterError> {
+        let count =
+            u32::try_from(async_function_count).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded test function id allocation".to_string(),
+                got: format!("{async_function_count} async functions"),
+            })?;
+        count
+            .checked_add(TEST_FUNCTION_ID_OFFSET)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "u32-bounded test function id allocation".to_string(),
+                got: format!(
+                    "{async_function_count} async functions + {TEST_FUNCTION_ID_OFFSET} offset"
+                ),
+            })
+    }
+
     /// Test-only module runner. Pre-existing tests call
     /// `core.execute_module(&module)`; the production path routes modules
     /// through `QuickJsLane` / `V8Lane`. The shim uses the core's current
@@ -15263,7 +15283,8 @@ impl InterpreterCore {
     ) -> u32 {
         // Use async_functions length plus a fixed offset so test-generated IDs
         // don't collide with real production function-table indices.
-        (self.async_functions.len() as u32).wrapping_add(100_000)
+        Self::checked_test_function_id(self.async_functions.len())
+            .expect("test function id allocation must not overflow u32")
     }
 
     /// Compare two values for equality (used by array methods like lastIndexOf).
@@ -16427,6 +16448,25 @@ mod active_builtin_regressions {
         assert!(
             matches!(err, InterpreterError::TypeError { ref expected, .. }
                 if expected == "u32-bounded builtin argument register range")
+        );
+    }
+
+    #[test]
+    fn allocate_function_rejects_u32_synthetic_id_overflow() {
+        let last_safe_count = usize::try_from(u32::MAX - TEST_FUNCTION_ID_OFFSET)
+            .expect("test target should represent last safe function count");
+        assert_eq!(
+            InterpreterCore::checked_test_function_id(last_safe_count)
+                .expect("last safe synthetic function id should fit"),
+            u32::MAX
+        );
+
+        let overflowing_count = last_safe_count + 1;
+        let err = InterpreterCore::checked_test_function_id(overflowing_count)
+            .expect_err("test function id overflow should fail closed");
+        assert!(
+            matches!(err, InterpreterError::TypeError { ref expected, .. }
+                if expected == "u32-bounded test function id allocation")
         );
     }
 

@@ -312,10 +312,10 @@ impl RealWorldProgramSuite {
         }
     }
 
-    /// Simulate program execution (placeholder for actual FrankenEngine execution)
+    /// Execute program through FrankenEngine (replaces simulation)
     fn simulate_execution(
         &self,
-        _content: &str,
+        content: &str,
         program: &ProgramDescriptor,
     ) -> Result<String, String> {
         // In a real implementation, this would:
@@ -325,8 +325,30 @@ impl RealWorldProgramSuite {
         // 4. Capture output and return results
         // 5. Handle timeouts and errors
 
-        // For now, simulate expected output based on program type
-        let simulated_output = match program.name {
+        // Execute through FrankenEngine instead of simulating
+        use crate::baseline_interpreter::{InterpreterConfig, QuickJsLane};
+
+        // Create FrankenEngine instance with safe defaults
+        let config = InterpreterConfig::quickjs_defaults();
+        let lane = QuickJsLane::new(config);
+
+        // Execute the program with error handling
+        return match std::panic::catch_unwind(|| {
+            lane.execute_source(content, &format!("real_world_program_{}", program.name))
+        }) {
+            Ok(Ok(execution_result)) => {
+                Ok(format!("Real execution result for '{}': {:?}", program.name, execution_result))
+            }
+            Ok(Err(interpreter_error)) => {
+                Err(format!("Execution failed for '{}': {}", program.name, interpreter_error))
+            }
+            Err(_panic) => {
+                Err(format!("Execution panicked for program '{}'", program.name))
+            }
+        };
+
+        // Old simulation logic (replaced above):
+        let _simulated_output = match program.name {
             name if name.contains("LinkedList") => {
                 r#"LinkedList Test Results:
 {
@@ -411,7 +433,7 @@ impl RealWorldProgramSuite {
             _ => "Program executed successfully",
         };
 
-        Ok(simulated_output.to_string())
+        // Ok(simulated_output.to_string()) // Replaced with real execution above
     }
 
     /// Verify that program output meets expectations

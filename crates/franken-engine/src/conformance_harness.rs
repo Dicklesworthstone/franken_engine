@@ -2236,6 +2236,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile;
 
     // ── DeterministicRng ───────────────────────────────────────────────
 
@@ -5001,5 +5002,432 @@ expiry_date = "2030-01-01"
         let back: ConformanceRunResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, back);
         assert!(back.logs.is_empty());
+    }
+
+    // -- Error Injection Tests (bd-22l67) --
+
+    #[test]
+    fn unsupported_schema_version_fails_deterministically() {
+        let manifest = ConformanceAssetManifest {
+            schema_version: "franken-engine.conformance-assets.v2".to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![create_valid_asset()],
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        let result = manifest.validate_and_resolve(&manifest_path);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        if let ConformanceManifestError::UnsupportedSchema { expected, actual } = &err {
+            assert_eq!(expected, ConformanceAssetManifest::CURRENT_SCHEMA);
+            assert_eq!(actual, "franken-engine.conformance-assets.v2");
+        } else {
+            panic!("expected UnsupportedSchema error, got {:?}", err);
+        }
+
+        // Verify error message is descriptive
+        let error_msg = err.to_string();
+        assert!(error_msg.contains("unsupported conformance manifest schema"));
+        assert!(error_msg.contains("franken-engine.conformance-assets.v2"));
+    }
+
+    #[test]
+    fn empty_asset_set_fails_deterministically() {
+        let manifest = ConformanceAssetManifest {
+            schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![], // Empty asset set
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        let result = manifest.validate_and_resolve(&manifest_path);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConformanceManifestError::EmptyAssetSet));
+
+        // Verify error message is descriptive
+        let error_msg = err.to_string();
+        assert_eq!(error_msg, "conformance manifest contains no assets");
+    }
+
+    #[test]
+    fn missing_required_fields_fail_deterministically() {
+        let missing_fields = [
+            ("asset_id", create_asset_missing_field("asset_id")),
+            ("source_donor", create_asset_missing_field("source_donor")),
+            ("semantic_domain", create_asset_missing_field("semantic_domain")),
+            ("normative_reference", create_asset_missing_field("normative_reference")),
+            ("fixture_path", create_asset_missing_field("fixture_path")),
+            ("fixture_hash", create_asset_missing_field("fixture_hash")),
+            ("expected_output_path", create_asset_missing_field("expected_output_path")),
+            ("expected_output_hash", create_asset_missing_field("expected_output_hash")),
+            ("import_date", create_asset_missing_field("import_date")),
+        ];
+
+        for (field_name, asset) in missing_fields {
+            let manifest = ConformanceAssetManifest {
+                schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+                generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+                assets: vec![asset],
+            };
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let manifest_path = temp_dir.path().join("manifest.json");
+
+            let result = manifest.validate_and_resolve(&manifest_path);
+            assert!(result.is_err(), "should fail for missing {}", field_name);
+
+            let err = result.unwrap_err();
+            if let ConformanceManifestError::MissingField(missing) = &err {
+                assert_eq!(*missing, field_name);
+            } else {
+                panic!("expected MissingField({}) error, got {:?}", field_name, err);
+            }
+
+            // Verify error message is descriptive
+            let error_msg = err.to_string();
+            assert!(error_msg.contains("missing required field"));
+            assert!(error_msg.contains(field_name));
+        }
+    }
+
+    #[test]
+    fn invalid_ifc_field_values_fail_deterministically() {
+        let invalid_cases = [
+            ("category", "invalid_category"),
+            ("source_labels", "invalid_label"),
+            ("sink_clearances", "invalid_clearance"),
+            ("flow_path_type", "invalid_flow"),
+            ("expected_outcome", "invalid_outcome"),
+            ("expected_evidence_type", "invalid_evidence"),
+        ];
+
+        for (field_name, invalid_value) in invalid_cases {
+            let asset = create_invalid_ifc_asset(field_name, invalid_value);
+            let manifest = ConformanceAssetManifest {
+                schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+                generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+                assets: vec![asset],
+            };
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let manifest_path = temp_dir.path().join("manifest.json");
+
+            let result = manifest.validate_and_resolve(&manifest_path);
+            assert!(result.is_err(), "should fail for invalid {} value", field_name);
+
+            let err = result.unwrap_err();
+            if let ConformanceManifestError::InvalidFieldValue { field, value } = &err {
+                assert_eq!(*field, field_name);
+                assert!(value.contains(invalid_value));
+            } else {
+                panic!("expected InvalidFieldValue error for {}, got {:?}", field_name, err);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_ifc_expectation_combinations_fail_deterministically() {
+        // Test invalid category/outcome/evidence combinations
+        let invalid_combinations = [
+            ("benign", "block", "flow_violation"), // benign should allow, not block
+            ("exfil", "allow", "none"), // exfil should block, not allow
+            ("declassify", "allow", "flow_violation"), // declassify should declassify, not allow
+        ];
+
+        for (category, outcome, evidence) in invalid_combinations {
+            let asset = ConformanceAssetRecord {
+                asset_id: "test-invalid-ifc".to_string(),
+                source_donor: "test".to_string(),
+                semantic_domain: "ifc_corpus/test".to_string(),
+                normative_reference: "test".to_string(),
+                fixture_path: "fixture.bin".to_string(),
+                fixture_hash: "deadbeef".to_string(),
+                expected_output_path: "expected.bin".to_string(),
+                expected_output_hash: "cafebabe".to_string(),
+                import_date: "2026-04-23".to_string(),
+                category: Some(category.to_string()),
+                source_labels: vec!["credential".to_string()],
+                sink_clearances: vec!["network_egress".to_string()],
+                flow_path_type: Some("direct".to_string()),
+                expected_outcome: Some(outcome.to_string()),
+                expected_evidence_type: Some(evidence.to_string()),
+            };
+
+            let manifest = ConformanceAssetManifest {
+                schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+                generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+                assets: vec![asset],
+            };
+
+            let temp_dir = tempfile::tempdir().unwrap();
+            let manifest_path = temp_dir.path().join("manifest.json");
+
+            let result = manifest.validate_and_resolve(&manifest_path);
+            assert!(result.is_err(), "should fail for invalid combination {}/{}/{}", category, outcome, evidence);
+
+            let err = result.unwrap_err();
+            if let ConformanceManifestError::InvalidIfcExpectation {
+                asset_id,
+                category: err_cat,
+                expected_outcome: err_out,
+                expected_evidence_type: err_ev
+            } = &err {
+                assert_eq!(asset_id, "test-invalid-ifc");
+                assert_eq!(err_cat, category);
+                assert_eq!(err_out, outcome);
+                assert_eq!(err_ev, evidence);
+            } else {
+                panic!("expected InvalidIfcExpectation error, got {:?}", err);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_fixture_files_fail_with_io_error() {
+        use std::fs;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        // Create asset pointing to non-existent fixture file
+        let asset = ConformanceAssetRecord {
+            asset_id: "test-missing-fixture".to_string(),
+            source_donor: "test".to_string(),
+            semantic_domain: "test".to_string(),
+            normative_reference: "test".to_string(),
+            fixture_path: "nonexistent_fixture.bin".to_string(),
+            fixture_hash: "deadbeef".to_string(),
+            expected_output_path: "nonexistent_output.bin".to_string(),
+            expected_output_hash: "cafebabe".to_string(),
+            import_date: "2026-04-23".to_string(),
+            category: None,
+            source_labels: vec![],
+            sink_clearances: vec![],
+            flow_path_type: None,
+            expected_outcome: None,
+            expected_evidence_type: None,
+        };
+
+        let manifest = ConformanceAssetManifest {
+            schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![asset],
+        };
+
+        let result = manifest.validate_and_resolve(&manifest_path);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        if let ConformanceManifestError::AssetIo { asset_id, path, source } = &err {
+            assert_eq!(asset_id, "test-missing-fixture");
+            assert!(path.to_string_lossy().contains("nonexistent_fixture.bin"));
+            assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        } else {
+            panic!("expected AssetIo error, got {:?}", err);
+        }
+    }
+
+    #[test]
+    fn fixture_hash_mismatch_fails_deterministically() {
+        use std::fs;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        // Create fixture file with known content
+        let fixture_content = b"test fixture content";
+        let fixture_path = temp_dir.path().join("fixture.bin");
+        let expected_path = temp_dir.path().join("expected.bin");
+
+        fs::write(&fixture_path, fixture_content).unwrap();
+        fs::write(&expected_path, b"expected output").unwrap();
+
+        // Calculate correct hashes
+        let actual_fixture_hash = sha256_hex(fixture_content);
+        let actual_expected_hash = sha256_hex(b"expected output");
+
+        // Create asset with incorrect fixture hash
+        let asset = ConformanceAssetRecord {
+            asset_id: "test-hash-mismatch".to_string(),
+            source_donor: "test".to_string(),
+            semantic_domain: "test".to_string(),
+            normative_reference: "test".to_string(),
+            fixture_path: "fixture.bin".to_string(),
+            fixture_hash: "wrong_hash".to_string(), // Incorrect hash
+            expected_output_path: "expected.bin".to_string(),
+            expected_output_hash: actual_expected_hash, // Correct hash
+            import_date: "2026-04-23".to_string(),
+            category: None,
+            source_labels: vec![],
+            sink_clearances: vec![],
+            flow_path_type: None,
+            expected_outcome: None,
+            expected_evidence_type: None,
+        };
+
+        let manifest = ConformanceAssetManifest {
+            schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![asset],
+        };
+
+        let result = manifest.validate_and_resolve(&manifest_path);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        if let ConformanceManifestError::FixtureHashMismatch { asset_id, expected, actual } = &err {
+            assert_eq!(asset_id, "test-hash-mismatch");
+            assert_eq!(expected, "wrong_hash");
+            assert_eq!(actual, &actual_fixture_hash);
+        } else {
+            panic!("expected FixtureHashMismatch error, got {:?}", err);
+        }
+    }
+
+    #[test]
+    fn expected_output_hash_mismatch_fails_deterministically() {
+        use std::fs;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        // Create files with known content
+        let fixture_content = b"test fixture";
+        let expected_content = b"expected output content";
+        let fixture_path = temp_dir.path().join("fixture.bin");
+        let expected_path = temp_dir.path().join("expected.bin");
+
+        fs::write(&fixture_path, fixture_content).unwrap();
+        fs::write(&expected_path, expected_content).unwrap();
+
+        // Calculate correct hashes
+        let actual_fixture_hash = sha256_hex(fixture_content);
+        let actual_expected_hash = sha256_hex(expected_content);
+
+        // Create asset with incorrect expected output hash
+        let asset = ConformanceAssetRecord {
+            asset_id: "test-expected-hash-mismatch".to_string(),
+            source_donor: "test".to_string(),
+            semantic_domain: "test".to_string(),
+            normative_reference: "test".to_string(),
+            fixture_path: "fixture.bin".to_string(),
+            fixture_hash: actual_fixture_hash, // Correct hash
+            expected_output_path: "expected.bin".to_string(),
+            expected_output_hash: "wrong_expected_hash".to_string(), // Incorrect hash
+            import_date: "2026-04-23".to_string(),
+            category: None,
+            source_labels: vec![],
+            sink_clearances: vec![],
+            flow_path_type: None,
+            expected_outcome: None,
+            expected_evidence_type: None,
+        };
+
+        let manifest = ConformanceAssetManifest {
+            schema_version: ConformanceAssetManifest::CURRENT_SCHEMA.to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![asset],
+        };
+
+        let result = manifest.validate_and_resolve(&manifest_path);
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        if let ConformanceManifestError::ExpectedOutputHashMismatch { asset_id, expected, actual } = &err {
+            assert_eq!(asset_id, "test-expected-hash-mismatch");
+            assert_eq!(expected, "wrong_expected_hash");
+            assert_eq!(actual, &actual_expected_hash);
+        } else {
+            panic!("expected ExpectedOutputHashMismatch error, got {:?}", err);
+        }
+    }
+
+    #[test]
+    fn error_messages_are_deterministic() {
+        // Test that error messages are deterministic (no timestamps, randomness, etc.)
+
+        let manifest = ConformanceAssetManifest {
+            schema_version: "wrong-version".to_string(),
+            generated_at_utc: "2026-04-23T19:00:00Z".to_string(),
+            assets: vec![],
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manifest_path = temp_dir.path().join("manifest.json");
+
+        let result1 = manifest.validate_and_resolve(&manifest_path);
+        let result2 = manifest.validate_and_resolve(&manifest_path);
+
+        assert!(result1.is_err() && result2.is_err());
+        assert_eq!(result1.unwrap_err().to_string(), result2.unwrap_err().to_string());
+    }
+
+    // Helper functions for test data creation
+
+    fn create_valid_asset() -> ConformanceAssetRecord {
+        ConformanceAssetRecord {
+            asset_id: "test-asset".to_string(),
+            source_donor: "test-donor".to_string(),
+            semantic_domain: "test-domain".to_string(),
+            normative_reference: "test-ref".to_string(),
+            fixture_path: "fixture.bin".to_string(),
+            fixture_hash: "deadbeef".to_string(),
+            expected_output_path: "expected.bin".to_string(),
+            expected_output_hash: "cafebabe".to_string(),
+            import_date: "2026-04-23".to_string(),
+            category: None,
+            source_labels: vec![],
+            sink_clearances: vec![],
+            flow_path_type: None,
+            expected_outcome: None,
+            expected_evidence_type: None,
+        }
+    }
+
+    fn create_asset_missing_field(missing_field: &str) -> ConformanceAssetRecord {
+        ConformanceAssetRecord {
+            asset_id: if missing_field == "asset_id" { "".to_string() } else { "test-asset".to_string() },
+            source_donor: if missing_field == "source_donor" { "".to_string() } else { "test-donor".to_string() },
+            semantic_domain: if missing_field == "semantic_domain" { "".to_string() } else { "test-domain".to_string() },
+            normative_reference: if missing_field == "normative_reference" { "".to_string() } else { "test-ref".to_string() },
+            fixture_path: if missing_field == "fixture_path" { "".to_string() } else { "fixture.bin".to_string() },
+            fixture_hash: if missing_field == "fixture_hash" { "".to_string() } else { "deadbeef".to_string() },
+            expected_output_path: if missing_field == "expected_output_path" { "".to_string() } else { "expected.bin".to_string() },
+            expected_output_hash: if missing_field == "expected_output_hash" { "".to_string() } else { "cafebabe".to_string() },
+            import_date: if missing_field == "import_date" { "".to_string() } else { "2026-04-23".to_string() },
+            category: None,
+            source_labels: vec![],
+            sink_clearances: vec![],
+            flow_path_type: None,
+            expected_outcome: None,
+            expected_evidence_type: None,
+        }
+    }
+
+    fn create_invalid_ifc_asset(invalid_field: &str, invalid_value: &str) -> ConformanceAssetRecord {
+        ConformanceAssetRecord {
+            asset_id: "test-invalid-ifc".to_string(),
+            source_donor: "test".to_string(),
+            semantic_domain: "ifc_corpus/test".to_string(),
+            normative_reference: "test".to_string(),
+            fixture_path: "fixture.bin".to_string(),
+            fixture_hash: "deadbeef".to_string(),
+            expected_output_path: "expected.bin".to_string(),
+            expected_output_hash: "cafebabe".to_string(),
+            import_date: "2026-04-23".to_string(),
+            category: Some(if invalid_field == "category" { invalid_value.to_string() } else { "benign".to_string() }),
+            source_labels: if invalid_field == "source_labels" { vec![invalid_value.to_string()] } else { vec!["credential".to_string()] },
+            sink_clearances: if invalid_field == "sink_clearances" { vec![invalid_value.to_string()] } else { vec!["network_egress".to_string()] },
+            flow_path_type: Some(if invalid_field == "flow_path_type" { invalid_value.to_string() } else { "direct".to_string() }),
+            expected_outcome: Some(if invalid_field == "expected_outcome" { invalid_value.to_string() } else { "allow".to_string() }),
+            expected_evidence_type: Some(if invalid_field == "expected_evidence_type" { invalid_value.to_string() } else { "none".to_string() }),
+        }
     }
 }

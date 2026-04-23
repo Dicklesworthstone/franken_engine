@@ -2510,8 +2510,9 @@ fn format_run_orchestrator_error(error: OrchestratorError) -> String {
 fn classify_run_orchestrator_error(error: &OrchestratorError) -> &'static str {
     match error {
         OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
-            reason, ..
-        }) if reason.contains("bare specifiers not supported") => {
+            reason: frankenengine_engine::baseline_interpreter::ModuleResolutionFailureReason::BareSpecifiersNotSupported,
+            ..
+        }) => {
             "unsupported_runtime_module_resolution"
         }
         OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {

@@ -1222,6 +1222,44 @@ pub trait InterpreterHook: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// ModuleResolutionFailureReason
+// ---------------------------------------------------------------------------
+
+/// Specific reasons for module resolution failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModuleResolutionFailureReason {
+    /// Bare specifiers are not supported in the current resolution context.
+    BareSpecifiersNotSupported,
+    /// Specifier format is malformed or invalid.
+    MalformedSpecifier,
+    /// Module not found in resolution paths.
+    ModuleNotFound,
+    /// Other resolution failure with descriptive reason.
+    Other(String),
+}
+
+impl ModuleResolutionFailureReason {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::BareSpecifiersNotSupported => "bare specifiers not supported",
+            Self::MalformedSpecifier => "malformed specifier",
+            Self::ModuleNotFound => "module not found",
+            Self::Other(_) => "resolution failed",
+        }
+    }
+}
+
+impl fmt::Display for ModuleResolutionFailureReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BareSpecifiersNotSupported => write!(f, "bare specifiers not supported"),
+            Self::MalformedSpecifier => write!(f, "malformed specifier"),
+            Self::ModuleNotFound => write!(f, "module not found"),
+            Self::Other(reason) => write!(f, "{}", reason),
+        }
+    }
+}
+
 // InterpreterError
 // ---------------------------------------------------------------------------
 
@@ -1255,7 +1293,7 @@ pub enum InterpreterError {
     /// Require specifier register did not contain a string.
     RequireSpecifierNotString { got: String },
     /// Module resolution failed.
-    ModuleResolutionFailed { specifier: String, reason: String },
+    ModuleResolutionFailed { specifier: String, reason: ModuleResolutionFailureReason },
     /// Failed to read module source from disk.
     ModuleReadFailed { specifier: String, error: String },
     /// Failed to parse module source.
@@ -2152,7 +2190,7 @@ impl InterpreterCore {
                 .or_else(|| self.config.module_root.as_ref().map(PathBuf::from))
                 .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: "no module root available for relative import".to_string(),
+                    reason: ModuleResolutionFailureReason::Other("no module root available for relative import".to_string()),
                 })?;
             Ok(base.join(specifier))
         } else if specifier.starts_with('/') {
@@ -2160,7 +2198,7 @@ impl InterpreterCore {
         } else {
             Err(InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
-                reason: "bare specifiers not supported in baseline interpreter".to_string(),
+                reason: ModuleResolutionFailureReason::BareSpecifiersNotSupported,
             })
         }
     }
@@ -2170,7 +2208,7 @@ impl InterpreterCore {
         let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
             InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
-                reason: format!("module not found at {}", resolved.display()),
+                reason: ModuleResolutionFailureReason::ModuleNotFound,
             }
         })?;
         let canonical =
@@ -2178,7 +2216,7 @@ impl InterpreterCore {
                 .canonicalize()
                 .map_err(|error| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: format!("failed to canonicalize module path: {error}"),
+                    reason: ModuleResolutionFailureReason::Other(format!("failed to canonicalize module path: {error}")),
                 })?;
         Ok(canonical.display().to_string())
     }
@@ -2190,14 +2228,14 @@ impl InterpreterCore {
             .resolve_require_candidate(&resolved, force_directory)
             .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
-                reason: format!("module not found at {}", resolved.display()),
+                reason: ModuleResolutionFailureReason::ModuleNotFound,
             })?;
         let canonical =
             candidate
                 .canonicalize()
                 .map_err(|error| InterpreterError::ModuleResolutionFailed {
                     specifier: specifier.to_string(),
-                    reason: format!("failed to canonicalize module path: {error}"),
+                    reason: ModuleResolutionFailureReason::Other(format!("failed to canonicalize module path: {error}")),
                 })?;
         Ok(canonical.display().to_string())
     }

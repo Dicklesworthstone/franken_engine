@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::deterministic_serde::{
-    CanonicalValue, SchemaRegistry, decode_value, deserialize_with_schema, encode_value,
+    CanonicalValue, SchemaRegistry, decode_value, encode_value,
     serialize_with_schema,
 };
 
@@ -126,7 +126,7 @@ fn test_decode_encode_roundtrip_golden() {
         output.push_str(&format!("Schema encoded: {} bytes\n", schema_encoded.len()));
 
         match registry.deserialize_checked(&schema_encoded) {
-            Ok(schema_decoded) => {
+            Ok((_schema_def, schema_decoded)) => {
                 output.push_str(&format!("Schema decoded: {:?}\n", schema_decoded));
                 output.push_str(&format!("Schema roundtrip OK: {}\n", original == schema_decoded));
             }

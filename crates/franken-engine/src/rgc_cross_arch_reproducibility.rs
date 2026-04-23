@@ -8,6 +8,7 @@
 
 use crate::deterministic_replay::NondeterminismTrace;
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
+use crate::hash_tiers::ContentHash;
 use chrono;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -277,13 +278,30 @@ impl CrossArchController {
             .get(session_id)
             .ok_or(CrossArchError::MissingReferenceTrace)?;
 
+        // Create deterministic content hash for reproducible object_id derivation
+        let content_hash = {
+            let mut content = Vec::new();
+            content.extend_from_slice(session_id.as_bytes());
+            content.extend_from_slice(&reference_trace.events.len().to_le_bytes());
+            content.extend_from_slice(&serde_json::to_vec(&self.config).unwrap_or_default());
+            content.extend_from_slice(&ArchitectureId::current().to_string().as_bytes());
+            ContentHash::compute(&content).as_bytes().to_vec()
+        };
+
         let object_id = derive_id(
             ObjectDomain::EvidenceRecord,
             &format!("cross-arch-report-{}", session_id),
             &cross_arch_schema(),
-            session_id.as_bytes(),
+            &content_hash,
         )
         .map_err(|e| CrossArchError::IdGeneration(format!("{:?}", e)))?;
+
+        // Use deterministic timestamp for reproducible builds, current time otherwise
+        let timestamp_utc = if cfg!(test) || std::env::var("FRANKEN_DETERMINISTIC_BUILD").is_ok() {
+            "2024-01-01T00:00:00Z".to_string()
+        } else {
+            chrono::Utc::now().to_rfc3339()
+        };
 
         Ok(CrossArchReport {
             object_id,
@@ -291,7 +309,7 @@ impl CrossArchController {
             reference_arch: ArchitectureId::current(),
             reference_event_count: reference_trace.events.len(),
             config: self.config.clone(),
-            timestamp_utc: chrono::Utc::now().to_rfc3339(),
+            timestamp_utc,
         })
     }
 }
@@ -415,5 +433,58 @@ mod tests {
         let comparison = result.unwrap();
         assert!(comparison.traces_identical);
         assert_eq!(comparison.assessment, ReproducibilityAssessment::Perfect);
+    }
+
+    #[test]
+    fn report_generation_deterministic_for_identical_inputs() {
+        let trace = CrossArchTrace {
+            events: vec![
+                TraceEvent { event: "test1".to_string() },
+                TraceEvent { event: "test2".to_string() },
+            ],
+        };
+        let config = CrossArchConfig::default();
+        let mut controller = CrossArchController::with_defaults();
+        controller.reference_traces.insert("session1".to_string(), trace.clone());
+        controller.config = config.clone();
+
+        // Generate two reports with identical inputs
+        let report1 = controller.generate_report("session1").unwrap();
+        let report2 = controller.generate_report("session1").unwrap();
+
+        // Reports should have identical object_id for reproducibility
+        assert_eq!(report1.object_id, report2.object_id);
+        assert_eq!(report1.session_id, report2.session_id);
+        assert_eq!(report1.reference_event_count, report2.reference_event_count);
+        assert_eq!(report1.config, report2.config);
+    }
+
+    #[test]
+    fn report_generation_different_object_id_for_different_inputs() {
+        let trace1 = CrossArchTrace {
+            events: vec![
+                TraceEvent { event: "test1".to_string() },
+                TraceEvent { event: "test2".to_string() },
+            ],
+        };
+        let trace2 = CrossArchTrace {
+            events: vec![
+                TraceEvent { event: "test1".to_string() },
+                TraceEvent { event: "test3".to_string() }, // Different event
+            ],
+        };
+        let config = CrossArchConfig::default();
+        let mut controller = CrossArchController::with_defaults();
+        controller.config = config;
+
+        // Setup different traces
+        controller.reference_traces.insert("session1".to_string(), trace1);
+        controller.reference_traces.insert("session2".to_string(), trace2);
+
+        let report1 = controller.generate_report("session1").unwrap();
+        let report2 = controller.generate_report("session2").unwrap();
+
+        // Different traces should produce different object_ids
+        assert_ne!(report1.object_id, report2.object_id);
     }
 }

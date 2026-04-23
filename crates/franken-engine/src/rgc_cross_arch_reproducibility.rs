@@ -148,6 +148,7 @@ impl Default for CrossArchConfig {
 pub struct CrossArchController {
     config: CrossArchConfig,
     reference_traces: BTreeMap<String, NondeterminismTrace>,
+    comparisons: BTreeMap<String, CrossArchComparison>,
 }
 
 impl CrossArchController {
@@ -156,6 +157,7 @@ impl CrossArchController {
         Self {
             config,
             reference_traces: BTreeMap::new(),
+            comparisons: BTreeMap::new(),
         }
     }
 
@@ -412,18 +414,19 @@ pub struct CrossArchReport {
 /// Test harness for cross-architecture reproducibility verification.
 pub fn verify_cross_arch_reproducibility(
     session_id: &str,
-    _iterations: usize,
+    iterations: usize,
 ) -> Result<CrossArchComparison, CrossArchError> {
-    let mut controller = CrossArchController::with_defaults();
-    let config = &controller.config;
+    let mut config = CrossArchConfig::default();
 
-    // Use config's replay_iterations, not the parameter
-    let effective_iterations = config.replay_iterations;
+    // Honor the iterations parameter instead of ignoring it
+    config.replay_iterations = iterations;
 
-    // Fail closed if config specifies no iterations
-    if effective_iterations == 0 {
+    // Fail closed if no iterations requested
+    if iterations == 0 {
         return Err(CrossArchError::NoIterationsSpecified);
     }
+
+    let mut controller = CrossArchController::new(config.clone());
 
     // Create reference trace on current architecture
     let mut reference_trace = NondeterminismTrace::new(session_id);
@@ -442,7 +445,7 @@ pub fn verify_cross_arch_reproducibility(
     let mut architecture_results = BTreeMap::new();
 
     // Run multiple iterations on current architecture
-    for iteration in 0..effective_iterations {
+    for iteration in 0..iterations {
         // Create iteration-specific trace
         let mut iteration_trace = NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(

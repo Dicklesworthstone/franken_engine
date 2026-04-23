@@ -69,6 +69,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "benchmark_regression_fuzz"
+path = "fuzz_targets/benchmark_regression_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "governance_verdict_fuzz"
 path = "fuzz_targets/governance_verdict_fuzz.rs"
 test = false

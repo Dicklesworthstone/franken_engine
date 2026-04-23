@@ -64,6 +64,7 @@ build_targets() {
   run_step "cargo fuzz build ir_lowering_fuzz" cargo fuzz build ir_lowering_fuzz
   run_step "cargo fuzz build ir3_instruction_fuzz" cargo fuzz build ir3_instruction_fuzz
   run_step "cargo fuzz build module_loader_fuzz" cargo fuzz build module_loader_fuzz
+  run_step "cargo fuzz build benchmark_regression_fuzz" cargo fuzz build benchmark_regression_fuzz
   run_step "cargo fuzz build governance_verdict_fuzz" cargo fuzz build governance_verdict_fuzz
 }
 
@@ -82,6 +83,8 @@ run_fuzz_targets() {
     cargo fuzz run ir3_instruction_fuzz -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
   run_step "cargo fuzz run module_loader_fuzz -- -max_total_time=$fuzz_time_seconds -rss_limit_mb=$rss_limit_mb -runs=0" \
     cargo fuzz run module_loader_fuzz -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
+  run_step "cargo fuzz run benchmark_regression_fuzz -- -max_total_time=$fuzz_time_seconds -rss_limit_mb=$rss_limit_mb -runs=0" \
+    cargo fuzz run benchmark_regression_fuzz -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
   run_step "cargo fuzz run governance_verdict_fuzz -- -max_total_time=$fuzz_time_seconds -rss_limit_mb=$rss_limit_mb -runs=0" \
     cargo fuzz run governance_verdict_fuzz -- "-max_total_time=$fuzz_time_seconds" "-rss_limit_mb=$rss_limit_mb" -runs=0
 }
@@ -165,7 +168,7 @@ write_manifest() {
       echo "    \"${commands_run[$idx]}\"${comma}"
     done
     echo '  ],'
-    echo '  "targets": ["decode_dos","handshake_replay","token_verification","parser_boundary","ir_lowering_fuzz","ir3_instruction_fuzz","module_loader_fuzz","governance_verdict_fuzz"],'
+    echo '  "targets": ["decode_dos","handshake_replay","token_verification","parser_boundary","ir_lowering_fuzz","ir3_instruction_fuzz","module_loader_fuzz","benchmark_regression_fuzz","governance_verdict_fuzz"],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","

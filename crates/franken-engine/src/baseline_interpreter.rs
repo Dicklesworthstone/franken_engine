@@ -42,7 +42,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::ast::ParseGoal;
@@ -1140,23 +1142,12 @@ impl EvidenceLog {
         )
     }
 
-    /// Compute HMAC-SHA256 of a message (simplified implementation).
+    /// Compute HMAC-SHA256 of a message.
     fn compute_hmac(&self, message: &str) -> String {
-        // Simplified HMAC implementation using basic hashing
-        // In production, would use a proper HMAC library
-        let mut hasher_state = 0u64;
-
-        // Hash the key
-        for &byte in &self.signing_key {
-            hasher_state = hasher_state.wrapping_mul(31).wrapping_add(byte as u64);
-        }
-
-        // Hash the message
-        for byte in message.bytes() {
-            hasher_state = hasher_state.wrapping_mul(31).wrapping_add(byte as u64);
-        }
-
-        format!("hmac-{:016x}", hasher_state)
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key)
+            .expect("HMAC-SHA256 accepts fixed-size evidence signing keys");
+        mac.update(message.as_bytes());
+        format!("hmac-sha256-{}", hex::encode(mac.finalize().into_bytes()))
     }
 
     /// Compute hash of register state for reproducibility.
@@ -21100,6 +21091,53 @@ mod tests {
             interpreter.decision_receipts.receipts[0].signature = "tampered".to_string();
 
             assert!(!interpreter.verify_decision_receipt_chain());
+        }
+
+        #[test]
+        fn receipt_signature_uses_hmac_sha256() {
+            let key = [0x11; 32];
+            let log = EvidenceLog::with_key(key);
+            let receipt = DecisionReceipt {
+                extension_id: "extension:golden".to_string(),
+                operation_type: "sandbox".to_string(),
+                risk_score: 125_000,
+                action_taken: "sandbox".to_string(),
+                timestamp: 42,
+                instruction_pointer: 7,
+                register_state_hash: "reghash-test".to_string(),
+                previous_receipt_hash: Some("prev-sig".to_string()),
+                signature: String::new(),
+            };
+
+            let signature = log.sign_receipt(&receipt);
+            let mut expected_mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+            expected_mac.update(log.receipt_signing_message(&receipt).as_bytes());
+            let expected = format!(
+                "hmac-sha256-{}",
+                hex::encode(expected_mac.finalize().into_bytes())
+            );
+
+            assert_eq!(signature, expected);
+            assert_eq!(signature.len(), "hmac-sha256-".len() + 64);
+        }
+
+        #[test]
+        fn chain_verification_rejects_payload_tampering() {
+            let mut log = EvidenceLog::with_key([0x22; 32]);
+            log.add_receipt(
+                "extension:current".to_string(),
+                "sandbox".to_string(),
+                125_000,
+                "sandbox".to_string(),
+                0,
+                &[Value::Int(1)],
+            );
+
+            assert!(log.verify_chain());
+
+            log.receipts[0].action_taken = "allow".to_string();
+
+            assert!(!log.verify_chain());
         }
 
         #[test]

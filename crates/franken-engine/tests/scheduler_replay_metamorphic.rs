@@ -101,7 +101,7 @@ fn simulate_replay(automaton: &SchedulerAutomaton, actions: &[TransitionLabel]) 
 #[test]
 fn mr_identity_replay_determinism() {
     proptest!(|(action_sequence in prop::collection::vec(
-        prop::string::string_regex("[a-z]{1,10}").unwrap(), 1..10)
+        prop::string::string_regex("[a-z]{1,10}").expect("Invalid test regex pattern"), 1..10)
     )| {
         let automaton = create_test_automaton();
         let actions: Vec<TransitionLabel> = action_sequence.iter()
@@ -122,7 +122,7 @@ fn mr_identity_replay_determinism() {
 #[test]
 fn mr_subsequence_monotonic() {
     proptest!(|(full_sequence in prop::collection::vec(
-        prop::string::string_regex("(start|yield|resume|finish)").unwrap(), 2..8)
+        prop::string::string_regex("(start|yield|resume|finish)").expect("Invalid test regex pattern"), 2..8)
     )| {
         let automaton = create_test_automaton();
         let full_actions: Vec<TransitionLabel> = full_sequence.iter()
@@ -244,7 +244,9 @@ fn mr_state_idempotence() {
     ];
 
     let first_result = simulate_replay(&automaton, &completion_sequence);
-    let final_state = first_result.last().unwrap();
+    let final_state = first_result.last().expect(
+        "simulate_replay returned empty sequence - check action validity and automaton transitions"
+    );
 
     // Attempting same actions from final state should not change it further
     let repeat_result = simulate_replay_from_state(
@@ -267,7 +269,7 @@ fn mr_state_idempotence() {
 #[test]
 fn mr_composite_identity_subsequence() {
     proptest!(|(full_sequence in prop::collection::vec(
-        prop::string::string_regex("(start|yield|resume|finish)").unwrap(), 3..6)
+        prop::string::string_regex("(start|yield|resume|finish)").expect("Invalid test regex pattern"), 3..6)
     )| {
         let automaton = create_test_automaton();
         let full_actions: Vec<TransitionLabel> = full_sequence.iter()
@@ -334,7 +336,7 @@ proptest! {
     fn comprehensive_mr_validation(
         action_count in 1usize..10,
         action_names in prop::collection::vec(
-            prop::string::string_regex("(start|yield|resume|finish|invalid[0-9])").unwrap(),
+            prop::string::string_regex("(start|yield|resume|finish|invalid[0-9])").expect("Invalid test regex pattern"),
             1..15
         )
     ) {

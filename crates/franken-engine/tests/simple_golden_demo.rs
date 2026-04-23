@@ -14,8 +14,10 @@ fn assert_golden(test_name: &str, actual: &str) {
 
     // UPDATE MODE: overwrite golden with actual output
     if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, actual).unwrap();
+        fs::create_dir_all(golden_path.parent().expect("Golden path must have parent directory"))
+            .expect("Failed to create golden artifacts directory");
+        fs::write(&golden_path, actual)
+            .expect("Failed to write golden artifact file");
         eprintln!("[GOLDEN] Updated: {}", golden_path.display());
         return;
     }
@@ -32,7 +34,8 @@ fn assert_golden(test_name: &str, actual: &str) {
     if actual != expected {
         // Write actual for easy diffing
         let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, actual).unwrap();
+        fs::write(&actual_path, actual)
+            .expect("Failed to write actual artifact file for comparison");
 
         panic!(
             "GOLDEN MISMATCH: {test_name}\n\n\

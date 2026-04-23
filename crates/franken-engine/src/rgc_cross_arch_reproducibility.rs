@@ -690,7 +690,7 @@ mod tests {
         }];
 
         let assessment = controller.assess_reproducibility(&divergences);
-        assert_eq!(assessment, ReproducibilityAssessment::Problematic);
+        assert_eq!(assessment, ReproducibilityAssessment::Failed);
     }
 
     #[test]

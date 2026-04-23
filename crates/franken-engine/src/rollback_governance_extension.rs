@@ -17,20 +17,15 @@
 //!
 //! Plan reference: bd-1lsy.7.4.3 (rollback governance P1).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::demotion_rollback::{
-    AutoDemotionMonitor, DemotionEvidenceItem, DemotionReason, DemotionReceipt, DemotionSeverity,
-};
-use crate::governance_mechanism::{ChallengeOutcome, ReportPhase};
-use crate::hash_tiers::ContentHash;
+use crate::demotion_rollback::DemotionEvidenceItem;
+use crate::governance_mechanism::ReportPhase;
 use crate::policy_checkpoint::DeterministicTimestamp;
-use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{Signature, SigningKey, VerificationKey};
-use crate::slot_registry::SlotId;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -208,11 +203,11 @@ impl DemotionAppealRequest {
     ) -> Result<Self, GovernanceError> {
         // Validate appeal deadline
         let deadline_ns = demotion_timestamp_ns + APPEAL_DEADLINE_NS;
-        if submitted_at.as_nanos_since_epoch() > deadline_ns {
+        if submitted_at.0 > deadline_ns {
             return Err(GovernanceError::AppealDeadlineExpired {
                 demotion_id: target_demotion_id,
                 deadline_ns,
-                submitted_at_ns: submitted_at.as_nanos_since_epoch(),
+                submitted_at_ns: submitted_at.0,
             });
         }
 
@@ -263,7 +258,7 @@ impl DemotionAppealRequest {
     /// Check if appeal is still within deadline.
     pub fn is_within_deadline(&self, demotion_timestamp_ns: u64) -> bool {
         let deadline_ns = demotion_timestamp_ns + APPEAL_DEADLINE_NS;
-        self.submitted_at.as_nanos_since_epoch() <= deadline_ns
+        self.submitted_at.0 <= deadline_ns
     }
 }
 
@@ -341,7 +336,7 @@ impl GovernanceVote {
         preimage.extend_from_slice(voter_role.to_string().as_bytes());
         preimage.push(if is_approval { 1 } else { 0 });
         preimage.extend_from_slice(&weight_millionths.to_be_bytes());
-        preimage.extend_from_slice(&cast_at.as_nanos_since_epoch().to_be_bytes());
+        preimage.extend_from_slice(&cast_at.0.to_be_bytes());
         preimage.extend_from_slice(rationale.as_bytes());
 
         let signature =
@@ -380,7 +375,7 @@ impl GovernanceVote {
         preimage.extend_from_slice(self.voter_role.to_string().as_bytes());
         preimage.push(if self.is_approval { 1 } else { 0 });
         preimage.extend_from_slice(&self.weight_millionths.to_be_bytes());
-        preimage.extend_from_slice(&self.cast_at.as_nanos_since_epoch().to_be_bytes());
+        preimage.extend_from_slice(&self.cast_at.0.to_be_bytes());
         preimage.extend_from_slice(self.rationale.as_bytes());
 
         crate::signature_preimage::verify_signature(verification_key, &preimage, &self.signature)
@@ -682,7 +677,7 @@ mod tests {
     use super::*;
 
     fn test_timestamp() -> DeterministicTimestamp {
-        DeterministicTimestamp::from_nanos_since_epoch(1_600_000_000_000_000_000)
+        DeterministicTimestamp(1_600_000_000_000_000_000)
     }
 
     fn test_signing_key() -> SigningKey {
@@ -704,7 +699,7 @@ mod tests {
             Vec::new(),
             Some("Restore with additional monitoring".to_string()),
             1_000_000, // 1.0 stake
-            DeterministicTimestamp::from_nanos_since_epoch(appeal_time),
+            DeterministicTimestamp(appeal_time),
             demotion_time,
         );
 
@@ -727,7 +722,7 @@ mod tests {
             Vec::new(),
             None,
             1_000_000,
-            DeterministicTimestamp::from_nanos_since_epoch(appeal_time),
+            DeterministicTimestamp(appeal_time),
             demotion_time,
         );
 
@@ -750,7 +745,7 @@ mod tests {
             Vec::new(),
             None,
             1_000_000,
-            DeterministicTimestamp::from_nanos_since_epoch(appeal_time),
+            DeterministicTimestamp(appeal_time),
             demotion_time,
         )
         .expect("valid appeal");
@@ -944,7 +939,7 @@ mod tests {
             Vec::new(),
             None,
             1_000_000,
-            DeterministicTimestamp::from_nanos_since_epoch(appeal_time),
+            DeterministicTimestamp(appeal_time),
             demotion_time,
         )
         .expect("valid appeal");

@@ -1,3 +1,11 @@
+//! Zero placeholder scanning and inventory system.
+//!
+//! Scans the codebase for zero placeholder patterns that indicate incomplete
+//! implementation areas. Categorizes findings by subsystem and tracks status
+//! (open placeholder, fail-closed, or resolved).
+//!
+//! Used for technical debt tracking and implementation completeness auditing.
+
 use std::ffi::OsString;
 use std::fs;
 use std::io;

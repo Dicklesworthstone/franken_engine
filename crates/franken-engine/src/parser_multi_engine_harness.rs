@@ -1,3 +1,9 @@
+//! Multi-engine parser testing and validation harness.
+//!
+//! Provides cross-engine parser validation by running the same input through
+//! multiple parser implementations and comparing results. Used for conformance
+//! testing and regression detection across parser backends.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;

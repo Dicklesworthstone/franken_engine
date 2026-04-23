@@ -1,3 +1,9 @@
+//! Sequence lock fast path implementation for lock-free reads.
+//!
+//! Provides optimistic read access patterns with retry budgets and writer
+//! pressure detection. Enables high-performance concurrent data structure
+//! access with minimal contention overhead.
+
 use std::hint;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};

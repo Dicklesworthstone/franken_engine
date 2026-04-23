@@ -389,8 +389,10 @@ fn verify_cross_arch_reproducibility_multiple_iterations() {
 
     // The function should exercise multiple iterations, producing different trace counts
     // This proves iterations parameter is actually honored
-    assert_ne!(comparison_1.matching_events, comparison_3.matching_events,
-        "1 vs 3 iterations should produce different matching event counts");
+    assert_ne!(
+        comparison_1.matching_events, comparison_3.matching_events,
+        "1 vs 3 iterations should produce different matching event counts"
+    );
 }
 
 #[test]
@@ -423,13 +425,10 @@ fn verify_cross_arch_reproducibility_exercises_target_architectures() {
     let comparison = result.unwrap();
     // Should exercise both x86_64 and aarch64 architectures in matrix
     // Even if current arch is one of them, it should test cross-arch differences
-    assert!(comparison.matching_events > 0, "Should have executed cross-architecture comparisons");
-}
-    assert_eq!(comparison_1.assessment, ReproducibilityAssessment::Perfect);
-    assert_eq!(comparison_3.assessment, ReproducibilityAssessment::Perfect);
-
-    // The key test: different iteration counts should be distinguishable in behavior
-    // (Implementation detail: different seeds per iteration may affect trace comparison patterns)
+    assert!(
+        comparison.matching_events > 0,
+        "Should have executed cross-architecture comparisons"
+    );
 }
 
 #[test]
@@ -438,7 +437,10 @@ fn verify_cross_arch_reproducibility_zero_iterations_fails_closed() {
     let result = verify_cross_arch_reproducibility("zero-iteration-test", 0);
 
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), CrossArchError::NoIterationsSpecified));
+    assert!(matches!(
+        result.unwrap_err(),
+        CrossArchError::NoIterationsSpecified
+    ));
 }
 
 #[test]
@@ -479,7 +481,7 @@ fn verify_cross_arch_reproducibility_honors_config_iterations() {
 #[test]
 fn verify_cross_arch_reproducibility_with_custom_config() {
     use frankenengine_engine::rgc_cross_arch_reproducibility::{
-        verify_cross_arch_reproducibility_with_config, CrossArchConfig, ArchitectureId
+        ArchitectureId, CrossArchConfig, verify_cross_arch_reproducibility_with_config,
     };
 
     // Test custom config with 1 iteration vs 5 iterations
@@ -518,12 +520,13 @@ fn verify_cross_arch_reproducibility_with_custom_config() {
 #[test]
 fn verify_cross_arch_config_fail_closed_no_iterations() {
     use frankenengine_engine::rgc_cross_arch_reproducibility::{
-        verify_cross_arch_reproducibility_with_config, CrossArchConfig, ArchitectureId, CrossArchError
+        ArchitectureId, CrossArchConfig, CrossArchError,
+        verify_cross_arch_reproducibility_with_config,
     };
 
     let config_zero_iter = CrossArchConfig {
         target_architectures: vec![ArchitectureId::X86_64],
-        replay_iterations: 0,  // Should fail closed
+        replay_iterations: 0, // Should fail closed
         capture_fp_divergences: false,
         strict_determinism: true,
         max_divergent_events: 0,
@@ -531,17 +534,20 @@ fn verify_cross_arch_config_fail_closed_no_iterations() {
 
     let result = verify_cross_arch_reproducibility_with_config("zero-config", config_zero_iter);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), CrossArchError::NoIterationsSpecified));
+    assert!(matches!(
+        result.unwrap_err(),
+        CrossArchError::NoIterationsSpecified
+    ));
 }
 
 #[test]
 fn verify_cross_arch_config_fail_closed_no_targets() {
     use frankenengine_engine::rgc_cross_arch_reproducibility::{
-        verify_cross_arch_reproducibility_with_config, CrossArchConfig, CrossArchError
+        CrossArchConfig, CrossArchError, verify_cross_arch_reproducibility_with_config,
     };
 
     let config_no_targets = CrossArchConfig {
-        target_architectures: vec![],  // Should fail closed
+        target_architectures: vec![], // Should fail closed
         replay_iterations: 3,
         capture_fp_divergences: false,
         strict_determinism: true,
@@ -550,7 +556,10 @@ fn verify_cross_arch_config_fail_closed_no_targets() {
 
     let result = verify_cross_arch_reproducibility_with_config("no-targets", config_no_targets);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), CrossArchError::Configuration(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        CrossArchError::Configuration(_)
+    ));
 }
 
 // ---------------------------------------------------------------------------

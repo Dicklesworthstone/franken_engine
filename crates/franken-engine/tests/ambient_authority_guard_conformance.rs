@@ -60,7 +60,9 @@ impl RollbackUnverified {
     fn should_trigger(violation_kind: ViolationKind, context: &str) -> bool {
         match violation_kind {
             ViolationKind::DirectUpstreamImport => context.contains("franken_"),
-            ViolationKind::ForbiddenPattern => context.contains("std::env") || context.contains("std::fs"),
+            ViolationKind::ForbiddenPattern => {
+                context.contains("std::env") || context.contains("std::fs")
+            }
             ViolationKind::CanonicalTypeShadow => true,
             ViolationKind::MissingCxParameter => false, // Not a security boundary
         }
@@ -111,7 +113,6 @@ const CONFORMANCE_CASES: &[ConformanceCase] = &[
         description: "Guard MUST reject all environment variable permutations",
         test_fn: test_env_var_permutations,
     },
-
     // Section 2: Feature Flag Override Prevention (MUST level)
     ConformanceCase {
         id: "BD11Z7-FLAG-01",
@@ -134,7 +135,6 @@ const CONFORMANCE_CASES: &[ConformanceCase] = &[
         description: "Guard MUST reject bypass-security feature flag",
         test_fn: test_bypass_security_feature,
     },
-
     // Section 3: RollbackUnverified Error Boundary (MUST level)
     ConformanceCase {
         id: "BD11Z7-ROLLBACK-01",
@@ -164,7 +164,6 @@ const CONFORMANCE_CASES: &[ConformanceCase] = &[
         description: "RollbackUnverified MUST NOT trigger on legitimate patterns",
         test_fn: test_no_rollback_on_legitimate_code,
     },
-
     // Section 4: Fail-Closed Behavior (MUST level)
     ConformanceCase {
         id: "BD11Z7-FAIL-01",
@@ -198,11 +197,16 @@ fn test_disable_ambient_guard_env_var() -> ConformanceResult {
 
     env::remove_var("DISABLE_AMBIENT_GUARD");
 
-    if !findings.is_empty() && findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport) {
+    if !findings.is_empty()
+        && findings
+            .iter()
+            .any(|f| f.kind == ViolationKind::DirectUpstreamImport)
+    {
         ConformanceResult::Pass
     } else {
         ConformanceResult::Fail {
-            reason: "Guard accepted direct upstream import despite DISABLE_AMBIENT_GUARD=1".to_string(),
+            reason: "Guard accepted direct upstream import despite DISABLE_AMBIENT_GUARD=1"
+                .to_string(),
         }
     }
 }
@@ -219,7 +223,11 @@ fn test_skip_authority_check_env_var() -> ConformanceResult {
 
     env::remove_var("SKIP_AUTHORITY_CHECK");
 
-    if !findings.is_empty() && findings.iter().any(|f| f.kind == ViolationKind::ForbiddenPattern) {
+    if !findings.is_empty()
+        && findings
+            .iter()
+            .any(|f| f.kind == ViolationKind::ForbiddenPattern)
+    {
         ConformanceResult::Pass
     } else {
         ConformanceResult::Fail {
@@ -238,10 +246,17 @@ fn test_bypass_security_env_var() -> ConformanceResult {
         let source = "struct TraceId(String);"; // Shadows canonical type
         let findings = auditor.audit_source("test", "test.rs", source);
 
-        if findings.is_empty() || !findings.iter().any(|f| f.kind == ViolationKind::CanonicalTypeShadow) {
+        if findings.is_empty()
+            || !findings
+                .iter()
+                .any(|f| f.kind == ViolationKind::CanonicalTypeShadow)
+        {
             env::remove_var("BYPASS_SECURITY");
             return ConformanceResult::Fail {
-                reason: format!("Guard accepted canonical type shadowing with BYPASS_SECURITY={}", value),
+                reason: format!(
+                    "Guard accepted canonical type shadowing with BYPASS_SECURITY={}",
+                    value
+                ),
             };
         }
     }
@@ -265,7 +280,8 @@ fn test_allow_unsafe_imports_env_var() -> ConformanceResult {
     env::remove_var("ALLOW_UNSAFE_IMPORTS");
 
     // Must still detect violations even with bypass env var
-    let upstream_violations = findings.iter()
+    let upstream_violations = findings
+        .iter()
         .filter(|f| f.kind == ViolationKind::DirectUpstreamImport)
         .count();
 
@@ -273,7 +289,10 @@ fn test_allow_unsafe_imports_env_var() -> ConformanceResult {
         ConformanceResult::Pass
     } else {
         ConformanceResult::Fail {
-            reason: format!("Guard only detected {} upstream import violations, expected 2", upstream_violations),
+            reason: format!(
+                "Guard only detected {} upstream import violations, expected 2",
+                upstream_violations
+            ),
         }
     }
 }
@@ -304,15 +323,24 @@ fn test_env_var_permutations() -> ConformanceResult {
         let findings = auditor.audit_source("test", "test.rs", test_source);
 
         // Should detect all violation types despite bypass attempt
-        let has_import_violation = findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport);
-        let has_io_violation = findings.iter().any(|f| f.kind == ViolationKind::ForbiddenPattern);
-        let has_shadow_violation = findings.iter().any(|f| f.kind == ViolationKind::CanonicalTypeShadow);
+        let has_import_violation = findings
+            .iter()
+            .any(|f| f.kind == ViolationKind::DirectUpstreamImport);
+        let has_io_violation = findings
+            .iter()
+            .any(|f| f.kind == ViolationKind::ForbiddenPattern);
+        let has_shadow_violation = findings
+            .iter()
+            .any(|f| f.kind == ViolationKind::CanonicalTypeShadow);
 
         env::remove_var(single_var.0);
 
         if !has_import_violation || !has_io_violation || !has_shadow_violation {
             return ConformanceResult::Fail {
-                reason: format!("Guard bypassed by single env var: {}={}", single_var.0, single_var.1),
+                reason: format!(
+                    "Guard bypassed by single env var: {}={}",
+                    single_var.0, single_var.1
+                ),
             };
         }
     }
@@ -324,7 +352,11 @@ fn test_env_var_permutations() -> ConformanceResult {
 
     let findings = auditor.audit_source("test", "test.rs", test_source);
 
-    for var in ["DISABLE_AMBIENT_GUARD", "BYPASS_SECURITY", "ALLOW_UNSAFE_IMPORTS"] {
+    for var in [
+        "DISABLE_AMBIENT_GUARD",
+        "BYPASS_SECURITY",
+        "ALLOW_UNSAFE_IMPORTS",
+    ] {
         env::remove_var(var);
     }
 
@@ -332,7 +364,10 @@ fn test_env_var_permutations() -> ConformanceResult {
         ConformanceResult::Pass
     } else {
         ConformanceResult::Fail {
-            reason: format!("Guard bypassed by multiple env vars, only {} violations detected", findings.len()),
+            reason: format!(
+                "Guard bypassed by multiple env vars, only {} violations detected",
+                findings.len()
+            ),
         }
     }
 }
@@ -366,7 +401,7 @@ fn test_disable_ambient_guard_feature() -> ConformanceResult {
         }
         Err(e) => ConformanceResult::Fail {
             reason: format!("Failed to run cargo check: {}", e),
-        }
+        },
     }
 }
 
@@ -385,13 +420,14 @@ fn test_unsafe_extension_host_feature() -> ConformanceResult {
                 ConformanceResult::Pass
             } else {
                 ConformanceResult::Fail {
-                    reason: "unsafe-extension-host feature flag exists and could bypass security".to_string(),
+                    reason: "unsafe-extension-host feature flag exists and could bypass security"
+                        .to_string(),
                 }
             }
         }
         Err(e) => ConformanceResult::Fail {
             reason: format!("Failed to check feature flags: {}", e),
-        }
+        },
     }
 }
 
@@ -402,7 +438,7 @@ fn test_bypass_security_feature() -> ConformanceResult {
         "disable-guards",
         "unsafe-mode",
         "debug-unsafe",
-        "skip-checks"
+        "skip-checks",
     ];
 
     for feature in &bypass_features {
@@ -467,13 +503,16 @@ fn test_rollback_on_forbidden_io() -> ConformanceResult {
         let findings = auditor.audit_source("test", "test.rs", source);
 
         let has_forbidden = findings.iter().any(|f| {
-            f.kind == ViolationKind::ForbiddenPattern &&
-            RollbackUnverified::should_trigger(f.kind, source)
+            f.kind == ViolationKind::ForbiddenPattern
+                && RollbackUnverified::should_trigger(f.kind, source)
         });
 
         if !has_forbidden {
             return ConformanceResult::Fail {
-                reason: format!("RollbackUnverified not triggered for forbidden I/O: {}", source),
+                reason: format!(
+                    "RollbackUnverified not triggered for forbidden I/O: {}",
+                    source
+                ),
             };
         }
     }
@@ -493,13 +532,16 @@ fn test_rollback_on_type_shadowing() -> ConformanceResult {
         let findings = auditor.audit_source("test", "test.rs", source);
 
         let has_shadow = findings.iter().any(|f| {
-            f.kind == ViolationKind::CanonicalTypeShadow &&
-            RollbackUnverified::should_trigger(f.kind, source)
+            f.kind == ViolationKind::CanonicalTypeShadow
+                && RollbackUnverified::should_trigger(f.kind, source)
         });
 
         if !has_shadow {
             return ConformanceResult::Fail {
-                reason: format!("RollbackUnverified not triggered for type shadowing: {}", source),
+                reason: format!(
+                    "RollbackUnverified not triggered for type shadowing: {}",
+                    source
+                ),
             };
         }
     }
@@ -518,13 +560,16 @@ fn test_no_rollback_on_legitimate_code() -> ConformanceResult {
     for source in &legitimate_sources {
         let findings = auditor.audit_source("test", "test.rs", source);
 
-        let triggers_rollback = findings.iter().any(|f|
-            RollbackUnverified::should_trigger(f.kind, source)
-        );
+        let triggers_rollback = findings
+            .iter()
+            .any(|f| RollbackUnverified::should_trigger(f.kind, source));
 
         if triggers_rollback {
             return ConformanceResult::Fail {
-                reason: format!("RollbackUnverified incorrectly triggered for legitimate code: {}", source),
+                reason: format!(
+                    "RollbackUnverified incorrectly triggered for legitimate code: {}",
+                    source
+                ),
             };
         }
     }
@@ -556,7 +601,11 @@ fn test_fail_closed_unknown_env_vars() -> ConformanceResult {
         env::remove_var(var);
 
         // Should still detect violation despite unknown bypass attempt
-        if findings.is_empty() || !findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport) {
+        if findings.is_empty()
+            || !findings
+                .iter()
+                .any(|f| f.kind == ViolationKind::DirectUpstreamImport)
+        {
             return ConformanceResult::Fail {
                 reason: format!("Guard bypassed by unknown env var: {}={}", var, value),
             };
@@ -571,9 +620,9 @@ fn test_fail_closed_malformed_bypass() -> ConformanceResult {
 
     // Test malformed bypass attempts that should still be rejected
     let malformed_attempts = [
-        ("DISABLE_AMBIENT_GUARD", ""), // Empty value
-        ("BYPASS_SECURITY", "maybe"), // Ambiguous value
-        ("SKIP_AUTHORITY_CHECK", "0x1"), // Hex format
+        ("DISABLE_AMBIENT_GUARD", ""),    // Empty value
+        ("BYPASS_SECURITY", "maybe"),     // Ambiguous value
+        ("SKIP_AUTHORITY_CHECK", "0x1"),  // Hex format
         ("ALLOW_UNSAFE_IMPORTS", "TRUE"), // Wrong case
     ];
 
@@ -587,7 +636,11 @@ fn test_fail_closed_malformed_bypass() -> ConformanceResult {
 
         env::remove_var(var);
 
-        if findings.is_empty() || !findings.iter().any(|f| f.kind == ViolationKind::ForbiddenPattern) {
+        if findings.is_empty()
+            || !findings
+                .iter()
+                .any(|f| f.kind == ViolationKind::ForbiddenPattern)
+        {
             return ConformanceResult::Fail {
                 reason: format!("Guard bypassed by malformed env var: {}={}", var, value),
             };
@@ -635,13 +688,17 @@ fn extension_host_ambient_authority_conformance() {
         };
 
         // Structured JSON-line output for CI parsing
-        eprintln!("{{\"id\":\"{}\",\"verdict\":\"{}\",\"level\":\"{:?}\",\"section\":\"{}\"}}",
-            case.id, verdict, case.level, case.section);
+        eprintln!(
+            "{{\"id\":\"{}\",\"verdict\":\"{}\",\"level\":\"{:?}\",\"section\":\"{}\"}}",
+            case.id, verdict, case.level, case.section
+        );
     }
 
     let total = pass + fail + xfail;
-    eprintln!("\nBD-11Z7 Conformance: {}/{} pass, {} fail, {} expected-fail",
-        pass, total, fail, xfail);
+    eprintln!(
+        "\nBD-11Z7 Conformance: {}/{} pass, {} fail, {} expected-fail",
+        pass, total, fail, xfail
+    );
 
     // Coverage accounting matrix
     let mut by_section: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
@@ -661,15 +718,25 @@ fn extension_host_ambient_authority_conformance() {
 
     for (section, (must, should, may)) in &by_section {
         let total = must + should + may;
-        eprintln!("| {} | {} | {} | {} | {} |", section, must, should, may, total);
+        eprintln!(
+            "| {} | {} | {} | {} | {} |",
+            section, must, should, may, total
+        );
     }
 
     assert_eq!(fail, 0, "{} conformance tests failed", fail);
 
     // MUST clause coverage ≥ 95% requirement
     let total_must = by_section.values().map(|(must, _, _)| must).sum::<usize>();
-    let must_score = if total_must > 0 { (pass as f32) / (total_must as f32) } else { 0.0 };
+    let must_score = if total_must > 0 {
+        (pass as f32) / (total_must as f32)
+    } else {
+        0.0
+    };
 
-    assert!(must_score >= 0.95,
-        "MUST clause coverage {:.2}% < 95% minimum", must_score * 100.0);
+    assert!(
+        must_score >= 0.95,
+        "MUST clause coverage {:.2}% < 95% minimum",
+        must_score * 100.0
+    );
 }

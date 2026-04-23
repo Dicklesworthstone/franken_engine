@@ -12,33 +12,35 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::deterministic_serde::{
-    CanonicalValue, SchemaRegistry, decode_value, encode_value,
-    serialize_with_schema,
+    CanonicalValue, SchemaRegistry, decode_value, encode_value, serialize_with_schema,
 };
 
 /// Core golden comparison function following testing-golden-artifacts pattern
 fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/golden")
-        .join(format!("{test_name}.golden"));
+    let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
 
     // UPDATE MODE: overwrite golden with actual output
     if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().expect("Golden path must have parent directory"))
-            .expect("Failed to create golden artifacts directory");
-        fs::write(&golden_path, actual)
-            .expect("Failed to write golden artifact file");
+        fs::create_dir_all(
+            golden_path
+                .parent()
+                .expect("Golden path must have parent directory"),
+        )
+        .expect("Failed to create golden artifacts directory");
+        fs::write(&golden_path, actual).expect("Failed to write golden artifact file");
         eprintln!("[GOLDEN] Updated: {}", golden_path.display());
         return;
     }
 
     // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path)
-        .unwrap_or_else(|_| panic!(
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
             "Golden file missing: {}\n\
              Run with UPDATE_GOLDENS=1 to create it\n\
              Then review and commit: git diff tests/golden/",
             golden_path.display()
-        ));
+        )
+    });
 
     if actual != expected {
         // Write actual for easy diffing
@@ -119,7 +121,7 @@ fn test_decode_encode_roundtrip_golden() {
         let schema = registry.register(
             &format!("test.seed_{}", seed),
             1,
-            format!("test.seed_{}.v1", seed).as_bytes()
+            format!("test.seed_{}.v1", seed).as_bytes(),
         );
 
         let schema_encoded = serialize_with_schema(&schema, &original);
@@ -128,7 +130,10 @@ fn test_decode_encode_roundtrip_golden() {
         match registry.deserialize_checked(&schema_encoded) {
             Ok((_schema_def, schema_decoded)) => {
                 output.push_str(&format!("Schema decoded: {:?}\n", schema_decoded));
-                output.push_str(&format!("Schema roundtrip OK: {}\n", original == schema_decoded));
+                output.push_str(&format!(
+                    "Schema roundtrip OK: {}\n",
+                    original == schema_decoded
+                ));
             }
             Err(e) => {
                 output.push_str(&format!("Schema decode error: {:?}\n", e));
@@ -147,7 +152,7 @@ fn test_malformed_input_behavior_golden() {
 
     // Test behavior on known malformed inputs
     let malformed_inputs = [
-        vec![],                              // Empty
+        vec![],                             // Empty
         vec![0xFF],                         // Single invalid byte
         vec![0x04, 0xFF, 0xFF, 0xFF, 0xFF], // Malformed length prefix (from original test)
         vec![0x01, 0x02, 0x03],             // Too short

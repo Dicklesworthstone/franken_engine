@@ -295,10 +295,7 @@ fn test_representativeness_passed_requires_floor() -> ConformanceResult {
                 format!("diverse_{i}_{variant}"),
                 *family,
                 (variant as u64 + 1) * 100_000, // Varied complexity
-                BTreeSet::from([
-                    format!("cat_{}", variant % 2),
-                    format!("level_{}", variant),
-                ]),
+                BTreeSet::from([format!("cat_{}", variant % 2), format!("level_{}", variant)]),
             );
             if let Err(e) = board.add_entry(entry) {
                 return ConformanceResult::Fail {

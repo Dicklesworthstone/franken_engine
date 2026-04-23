@@ -9,27 +9,30 @@ use std::path::Path;
 
 /// Core golden comparison function following testing-golden-artifacts pattern
 fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/golden")
-        .join(format!("{test_name}.golden"));
+    let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
 
     // UPDATE MODE: overwrite golden with actual output
     if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().expect("Golden path must have parent directory"))
-            .expect("Failed to create golden artifacts directory");
-        fs::write(&golden_path, actual)
-            .expect("Failed to write golden artifact file");
+        fs::create_dir_all(
+            golden_path
+                .parent()
+                .expect("Golden path must have parent directory"),
+        )
+        .expect("Failed to create golden artifacts directory");
+        fs::write(&golden_path, actual).expect("Failed to write golden artifact file");
         eprintln!("[GOLDEN] Updated: {}", golden_path.display());
         return;
     }
 
     // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path)
-        .unwrap_or_else(|_| panic!(
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
             "Golden file missing: {}\n\
              Run with UPDATE_GOLDENS=1 to create it\n\
              Then review and commit: git diff tests/golden/",
             golden_path.display()
-        ));
+        )
+    });
 
     if actual != expected {
         // Write actual for easy diffing
@@ -86,7 +89,10 @@ fn test_error_message_formatting() {
     let test_errors = vec![
         ("InvalidInput", "Parameter 'count' must be positive"),
         ("ParseError", "Expected number at position 42"),
-        ("ValidationFailed", "Schema version mismatch: expected v1, got v2"),
+        (
+            "ValidationFailed",
+            "Schema version mismatch: expected v1, got v2",
+        ),
     ];
 
     output.push_str("Error Message Catalog\n");

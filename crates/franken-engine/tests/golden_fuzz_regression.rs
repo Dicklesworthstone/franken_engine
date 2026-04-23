@@ -6,11 +6,11 @@
 //! behavioral regressions. When fuzzing finds interesting cases, we lock down their
 //! outputs as golden files to ensure future changes don't break the behavior.
 
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, ParseDiagnosticEnvelope, ParseEventIr, ParseEventKind, ParseGoal,
@@ -79,13 +79,14 @@ fn assert_golden(test_name: &str, actual: &str) {
     }
 
     // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path)
-        .unwrap_or_else(|_| panic!(
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
             "Golden file missing: {}\n\
              Run with UPDATE_GOLDENS=1 to create it\n\
              Then review and commit: git diff tests/golden/",
             golden_path.display()
-        ));
+        )
+    });
 
     if actual != expected {
         // Write actual for easy diffing
@@ -220,7 +221,11 @@ fn parser_boundary_source(data: &[u8], goal: ParseGoal) -> String {
                 format!("var x = {}; x + {};", byte(data, 3), byte(data, 4))
             }
             ParseGoal::Module => {
-                format!("export const x = {}; export default x + {};", byte(data, 3), byte(data, 4))
+                format!(
+                    "export const x = {}; export default x + {};",
+                    byte(data, 3),
+                    byte(data, 4)
+                )
             }
         }
     }
@@ -244,8 +249,8 @@ fn parser_boundary_golden_regression_test() {
 
     for (i, test_data) in test_cases.iter().enumerate() {
         let result = run_parser_boundary_golden(test_data);
-        let json_output = serde_json::to_string_pretty(&result)
-            .expect("should serialize golden result");
+        let json_output =
+            serde_json::to_string_pretty(&result).expect("should serialize golden result");
         let scrubbed = scrub_golden_output(&json_output);
 
         assert_golden(&format!("parser_boundary_case_{:02}", i), &scrubbed);

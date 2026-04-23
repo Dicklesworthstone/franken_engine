@@ -894,6 +894,8 @@ write_manifest() {
   fi
   manifest_written=true
 
+  # support_contract_artifact_path empty initialization: when copied_support_contract_path
+  # is missing or invalid, this remains unset/empty for null-safe manifest emission
   if [[ -f "$copied_support_contract_path" ]]; then
     support_contract_artifact_path="$copied_support_contract_path"
   fi

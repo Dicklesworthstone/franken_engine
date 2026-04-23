@@ -40,7 +40,7 @@ fn certified_rewrite_optimizer_intentionally_unavailable() {
         "OptimizationTier::Conservative",
         "GovernanceState::new()",
         "RollbackRecord::new",
-        "OptimizationCertificate::new"
+        "OptimizationCertificate::new",
     ];
 
     // Ensure we have a clear list of what's needed

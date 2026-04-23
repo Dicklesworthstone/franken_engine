@@ -174,8 +174,10 @@ fn mr_action_permutation_invariance() {
     let result1 = simulate_replay(&automaton, &sequence1);
     let result2 = simulate_replay(&automaton, &sequence2);
 
-    assert_eq!(result1, result2,
-        "Permuting invalid actions affected replay determinism");
+    assert_eq!(
+        result1, result2,
+        "Permuting invalid actions affected replay determinism"
+    );
 }
 
 /// MR4: Replay Composition (Additive) - Score: 4.0
@@ -185,7 +187,10 @@ fn mr_replay_composition() {
     let automaton = create_test_automaton();
 
     let sequence1 = vec![TransitionLabel::new("start")];
-    let sequence2 = vec![TransitionLabel::new("yield"), TransitionLabel::new("resume")];
+    let sequence2 = vec![
+        TransitionLabel::new("yield"),
+        TransitionLabel::new("resume"),
+    ];
 
     // Combined sequence
     let mut combined = sequence1.clone();
@@ -195,24 +200,29 @@ fn mr_replay_composition() {
     let result2_from_active = simulate_replay_from_state(
         &automaton,
         &sequence2,
-        &StateId::new("active")  // Expected final state of sequence1
+        &StateId::new("active"), // Expected final state of sequence1
     );
     let combined_result = simulate_replay(&automaton, &combined);
 
     // Combined result should contain states from both parts
-    assert!(combined_result.len() >= result1.len(),
-        "Combined replay shorter than first part");
+    assert!(
+        combined_result.len() >= result1.len(),
+        "Combined replay shorter than first part"
+    );
 
     // First part should match
-    assert_eq!(&combined_result[..result1.len()], &result1[..],
-        "Combined replay diverged in first segment");
+    assert_eq!(
+        &combined_result[..result1.len()],
+        &result1[..],
+        "Combined replay diverged in first segment"
+    );
 }
 
 /// Helper function for stateful replay composition
 fn simulate_replay_from_state(
     automaton: &SchedulerAutomaton,
     actions: &[TransitionLabel],
-    start_state: &StateId
+    start_state: &StateId,
 ) -> Vec<StateId> {
     let mut current_state = start_state.clone();
     let mut state_sequence = vec![current_state.clone()];
@@ -245,20 +255,21 @@ fn mr_state_idempotence() {
 
     let first_result = simulate_replay(&automaton, &completion_sequence);
     let final_state = first_result.last().expect(
-        "simulate_replay returned empty sequence - check action validity and automaton transitions"
+        "simulate_replay returned empty sequence - check action validity and automaton transitions",
     );
 
     // Attempting same actions from final state should not change it further
-    let repeat_result = simulate_replay_from_state(
-        &automaton,
-        &completion_sequence,
-        final_state
-    );
+    let repeat_result = simulate_replay_from_state(&automaton, &completion_sequence, final_state);
 
-    assert_eq!(repeat_result.len(), 1,
-        "Replay from final state should not create new transitions");
-    assert_eq!(&repeat_result[0], final_state,
-        "State idempotence violated: final state changed during repeat");
+    assert_eq!(
+        repeat_result.len(),
+        1,
+        "Replay from final state should not create new transitions"
+    );
+    assert_eq!(
+        &repeat_result[0], final_state,
+        "State idempotence violated: final state changed during repeat"
+    );
 }
 
 // ---------------------------------------------------------------------------

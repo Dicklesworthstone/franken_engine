@@ -1135,12 +1135,16 @@ impl ExtensionRegistry {
         }
 
         let publisher = self.get_publisher(&pkg.manifest.publisher_id);
-        let publisher_key_matches_registry = publisher
-            .map(|publisher| publisher.verification_key == pkg.manifest.publisher_key)
-            .unwrap_or(true);
-        if publisher.is_some() && !publisher_key_matches_registry {
-            errors
-                .push("manifest publisher key does not match registered publisher key".to_string());
+        let publisher_key_matches_registry = match publisher {
+            Some(publisher) => publisher.verification_key == pkg.manifest.publisher_key,
+            None => false,
+        };
+        if !publisher_key_matches_registry {
+            errors.push(match publisher {
+                Some(_) => "manifest publisher key does not match registered publisher key",
+                None => "publisher not found; manifest publisher key cannot be verified against registry",
+            }
+            .to_string());
         }
 
         let package_active = !pkg.revoked;
@@ -1148,13 +1152,12 @@ impl ExtensionRegistry {
             errors.push("package has been revoked".to_string());
         }
 
-        // Verify signature against the registry's publisher key when available,
-        // not the manifest-embedded key, to detect manifest key tampering.
-        let verification_key = publisher
-            .map(|p| &p.verification_key)
-            .unwrap_or(&pkg.manifest.publisher_key);
+        // Verify signature only against a registered publisher key. The
+        // manifest-embedded key is evidence, not an authority root.
         let unsigned = pkg.manifest.unsigned_bytes();
-        let signature_valid = verify_signature(verification_key, &unsigned, &pkg.signature).is_ok();
+        let signature_valid = publisher.is_some_and(|publisher| {
+            verify_signature(&publisher.verification_key, &unsigned, &pkg.signature).is_ok()
+        });
         if !signature_valid {
             errors.push("signature verification failed".to_string());
         }
@@ -2537,7 +2540,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_missing_publisher_does_not_report_key_mismatch() {
+    fn verify_missing_publisher_fails_closed_without_trusting_manifest_key() {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
         let fake_pub_id = EngineObjectId([42; 32]);
         let sk = second_signing_key();
@@ -2567,7 +2570,7 @@ mod tests {
 
         let result = reg.verify_package("testorg", "ext", v).unwrap();
         assert!(!result.valid);
-        assert!(result.signature_valid);
+        assert!(!result.signature_valid);
         assert!(!result.publisher_active);
         assert!(
             result
@@ -2579,8 +2582,19 @@ mod tests {
             result
                 .errors
                 .iter()
-                .all(|error| !error.contains("publisher key does not match"))
+                .any(|error| error.contains("manifest publisher key cannot be verified"))
         );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("signature verification failed"))
+        );
+
+        let last_event = reg.export_audit_log().last().unwrap();
+        assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
+        assert_eq!(last_event.outcome, EventOutcome::Denied);
+        assert_eq!(last_event.publisher_id, Some(fake_pub_id));
     }
 
     #[test]

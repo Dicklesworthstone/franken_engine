@@ -1442,4 +1442,255 @@ mod tests {
         assert!(display.contains("timeout_test"));
         assert!(display.contains("5000ms"));
     }
+
+    // ---------------------------------------------------------------------------
+    // Metamorphic Property Tests - Idempotency and Confluence
+    // ---------------------------------------------------------------------------
+
+    /// Helper function to run optimization and extract the optimized program.
+    /// Returns the input program unchanged if optimization fails or produces no output.
+    fn run_optimization(
+        optimizer: &mut CertifiedRewriteOptimizer,
+        program: &str,
+        tier: OptimizationTier,
+        request_suffix: &str,
+    ) -> String {
+        let epoch = SecurityEpoch::from_raw(1);
+        let request = OptimizationRequest::new(
+            format!("metamorphic_{}", request_suffix),
+            epoch,
+            tier,
+            program.to_string(),
+        );
+
+        match optimizer.optimize(request) {
+            Ok(result) if result.success => {
+                result.optimized_program.unwrap_or_else(|| program.to_string())
+            }
+            Ok(_) | Err(_) => program.to_string(), // Return input unchanged if optimization fails
+        }
+    }
+
+    #[test]
+    fn metamorphic_idempotency_simple_expressions() {
+        // Test idempotency: optimize(optimize(X)) == optimize(X)
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let test_cases = [
+            "x + 0",           // Identity addition
+            "x * 1",           // Identity multiplication
+            "x - 0",           // Identity subtraction
+            "0 + x",           // Commutative identity
+            "1 * x",           // Commutative identity
+            "x + x",           // Common subexpression
+            "func(x, y)",      // Function call
+            "x",               // Single variable
+            "(x + 0) * 1",     // Nested identities
+        ];
+
+        for (i, program) in test_cases.iter().enumerate() {
+            // First optimization pass
+            let first_pass = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("idem1_{}", i));
+
+            // Second optimization pass on the result
+            let second_pass = run_optimization(&mut optimizer, &first_pass, OptimizationTier::Standard, &format!("idem2_{}", i));
+
+            // Metamorphic property: P(P(x)) == P(x) (idempotency)
+            assert_eq!(
+                first_pass, second_pass,
+                "Idempotency violated for program '{}': first pass produced '{}', second pass produced '{}'",
+                program, first_pass, second_pass
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_idempotency_conservative_vs_standard_tiers() {
+        // Test idempotency across different optimization tiers
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let test_cases = [
+            "x + 0 - 0",
+            "x * 1 * 1",
+            "func(arg1, arg2)",
+            "complex_expr(x + 0, y * 1)",
+        ];
+
+        let tiers = [OptimizationTier::Conservative, OptimizationTier::Standard];
+
+        for (i, program) in test_cases.iter().enumerate() {
+            for (j, tier) in tiers.iter().enumerate() {
+                let first_pass = run_optimization(&mut optimizer, program, *tier, &format!("tier1_{}_{}", i, j));
+                let second_pass = run_optimization(&mut optimizer, &first_pass, *tier, &format!("tier2_{}_{}", i, j));
+
+                assert_eq!(
+                    first_pass, second_pass,
+                    "Idempotency violated for program '{}' at tier {:?}: first='{}', second='{}'",
+                    program, tier, first_pass, second_pass
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metamorphic_confluence_different_tiers() {
+        // Test confluence: Conservative(Standard(X)) vs Standard(Conservative(X))
+        // Both should converge to the same result when applied in different orders
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let test_cases = [
+            "x + 0 * 1",       // Mixed identity operations
+            "func(x + 0)",     // Function with optimizable argument
+            "x * 1 + y * 1",   // Multiple identity operations
+            "(x + 0) + (y - 0)", // Nested expressions
+        ];
+
+        for (i, program) in test_cases.iter().enumerate() {
+            // Path A: Conservative -> Standard
+            let conservative_first = run_optimization(&mut optimizer, program, OptimizationTier::Conservative, &format!("conf_c1_{}", i));
+            let standard_after_conservative = run_optimization(&mut optimizer, &conservative_first, OptimizationTier::Standard, &format!("conf_s2_{}", i));
+
+            // Path B: Standard -> Conservative
+            let standard_first = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("conf_s1_{}", i));
+            let conservative_after_standard = run_optimization(&mut optimizer, &standard_first, OptimizationTier::Conservative, &format!("conf_c2_{}", i));
+
+            // Confluence property: A(B(x)) should be equivalent to B(A(x))
+            // Note: Due to the nature of optimization tiers, we expect both paths to converge
+            // to the same level of optimization (likely Standard level, since Conservative is less aggressive)
+            assert_eq!(
+                standard_after_conservative, conservative_after_standard,
+                "Confluence violated for program '{}': Conservative->Standard produced '{}', Standard->Conservative produced '{}'",
+                program, standard_after_conservative, conservative_after_standard
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_idempotency_aggressive_tier() {
+        // Test idempotency for the most aggressive optimization tier
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let test_cases = [
+            "x + 0 + 0 + 0",     // Multiple identity additions
+            "x * 1 * 1 * 1",     // Multiple identity multiplications
+            "nested(func(x + 0), y * 1)", // Nested function calls with optimizable expressions
+            "complex_chain(a + 0, b - 0, c * 1)", // Multiple arguments
+        ];
+
+        for (i, program) in test_cases.iter().enumerate() {
+            let first_pass = run_optimization(&mut optimizer, program, OptimizationTier::Aggressive, &format!("aggr1_{}", i));
+            let second_pass = run_optimization(&mut optimizer, &first_pass, OptimizationTier::Aggressive, &format!("aggr2_{}", i));
+
+            assert_eq!(
+                first_pass, second_pass,
+                "Aggressive tier idempotency violated for program '{}': first='{}', second='{}'",
+                program, first_pass, second_pass
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_fixpoint_convergence() {
+        // Test that applying optimization repeatedly converges to a fixpoint
+        // P(P(P(...P(x)))) should stabilize after enough iterations
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        let test_cases = [
+            "x + 0 - 0 + 0 - 0", // Multiple redundant operations
+            "x * 1 / 1 * 1 / 1", // Multiple identity operations (if division is supported)
+        ];
+
+        for (i, program) in test_cases.iter().enumerate() {
+            let mut current = program.to_string();
+            let mut previous;
+            let mut iteration = 0;
+            const MAX_ITERATIONS: usize = 10;
+
+            // Apply optimization repeatedly until convergence or max iterations
+            loop {
+                previous = current.clone();
+                current = run_optimization(&mut optimizer, &current, OptimizationTier::Standard, &format!("fixpt_{}_iter{}", i, iteration));
+                iteration += 1;
+
+                // Check if we've reached a fixpoint
+                if current == previous {
+                    break;
+                }
+
+                // Safety check to prevent infinite loops
+                if iteration >= MAX_ITERATIONS {
+                    panic!(
+                        "Optimization did not converge to fixpoint within {} iterations for program '{}'. Last result: '{}'",
+                        MAX_ITERATIONS, program, current
+                    );
+                }
+            }
+
+            // After convergence, one more optimization should not change the result (idempotency at fixpoint)
+            let final_check = run_optimization(&mut optimizer, &current, OptimizationTier::Standard, &format!("fixpt_{}_final", i));
+            assert_eq!(
+                current, final_check,
+                "Fixpoint idempotency violated for program '{}': fixpoint='{}', after-fixpoint='{}'",
+                program, current, final_check
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_commutativity_with_order_independence() {
+        // Test that optimization preserves or properly handles commutative operations
+        // This is a specialized confluence test for operations that should be order-independent
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        // Programs that should optimize to equivalent results regardless of internal operation order
+        let commutative_pairs = [
+            ("x + 0", "0 + x"),         // Additive identity commutativity
+            ("x * 1", "1 * x"),         // Multiplicative identity commutativity
+            ("func(x + 0, y)", "func(0 + x, y)"), // Commutativity within arguments
+        ];
+
+        for (i, (prog_a, prog_b)) in commutative_pairs.iter().enumerate() {
+            let result_a = run_optimization(&mut optimizer, prog_a, OptimizationTier::Standard, &format!("comm_a_{}", i));
+            let result_b = run_optimization(&mut optimizer, prog_b, OptimizationTier::Standard, &format!("comm_b_{}", i));
+
+            // Both should optimize to the same canonical form
+            assert_eq!(
+                result_a, result_b,
+                "Commutativity not preserved: '{}' optimized to '{}', '{}' optimized to '{}'",
+                prog_a, result_a, prog_b, result_b
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_identity_preservation() {
+        // Test that already-optimized programs remain unchanged (identity element test)
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+
+        // Programs that should already be in optimal form
+        let already_optimal = [
+            "x",               // Single variable
+            "func(x)",        // Simple function call
+            "complex_expr",   // Expression that likely can't be optimized further
+            "variable_name",  // Variable that shouldn't be modified
+        ];
+
+        for (i, program) in already_optimal.iter().enumerate() {
+            let optimized = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("ident_{}", i));
+
+            // Already optimal programs should not change
+            assert_eq!(
+                *program, optimized,
+                "Identity preservation violated: optimal program '{}' changed to '{}'",
+                program, optimized
+            );
+        }
+    }
 }

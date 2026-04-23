@@ -17081,14 +17081,6 @@ mod tests {
         assert_string_split_result(result, vec!["a", "b", "c"], &mut core);
     }
 
-    #[allow(dead_code)]
-    fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
-        // SAFETY: Test-only unwrap expecting QuickJS execution to succeed with valid module
-        assert_eq!(quickjs_execute(module).unwrap().value, expected);
-        // SAFETY: Test-only unwrap expecting V8 execution to succeed with valid module
-        assert_eq!(v8_execute(module).unwrap().value, expected);
-    }
-
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum HookRecord {
         Property {

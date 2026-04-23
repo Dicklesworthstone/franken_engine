@@ -583,8 +583,10 @@ pub fn evaluate_tier_up_safety(
                     } else {
                         SafetyVerdict::BlockedOverride
                     },
-                    safety_reasoning: format!("Operator override {} active: {}",
-                        override_obj.override_id, override_obj.reason),
+                    safety_reasoning: format!(
+                        "Operator override {} active: {}",
+                        override_obj.override_id, override_obj.reason
+                    ),
                 };
             }
         }
@@ -1541,11 +1543,11 @@ mod tests {
     #[test]
     fn operator_override_creation_and_verification() {
         let override_obj = OperatorOverride::new(
-            42, // target_ip
+            42,                           // target_ip
             Some("baseline".to_string()), // forced_tier
             "Performance issue investigation".to_string(),
             9999999999, // expires_at
-            1, // security_epoch
+            1,          // security_epoch
         );
 
         assert_eq!(override_obj.target_ip, 42);
@@ -1571,10 +1573,13 @@ mod tests {
 
     #[test]
     fn safety_evaluation_safe_case() {
-        let report = make_report(200, vec![
-            make_vm_event(0, "add", Some(true)),
-            make_vm_event(1, "mul", Some(true)),
-        ]);
+        let report = make_report(
+            200,
+            vec![
+                make_vm_event(0, "add", Some(true)),
+                make_vm_event(1, "mul", Some(true)),
+            ],
+        );
         let tier_policy = TierUpPolicy::default();
         let regret_policy = BoundedRegretPolicy::default();
         let overrides = Vec::new();
@@ -1594,14 +1599,12 @@ mod tests {
 
     #[test]
     fn safety_evaluation_blocked_by_override() {
-        let report = make_report(200, vec![
-            make_vm_event(0, "add", Some(true)),
-        ]);
+        let report = make_report(200, vec![make_vm_event(0, "add", Some(true))]);
         let tier_policy = TierUpPolicy::default();
         let regret_policy = BoundedRegretPolicy::default();
 
         let override_obj = OperatorOverride::new(
-            0, // target_ip matches the event
+            0,    // target_ip matches the event
             None, // block tier-up
             "Security investigation".to_string(),
             9999999999,
@@ -1617,21 +1620,22 @@ mod tests {
             9999999998, // current_time before expiration
         );
 
-        assert!(matches!(safety_eval.safety_verdict, SafetyVerdict::BlockedOverride));
+        assert!(matches!(
+            safety_eval.safety_verdict,
+            SafetyVerdict::BlockedOverride
+        ));
         assert_eq!(safety_eval.active_overrides.len(), 1);
         assert!(safety_eval.safety_reasoning.contains("Operator override"));
     }
 
     #[test]
     fn safety_evaluation_forced_by_override() {
-        let report = make_report(200, vec![
-            make_vm_event(0, "add", Some(true)),
-        ]);
+        let report = make_report(200, vec![make_vm_event(0, "add", Some(true))]);
         let tier_policy = TierUpPolicy::default();
         let regret_policy = BoundedRegretPolicy::default();
 
         let override_obj = OperatorOverride::new(
-            0, // target_ip matches the event
+            0,                             // target_ip matches the event
             Some("optimized".to_string()), // force tier
             "Manual optimization".to_string(),
             9999999999,
@@ -1647,6 +1651,9 @@ mod tests {
             9999999998,
         );
 
-        assert!(matches!(safety_eval.safety_verdict, SafetyVerdict::ForcedOverride));
+        assert!(matches!(
+            safety_eval.safety_verdict,
+            SafetyVerdict::ForcedOverride
+        ));
     }
 }

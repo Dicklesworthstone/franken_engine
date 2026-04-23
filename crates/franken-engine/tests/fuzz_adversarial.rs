@@ -1259,8 +1259,8 @@ struct ParserBoundaryOutput {
 #[derive(Debug, serde::Serialize)]
 struct InputSummary {
     data_length: usize,
-    goal: String,  // "Script" or "Module"
-    source_preview: String,  // First 200 chars of generated source
+    goal: String,           // "Script" or "Module"
+    source_preview: String, // First 200 chars of generated source
     options_summary: String,
 }
 
@@ -1297,8 +1297,7 @@ struct DeterminismCheckSummary {
 
 /// Golden file testing infrastructure
 fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput) {
-    let golden_path = Path::new("tests/golden/parser_boundary")
-        .join(format!("{test_name}.json"));
+    let golden_path = Path::new("tests/golden/parser_boundary").join(format!("{test_name}.json"));
 
     // Serialize output with stable formatting
     let actual = serde_json::to_string_pretty(output).unwrap();
@@ -1313,13 +1312,14 @@ fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput)
     }
 
     // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path)
-        .unwrap_or_else(|_| panic!(
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
             "Golden file missing: {}\n\
              Run with UPDATE_GOLDENS=1 to create it\n\
              Then review and commit: git diff tests/golden/",
             golden_path.display()
-        ));
+        )
+    });
 
     if scrubbed_actual != expected {
         // Write actual for easy diffing
@@ -1350,12 +1350,16 @@ fn scrub_parser_output(output: &str) -> String {
     scrubbed = hash_re.replace_all(&scrubbed, "[HASH]").to_string();
 
     // Trace IDs → [TRACE_ID]
-    let trace_re = Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
+    let trace_re =
+        Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
     scrubbed = trace_re.replace_all(&scrubbed, "[TRACE_ID]").to_string();
 
     // Decision IDs → [DECISION_ID]
-    let decision_re = Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
-    scrubbed = decision_re.replace_all(&scrubbed, "[DECISION_ID]").to_string();
+    let decision_re =
+        Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
+    scrubbed = decision_re
+        .replace_all(&scrubbed, "[DECISION_ID]")
+        .to_string();
 
     scrubbed
 }
@@ -1378,15 +1382,31 @@ fn capture_parser_boundary_output(data: &[u8]) -> ParserBoundaryOutput {
         data_length: data.len(),
         goal: format!("{goal:?}"),
         source_preview: source.chars().take(200).collect(),
-        options_summary: format!("mode={:?}, max_tokens={}, max_depth={}",
-            options.mode, options.budget.max_token_count, options.budget.max_recursion_depth),
+        options_summary: format!(
+            "mode={:?}, max_tokens={}, max_depth={}",
+            options.mode, options.budget.max_token_count, options.budget.max_recursion_depth
+        ),
     };
 
     let event_ir_summary = EventIrSummary {
         canonical_hash: event_ir_hash.clone(),
         event_count: event_ir.events.len(),
-        first_event_kind: format!("{:?}", event_ir.events.first().map(|e| &e.kind).unwrap_or(&ParseEventKind::ParseStarted)),
-        last_event_kind: format!("{:?}", event_ir.events.last().map(|e| &e.kind).unwrap_or(&ParseEventKind::ParseStarted)),
+        first_event_kind: format!(
+            "{:?}",
+            event_ir
+                .events
+                .first()
+                .map(|e| &e.kind)
+                .unwrap_or(&ParseEventKind::ParseStarted)
+        ),
+        last_event_kind: format!(
+            "{:?}",
+            event_ir
+                .events
+                .last()
+                .map(|e| &e.kind)
+                .unwrap_or(&ParseEventKind::ParseStarted)
+        ),
         schema_version: event_ir.schema_version.clone(),
         contract_version: event_ir.contract_version.clone(),
     };
@@ -1401,7 +1421,8 @@ fn capture_parser_boundary_output(data: &[u8]) -> ParserBoundaryOutput {
             let materialize_hash_match = materialized.syntax_tree.canonical_hash() == tree_hash;
 
             // Determinism check - parse again
-            let (repeat_result, repeat_ir) = parser.parse_with_event_ir(source.as_str(), goal, &options);
+            let (repeat_result, repeat_ir) =
+                parser.parse_with_event_ir(source.as_str(), goal, &options);
             let repeat_tree = repeat_result.expect("successful parse should be deterministic");
             let repeat_tree_hash_matches = repeat_tree.canonical_hash() == tree_hash;
             let repeat_event_ir_hash_matches = repeat_ir.canonical_hash() == event_ir_hash;
@@ -1433,7 +1454,7 @@ fn capture_parser_boundary_output(data: &[u8]) -> ParserBoundaryOutput {
                     parse_failed_event_present,
                 },
                 DeterminismCheckSummary {
-                    repeat_tree_hash_matches: false, // N/A for errors
+                    repeat_tree_hash_matches: false,     // N/A for errors
                     repeat_event_ir_hash_matches: false, // N/A for errors
                 },
             )
@@ -1453,12 +1474,12 @@ fn capture_parser_boundary_output(data: &[u8]) -> ParserBoundaryOutput {
 fn golden_parser_boundary_success_simple_script() {
     // Simple script that should parse successfully
     let data = [
-        0x00,  // Goal: Script (even number)
-        0x01,  // Synthetic source (byte(data, 0) % 4 == 1)
-        0x10,  // Max tokens: 16 + 0x10 = 32
-        0x08,  // Max depth: 8 + 0x08 = 16
-        0x00,  // Let statement (opcode % 14 == 0)
-        0x02,  // Expression: index + value = 0 + 2
+        0x00, // Goal: Script (even number)
+        0x01, // Synthetic source (byte(data, 0) % 4 == 1)
+        0x10, // Max tokens: 16 + 0x10 = 32
+        0x08, // Max depth: 8 + 0x08 = 16
+        0x00, // Let statement (opcode % 14 == 0)
+        0x02, // Expression: index + value = 0 + 2
     ];
 
     let output = capture_parser_boundary_output(&data);
@@ -1470,13 +1491,13 @@ fn golden_parser_boundary_success_simple_script() {
 fn golden_parser_boundary_error_malformed_syntax() {
     // Input designed to produce parse errors
     let data = [
-        0x01,  // Goal: Module (odd number)
-        0x00,  // Use raw UTF-8 from data (byte(data, 0) % 4 == 0)
-        0xFF,  // Max tokens: 16 + 255 = 271
-        0x3F,  // Max depth: 8 + 63 = 71
+        0x01, // Goal: Module (odd number)
+        0x00, // Use raw UTF-8 from data (byte(data, 0) % 4 == 0)
+        0xFF, // Max tokens: 16 + 255 = 271
+        0x3F, // Max depth: 8 + 63 = 71
         // Rest is malformed UTF-8 / syntax
-        0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8,
-        0xF7, 0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1, 0xF0,
+        0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8, 0xF7, 0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1,
+        0xF0,
     ];
 
     let output = capture_parser_boundary_output(&data);
@@ -1488,15 +1509,15 @@ fn golden_parser_boundary_error_malformed_syntax() {
 fn golden_parser_boundary_module_with_exports() {
     // Module goal with export statements
     let data = [
-        0x01,  // Goal: Module (odd number)
-        0x01,  // Synthetic source
-        0x20,  // Max tokens: 16 + 32 = 48
-        0x10,  // Max depth: 8 + 16 = 24
-        0x06,  // Import statement trigger (byte(data, 3) is even)
-        0x0A,  // Export const statement (opcode % 14 == 10, goal == Module)
-        0x03,  // Value for export expression
-        0x0B,  // Export default statement (opcode % 14 == 11, goal == Module)
-        0x05,  // Value for default export
+        0x01, // Goal: Module (odd number)
+        0x01, // Synthetic source
+        0x20, // Max tokens: 16 + 32 = 48
+        0x10, // Max depth: 8 + 16 = 24
+        0x06, // Import statement trigger (byte(data, 3) is even)
+        0x0A, // Export const statement (opcode % 14 == 10, goal == Module)
+        0x03, // Value for export expression
+        0x0B, // Export default statement (opcode % 14 == 11, goal == Module)
+        0x05, // Value for default export
     ];
 
     let output = capture_parser_boundary_output(&data);

@@ -336,15 +336,15 @@ impl RealWorldProgramSuite {
         return match std::panic::catch_unwind(|| {
             lane.execute_source(content, &format!("real_world_program_{}", program.name))
         }) {
-            Ok(Ok(execution_result)) => {
-                Ok(format!("Real execution result for '{}': {:?}", program.name, execution_result))
-            }
-            Ok(Err(interpreter_error)) => {
-                Err(format!("Execution failed for '{}': {}", program.name, interpreter_error))
-            }
-            Err(_panic) => {
-                Err(format!("Execution panicked for program '{}'", program.name))
-            }
+            Ok(Ok(execution_result)) => Ok(format!(
+                "Real execution result for '{}': {:?}",
+                program.name, execution_result
+            )),
+            Ok(Err(interpreter_error)) => Err(format!(
+                "Execution failed for '{}': {}",
+                program.name, interpreter_error
+            )),
+            Err(_panic) => Err(format!("Execution panicked for program '{}'", program.name)),
         };
 
         // Old simulation logic (replaced above):

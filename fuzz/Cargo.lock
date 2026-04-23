@@ -357,9 +357,13 @@ dependencies = [
 name = "frankenengine-engine-fuzz"
 version = "0.0.0"
 dependencies = [
+ "ed25519-dalek",
  "frankenengine-engine",
+ "frankenengine-extension-host",
+ "hex",
  "libfuzzer-sys",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

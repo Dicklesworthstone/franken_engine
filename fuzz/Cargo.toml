@@ -9,8 +9,12 @@ cargo-fuzz = true
 
 [dependencies]
 frankenengine-engine = { path = "../crates/franken-engine" }
+frankenengine-extension-host = { path = "../crates/franken-extension-host" }
 libfuzzer-sys = "0.4"
 serde_json = "1.0"
+ed25519-dalek = "2.2.0"
+sha2 = "0.10"
+hex = "0.4"
 
 [[bin]]
 name = "decode_dos"
@@ -78,6 +82,13 @@ bench = false
 [[bin]]
 name = "governance_verdict_fuzz"
 path = "fuzz_targets/governance_verdict_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_manifest_verification"
+path = "fuzz_targets/extension_manifest_verification.rs"
 test = false
 doc = false
 bench = false

@@ -1,0 +1,64 @@
+# Extension Manifest Verification Fuzzing Dictionary
+# Common patterns for Ed25519 signature verification attacks
+
+# Common manifest names
+"test"
+"main"
+"app"
+"extension"
+"plugin"
+
+# Common versions
+"1.0.0"
+"0.1.0"
+"2.0.0"
+"1.2.3"
+
+# Common entrypoints
+"index.js"
+"main.js"
+"app.js"
+"bundle.js"
+"index.ts"
+
+# Ed25519 signature length (64 bytes)
+"\x40"
+
+# Ed25519 public key length (32 bytes)
+"\x20"
+
+# Common hex patterns
+"deadbeef"
+"cafebabe"
+"feedface"
+"0123456789abcdef"
+
+# Invalid hex characters
+"gggggggg"
+"ZZZZZZZZ"
+
+# Domain separation patterns
+"franken-extension-host-signed-manifest-v1:"
+"wrong-domain-tag:"
+"malicious-tag:"
+
+# Signature manipulation patterns
+"\x00\x00\x00\x00"
+"\xFF\xFF\xFF\xFF"
+"\x01\x02\x03\x04"
+
+# Length manipulation
+"\x00"
+"\x01"
+"\x20"
+"\x40"
+"\x80"
+"\xFF"
+
+# Capability bitmasks
+"\x01"  # FsRead
+"\x02"  # FsWrite
+"\x04"  # NetClient
+"\x08"  # HostCall
+"\x10"  # ProcessSpawn
+"\x1F"  # All capabilities

@@ -560,7 +560,7 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn verify_manifest_signature(
+pub fn verify_manifest_signature(
     manifest: &ExtensionManifest,
     trust_chain_ref: &str,
     publisher_signature: &[u8],

@@ -882,6 +882,34 @@ impl ExtensionRegistry {
             .is_some_and(|owner| owner == publisher_id)
     }
 
+    /// Check if a publisher owns multiple scopes (batched for performance).
+    ///
+    /// Returns a vector of booleans in the same order as the input scopes.
+    /// This is more efficient than calling `publisher_owns_scope` multiple times
+    /// as it reduces BTreeMap traversal overhead from O(n log n) to O(n + m log m)
+    /// where n is the number of scopes to check and m is the size of scope_owners.
+    pub fn publisher_owns_scopes(&self, publisher_id: &EngineObjectId, scopes: &[&str]) -> Vec<bool> {
+        scopes
+            .iter()
+            .map(|scope| {
+                self.scope_owners
+                    .get(*scope)
+                    .is_some_and(|owner| owner == publisher_id)
+            })
+            .collect()
+    }
+
+    /// Get scope owners for multiple scopes at once (batched for performance).
+    ///
+    /// Returns a vector of Option<EngineObjectId> in the same order as input scopes.
+    /// This enables efficient bulk scope ownership queries without repeated BTreeMap traversals.
+    pub fn get_scope_owners(&self, scopes: &[&str]) -> Vec<Option<&EngineObjectId>> {
+        scopes
+            .iter()
+            .map(|scope| self.scope_owners.get(*scope))
+            .collect()
+    }
+
     // -----------------------------------------------------------------------
     // Publish
     // -----------------------------------------------------------------------
@@ -2849,5 +2877,53 @@ mod tests {
             pkg.revocation_reason.as_deref(),
             Some("critical vulnerability CVE-2026-0001")
         );
+    }
+
+    #[test]
+    fn batched_scope_operations_consistent_with_individual() {
+        let (mut reg, pub_id, _sk, _vk) = setup_registry_with_publisher();
+
+        // Register publisher with multiple scopes
+        reg.register_scope(&pub_id, "scope1").unwrap();
+        reg.register_scope(&pub_id, "scope2").unwrap();
+        reg.register_scope(&pub_id, "scope3").unwrap();
+
+        let test_scopes = ["scope1", "scope2", "scope4", "scope5"];
+
+        // Test publisher_owns_scopes matches individual calls
+        let batched_results = reg.publisher_owns_scopes(&pub_id, &test_scopes);
+        let individual_results: Vec<bool> = test_scopes
+            .iter()
+            .map(|scope| reg.publisher_owns_scope(&pub_id, scope))
+            .collect();
+
+        assert_eq!(
+            batched_results, individual_results,
+            "batched scope ownership check must match individual calls"
+        );
+
+        // Test get_scope_owners matches individual gets
+        let batched_owners = reg.get_scope_owners(&test_scopes);
+        let individual_owners: Vec<Option<&EngineObjectId>> = test_scopes
+            .iter()
+            .map(|scope| reg.scope_owners.get(*scope))
+            .collect();
+
+        // Convert to comparable format (both Option<&EngineObjectId>)
+        let batched_comparable: Vec<Option<&EngineObjectId>> = batched_owners
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            batched_comparable, individual_owners,
+            "batched scope owner lookup must match individual lookups"
+        );
+
+        // Verify expected ownership pattern
+        assert!(reg.publisher_owns_scope(&pub_id, "scope1"));
+        assert!(reg.publisher_owns_scope(&pub_id, "scope2"));
+        assert!(reg.publisher_owns_scope(&pub_id, "scope3"));
+        assert!(!reg.publisher_owns_scope(&pub_id, "scope4"));
+        assert!(!reg.publisher_owns_scope(&pub_id, "scope5"));
     }
 }

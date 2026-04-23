@@ -250,6 +250,16 @@ fn test_suite_runner_counts_validation_mismatches() {
     assert_eq!(result.failed_tests, 1);
     assert_eq!(result.results[1].test_id, "runtime_wrong_expectation");
     assert!(!result.results[1].success);
+    assert_eq!(
+        result.results[2].test_id,
+        "parser_expected_validation_failure"
+    );
+    assert!(result.results[2].success);
+    assert_eq!(
+        result.results[3].test_id,
+        "security_expected_validation_failure"
+    );
+    assert!(result.results[3].success);
 }
 
 #[test]

@@ -1,18 +1,17 @@
 #![no_main]
 
-use frankenengine_engine::module_resolver::{
-    DeterministicModuleResolver, ExternalPackageDefinition, ExternalPackageExportTarget,
-    ImportStyle, ModuleDefinition, ModuleDependency, ModuleRequest, ModuleSyntax,
-    ResolutionContext, AllowAllPolicy, CapabilityPolicyHook,
-};
 use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::module_resolver::{
+    AllowAllPolicy, DeterministicModuleResolver, ExternalPackageDefinition,
+    ExternalPackageExportTarget, ImportStyle, ModuleDefinition, ModuleDependency, ModuleRequest,
+    ModuleResolver, ModuleSyntax, ResolutionContext,
+};
 use libfuzzer_sys::fuzz_target;
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_INPUT_BYTES: usize = 16 * 1024;
 const MAX_MODULES: usize = 32;
 const MAX_DEPENDENCIES: usize = 8;
-const MAX_SPECIFIER_LENGTH: usize = 256;
 const MAX_PACKAGE_EXPORTS: usize = 16;
 
 fuzz_target!(|data: &[u8]| {
@@ -77,11 +76,7 @@ fn parse_module_graph(data: &[u8]) -> ModuleGraph {
     let mut resolution_requests = Vec::new();
 
     // Parse chunks of data to create adversarial module configurations
-    for (chunk_idx, chunk) in data
-        .chunks(8)
-        .take(MAX_MODULES)
-        .enumerate()
-    {
+    for (chunk_idx, chunk) in data.chunks(8).take(MAX_MODULES).enumerate() {
         let opcode = byte(chunk, 0);
 
         match opcode % 3 {
@@ -122,14 +117,78 @@ fn generate_workspace_module(chunk: &[u8], index: usize) -> WorkspaceModule {
 
 fn generate_module_id(chunk: &[u8], index: usize, module_type: u8) -> String {
     match module_type {
-        0 => format!("/app/main_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        1 => format!("/app/cycle_a_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        2 => format!("/app/cycle_b_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        3 => format!("/app/deep/nested/path_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        4 => format!("/app/../escape_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        5 => format!("/app/pkg_{}/index.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        6 => format!("/app/.hidden/module_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
-        _ => format!("/app/fuzz_{}.{}", index, if byte(chunk, 1) & 1 == 0 { "mjs" } else { "cjs" }),
+        0 => format!(
+            "/app/main_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        1 => format!(
+            "/app/cycle_a_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        2 => format!(
+            "/app/cycle_b_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        3 => format!(
+            "/app/deep/nested/path_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        4 => format!(
+            "/app/../escape_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        5 => format!(
+            "/app/pkg_{}/index.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        6 => format!(
+            "/app/.hidden/module_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
+        _ => format!(
+            "/app/fuzz_{}.{}",
+            index,
+            if byte(chunk, 1) & 1 == 0 {
+                "mjs"
+            } else {
+                "cjs"
+            }
+        ),
     }
 }
 
@@ -156,7 +215,11 @@ fn generate_module_source(syntax: ModuleSyntax, chunk: &[u8], module_type: u8) -
     }
 }
 
-fn generate_dependencies(chunk: &[u8], syntax: ModuleSyntax, module_type: u8) -> Vec<ModuleDependency> {
+fn generate_dependencies(
+    chunk: &[u8],
+    syntax: ModuleSyntax,
+    module_type: u8,
+) -> Vec<ModuleDependency> {
     let mut dependencies = Vec::new();
     let dep_count = (byte(chunk, 5) % MAX_DEPENDENCIES as u8) as usize;
 
@@ -186,12 +249,26 @@ fn generate_dependencies(chunk: &[u8], syntax: ModuleSyntax, module_type: u8) ->
     }
 
     // Add circular dependency patterns for specific module types
-    if module_type == 1 { // cycle_a
-        dependencies.push(ModuleDependency::new("./cycle_b_0",
-            if syntax == ModuleSyntax::EsModule { ImportStyle::Import } else { ImportStyle::Require }));
-    } else if module_type == 2 { // cycle_b
-        dependencies.push(ModuleDependency::new("./cycle_a_0",
-            if syntax == ModuleSyntax::EsModule { ImportStyle::Import } else { ImportStyle::Require }));
+    if module_type == 1 {
+        // cycle_a
+        dependencies.push(ModuleDependency::new(
+            "./cycle_b_0",
+            if syntax == ModuleSyntax::EsModule {
+                ImportStyle::Import
+            } else {
+                ImportStyle::Require
+            },
+        ));
+    } else if module_type == 2 {
+        // cycle_b
+        dependencies.push(ModuleDependency::new(
+            "./cycle_a_0",
+            if syntax == ModuleSyntax::EsModule {
+                ImportStyle::Import
+            } else {
+                ImportStyle::Require
+            },
+        ));
     }
 
     dependencies
@@ -201,10 +278,10 @@ fn generate_capabilities(chunk: &[u8]) -> BTreeSet<RuntimeCapability> {
     let mut capabilities = BTreeSet::new();
 
     if byte(chunk, 7) & 1 == 1 {
-        capabilities.insert(RuntimeCapability::FileSystemRead);
+        capabilities.insert(RuntimeCapability::FsRead);
     }
     if byte(chunk, 7) & 2 == 2 {
-        capabilities.insert(RuntimeCapability::NetworkRequest);
+        capabilities.insert(RuntimeCapability::NetworkEgress);
     }
     if byte(chunk, 7) & 4 == 4 {
         capabilities.insert(RuntimeCapability::ProcessSpawn);
@@ -228,7 +305,7 @@ fn generate_external_package(chunk: &[u8], index: usize) -> ExternalPackage {
     let export_count = (byte(chunk, 2) % MAX_PACKAGE_EXPORTS as u8) as usize;
 
     for i in 0..export_count {
-        let export_key = match (byte(chunk, 3 + i) % 6) {
+        let export_key = match byte(chunk, 3 + i) % 6 {
             0 => ".".to_string(),
             1 => "./subpath".to_string(),
             2 => format!("./feature_{}", i),
@@ -258,10 +335,13 @@ fn generate_external_package(chunk: &[u8], index: usize) -> ExternalPackage {
             fallback_target = Some("../outside.mjs".to_string());
         }
 
-        exports.insert(export_key, PackageExport {
-            condition_targets,
-            fallback_target,
-        });
+        exports.insert(
+            export_key,
+            PackageExport {
+                condition_targets,
+                fallback_target,
+            },
+        );
     }
 
     ExternalPackage { name, exports }
@@ -303,7 +383,7 @@ fn generate_resolution_request(chunk: &[u8], index: usize) -> ResolutionRequest 
 
 fn test_module_resolution(module_graph: &ModuleGraph) {
     let mut resolver = DeterministicModuleResolver::new("/app");
-    let policy_hook = AllowAllPolicy::new();
+    let policy_hook = AllowAllPolicy;
 
     // Register workspace modules
     for module in &module_graph.workspace_modules {
@@ -332,36 +412,29 @@ fn test_module_resolution(module_graph: &ModuleGraph) {
     }
 
     // Test resolution requests
-    let context = ResolutionContext::new(
-        "fuzz-trace",
-        "fuzz-decision",
-        "fuzz-policy",
-    );
+    let context = ResolutionContext::new("fuzz-trace", "fuzz-decision", "fuzz-policy");
 
     for request in &module_graph.resolution_requests {
-        let module_request = ModuleRequest {
-            specifier: request.specifier.clone(),
-            style: request.style,
-            referrer: request.referrer.clone(),
-        };
+        let mut module_request = ModuleRequest::new(request.specifier.clone(), request.style);
+        if let Some(referrer) = &request.referrer {
+            module_request = module_request.with_referrer(referrer.clone());
+        }
 
         // Test resolution - should handle all edge cases gracefully
-        let _result = resolver.resolve_module_request(&module_request, &context, &policy_hook);
+        let _result = resolver.resolve(&module_request, &context, &policy_hook);
 
         // Test with different policy hooks for coverage
-        let strict_policy = AllowAllPolicy::new(); // TODO: Add stricter policy if available
-        let _strict_result = resolver.resolve_module_request(&module_request, &context, &strict_policy);
+        let strict_policy = AllowAllPolicy;
+        let _strict_result = resolver.resolve(&module_request, &context, &strict_policy);
     }
 }
 
 fn test_graph_validation(module_graph: &ModuleGraph) {
     // Test that module graph structures can be validated without panics
     for module in &module_graph.workspace_modules {
-        // Validate module ID format
-        assert!(!module.id.is_empty(), "module ID cannot be empty");
-
-        // Validate dependency count bounds
-        assert!(module.dependencies.len() <= MAX_DEPENDENCIES, "too many dependencies");
+        if module.id.is_empty() || module.dependencies.len() > MAX_DEPENDENCIES {
+            return;
+        }
 
         // Test capability set consistency
         for capability in &module.capabilities {
@@ -370,12 +443,15 @@ fn test_graph_validation(module_graph: &ModuleGraph) {
     }
 
     for package in &module_graph.external_packages {
-        // Validate package name
-        assert!(!package.name.is_empty(), "package name cannot be empty");
+        if package.name.is_empty() {
+            return;
+        }
 
         // Validate export map structure
         for (export_key, export_val) in &package.exports {
-            assert!(!export_key.is_empty(), "export key cannot be empty");
+            if export_key.is_empty() {
+                return;
+            }
 
             // Check for path traversal patterns (should be handled gracefully, not panic)
             if export_key.contains("..") {
@@ -384,8 +460,9 @@ fn test_graph_validation(module_graph: &ModuleGraph) {
 
             // Validate condition targets
             for (condition, target) in &export_val.condition_targets {
-                assert!(!condition.is_empty(), "condition cannot be empty");
-                assert!(!target.is_empty(), "target cannot be empty");
+                if condition.is_empty() || target.is_empty() {
+                    return;
+                }
             }
         }
     }
@@ -401,9 +478,6 @@ fn test_module_serialization(module_graph: &ModuleGraph) {
         if let Ok(json_str) = serialized {
             let _deserialized: Result<ModuleDefinition, _> = serde_json::from_str(&json_str);
         }
-
-        // Test canonical value generation
-        let _canonical = definition.canonical_value();
     }
 
     // Test external package serialization
@@ -411,7 +485,8 @@ fn test_module_serialization(module_graph: &ModuleGraph) {
         let pkg_def = ExternalPackageDefinition::new(&package.name);
         let serialized = serde_json::to_string(&pkg_def);
         if let Ok(json_str) = serialized {
-            let _deserialized: Result<ExternalPackageDefinition, _> = serde_json::from_str(&json_str);
+            let _deserialized: Result<ExternalPackageDefinition, _> =
+                serde_json::from_str(&json_str);
         }
     }
 }

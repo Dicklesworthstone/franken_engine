@@ -607,16 +607,49 @@ pub fn allows_frontier_release(execution: &DisruptionTrackExecution) -> bool {
 
 /// Validate moonshot contracts against execution state.
 pub fn validate_moonshot_contracts(
-    _execution: &DisruptionTrackExecution,
+    execution: &DisruptionTrackExecution,
     contracts: &[MoonshotContract],
 ) -> Result<(), DisruptionTrackError> {
+    // Extract metrics from gate results
+    let mut current_metrics: BTreeMap<String, i64> = BTreeMap::new();
+    for (gate_id, gate_result) in &execution.gate_results {
+        if let Some(score) = gate_result.evidence_score_millionths {
+            current_metrics.insert(format!("{}_score", gate_id), score as i64);
+        }
+        // Add gate pass/fail as binary metric
+        current_metrics.insert(
+            format!("{}_status", gate_id),
+            if gate_result.status.is_pass() { 1 } else { 0 },
+        );
+    }
+
+    // Compute elapsed time from earliest to latest gate execution
+    let mut timestamps: Vec<&str> = execution
+        .gate_results
+        .values()
+        .map(|r| r.execution_timestamp.as_str())
+        .collect();
+    timestamps.sort();
+
+    let elapsed_ns = if timestamps.len() >= 2 {
+        // Parse ISO timestamps and compute difference
+        // For now use a simplified approach - count of gates as proxy for elapsed time
+        (timestamps.len() as u64).saturating_mul(1_000_000_000) // 1 second per gate
+    } else {
+        0
+    };
+
+    // Compute budget spent as fraction of completed gates vs total expected gates
+    let total_expected_gates = MoonshotGateId::all().len() as u64;
+    let completed_gates = execution.gate_results.len() as u64;
+    let budget_spent = if total_expected_gates > 0 {
+        (completed_gates * 1_000_000) / total_expected_gates // millionths
+    } else {
+        0
+    };
+
     // Validate each contract's kill criteria are not triggered
     for contract in contracts {
-        // Check if any kill criteria are triggered based on current gate results
-        let current_metrics = BTreeMap::new(); // Would be populated from gate results
-        let elapsed_ns = 0; // Would be computed from execution timestamps
-        let budget_spent = 0; // Would be tracked separately
-
         let triggered = contract.check_kill_criteria(&current_metrics, elapsed_ns, budget_spent);
         if !triggered.is_empty() {
             return Err(DisruptionTrackError::ContractValidationFailed {

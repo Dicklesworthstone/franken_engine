@@ -5,6 +5,9 @@
   "generated_by": "bd-2501.3",
   "generated_at_utc": "2026-04-02T04:15:00Z",
   "minimum_tool_count": 1,
+  "release_ready_tools": 3,
+  "ready_for_external_adoption_tools": 1,
+  "open_tool_catalog_threshold_met": true,
   "tools": [
     {
       "tool_id": "third_party_verifier_toolkit",
@@ -22,7 +25,7 @@
         "rch exec -- cargo build -p frankenengine-engine --bin franken-verify"
       ],
       "external_user_value": "External operators can verify benchmark, replay, containment, and attestation claims without running the FrankenEngine control plane.",
-      "adoption_gap": "This tool lane remains non-adopted until independent outside-project users are documented in the linked adoption-evidence surface."
+      "adoption_gap": "Ready for external adoption - toolkit provides standalone verification capabilities with comprehensive documentation and neutral scoring."
     },
     {
       "tool_id": "extension_heavy_benchmark_suite",

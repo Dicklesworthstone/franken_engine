@@ -987,6 +987,111 @@ pub struct GateSummary {
 }
 
 // ---------------------------------------------------------------------------
+// GovernanceArtifactInventory
+// ---------------------------------------------------------------------------
+
+/// Required module-index governance artifact family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernanceArtifactFamily {
+    ParityMatrix,
+    CohortBenchmark,
+    RollbackGuard,
+    CapabilityMatrix,
+    ObservabilityDelta,
+    RunManifest,
+    EventLog,
+    CommandLog,
+    TraceIndex,
+    StepLogs,
+}
+
+impl GovernanceArtifactFamily {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ParityMatrix => "parity_matrix",
+            Self::CohortBenchmark => "cohort_benchmark",
+            Self::RollbackGuard => "rollback_guard",
+            Self::CapabilityMatrix => "capability_matrix",
+            Self::ObservabilityDelta => "observability_delta",
+            Self::RunManifest => "run_manifest",
+            Self::EventLog => "event_log",
+            Self::CommandLog => "command_log",
+            Self::TraceIndex => "trace_index",
+            Self::StepLogs => "step_logs",
+        }
+    }
+}
+
+/// One artifact required before module-index publication language is truthful.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GovernanceArtifactRequirement {
+    pub name: String,
+    pub family: GovernanceArtifactFamily,
+    pub freshness_required: bool,
+    pub blocks_publication: bool,
+}
+
+impl GovernanceArtifactRequirement {
+    fn append_to_hash(&self, buf: &mut Vec<u8>) {
+        append_str(buf, &self.name);
+        append_str(buf, self.family.as_str());
+        buf.push(u8::from(self.freshness_required));
+        buf.push(u8::from(self.blocks_publication));
+    }
+}
+
+/// Deterministic inventory of artifacts required by the RGC-406C gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceArtifactInventory {
+    pub schema_version: String,
+    pub component: String,
+    pub policy_id: String,
+    pub requirements: Vec<GovernanceArtifactRequirement>,
+    pub content_hash: ContentHash,
+}
+
+impl GovernanceArtifactInventory {
+    pub fn seal(&mut self) {
+        let mut buf = Vec::new();
+        append_str(&mut buf, &self.schema_version);
+        append_str(&mut buf, &self.component);
+        append_str(&mut buf, &self.policy_id);
+
+        let mut requirements = self.requirements.clone();
+        requirements.sort_by(|left, right| left.name.cmp(&right.name));
+        for requirement in &requirements {
+            requirement.append_to_hash(&mut buf);
+        }
+
+        self.content_hash = compute_digest(&buf);
+    }
+
+    pub fn required_names(&self) -> BTreeSet<String> {
+        self.requirements
+            .iter()
+            .filter(|requirement| requirement.blocks_publication)
+            .map(|requirement| requirement.name.clone())
+            .collect()
+    }
+
+    pub fn missing_required_artifacts(
+        &self,
+        present_artifacts: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        self.required_names()
+            .difference(present_artifacts)
+            .cloned()
+            .collect()
+    }
+
+    pub fn is_publication_ready(&self, present_artifacts: &BTreeSet<String>) -> bool {
+        self.missing_required_artifacts(present_artifacts)
+            .is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BatchResult
 // ---------------------------------------------------------------------------
 
@@ -1042,6 +1147,80 @@ pub fn module_index_parity_gate_manifest() -> GateSummary {
         is_locked_out: false,
         pass_rate_millionths: 0,
     }
+}
+
+/// Produce the required RGC-406C governance artifact inventory.
+pub fn module_index_governance_artifact_inventory() -> GovernanceArtifactInventory {
+    let mut inventory = GovernanceArtifactInventory {
+        schema_version: SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        policy_id: POLICY_ID.to_string(),
+        requirements: vec![
+            GovernanceArtifactRequirement {
+                name: "module_index_parity_matrix.json".to_string(),
+                family: GovernanceArtifactFamily::ParityMatrix,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "package_cohort_resolution_benchmark.json".to_string(),
+                family: GovernanceArtifactFamily::CohortBenchmark,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "module_index_rollback_guard.json".to_string(),
+                family: GovernanceArtifactFamily::RollbackGuard,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "module_index_capability_matrix.json".to_string(),
+                family: GovernanceArtifactFamily::CapabilityMatrix,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "module_index_observability_delta.json".to_string(),
+                family: GovernanceArtifactFamily::ObservabilityDelta,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "run_manifest.json".to_string(),
+                family: GovernanceArtifactFamily::RunManifest,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "events.jsonl".to_string(),
+                family: GovernanceArtifactFamily::EventLog,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "commands.txt".to_string(),
+                family: GovernanceArtifactFamily::CommandLog,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "trace_ids".to_string(),
+                family: GovernanceArtifactFamily::TraceIndex,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+            GovernanceArtifactRequirement {
+                name: "step_logs/".to_string(),
+                family: GovernanceArtifactFamily::StepLogs,
+                freshness_required: true,
+                blocks_publication: true,
+            },
+        ],
+        content_hash: ContentHash::compute(b""),
+    };
+    inventory.seal();
+    inventory
 }
 
 // ---------------------------------------------------------------------------
@@ -1780,6 +1959,53 @@ mod tests {
         let m = module_index_parity_gate_manifest();
         assert_eq!(m.total_evaluations, 0);
         assert!(!m.is_locked_out);
+    }
+
+    #[test]
+    fn test_governance_artifact_inventory_lists_required_outputs() {
+        let inventory = module_index_governance_artifact_inventory();
+        assert_eq!(inventory.schema_version, SCHEMA_VERSION);
+        assert_eq!(inventory.component, COMPONENT);
+        assert_eq!(inventory.policy_id, POLICY_ID);
+
+        let required = inventory.required_names();
+        assert_eq!(required.len(), 10);
+        for name in [
+            "module_index_parity_matrix.json",
+            "package_cohort_resolution_benchmark.json",
+            "module_index_rollback_guard.json",
+            "module_index_capability_matrix.json",
+            "module_index_observability_delta.json",
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "trace_ids",
+            "step_logs/",
+        ] {
+            assert!(required.contains(name), "missing required artifact {name}");
+        }
+    }
+
+    #[test]
+    fn test_governance_artifact_inventory_fails_closed_when_artifacts_are_missing() {
+        let inventory = module_index_governance_artifact_inventory();
+        let mut present = inventory.required_names();
+        present.remove("module_index_observability_delta.json");
+        present.remove("step_logs/");
+
+        let missing = inventory.missing_required_artifacts(&present);
+        assert_eq!(
+            missing,
+            BTreeSet::from([
+                "module_index_observability_delta.json".to_string(),
+                "step_logs/".to_string(),
+            ])
+        );
+        assert!(!inventory.is_publication_ready(&present));
+
+        present.insert("module_index_observability_delta.json".to_string());
+        present.insert("step_logs/".to_string());
+        assert!(inventory.is_publication_ready(&present));
     }
 
     // -----------------------------------------------------------------------

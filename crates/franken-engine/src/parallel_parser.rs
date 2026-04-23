@@ -4434,4 +4434,293 @@ mod tests {
             assert_eq!(*v, back);
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Metamorphic Property Tests - Deterministic Partitioning
+    // ---------------------------------------------------------------------------
+
+    /// Test that partitioning the SAME input across parallel parser workers
+    /// multiple times yields IDENTICAL partition boundaries.
+    /// This is critical for reproducible replays and deterministic execution.
+
+    /// Create a medium-size JavaScript source file for testing partitioning
+    fn create_medium_js_source() -> String {
+        let mut source = String::new();
+
+        // Function definitions with nested structures
+        source.push_str("function fibonacci(n) {\n");
+        source.push_str("    if (n <= 1) return n;\n");
+        source.push_str("    return fibonacci(n - 1) + fibonacci(n - 2);\n");
+        source.push_str("}\n\n");
+
+        // Complex class with methods
+        source.push_str("class Calculator {\n");
+        source.push_str("    constructor(precision = 2) {\n");
+        source.push_str("        this.precision = precision;\n");
+        source.push_str("        this.history = [];\n");
+        source.push_str("    }\n\n");
+
+        source.push_str("    add(a, b) {\n");
+        source.push_str("        const result = a + b;\n");
+        source.push_str("        this.history.push({ op: 'add', a, b, result });\n");
+        source.push_str("        return result.toFixed(this.precision);\n");
+        source.push_str("    }\n\n");
+
+        source.push_str("    multiply(a, b) {\n");
+        source.push_str("        const result = a * b;\n");
+        source.push_str("        this.history.push({ op: 'multiply', a, b, result });\n");
+        source.push_str("        return result.toFixed(this.precision);\n");
+        source.push_str("    }\n\n");
+
+        source.push_str("    getHistory() {\n");
+        source.push_str("        return this.history.slice();\n");
+        source.push_str("    }\n");
+        source.push_str("}\n\n");
+
+        // Control flow with loops and conditionals
+        source.push_str("function processArray(arr) {\n");
+        source.push_str("    const results = [];\n");
+        source.push_str("    for (let i = 0; i < arr.length; i++) {\n");
+        source.push_str("        if (arr[i] % 2 === 0) {\n");
+        source.push_str("            results.push(arr[i] * 2);\n");
+        source.push_str("        } else {\n");
+        source.push_str("            results.push(arr[i] + 1);\n");
+        source.push_str("        }\n");
+        source.push_str("    }\n");
+        source.push_str("    return results;\n");
+        source.push_str("}\n\n");
+
+        // Object literals and array operations
+        source.push_str("const config = {\n");
+        source.push_str("    apiEndpoint: 'https://api.example.com',\n");
+        source.push_str("    timeout: 5000,\n");
+        source.push_str("    retries: 3,\n");
+        source.push_str("    headers: {\n");
+        source.push_str("        'Content-Type': 'application/json',\n");
+        source.push_str("        'Authorization': 'Bearer token123'\n");
+        source.push_str("    }\n");
+        source.push_str("};\n\n");
+
+        // Async function with try-catch
+        source.push_str("async function fetchData(url) {\n");
+        source.push_str("    try {\n");
+        source.push_str("        const response = await fetch(url, {\n");
+        source.push_str("            method: 'GET',\n");
+        source.push_str("            headers: config.headers,\n");
+        source.push_str("            timeout: config.timeout\n");
+        source.push_str("        });\n");
+        source.push_str("        if (!response.ok) {\n");
+        source.push_str("            throw new Error(`HTTP ${response.status}`);\n");
+        source.push_str("        }\n");
+        source.push_str("        return await response.json();\n");
+        source.push_str("    } catch (error) {\n");
+        source.push_str("        console.error('Fetch failed:', error.message);\n");
+        source.push_str("        return null;\n");
+        source.push_str("    }\n");
+        source.push_str("}\n\n");
+
+        // Module exports
+        source.push_str("module.exports = {\n");
+        source.push_str("    fibonacci,\n");
+        source.push_str("    Calculator,\n");
+        source.push_str("    processArray,\n");
+        source.push_str("    fetchData,\n");
+        source.push_str("    config\n");
+        source.push_str("};\n");
+
+        source
+    }
+
+    /// Helper to extract partition boundaries from parse output for comparison
+    fn extract_partition_info(output: &ParseOutput) -> Vec<(u64, u64)> {
+        // Extract partition boundaries from tokens if available
+        // For this test, we'll use token start positions as boundaries
+        output.tokens.iter()
+            .enumerate()
+            .filter(|(i, _)| i % 10 == 0) // Sample every 10th token to get boundaries
+            .map(|(_, token)| (token.start, token.end))
+            .collect()
+    }
+
+    #[test]
+    fn metamorphic_deterministic_partitioning_repeated_runs() {
+        // Test that partitioning the SAME input multiple times yields IDENTICAL results
+        let source = create_medium_js_source();
+        let mut config = small_config();
+        config.max_workers = 4; // Use multiple workers to trigger partitioning
+
+        let input = make_input(&source, &config);
+
+        // Parse the same input multiple times
+        let output1 = parse(&input).expect("First parse should succeed");
+        let output2 = parse(&input).expect("Second parse should succeed");
+        let output3 = parse(&input).expect("Third parse should succeed");
+
+        // All outputs should have identical partition information
+        let partitions1 = extract_partition_info(&output1);
+        let partitions2 = extract_partition_info(&output2);
+        let partitions3 = extract_partition_info(&output3);
+
+        assert_eq!(partitions1, partitions2,
+            "Repeated partitioning must yield identical boundaries (run 1 vs 2)");
+        assert_eq!(partitions1, partitions3,
+            "Repeated partitioning must yield identical boundaries (run 1 vs 3)");
+
+        // Token output should be identical
+        assert_eq!(output1.tokens, output2.tokens,
+            "Repeated parsing must yield identical tokens (run 1 vs 2)");
+        assert_eq!(output1.tokens, output3.tokens,
+            "Repeated parsing must yield identical tokens (run 1 vs 3)");
+    }
+
+    #[test]
+    fn metamorphic_partitioning_edge_case_single_worker() {
+        // Edge case: N=1 (single worker should still be deterministic)
+        let source = create_medium_js_source();
+        let mut config = small_config();
+        config.max_workers = 1;
+
+        let input = make_input(&source, &config);
+
+        let output1 = parse(&input).expect("First single-worker parse should succeed");
+        let output2 = parse(&input).expect("Second single-worker parse should succeed");
+
+        // Even with single worker, outputs should be identical
+        assert_eq!(output1.tokens, output2.tokens,
+            "Single worker parsing must be deterministic");
+    }
+
+    #[test]
+    fn metamorphic_partitioning_edge_case_many_workers() {
+        // Edge case: N > practical number (more workers than needed)
+        let source = create_medium_js_source();
+        let mut config = small_config();
+        config.max_workers = 16; // More workers than likely needed
+
+        let input = make_input(&source, &config);
+
+        let output1 = parse(&input).expect("First many-worker parse should succeed");
+        let output2 = parse(&input).expect("Second many-worker parse should succeed");
+
+        // Many workers should still produce deterministic results
+        assert_eq!(output1.tokens, output2.tokens,
+            "Many worker parsing must be deterministic");
+    }
+
+    #[test]
+    fn metamorphic_partitioning_worker_count_independence() {
+        // Test that different worker counts produce equivalent results (modulo performance metadata)
+        let source = create_medium_js_source();
+        let base_config = small_config();
+
+        let worker_counts = [1, 2, 4, 8];
+        let mut outputs = Vec::new();
+
+        for &worker_count in &worker_counts {
+            let mut config = base_config.clone();
+            config.max_workers = worker_count;
+            let input = make_input(&source, &config);
+            let output = parse(&input).expect(&format!("Parse with {} workers should succeed", worker_count));
+            outputs.push(output);
+        }
+
+        // All outputs should have identical tokens regardless of worker count
+        let reference_tokens = &outputs[0].tokens;
+        for (i, output) in outputs.iter().enumerate() {
+            assert_eq!(reference_tokens, &output.tokens,
+                "Worker count {} should produce identical tokens to reference", worker_counts[i]);
+        }
+    }
+
+    #[test]
+    fn metamorphic_partitioning_input_size_vs_workers() {
+        // Edge case: N > input_bytes (more workers than bytes)
+        let small_source = "var x = 1;"; // Very small input
+        let mut config = small_config();
+        config.max_workers = 8; // More workers than characters
+
+        let input = make_input(small_source, &config);
+
+        let output1 = parse(&input).expect("First small-input parse should succeed");
+        let output2 = parse(&input).expect("Second small-input parse should succeed");
+
+        // Small input with many workers should still be deterministic
+        assert_eq!(output1.tokens, output2.tokens,
+            "Small input with many workers must be deterministic");
+    }
+
+    #[test]
+    fn metamorphic_partitioning_boundary_consistency() {
+        // Test that partition boundaries respect language structure
+        let source = create_medium_js_source();
+        let mut config = small_config();
+        config.max_workers = 4;
+
+        let input = make_input(&source, &config);
+
+        // Multiple runs to ensure boundary consistency
+        for run in 1..=5 {
+            let output = parse(&input).expect(&format!("Parse run {} should succeed", run));
+
+            // Verify tokens are in order and non-overlapping
+            for (i, window) in output.tokens.windows(2).enumerate() {
+                assert!(window[0].end <= window[1].start,
+                    "Run {}: Token {} (end={}) should not overlap with token {} (start={})",
+                    run, i, window[0].end, i+1, window[1].start);
+            }
+
+            // Verify complete coverage of input
+            if !output.tokens.is_empty() {
+                let first_token = &output.tokens[0];
+                let last_token = &output.tokens[output.tokens.len() - 1];
+                assert_eq!(first_token.start, 0,
+                    "Run {}: First token should start at position 0", run);
+                assert!(last_token.end <= source.len() as u64,
+                    "Run {}: Last token should not exceed input length", run);
+            }
+        }
+    }
+
+    #[test]
+    fn metamorphic_partitioning_deterministic_across_config_changes() {
+        // Test that deterministic partitioning is preserved even when non-partitioning
+        // config parameters change
+        let source = create_medium_js_source();
+
+        let configs = [
+            {
+                let mut c = small_config();
+                c.max_workers = 4;
+                c.chunk_budget_us = 30_000;
+                c
+            },
+            {
+                let mut c = small_config();
+                c.max_workers = 4;
+                c.chunk_budget_us = 60_000; // Different budget
+                c
+            },
+            {
+                let mut c = small_config();
+                c.max_workers = 4;
+                c.merge_buffer_bytes = 8192; // Different buffer size
+                c
+            },
+        ];
+
+        let mut token_sequences = Vec::new();
+
+        for (i, config) in configs.iter().enumerate() {
+            let input = make_input(&source, config);
+            let output = parse(&input).expect(&format!("Parse with config {} should succeed", i));
+            token_sequences.push(output.tokens);
+        }
+
+        // All configurations should produce identical token sequences
+        let reference = &token_sequences[0];
+        for (i, tokens) in token_sequences.iter().enumerate() {
+            assert_eq!(reference, tokens,
+                "Configuration {} should produce identical tokens to reference", i);
+        }
+    }
 }

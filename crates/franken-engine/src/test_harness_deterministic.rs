@@ -147,6 +147,50 @@ pub struct TestData {
     pub generatoreration_seed: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HarnessObservedOutcome {
+    Success,
+    Failure,
+    Timeout,
+}
+
+impl HarnessObservedOutcome {
+    fn matches_expected(self, expected: &TestOutcome) -> bool {
+        matches!(
+            (self, expected),
+            (Self::Success, TestOutcome::Success)
+                | (Self::Failure, TestOutcome::Failure)
+                | (Self::Timeout, TestOutcome::Timeout)
+        )
+    }
+}
+
+fn source_matches_complexity(source: &TestSource) -> bool {
+    match &source.complexity {
+        SourceComplexity::Simple => {
+            source.content.starts_with("const value_") && source.content.ends_with(';')
+        }
+        SourceComplexity::Moderate => {
+            source.content.starts_with("function test_") && source.content.contains("Math.floor")
+        }
+        SourceComplexity::Complex => {
+            source.content.starts_with("class Test") && source.content.contains("compute()")
+        }
+    }
+}
+
+fn source_cost_millis(source: &TestSource) -> u64 {
+    match &source.complexity {
+        SourceComplexity::Simple => 1,
+        SourceComplexity::Moderate => 5,
+        SourceComplexity::Complex => 10,
+    }
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 /// Runtime test harness for execution validation
 #[derive(Debug)]
 pub struct RuntimeTestHarness {
@@ -167,6 +211,7 @@ impl RuntimeTestHarness {
     /// Execute a deterministic runtime test
     pub fn execute_runtime_test(&mut self, test_spec: RuntimeTestSpec) -> TestResult {
         let start_time = std::time::Instant::now();
+        let expected_outcome = test_spec.expected_outcome.clone();
 
         // Generate deterministic test fixtures
         let source = self
@@ -176,8 +221,8 @@ impl RuntimeTestHarness {
             .fixture_generator
             .generate_test_data(test_spec.data_size);
 
-        // Execute test logic (mock implementation for now)
-        let success = self.mock_runtime_execution(&source, &test_data);
+        let observed = self.validate_runtime_execution(&source, &test_data);
+        let success = observed.matches_expected(&expected_outcome);
 
         TestResult {
             test_id: test_spec.test_id.clone(),
@@ -191,9 +236,26 @@ impl RuntimeTestHarness {
         }
     }
 
-    fn mock_runtime_execution(&self, _source: &TestSource, _data: &TestData) -> bool {
-        // Mock implementation - always succeeds for deterministic results
-        true
+    fn validate_runtime_execution(
+        &self,
+        source: &TestSource,
+        data: &TestData,
+    ) -> HarnessObservedOutcome {
+        let data_cost = usize_to_u64(data.entries.len());
+        if source_cost_millis(source).saturating_add(data_cost) > self.config.timeout_millis {
+            return HarnessObservedOutcome::Timeout;
+        }
+
+        let checksum_matches =
+            source.checksum == self.fixture_generator.compute_checksum(&source.content);
+        let data_is_consistent = data.generatoreration_seed == self.config.deterministic_seed
+            && !data.entries.is_empty();
+
+        if checksum_matches && source_matches_complexity(source) && data_is_consistent {
+            HarnessObservedOutcome::Success
+        } else {
+            HarnessObservedOutcome::Failure
+        }
     }
 }
 
@@ -235,6 +297,7 @@ impl ParserTestHarness {
     /// Execute a deterministic parser test
     pub fn execute_parser_test(&mut self, test_spec: ParserTestSpec) -> TestResult {
         let start_time = std::time::Instant::now();
+        let expected_outcome = test_spec.expected_outcome.clone();
 
         // Extract needed fields before any moves. SourceComplexity is Clone
         // but not Copy, so clone explicitly to avoid partially moving
@@ -244,8 +307,8 @@ impl ParserTestHarness {
         // Generate deterministic parser test cases
         let source = self.fixture_generator.generate_source(source_complexity);
 
-        // Execute parser validation (mock implementation)
-        let success = self.mock_parser_validation(&source, &test_spec);
+        let observed = self.validate_parser_execution(&source, &test_spec);
+        let success = observed.matches_expected(&expected_outcome);
 
         TestResult {
             test_id: test_spec.test_id.clone(),
@@ -259,9 +322,26 @@ impl ParserTestHarness {
         }
     }
 
-    fn mock_parser_validation(&self, _source: &TestSource, _spec: &ParserTestSpec) -> bool {
-        // Mock implementation - deterministic based on seed
-        (self.config.deterministic_seed % 10) < 8 // 80% success rate
+    fn validate_parser_execution(
+        &self,
+        source: &TestSource,
+        spec: &ParserTestSpec,
+    ) -> HarnessObservedOutcome {
+        let feature_cost = usize_to_u64(spec.syntax_features.len()).saturating_mul(2);
+        if source_cost_millis(source).saturating_add(feature_cost) > self.config.timeout_millis {
+            return HarnessObservedOutcome::Timeout;
+        }
+
+        let checksum_matches =
+            source.checksum == self.fixture_generator.compute_checksum(&source.content);
+        let features_are_valid =
+            !spec.syntax_features.is_empty() && syntax_features_are_unique(&spec.syntax_features);
+
+        if checksum_matches && source_matches_complexity(source) && features_are_valid {
+            HarnessObservedOutcome::Success
+        } else {
+            HarnessObservedOutcome::Failure
+        }
     }
 }
 
@@ -307,14 +387,15 @@ impl SecurityTestHarness {
     /// Execute a deterministic security test
     pub fn execute_security_test(&mut self, test_spec: SecurityTestSpec) -> TestResult {
         let start_time = std::time::Instant::now();
+        let expected_outcome = test_spec.expected_outcome.clone();
 
         // Generate deterministic security test scenarios
         let test_data = self
             .fixture_generator
             .generate_test_data(test_spec.threat_vectors.len());
 
-        // Execute security validation (mock implementation)
-        let success = self.mock_security_validation(&test_spec);
+        let observed = self.validate_security_execution(&test_data, &test_spec);
+        let success = observed.matches_expected(&expected_outcome);
 
         TestResult {
             test_id: test_spec.test_id.clone(),
@@ -328,9 +409,91 @@ impl SecurityTestHarness {
         }
     }
 
-    fn mock_security_validation(&self, _spec: &SecurityTestSpec) -> bool {
-        // Mock implementation - security tests more strict
-        (self.config.deterministic_seed % 20) < 15 // 75% success rate
+    fn validate_security_execution(
+        &self,
+        test_data: &TestData,
+        spec: &SecurityTestSpec,
+    ) -> HarnessObservedOutcome {
+        let level_cost: u64 = match &spec.security_level {
+            SecurityLevel::Low => 1,
+            SecurityLevel::Medium => 3,
+            SecurityLevel::High => 6,
+            SecurityLevel::Critical => 10,
+        };
+        let threat_cost = usize_to_u64(spec.threat_vectors.len()).saturating_mul(3);
+        if level_cost.saturating_add(threat_cost) > self.config.timeout_millis {
+            return HarnessObservedOutcome::Timeout;
+        }
+
+        let data_matches_spec = test_data.entries.len() == spec.threat_vectors.len()
+            && test_data.generatoreration_seed == self.config.deterministic_seed;
+
+        if data_matches_spec && security_spec_covers_declared_level(spec) {
+            HarnessObservedOutcome::Success
+        } else {
+            HarnessObservedOutcome::Failure
+        }
+    }
+}
+
+fn syntax_features_are_unique(features: &[SyntaxFeature]) -> bool {
+    let mut seen = BTreeMap::new();
+    for feature in features {
+        if seen.insert(syntax_feature_key(feature), ()).is_some() {
+            return false;
+        }
+    }
+    true
+}
+
+fn syntax_feature_key(feature: &SyntaxFeature) -> &'static str {
+    match feature {
+        SyntaxFeature::Variables => "variables",
+        SyntaxFeature::ArrowFunctions => "arrow_functions",
+        SyntaxFeature::AsyncAwait => "async_await",
+        SyntaxFeature::Classes => "classes",
+        SyntaxFeature::Destructuring => "destructuring",
+        SyntaxFeature::Modules => "modules",
+        SyntaxFeature::TemplateStrings => "template_strings",
+    }
+}
+
+fn security_spec_covers_declared_level(spec: &SecurityTestSpec) -> bool {
+    if spec.threat_vectors.is_empty() || !threat_vectors_are_unique(&spec.threat_vectors) {
+        return false;
+    }
+
+    let threat_count = spec.threat_vectors.len();
+    match &spec.security_level {
+        SecurityLevel::Low | SecurityLevel::Medium => threat_count >= 1,
+        SecurityLevel::High => threat_count >= 2,
+        SecurityLevel::Critical => {
+            threat_count >= 3
+                && spec
+                    .threat_vectors
+                    .iter()
+                    .any(|threat| matches!(threat, ThreatVector::PrivilegeEscalation))
+        }
+    }
+}
+
+fn threat_vectors_are_unique(threats: &[ThreatVector]) -> bool {
+    let mut seen = BTreeMap::new();
+    for threat in threats {
+        if seen.insert(threat_vector_key(threat), ()).is_some() {
+            return false;
+        }
+    }
+    true
+}
+
+fn threat_vector_key(threat: &ThreatVector) -> &'static str {
+    match threat {
+        ThreatVector::CodeInjection => "code_injection",
+        ThreatVector::PrototypePollution => "prototype_pollution",
+        ThreatVector::PathTraversal => "path_traversal",
+        ThreatVector::DenialOfService => "denial_of_service",
+        ThreatVector::PrivilegeEscalation => "privilege_escalation",
     }
 }
 
@@ -556,6 +719,60 @@ mod tests {
     }
 
     #[test]
+    fn runtime_harness_rejects_empty_runtime_data() {
+        let config = TestHarnessConfig::default();
+        let mut harness = RuntimeTestHarness::new(config);
+
+        let spec = RuntimeTestSpec {
+            test_id: "runtime_empty_data".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            data_size: 0,
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_runtime_test(spec);
+        assert_eq!(result.test_id, "runtime_empty_data");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn runtime_harness_reports_expected_outcome_mismatches() {
+        let config = TestHarnessConfig::default();
+        let mut harness = RuntimeTestHarness::new(config);
+
+        let spec = RuntimeTestSpec {
+            test_id: "runtime_wrong_expectation".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            data_size: 2,
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_runtime_test(spec);
+        assert_eq!(result.test_id, "runtime_wrong_expectation");
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn runtime_harness_classifies_budget_overrun_as_timeout() {
+        let config = TestHarnessConfig {
+            timeout_millis: 1,
+            ..TestHarnessConfig::default()
+        };
+        let mut harness = RuntimeTestHarness::new(config);
+
+        let spec = RuntimeTestSpec {
+            test_id: "runtime_timeout".to_string(),
+            source_complexity: SourceComplexity::Complex,
+            data_size: 20,
+            expected_outcome: TestOutcome::Timeout,
+        };
+
+        let result = harness.execute_runtime_test(spec);
+        assert_eq!(result.test_id, "runtime_timeout");
+        assert!(result.success);
+    }
+
+    #[test]
     fn test_parser_harness_execution() {
         let config = TestHarnessConfig {
             deterministic_seed: 12345,
@@ -573,6 +790,40 @@ mod tests {
         let result = harness.execute_parser_test(spec);
         assert_eq!(result.test_id, "parser_test_1");
         assert_eq!(result.artifacts.len(), 2);
+    }
+
+    #[test]
+    fn parser_harness_rejects_empty_syntax_feature_set() {
+        let config = TestHarnessConfig::default();
+        let mut harness = ParserTestHarness::new(config);
+
+        let spec = ParserTestSpec {
+            test_id: "parser_empty_features".to_string(),
+            source_complexity: SourceComplexity::Simple,
+            syntax_features: Vec::new(),
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_parser_test(spec);
+        assert_eq!(result.test_id, "parser_empty_features");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn parser_harness_rejects_duplicate_syntax_features() {
+        let config = TestHarnessConfig::default();
+        let mut harness = ParserTestHarness::new(config);
+
+        let spec = ParserTestSpec {
+            test_id: "parser_duplicate_features".to_string(),
+            source_complexity: SourceComplexity::Moderate,
+            syntax_features: vec![SyntaxFeature::Classes, SyntaxFeature::Classes],
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_parser_test(spec);
+        assert_eq!(result.test_id, "parser_duplicate_features");
+        assert!(result.success);
     }
 
     #[test]
@@ -596,6 +847,44 @@ mod tests {
         let result = harness.execute_security_test(spec);
         assert_eq!(result.test_id, "security_test_1");
         assert_eq!(result.artifacts.len(), 2);
+    }
+
+    #[test]
+    fn security_harness_rejects_critical_tests_without_privilege_escalation() {
+        let config = TestHarnessConfig::default();
+        let mut harness = SecurityTestHarness::new(config);
+
+        let spec = SecurityTestSpec {
+            test_id: "security_critical_undercovered".to_string(),
+            threat_vectors: vec![
+                ThreatVector::CodeInjection,
+                ThreatVector::PrototypePollution,
+                ThreatVector::PathTraversal,
+            ],
+            security_level: SecurityLevel::Critical,
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_security_test(spec);
+        assert_eq!(result.test_id, "security_critical_undercovered");
+        assert!(result.success);
+    }
+
+    #[test]
+    fn security_harness_rejects_duplicate_threat_vectors() {
+        let config = TestHarnessConfig::default();
+        let mut harness = SecurityTestHarness::new(config);
+
+        let spec = SecurityTestSpec {
+            test_id: "security_duplicate_threats".to_string(),
+            threat_vectors: vec![ThreatVector::CodeInjection, ThreatVector::CodeInjection],
+            security_level: SecurityLevel::High,
+            expected_outcome: TestOutcome::Failure,
+        };
+
+        let result = harness.execute_security_test(spec);
+        assert_eq!(result.test_id, "security_duplicate_threats");
+        assert!(result.success);
     }
 
     #[test]

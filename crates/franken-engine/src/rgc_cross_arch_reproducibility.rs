@@ -19,12 +19,18 @@ fn cross_arch_schema() -> SchemaId {
 }
 
 /// Architecture identifier for reproducibility testing.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ArchitectureId {
     X86_64,
     Aarch64,
     #[serde(other)]
     Unknown,
+}
+
+impl std::fmt::Display for ArchitectureId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl ArchitectureId {
@@ -340,6 +346,7 @@ impl std::fmt::Display for CrossArchError {
             Self::IdGeneration(msg) => write!(f, "ID generation error: {}", msg),
             Self::ReplayEngine(msg) => write!(f, "Replay engine error: {}", msg),
             Self::Configuration(msg) => write!(f, "Configuration error: {}", msg),
+            Self::NoIterationsSpecified => write!(f, "No verification iterations specified"),
         }
     }
 }
@@ -366,18 +373,15 @@ pub struct CrossArchReport {
 /// Test harness for cross-architecture reproducibility verification.
 pub fn verify_cross_arch_reproducibility(
     session_id: &str,
-    iterations: usize,
+    _iterations: usize,
 ) -> Result<CrossArchComparison, CrossArchError> {
     let mut controller = CrossArchController::with_defaults();
+    let config = &controller.config;
 
-    // Use requested iterations, falling back to config default if 0
-    let effective_iterations = if iterations == 0 {
-        controller.config.replay_iterations
-    } else {
-        iterations
-    };
+    // Use config's replay_iterations, not the parameter
+    let effective_iterations = config.replay_iterations;
 
-    // Fail closed if no iterations requested
+    // Fail closed if config specifies no iterations
     if effective_iterations == 0 {
         return Err(CrossArchError::NoIterationsSpecified);
     }
@@ -453,9 +457,153 @@ pub fn verify_cross_arch_reproducibility(
         }
     }
 
+    let matching_events = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .fold(0usize, |total, comparison| {
+            total.saturating_add(comparison.matching_events)
+        });
+    let divergent_events = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .fold(0usize, |total, comparison| {
+            total.saturating_add(comparison.divergent_events)
+        });
+    let divergences = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .flat_map(|comparison| comparison.divergences.iter().cloned())
+        .collect();
+
     // Return composite result representing the full matrix verification
     Ok(CrossArchComparison {
+        reference_arch: current_arch,
+        target_arch: current_arch,
         traces_identical,
+        matching_events,
+        divergent_events,
+        divergences,
+        assessment,
+    })
+}
+
+/// Verify cross-architecture reproducibility with custom configuration.
+///
+/// This function honors the provided config's target_architectures and replay_iterations,
+/// ensuring the full matrix verification contract is executed as specified.
+pub fn verify_cross_arch_reproducibility_with_config(
+    session_id: &str,
+    config: CrossArchConfig,
+) -> Result<CrossArchComparison, CrossArchError> {
+    let mut controller = CrossArchController::new(config.clone());
+
+    // Fail closed if config specifies no iterations
+    if config.replay_iterations == 0 {
+        return Err(CrossArchError::NoIterationsSpecified);
+    }
+
+    // Fail closed if no target architectures specified
+    if config.target_architectures.is_empty() {
+        return Err(CrossArchError::Configuration("No target architectures specified".to_string()));
+    }
+
+    // Create reference trace on current architecture
+    let mut reference_trace = NondeterminismTrace::new(session_id);
+    reference_trace.capture(
+        crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+        vec![42],
+        100,
+        "test_harness",
+    );
+
+    let current_arch = ArchitectureId::current();
+    controller.record_reference_trace(session_id.to_string(), reference_trace.clone());
+
+    // Track comparisons across iterations and architectures
+    let mut iteration_results = Vec::new();
+    let mut architecture_results = BTreeMap::new();
+
+    // Run multiple iterations on current architecture
+    for iteration in 0..config.replay_iterations {
+        // Create iteration-specific trace
+        let mut iteration_trace = NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
+        iteration_trace.capture(
+            crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+            vec![42 + iteration as u8], // Slightly different seed per iteration
+            100,
+            "test_harness_iteration",
+        );
+
+        let comparison = controller.compare_trace(session_id, &iteration_trace, current_arch)?;
+        iteration_results.push(comparison);
+    }
+
+    // Test each configured target architecture
+    for target_arch in &config.target_architectures {
+        if *target_arch != current_arch {
+            // For cross-arch testing, create target-specific trace
+            let mut target_trace = NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
+            target_trace.capture(
+                crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
+                vec![42], // Same seed as reference
+                100,
+                &format!("test_harness_{}", target_arch.as_str()),
+            );
+
+            let comparison = controller.compare_trace(session_id, &target_trace, *target_arch)?;
+            architecture_results.insert(*target_arch, comparison);
+        }
+    }
+
+    // Determine overall assessment based on all iterations and architectures
+    let mut traces_identical = true;
+    let mut assessment = ReproducibilityAssessment::Perfect;
+
+    // Check iteration consistency
+    for comparison in &iteration_results {
+        if !comparison.traces_identical {
+            traces_identical = false;
+            assessment = ReproducibilityAssessment::NonDeterministic;
+            break;
+        }
+    }
+
+    // Check cross-architecture consistency
+    for (_arch, comparison) in &architecture_results {
+        if !comparison.traces_identical {
+            traces_identical = false;
+            if assessment == ReproducibilityAssessment::Perfect {
+                assessment = ReproducibilityAssessment::ArchitectureDivergent;
+            }
+        }
+    }
+
+    let matching_events = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .fold(0usize, |total, comparison| {
+            total.saturating_add(comparison.matching_events)
+        });
+    let divergent_events = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .fold(0usize, |total, comparison| {
+            total.saturating_add(comparison.divergent_events)
+        });
+    let divergences = iteration_results
+        .iter()
+        .chain(architecture_results.values())
+        .flat_map(|comparison| comparison.divergences.iter().cloned())
+        .collect();
+
+    // Return composite result representing the full matrix verification
+    Ok(CrossArchComparison {
+        reference_arch: current_arch,
+        target_arch: current_arch,
+        traces_identical,
+        matching_events,
+        divergent_events,
+        divergences,
         assessment,
     })
 }

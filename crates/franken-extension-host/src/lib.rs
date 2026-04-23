@@ -20,6 +20,21 @@ const COMPONENT: &str = "extension_manifest_validation";
 const EMPTY_CAPABILITIES: &[Capability] = &[];
 const WRITE_IMPLIES: &[Capability] = &[Capability::FsRead];
 
+/// Domain separation tag for Ed25519 signatures over extension manifest content hashes.
+/// This prevents cross-protocol signature reuse attacks by ensuring signatures are only
+/// valid within the extension manifest signing context.
+const EXTENSION_MANIFEST_DOMAIN_TAG: &[u8] = b"franken-extension-host-signed-manifest-v1:";
+
+/// Create domain-separated payload for Ed25519 signing/verification.
+/// Prepends the extension manifest domain tag to the content hash to prevent
+/// cross-protocol signature reuse attacks.
+fn domain_separated_manifest_payload(content_hash: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(EXTENSION_MANIFEST_DOMAIN_TAG.len() + content_hash.len());
+    payload.extend_from_slice(EXTENSION_MANIFEST_DOMAIN_TAG);
+    payload.extend_from_slice(content_hash);
+    payload
+}
+
 /// Extension manifest field limits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -585,7 +600,12 @@ fn verify_manifest_signature(
 
     let signature = Signature::from_bytes(&signature_array);
 
-    verifying_key.verify(&content_hash, &signature).is_ok()
+    // Create domain-separated payload to prevent cross-protocol signature reuse
+    let domain_separated_payload = domain_separated_manifest_payload(&content_hash);
+
+    verifying_key
+        .verify(&domain_separated_payload, &signature)
+        .is_ok()
 }
 
 /// Canonical deterministic manifest serialization (sorted keys, compact output).
@@ -684,9 +704,14 @@ fn with_test_signed_supply_chain_provenance(mut manifest: ExtensionManifest) -> 
     manifest.publisher_signature = None;
     manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
 
-    // Generate proper Ed25519 signature over content hash (64 bytes)
-    manifest.publisher_signature =
-        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    // Generate proper Ed25519 signature over domain-separated content hash (64 bytes)
+    let domain_separated_payload = domain_separated_manifest_payload(&manifest.content_hash);
+    manifest.publisher_signature = Some(
+        signing_key
+            .sign(&domain_separated_payload)
+            .to_bytes()
+            .to_vec(),
+    );
     manifest
 }
 
@@ -6754,8 +6779,13 @@ fn create_test_signed_manifest_fixture(
     };
 
     manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
-    manifest.publisher_signature =
-        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    let domain_separated_payload = domain_separated_manifest_payload(&manifest.content_hash);
+    manifest.publisher_signature = Some(
+        signing_key
+            .sign(&domain_separated_payload)
+            .to_bytes()
+            .to_vec(),
+    );
     manifest
 }
 
@@ -6926,6 +6956,43 @@ mod tests {
             validate_provenance(&dev_manifest, ManifestTrustLevel::Development),
             Err(ManifestValidationError::DevelopmentTrustDisabled)
         );
+    }
+
+    // ── Domain separation regression tests ─────────────────────────────────
+    // These tests ensure Ed25519 signatures use proper domain separation
+
+    #[test]
+    fn signed_manifest_rejects_signature_with_wrong_domain_tag() {
+        let manifest = signed_manifest(&[Capability::FsRead]);
+
+        // Create a signature with a different domain tag
+        let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
+        let wrong_domain_tag = b"wrong-domain-tag:";
+
+        // Sign with wrong domain tag
+        let mut wrong_domain_payload = Vec::with_capacity(wrong_domain_tag.len() + 32);
+        wrong_domain_payload.extend_from_slice(wrong_domain_tag);
+        wrong_domain_payload.extend_from_slice(&manifest.content_hash);
+        let wrong_signature = signing_key.sign(&wrong_domain_payload);
+
+        // Create manifest with wrong-domain signature
+        let mut manifest_with_wrong_domain = manifest;
+        manifest_with_wrong_domain.publisher_signature = Some(wrong_signature.to_bytes().to_vec());
+
+        // Should fail verification due to domain mismatch
+        assert_eq!(
+            validate_manifest(&manifest_with_wrong_domain),
+            Err(ManifestValidationError::InvalidPublisherSignature)
+        );
+    }
+
+    #[test]
+    fn signed_manifest_verifies_with_correct_domain_separation() {
+        // Ensure a properly signed manifest still validates after domain separation fix
+        let manifest = signed_manifest(&[Capability::FsRead]);
+
+        // Should pass validation with correct domain-separated signature
+        assert_eq!(validate_manifest(&manifest), Ok(()));
     }
 
     #[test]

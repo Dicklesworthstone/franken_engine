@@ -3929,11 +3929,8 @@ mod tests {
         assert!(provider.verify_quote(&quote));
     }
 
-    #[test]
-    #[ignore = "API drift: TeeAttestationPolicyDocument + ApprovedMeasurementSet types were restructured"]
-    fn expired_quote_rejected() {
-        unimplemented!("needs rewrite against new TeeAttestationPolicy surface");
-    }
+    // Removed: expired_quote_rejected() test - ignored due to API drift,
+    // contained only unimplemented!() placeholder for restructured TeeAttestationPolicy types
 
     #[test]
     fn tampered_quote_rejected() {
@@ -3976,9 +3973,6 @@ mod tests {
         assert_eq!(old_policy_quote.quote_age_secs, 7200);
     }
 
-    #[test]
-    #[ignore = "API drift: TeeAttestationPolicyDocument + ApprovedMeasurementSet types were restructured"]
-    fn high_impact_requires_attestation() {
-        unimplemented!("needs rewrite against new TeeAttestationPolicy surface");
-    }
+    // Removed: high_impact_requires_attestation() test - ignored due to API drift,
+    // contained only unimplemented!() placeholder for restructured TeeAttestationPolicy types
 }

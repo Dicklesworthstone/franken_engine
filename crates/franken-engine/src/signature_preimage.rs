@@ -1288,17 +1288,9 @@ mod tests {
 
     // -- Constant-time comparison --
 
-    #[test]
-    #[ignore = "API drift: constant_time_eq_64 was removed/renamed"]
-    fn constant_time_eq_same() {
-        unimplemented!("constant_time_eq_64 helper no longer exists");
-    }
-
-    #[test]
-    #[ignore = "API drift: constant_time_eq_64 was removed/renamed"]
-    fn constant_time_eq_different() {
-        unimplemented!("constant_time_eq_64 helper no longer exists");
-    }
+    // Removed: constant_time_eq_same() and constant_time_eq_different() tests
+    // These tests were ignored due to API drift - the constant_time_eq_64 helper
+    // was removed/renamed and these tests contained only unimplemented!() placeholders
 
     // -- Enrichment: std::error --
 

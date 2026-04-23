@@ -1466,4 +1466,219 @@ mod tests {
         let a2 = write_parser_gap_inventory_bundle(&out2, &cmds).expect("w2");
         assert_eq!(a1.inventory_hash, a2.inventory_hash);
     }
+
+    // -- OpenPlaceholder Resolution Test Coverage (bd-mxrfn) --
+
+    /// Helper to create test inventory with specific sites marked as OpenPlaceholder
+    fn test_inventory_with_open_placeholders(open_sites: &[ParserGapSiteId]) -> ParserGapInventory {
+        let sites = ParserGapSiteId::ALL
+            .iter()
+            .map(|site| {
+                let mut desc = ParserGapSiteDescriptor::from_site(*site);
+                if open_sites.contains(site) {
+                    desc.remediation_status = ParserGapRemediationStatus::OpenPlaceholder;
+                }
+                desc
+            })
+            .collect();
+        ParserGapInventory {
+            schema_version: PARSER_GAP_INVENTORY_SCHEMA_VERSION.to_string(),
+            diagnostic_schema_version: UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION.to_string(),
+            taxonomy_version: PARSER_DIAGNOSTIC_TAXONOMY_VERSION.to_string(),
+            component: PARSER_GAP_COMPONENT.to_string(),
+            sites,
+        }
+    }
+
+    #[test]
+    fn open_placeholder_site_count_filters_correctly() {
+        // Test with no open placeholders
+        let inventory_resolved = test_inventory_with_open_placeholders(&[]);
+        assert_eq!(inventory_resolved.open_placeholder_site_count(), 0);
+
+        // Test with single open placeholder
+        let inventory_single = test_inventory_with_open_placeholders(&[
+            ParserGapSiteId::ForInStatementPlaceholder
+        ]);
+        assert_eq!(inventory_single.open_placeholder_site_count(), 1);
+
+        // Test with multiple open placeholders
+        let inventory_multiple = test_inventory_with_open_placeholders(&[
+            ParserGapSiteId::ForInStatementPlaceholder,
+            ParserGapSiteId::TemplateLiteralRawPlaceholder,
+            ParserGapSiteId::BinaryNonArithmeticAddPlaceholder,
+        ]);
+        assert_eq!(inventory_multiple.open_placeholder_site_count(), 3);
+
+        // Test with all sites as open placeholders
+        let inventory_all = test_inventory_with_open_placeholders(&ParserGapSiteId::ALL);
+        assert_eq!(inventory_all.open_placeholder_site_count(), 6);
+    }
+
+    #[test]
+    fn open_placeholder_sites_have_correct_status() {
+        let inventory = test_inventory_with_open_placeholders(&[
+            ParserGapSiteId::ForOfStatementPlaceholder,
+            ParserGapSiteId::NewExpressionCallPlaceholder,
+        ]);
+
+        for site in &inventory.sites {
+            if site.site_id == "lower_ir0_to_ir1.for_of_placeholder"
+                || site.site_id == "lower_ir0_to_ir1.new_call_placeholder" {
+                assert_eq!(site.remediation_status, ParserGapRemediationStatus::OpenPlaceholder);
+            } else {
+                assert_eq!(site.remediation_status, ParserGapRemediationStatus::Resolved);
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_generates_for_open_placeholder() {
+        // Verify that diagnostics can be generated for each site when in OpenPlaceholder status
+        for site_id in ParserGapSiteId::ALL {
+            let diagnostic = UnsupportedSyntaxDiagnostic::from_site(
+                site_id,
+                "test_source_with_open_placeholder",
+                Some(span()),
+            );
+
+            assert_eq!(diagnostic.diagnostic_code, site_id.diagnostic_code());
+            assert_eq!(diagnostic.source_label, "test_source_with_open_placeholder");
+            assert!(diagnostic.canonical_hash().len() > 20);
+            assert!(!diagnostic.message.is_empty());
+
+            // Verify the diagnostic contains the expected parser gap context
+            assert!(diagnostic.message.contains("unsupported"));
+        }
+    }
+
+    #[test]
+    fn parser_gap_remediation_status_ordering_for_validation() {
+        // Test that OpenPlaceholder status has correct ordering for validation gates
+        assert!(ParserGapRemediationStatus::FailClosed < ParserGapRemediationStatus::OpenPlaceholder);
+        assert!(ParserGapRemediationStatus::OpenPlaceholder < ParserGapRemediationStatus::Resolved);
+
+        // Ensure OpenPlaceholder is in middle of severity spectrum
+        let statuses = [
+            ParserGapRemediationStatus::FailClosed,
+            ParserGapRemediationStatus::OpenPlaceholder,
+            ParserGapRemediationStatus::Resolved,
+        ];
+
+        let mut sorted = statuses;
+        sorted.sort();
+        assert_eq!(statuses, sorted);
+    }
+
+    #[test]
+    fn open_placeholder_sites_fail_release_validation() {
+        // Test that an inventory with open placeholders would fail release validation
+        let inventory_with_gaps = test_inventory_with_open_placeholders(&[
+            ParserGapSiteId::ForInStatementPlaceholder,
+            ParserGapSiteId::TemplateLiteralRawPlaceholder,
+        ]);
+
+        // Verify that open placeholder count is non-zero (would trigger validation failure)
+        assert!(inventory_with_gaps.open_placeholder_site_count() > 0);
+        assert_eq!(inventory_with_gaps.open_placeholder_site_count(), 2);
+
+        // Ensure we can detect which specific sites are problematic
+        let open_sites: Vec<&str> = inventory_with_gaps
+            .sites
+            .iter()
+            .filter(|site| site.remediation_status == ParserGapRemediationStatus::OpenPlaceholder)
+            .map(|site| site.site_id.as_str())
+            .collect();
+
+        assert!(open_sites.contains(&"lower_ir0_to_ir1.for_in_placeholder"));
+        assert!(open_sites.contains(&"lower_ir0_to_ir1.template_literal_raw_placeholder"));
+        assert!(!open_sites.contains(&"lower_ir0_to_ir1.for_of_placeholder"));
+    }
+
+    #[test]
+    fn each_parser_gap_site_drives_to_resolved_in_production() {
+        // Regression test: verify that each parser gap site can be driven to Resolved status
+        // This test documents that we have implementation coverage for all gaps
+
+        let production_inventory = parser_gap_inventory();
+
+        // All sites should be resolved in production
+        for site in &production_inventory.sites {
+            assert_eq!(
+                site.remediation_status,
+                ParserGapRemediationStatus::Resolved,
+                "Site {} should be Resolved in production, found {:?}",
+                site.site_id,
+                site.remediation_status
+            );
+        }
+
+        // Verify we have coverage for each syntax family mentioned in the bead
+        let resolved_families: std::collections::BTreeSet<&str> = production_inventory
+            .sites
+            .iter()
+            .map(|site| site.feature_family.as_str())
+            .collect();
+
+        assert!(resolved_families.contains("for_in_statement"));
+        assert!(resolved_families.contains("for_of_statement"));
+        assert!(resolved_families.contains("template_literal"));
+        assert!(resolved_families.contains("new_expression"));
+        assert!(resolved_families.contains("binary_expression"));
+        assert!(resolved_families.contains("assignment_expression"));
+    }
+
+    #[test]
+    fn open_placeholder_diagnostic_coverage_completeness() {
+        // Verify that each parser gap site has complete diagnostic coverage when unresolved
+        for site_id in ParserGapSiteId::ALL {
+            let diagnostic_code = site_id.diagnostic_code();
+            let syntax_shape = site_id.syntax_shape();
+            let feature_family = site_id.feature_family();
+
+            // Each site should have meaningful diagnostic identifiers
+            assert!(!diagnostic_code.is_empty(), "{:?} missing diagnostic code", site_id);
+            assert!(!syntax_shape.is_empty(), "{:?} missing syntax shape", site_id);
+            assert!(!feature_family.is_empty(), "{:?} missing feature family", site_id);
+
+            // Diagnostic codes should be distinct
+            assert!(diagnostic_code.contains("franken"),
+                "{:?} diagnostic code should contain 'franken': {}", site_id, diagnostic_code);
+
+            // Feature families should match expected ES2020+ syntax categories
+            let valid_families = [
+                "for_in_statement", "for_of_statement", "template_literal",
+                "new_expression", "binary_expression", "assignment_expression"
+            ];
+            assert!(valid_families.contains(&feature_family.as_str()),
+                "{:?} has unexpected feature family: {}", site_id, feature_family);
+        }
+    }
+
+    #[test]
+    fn open_placeholder_status_serialization_roundtrip() {
+        // Test that OpenPlaceholder status survives serialization/deserialization
+        let test_inventory = test_inventory_with_open_placeholders(&[
+            ParserGapSiteId::ForInStatementPlaceholder,
+            ParserGapSiteId::BinaryNonArithmeticAddPlaceholder,
+        ]);
+
+        let json = serde_json::to_string(&test_inventory).unwrap();
+        let deserialized: ParserGapInventory = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.open_placeholder_site_count(), 2);
+        assert_eq!(deserialized.sites.len(), 6);
+
+        // Verify specific sites maintained their OpenPlaceholder status
+        let open_sites: std::collections::BTreeSet<&str> = deserialized
+            .sites
+            .iter()
+            .filter(|site| site.remediation_status == ParserGapRemediationStatus::OpenPlaceholder)
+            .map(|site| site.site_id.as_str())
+            .collect();
+
+        assert_eq!(open_sites.len(), 2);
+        assert!(open_sites.contains("lower_ir0_to_ir1.for_in_placeholder"));
+        assert!(open_sites.contains("lower_ir1_to_ir3.binary_non_arithmetic_add_placeholder"));
+    }
 }

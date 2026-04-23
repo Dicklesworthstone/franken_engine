@@ -5217,7 +5217,6 @@ expiry_date = "2030-01-01"
 
     #[test]
     fn missing_fixture_files_fail_with_io_error() {
-        use std::fs;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let manifest_path = temp_dir.path().join("manifest.json");

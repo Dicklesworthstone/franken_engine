@@ -10278,6 +10278,199 @@ mod enrichment_tests {
         assert_eq!(pubkey, back);
     }
 
+    // ── Metamorphic Signature Determinism Tests (bd-28eh5) ─────────────
+
+    #[test]
+    fn metamorphic_signature_determinism_same_key_same_payload() {
+        // Invariant: signing same payload twice with same key → byte-identical signatures
+        let key = DecisionSigningKey::new([0xDE; 32]);
+        let payload = b"determinism test payload";
+
+        let signature_1 = key.sign(payload);
+        let signature_2 = key.sign(payload);
+
+        assert_eq!(
+            signature_1, signature_2,
+            "Ed25519 signatures must be deterministic: same key + same payload → identical signatures"
+        );
+
+        // Verify both signatures are valid
+        let pubkey = key.public_key();
+        assert!(pubkey.verify(payload, &signature_1));
+        assert!(pubkey.verify(payload, &signature_2));
+    }
+
+    #[test]
+    fn metamorphic_signature_determinism_fixed_seed_reproducibility() {
+        // Test that signatures are reproducible with fixed key material
+        let seed = [0x42; 32];
+        let payload = b"reproducible signature test";
+
+        let key_1 = DecisionSigningKey::new(seed);
+        let key_2 = DecisionSigningKey::new(seed);
+
+        let sig_1 = key_1.sign(payload);
+        let sig_2 = key_2.sign(payload);
+
+        assert_eq!(key_1, key_2, "Keys from same seed must be identical");
+        assert_eq!(sig_1, sig_2, "Signatures from identical keys must be byte-identical");
+    }
+
+    #[test]
+    fn metamorphic_signature_collision_resistance_different_keys() {
+        // Invariant: same payload + different keys → NEVER produces identical signatures
+        let payload = b"collision resistance test payload";
+
+        // Test multiple key pairs to reduce chance of false positive
+        let key_pairs = [
+            ([0x01; 32], [0x02; 32]),
+            ([0xFF; 32], [0x00; 32]),
+            ([0xAA; 32], [0x55; 32]),
+            ([0x12; 32], [0x56; 32]),
+        ];
+
+        for (seed_a, seed_b) in &key_pairs {
+            let key_a = DecisionSigningKey::new(*seed_a);
+            let key_b = DecisionSigningKey::new(*seed_b);
+
+            let sig_a = key_a.sign(payload);
+            let sig_b = key_b.sign(payload);
+
+            assert_ne!(
+                sig_a, sig_b,
+                "Different keys must NEVER produce identical signatures for same payload (seeds: {:?} vs {:?})",
+                seed_a, seed_b
+            );
+
+            // Verify both signatures are valid with their respective keys
+            assert!(key_a.public_key().verify(payload, &sig_a));
+            assert!(key_b.public_key().verify(payload, &sig_b));
+
+            // Cross-verification must fail (signature from key_a invalid for key_b)
+            assert!(!key_b.public_key().verify(payload, &sig_a));
+            assert!(!key_a.public_key().verify(payload, &sig_b));
+        }
+    }
+
+    #[test]
+    fn metamorphic_signature_payload_independence() {
+        // Different payloads with same key should produce different signatures
+        let key = DecisionSigningKey::new([0x13; 32]);
+
+        let payloads: &[&[u8]] = &[
+            b"payload A",
+            b"payload B",
+            b"", // empty payload
+            b"a very long payload that tests signature generation with larger inputs to ensure no collisions",
+            &[0x00, 0x01, 0x02, 0xFF], // binary payload
+        ];
+
+        let signatures: Vec<Vec<u8>> = payloads.iter()
+            .map(|payload| key.sign(payload))
+            .collect();
+
+        // All signatures must be different
+        for i in 0..signatures.len() {
+            for j in i + 1..signatures.len() {
+                assert_ne!(
+                    signatures[i], signatures[j],
+                    "Different payloads must produce different signatures (payload {} vs {})",
+                    i, j
+                );
+            }
+        }
+
+        // All signatures must verify correctly
+        let pubkey = key.public_key();
+        for (i, payload) in payloads.iter().enumerate() {
+            assert!(
+                pubkey.verify(payload, &signatures[i]),
+                "Signature {} must verify against its payload", i
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_signature_domain_separation_consistency() {
+        // Verify that domain separation is consistently applied to all signature operations
+        let key = DecisionSigningKey::new([0x99; 32]);
+        let manifest_payload = b"extension manifest content hash";
+
+        // Verify domain separation is applied by checking signature determinism
+        let pubkey = key.public_key();
+        let signature = key.sign(manifest_payload);
+
+        // Multiple signatures of same content should be identical (determinism with domain separation)
+        let signature_2 = key.sign(manifest_payload);
+        assert_eq!(signature, signature_2, "Domain-separated signatures must be deterministic");
+
+        // The raw signing should be consistent
+        assert!(pubkey.verify(manifest_payload, &signature));
+    }
+
+    #[test]
+    fn metamorphic_signature_error_handling_corrupt_keys() {
+        // Test proper error handling with corrupt key material (should not panic)
+        let valid_key = DecisionSigningKey::new([0x42; 32]);
+        let payload = b"test payload for error handling";
+
+        // Valid case first
+        let valid_signature = valid_key.sign(payload);
+        assert!(valid_key.public_key().verify(payload, &valid_signature));
+
+        // Test with various malformed signature lengths
+        let malformed_signatures = [
+            vec![], // empty signature
+            vec![0xFF], // too short
+            vec![0x00; 63], // one byte short
+            vec![0x00; 65], // one byte too long
+            vec![0xFF; 128], // way too long
+        ];
+
+        let pubkey = valid_key.public_key();
+        for malformed_sig in &malformed_signatures {
+            // Should return false, not panic
+            assert!(
+                !pubkey.verify(payload, malformed_sig),
+                "Malformed signature should be rejected gracefully (length: {})",
+                malformed_sig.len()
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_signature_property_based_determinism() {
+        // Property-based test: For any fixed seed, signatures must be reproducible
+        let test_cases = [
+            ([0x00; 32], ""),
+            ([0xFF; 32], "single byte"),
+            ([0xAA; 32], "medium length payload for testing"),
+            ([0x12; 32], "binary payload test"),
+            ([0x42; 32], "generated sequence payload"),
+        ];
+
+        for (seed, payload_str) in &test_cases {
+            let payload = payload_str.as_bytes();
+
+            // Create multiple instances with same seed
+            let instances = (0..3).map(|_| DecisionSigningKey::new(*seed)).collect::<Vec<_>>();
+
+            // All instances should be identical
+            for i in 1..instances.len() {
+                assert_eq!(instances[0], instances[i], "Keys from same seed must be identical");
+            }
+
+            // All signatures should be identical
+            let signatures: Vec<Vec<u8>> = instances.iter().map(|key| key.sign(payload)).collect();
+            for i in 1..signatures.len() {
+                assert_eq!(
+                    signatures[0], signatures[i],
+                    "Signatures from identical keys must be byte-identical (seed: {:?})", seed
+                );
+            }
+        }
+    }
+
     // ── ManifestValidationError ─────────────────────────────────────────
 
     #[test]

@@ -2888,9 +2888,9 @@ mod tests {
         let (mut reg, pub_id, _sk, _vk) = setup_registry_with_publisher();
 
         // Register publisher with multiple scopes
-        reg.register_scope(&pub_id, "scope1").unwrap();
-        reg.register_scope(&pub_id, "scope2").unwrap();
-        reg.register_scope(&pub_id, "scope3").unwrap();
+        reg.claim_scope(pub_id.clone(), "scope1").unwrap();
+        reg.claim_scope(pub_id.clone(), "scope2").unwrap();
+        reg.claim_scope(pub_id.clone(), "scope3").unwrap();
 
         let test_scopes = ["scope1", "scope2", "scope4", "scope5"];
 

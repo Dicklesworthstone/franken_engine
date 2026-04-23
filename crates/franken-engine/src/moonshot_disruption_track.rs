@@ -732,6 +732,7 @@ pub fn generate_log_entries(
 mod tests {
     use super::*;
     use crate::disruption_scorecard::ScorecardSchema;
+    use crate::moonshot_contract::DistributionType;
 
     // -----------------------------------------------------------------------
     // Helpers

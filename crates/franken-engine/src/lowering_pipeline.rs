@@ -12305,16 +12305,20 @@ mod tests {
     fn function_body_match_arms_handle_all_valid_ir1_ops() {
         // Regression test for bd-2zyj5: Ensure catch-all replacement doesn't break existing functionality
         // Test that LoadLiteral (one of the explicitly handled operations) works correctly in function bodies
-        use crate::ast::{FunctionDeclaration, FunctionParam, ParseGoal, SourceSpan, SyntaxTree};
+        use crate::ast::{BlockStatement, FunctionDeclaration, ParseGoal, SyntaxTree};
         use crate::ir_contract::{Ir0Module, IrHeader, IrLevel, IrSchemaVersion};
 
         let function_with_literal = Statement::FunctionDeclaration(FunctionDeclaration {
             name: Some("testFunc".to_string()),
             params: vec![],
-            body: vec![Statement::Return(ReturnStatement {
-                argument: Some(Expression::NumericLiteral(42)),
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::NumericLiteral(42)),
+                    span: span(),
+                })],
                 span: span(),
-            })],
+            },
+            is_async: false,
             is_generator: false,
             span: span(),
         });

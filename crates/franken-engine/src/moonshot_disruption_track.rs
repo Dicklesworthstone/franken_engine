@@ -476,7 +476,7 @@ impl std::error::Error for DisruptionTrackError {}
 impl From<ScorecardError> for DisruptionTrackError {
     fn from(error: ScorecardError) -> Self {
         Self::ScorecardError {
-            error: error.to_string(),
+            error: crate::bound_error_message(&error),
         }
     }
 }
@@ -1385,11 +1385,7 @@ mod tests {
 
         let contract = MoonshotContract {
             contract_id: "test-contract".to_string(),
-            version: ContractVersion {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
+            version: ContractVersion { major: 1, minor: 0 },
             hypothesis: Hypothesis {
                 problem: "Test hypothesis".to_string(),
                 mechanism: "Test mechanism".to_string(),
@@ -1398,23 +1394,30 @@ mod tests {
             },
             target_metrics: vec![],
             ev_model: EvModel {
-                expected_value_millionths: 1_000_000,
-                uncertainty_millionths: 500_000,
-                confidence_level_millionths: 950_000,
-                measurement_method: crate::moonshot_contract::MeasurementMethod::Benchmark,
+                success_distribution: DistributionType::PointEstimate,
+                distribution_params: {
+                    let mut params = BTreeMap::new();
+                    params.insert("value".to_string(), 1_000_000);
+                    params
+                },
+                cost_millionths: 500_000,
+                benefit_on_success_millionths: 2_000_000,
+                harm_on_failure_millionths: 200_000,
             },
             risk_budget: RiskBudget {
-                risk_dimensions: vec![],
+                dimension_caps: BTreeMap::new(),
             },
             artifact_obligations: vec![],
             kill_criteria: vec![kill_criterion],
             rollback_plan: RollbackPlan {
-                total_steps: 0,
                 steps: vec![],
+                artifact_references: vec![],
+                expected_state_after_rollback: "System restored to baseline".to_string(),
             },
             current_stage: MoonshotStage::Research,
             epoch: SecurityEpoch::from_raw(1),
             governance_signature: None,
+            metadata: BTreeMap::new(),
         };
 
         let result = validate_moonshot_contracts(&execution, &[contract]);

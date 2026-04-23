@@ -830,6 +830,29 @@ typed deterministic taxonomy (`EvalErrorClass` + `EvalErrorCode`) with stable na
 stable sorting for multi-error contexts, and explicit propagation helpers for sync/async/hostcall \
 boundaries.";
 
+/// Maximum length for error message strings to prevent DoS via memory exhaustion.
+/// Malicious extensions could generate huge error messages - bound them to 4KB.
+const MAX_ERROR_MSG_LEN: usize = 4096;
+
+/// Maximum total aggregated error bytes per batch to prevent accumulation attacks.
+/// Reserved for future batch processing where multiple errors are aggregated.
+#[allow(dead_code)]
+const MAX_AGGREGATED_ERROR_BYTES: usize = 65536; // 64KB
+
+/// Safely convert an error to a bounded string to prevent memory exhaustion DoS.
+/// Truncates at MAX_ERROR_MSG_LEN and appends indicator if truncated.
+pub fn bound_error_message<E: std::fmt::Display>(error: E) -> String {
+    let error_str = error.to_string();
+    if error_str.len() <= MAX_ERROR_MSG_LEN {
+        error_str
+    } else {
+        let mut truncated = error_str;
+        truncated.truncate(MAX_ERROR_MSG_LEN.saturating_sub(20)); // Reserve space for suffix
+        truncated.push_str("... (truncated for security)");
+        truncated
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExceptionBoundary {
@@ -1707,22 +1730,22 @@ fn attach_eval_correlation(
 fn map_parse_error(error: ParseError) -> EvalError {
     let mapped = match error.code {
         ParseErrorCode::EmptySource => EvalError::empty_source(),
-        _ => EvalError::parse_failure(error.to_string()),
+        _ => EvalError::parse_failure(bound_error_message(&error)),
     };
     annotate_error_stage(mapped, "parse", parse_error_location(&error))
 }
 
 fn map_lowering_error(error: LoweringPipelineError) -> EvalError {
     let mapped = if matches!(error, LoweringPipelineError::SemanticViolation(_)) {
-        EvalError::resolution_failure(error.to_string())
+        EvalError::resolution_failure(bound_error_message(&error))
     } else if matches!(error, LoweringPipelineError::FlowLatticeFailure { .. }) {
-        EvalError::policy_denied(error.to_string())
+        EvalError::policy_denied(bound_error_message(&error))
     } else if matches!(error, LoweringPipelineError::UnauthorizedFlow { .. }) {
-        EvalError::capability_denied(error.to_string())
+        EvalError::capability_denied(bound_error_message(&error))
     } else if matches!(error, LoweringPipelineError::UnsupportedSyntax(_)) {
-        EvalError::parse_failure(error.to_string())
+        EvalError::parse_failure(bound_error_message(&error))
     } else {
-        EvalError::invariant_violation(error.to_string())
+        EvalError::invariant_violation(bound_error_message(&error))
     };
     annotate_error_stage(mapped, "lowering", None)
 }
@@ -1730,9 +1753,9 @@ fn map_lowering_error(error: LoweringPipelineError) -> EvalError {
 fn map_interpreter_error(error: InterpreterError) -> EvalError {
     let mapped = match error {
         err @ InterpreterError::CapabilityDenied { .. } => {
-            EvalError::capability_denied(err.to_string())
+            EvalError::capability_denied(bound_error_message(&err))
         }
-        err => EvalError::runtime_fault(err.to_string()),
+        err => EvalError::runtime_fault(bound_error_message(&err)),
     };
     annotate_error_stage(mapped, "execute", None)
 }
@@ -2411,5 +2434,50 @@ mod tests {
                 "ADR must reference canonical type `{type_name}`"
             );
         }
+    }
+
+    /// Regression test for bd-bu828: verify error message bounding prevents DoS
+    #[test]
+    fn bound_error_message_prevents_memory_exhaustion() {
+        // Test normal-sized error (should pass through unchanged)
+        #[derive(Debug)]
+        struct SmallError(&'static str);
+        impl std::fmt::Display for SmallError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "Small error: {}", self.0)
+            }
+        }
+        let small = SmallError("test");
+        let bounded_small = bound_error_message(&small);
+        assert_eq!(bounded_small, "Small error: test");
+        assert!(bounded_small.len() < MAX_ERROR_MSG_LEN);
+
+        // Test huge error (should be truncated)
+        #[derive(Debug)]
+        struct HugeError;
+        impl std::fmt::Display for HugeError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                // Generate 10MB+ error message (potential DoS attack)
+                for _ in 0..10_000 {
+                    write!(f, "This is a malicious error designed to exhaust memory! ")?;
+                }
+                write!(f, "Attack completed!")
+            }
+        }
+        let huge = HugeError;
+        let bounded_huge = bound_error_message(&huge);
+
+        // Verify truncation occurred and length is bounded
+        assert!(bounded_huge.len() <= MAX_ERROR_MSG_LEN);
+        assert!(bounded_huge.ends_with("... (truncated for security)"));
+
+        // Verify it doesn't contain the full attack
+        assert!(!bounded_huge.contains("Attack completed!"));
+
+        // Verify reasonable performance - should not take significant time
+        let start = std::time::Instant::now();
+        let _result = bound_error_message(&huge);
+        let duration = start.elapsed();
+        assert!(duration.as_millis() < 100, "Bounding should be fast, took {:?}", duration);
     }
 }

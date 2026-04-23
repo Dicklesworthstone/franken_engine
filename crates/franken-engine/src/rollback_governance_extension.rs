@@ -684,7 +684,7 @@ mod tests {
     fn test_signing_key() -> SigningKey {
         // This is a test key - not used in production
         let test_bytes = [42u8; 32];
-        SigningKey::from_bytes(&test_bytes).expect("valid test key")
+        SigningKey::from_bytes(test_bytes).expect("valid test key")
     }
 
     #[test]
@@ -827,7 +827,7 @@ mod tests {
             rationale: "Support".to_string(),
             weight_millionths: 600_000,
             cast_at: test_timestamp(),
-            signature: Signature::from_bytes(&[0; 64]).expect("test signature"),
+            signature: Signature::from_bytes([0; 64]),
         };
 
         // Add rejection vote with 40% weight
@@ -838,7 +838,7 @@ mod tests {
             rationale: "Concerns".to_string(),
             weight_millionths: 400_000,
             cast_at: test_timestamp(),
-            signature: Signature::from_bytes(&[1; 64]).expect("test signature"),
+            signature: Signature::from_bytes([1; 64]),
         };
 
         review.add_vote(vote1).expect("add vote1");

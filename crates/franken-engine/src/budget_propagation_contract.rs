@@ -1572,8 +1572,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let msg = err.to_string();
+            let msg = crate::bound_error_message(err);
             assert!(!msg.is_empty(), "error display should be non-empty");
+            assert!(msg.len() <= 4096, "error message should be bounded to prevent DoS");
         }
     }
 

@@ -322,6 +322,20 @@ Audit artifacts are generated at `artifacts/rgc_docs_help_surface_audit/<timesta
 
 See [`docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md`](./docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md) for the complete contract specification.
 
+## RGC CLI and Operator Workflow Verification Pack
+
+The CLI and operator workflow verification pack validates the real operator experience of frankenctl workflows across golden-path, failure-path, and observability-mode scenarios with actionable diagnostics. This pack ensures operator workflows are evidence-first and deterministic.
+
+```bash
+./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci
+./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci
+jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json
+```
+
+Verification artifacts are generated at `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/run_manifest.json`, `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/events.jsonl`, `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/commands.txt`, `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json`, and `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_*.log` for each verification run. The workflow also generates support bundle artifacts at `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/index.json`.
+
+See [`docs/RGC_CLI_OPERATOR_WORKFLOW_VERIFICATION_PACK_V1.md`](./docs/RGC_CLI_OPERATOR_WORKFLOW_VERIFICATION_PACK_V1.md) for the complete contract specification.
+
 ## Installation
 
 ### Build From Source

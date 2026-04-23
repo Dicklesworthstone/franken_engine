@@ -61,4 +61,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "module_loader_fuzz"
+path = "fuzz_targets/module_loader_fuzz.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

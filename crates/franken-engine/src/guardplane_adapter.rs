@@ -27,6 +27,11 @@ use crate::security_epoch::SecurityEpoch;
 
 const MILLION: i64 = 1_000_000;
 const WITNESS_CONFIDENCE_FLOOR_MILLIONTHS: i64 = 900_000;
+const TRUST_LEVEL_METADATA_KEYS: &[&str] = &[
+    "capability_witness.trust_level",
+    "guardplane.trust_level",
+    "trust_level",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuardplaneTrustLevel {
@@ -125,26 +130,19 @@ impl GuardplaneExtensionContext {
     ) -> Self {
         let mut diagnostics = Vec::new();
 
-        let trust_level = metadata_lookup_with_key(
-            &metadata,
-            &[
-                "capability_witness.trust_level",
-                "guardplane.trust_level",
-                "trust_level",
-            ],
-        )
-        .map(|(key, value)| {
-            let (level, parsed) = GuardplaneTrustLevel::parse_with_status(value);
-            if !parsed {
-                diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
-                    key,
-                    value,
-                    "failed to parse trust level",
-                ));
-            }
-            level
-        })
-        .unwrap_or(GuardplaneTrustLevel::Unknown);
+        let trust_level = metadata_lookup_with_key(&metadata, TRUST_LEVEL_METADATA_KEYS)
+            .map(|(key, value)| {
+                let (level, parsed) = GuardplaneTrustLevel::parse_with_status(value);
+                if !parsed {
+                    diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
+                        key,
+                        value,
+                        "failed to parse trust level",
+                    ));
+                }
+                level
+            })
+            .unwrap_or(GuardplaneTrustLevel::Unknown);
 
         let witness_confidence_millionths = metadata_lookup_with_key(
             &metadata,
@@ -219,6 +217,7 @@ impl GuardplaneExtensionContext {
         )
         .is_some_and(parse_boolish)
             || self.witness_declared()
+            || self.malformed_trust_metadata_declared()
         {
             return true;
         }
@@ -236,6 +235,13 @@ impl GuardplaneExtensionContext {
         !self.required_capabilities.is_empty()
             || !self.denied_capabilities.is_empty()
             || self.witness_confidence_millionths > 0
+    }
+
+    fn malformed_trust_metadata_declared(&self) -> bool {
+        self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "guardplane.metadata_parse_error"
+                && TRUST_LEVEL_METADATA_KEYS.contains(&diagnostic.metadata_key.as_str())
+        })
     }
 
     fn distinct_capability_count(&self) -> u32 {
@@ -850,6 +856,7 @@ mod tests {
 
         assert_eq!(context.trust_level, GuardplaneTrustLevel::Unknown);
         assert_eq!(context.witness_confidence_millionths, 0);
+        assert!(context.instruction_hooks_enabled());
         assert_eq!(context.diagnostics.len(), 2);
         assert!(context.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "guardplane.metadata_parse_error"

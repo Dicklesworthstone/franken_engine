@@ -1913,13 +1913,24 @@ pub fn log_production_hardening_event(
         timestamp: now,
     };
 
-    // In a real implementation, this would write to structured logging infrastructure
+    // Write structured log entry to stderr with proper formatting for production
     match serde_json::to_string(&log_entry) {
-        Ok(json) => eprintln!("PRODUCTION_HARDENING_LOG: {}", json),
-        Err(e) => eprintln!(
-            "PRODUCTION_HARDENING_LOG: [JSON serialization failed: {}] gate_id={} component={} event={} outcome={:?}",
-            e, gate_id, component, event, outcome
-        ),
+        Ok(json) => {
+            // Use structured JSON logging for machine readability
+            eprintln!("{}", json);
+        }
+        Err(e) => {
+            // Fallback to structured key-value format if JSON fails
+            eprintln!(
+                "{{\"error\":\"json_serialization_failed\",\"reason\":\"{}\",\"gate_id\":\"{}\",\"component\":\"{}\",\"event\":\"{}\",\"outcome\":\"{}\",\"timestamp\":{}}}",
+                e.to_string().replace('"', "\\\""),
+                gate_id,
+                component,
+                event,
+                outcome,
+                now
+            );
+        }
     }
 }
 

@@ -951,7 +951,7 @@ fn scan_file_for_seam_occurrences(
     for occ in &mut occurrences {
         if occ
             .file_path
-            .starts_with(workspace_root.display().to_string().as_str())
+            .starts_with(&workspace_root.display().to_string())
         {
             occ.file_path = relative_path.to_string();
         }
@@ -3229,7 +3229,7 @@ fn scan_rust_file_for_ambient_mock_violations(
     for violation in &mut violations {
         if violation
             .file_path
-            .starts_with(workspace_root.display().to_string().as_str())
+            .starts_with(&workspace_root.display().to_string())
         {
             violation.file_path = relative_path.to_string();
         }

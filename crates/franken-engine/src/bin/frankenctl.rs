@@ -6862,7 +6862,7 @@ mod tests {
         );
         assert_eq!(
             report["report_path"].as_str(),
-            Some(report_path.display().to_string().as_str())
+            Some(&report_path.display().to_string())
         );
         assert_eq!(report["passed"].as_bool(), Some(true));
     }
@@ -7330,8 +7330,8 @@ mod tests {
         .expect_err("signature-drift should fail closed");
         assert!(signature_error.contains(CODE_UNSUPPORTED_PLACEHOLDER_COMMAND));
         assert!(signature_error.contains("gates signature-drift"));
-        assert!(signature_error.contains(signature_report.display().to_string().as_str()));
-        assert!(signature_error.contains(signature_config.display().to_string().as_str()));
+        assert!(signature_error.contains(&signature_report.display().to_string()));
+        assert!(signature_error.contains(&signature_config.display().to_string()));
         assert!(!signature_out_dir.exists());
         assert!(!signature_report.exists());
 

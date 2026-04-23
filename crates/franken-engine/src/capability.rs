@@ -231,7 +231,7 @@ impl CapabilityProfile {
                 HeapAllocate,
                 Console,
                 Timer,
-                Builtin
+                Builtin,
             ]),
         }
     }

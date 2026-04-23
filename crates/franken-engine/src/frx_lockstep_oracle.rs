@@ -529,7 +529,7 @@ fn default_replay_test_command() -> String {
 }
 
 fn shell_escape_path(path: &Path) -> String {
-    shell_escape_argument(path.display().to_string().as_str())
+    shell_escape_argument(&path.display().to_string())
 }
 
 fn shell_escape_argument(value: &str) -> String {

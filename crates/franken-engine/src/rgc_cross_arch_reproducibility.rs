@@ -148,6 +148,7 @@ impl Default for CrossArchConfig {
 pub struct CrossArchController {
     config: CrossArchConfig,
     reference_traces: BTreeMap<String, NondeterminismTrace>,
+    #[allow(dead_code)]
     comparisons: BTreeMap<String, CrossArchComparison>,
 }
 
@@ -300,7 +301,7 @@ impl CrossArchController {
             content.extend_from_slice(session_id.as_bytes());
             content.extend_from_slice(&reference_trace.events.len().to_le_bytes());
             content.extend_from_slice(&serde_json::to_vec(&self.config).unwrap_or_default());
-            content.extend_from_slice(&ArchitectureId::current().to_string().as_bytes());
+            content.extend_from_slice(ArchitectureId::current().to_string().as_bytes());
             content.extend_from_slice(reference_trace_hash.as_bytes());
             ContentHash::compute(&content).as_bytes().to_vec()
         };
@@ -417,10 +418,11 @@ pub fn verify_cross_arch_reproducibility(
     session_id: &str,
     iterations: usize,
 ) -> Result<CrossArchComparison, CrossArchError> {
-    let mut config = CrossArchConfig::default();
-
     // Honor the iterations parameter instead of ignoring it
-    config.replay_iterations = iterations;
+    let config = CrossArchConfig {
+        replay_iterations: iterations,
+        ..Default::default()
+    };
 
     // Fail closed if no iterations requested
     if iterations == 0 {
@@ -449,7 +451,7 @@ pub fn verify_cross_arch_reproducibility(
     for iteration in 0..iterations {
         // Create iteration-specific trace
         let mut iteration_trace =
-            NondeterminismTrace::new(&format!("{}-iter-{}", session_id, iteration));
+            NondeterminismTrace::new(format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
             vec![42],
@@ -466,7 +468,7 @@ pub fn verify_cross_arch_reproducibility(
         if *target_arch != current_arch {
             // For cross-arch testing, create target-specific trace
             let mut target_trace =
-                NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
+                NondeterminismTrace::new(format!("{}-{}", session_id, target_arch.as_str()));
             target_trace.capture(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
@@ -493,7 +495,7 @@ pub fn verify_cross_arch_reproducibility(
     }
 
     // Check cross-architecture consistency
-    for (_arch, comparison) in &architecture_results {
+    for comparison in architecture_results.values() {
         if !comparison.traces_identical {
             traces_identical = false;
             if assessment == ReproducibilityAssessment::Perfect {
@@ -591,7 +593,7 @@ pub fn verify_cross_arch_reproducibility_with_config(
         if *target_arch != current_arch {
             // For cross-arch testing, create target-specific trace
             let mut target_trace =
-                NondeterminismTrace::new(&format!("{}-{}", session_id, target_arch.as_str()));
+                NondeterminismTrace::new(format!("{}-{}", session_id, target_arch.as_str()));
             target_trace.capture(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
@@ -618,7 +620,7 @@ pub fn verify_cross_arch_reproducibility_with_config(
     }
 
     // Check cross-architecture consistency
-    for (_arch, comparison) in &architecture_results {
+    for comparison in architecture_results.values() {
         if !comparison.traces_identical {
             traces_identical = false;
             if assessment == ReproducibilityAssessment::Perfect {

@@ -15,6 +15,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Golden file testing imports
+use regex::Regex;
+use serde_json;
+
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::capability_token::{
     CapabilityToken, CheckpointRef, PrincipalId, RevocationFreshnessRef, TokenBuilder,
@@ -1237,4 +1241,264 @@ fn session_handshake_serde_roundtrip() {
 fn run_token_program_handles_all_max_byte_data() {
     let data = vec![0xFF; 64];
     run_token_program(&data);
+}
+
+// =============================================================================
+// Golden File Testing for Parser Boundary Harness
+// =============================================================================
+
+/// Structured representation of parser boundary harness output for golden testing
+#[derive(Debug, serde::Serialize)]
+struct ParserBoundaryOutput {
+    input_summary: InputSummary,
+    parse_result: ParseResultSummary,
+    event_ir_summary: EventIrSummary,
+    determinism_check: DeterminismCheckSummary,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct InputSummary {
+    data_length: usize,
+    goal: String,  // "Script" or "Module"
+    source_preview: String,  // First 200 chars of generated source
+    options_summary: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "type")]
+enum ParseResultSummary {
+    Success {
+        tree_hash: String,
+        tree_goal: String,
+        materialize_success: bool,
+        materialize_hash_match: bool,
+    },
+    Error {
+        diagnostic_hash: String,
+        parse_failed_event_present: bool,
+    },
+}
+
+#[derive(Debug, serde::Serialize)]
+struct EventIrSummary {
+    canonical_hash: String,
+    event_count: usize,
+    first_event_kind: String,
+    last_event_kind: String,
+    schema_version: String,
+    contract_version: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DeterminismCheckSummary {
+    repeat_tree_hash_matches: bool,
+    repeat_event_ir_hash_matches: bool,
+}
+
+/// Golden file testing infrastructure
+fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput) {
+    let golden_path = Path::new("tests/golden/parser_boundary")
+        .join(format!("{test_name}.json"));
+
+    // Serialize output with stable formatting
+    let actual = serde_json::to_string_pretty(output).unwrap();
+    let scrubbed_actual = scrub_parser_output(&actual);
+
+    // UPDATE MODE: overwrite golden with actual output
+    if std::env::var("UPDATE_GOLDENS").is_ok() {
+        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
+        fs::write(&golden_path, &scrubbed_actual).unwrap();
+        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
+        return;
+    }
+
+    // COMPARE MODE: diff actual vs golden
+    let expected = fs::read_to_string(&golden_path)
+        .unwrap_or_else(|_| panic!(
+            "Golden file missing: {}\n\
+             Run with UPDATE_GOLDENS=1 to create it\n\
+             Then review and commit: git diff tests/golden/",
+            golden_path.display()
+        ));
+
+    if scrubbed_actual != expected {
+        // Write actual for easy diffing
+        let actual_path = golden_path.with_extension("actual");
+        fs::write(&actual_path, &scrubbed_actual).unwrap();
+
+        panic!(
+            "GOLDEN MISMATCH: {test_name}\n\n\
+             Golden differs from actual output.\n\
+             Expected: {}\n\
+             Actual: {}\n\n\
+             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
+             To review: diff {} {}",
+            golden_path.display(),
+            actual_path.display(),
+            golden_path.display(),
+            actual_path.display(),
+        );
+    }
+}
+
+/// Scrub non-deterministic values from parser output
+fn scrub_parser_output(output: &str) -> String {
+    let mut scrubbed = output.to_string();
+
+    // SHA256 hashes → [HASH]
+    let hash_re = Regex::new(r"sha256:[a-f0-9]{64}").unwrap();
+    scrubbed = hash_re.replace_all(&scrubbed, "[HASH]").to_string();
+
+    // Trace IDs → [TRACE_ID]
+    let trace_re = Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
+    scrubbed = trace_re.replace_all(&scrubbed, "[TRACE_ID]").to_string();
+
+    // Decision IDs → [DECISION_ID]
+    let decision_re = Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
+    scrubbed = decision_re.replace_all(&scrubbed, "[DECISION_ID]").to_string();
+
+    scrubbed
+}
+
+/// Capture parser boundary output for golden testing
+fn capture_parser_boundary_output(data: &[u8]) -> ParserBoundaryOutput {
+    if data.is_empty() || data.len() > MAX_PARSER_INPUT_BYTES {
+        panic!("Input data out of bounds for golden testing");
+    }
+
+    let goal = parser_boundary_goal(data);
+    let source = parser_boundary_source(data, goal);
+    let parser = CanonicalEs2020Parser;
+    let options = parser_boundary_options(data);
+
+    let (result, event_ir) = parser.parse_with_event_ir(source.as_str(), goal, &options);
+    let event_ir_hash = event_ir.canonical_hash();
+
+    let input_summary = InputSummary {
+        data_length: data.len(),
+        goal: format!("{goal:?}"),
+        source_preview: source.chars().take(200).collect(),
+        options_summary: format!("mode={:?}, max_tokens={}, max_depth={}",
+            options.mode, options.budget.max_token_count, options.budget.max_recursion_depth),
+    };
+
+    let event_ir_summary = EventIrSummary {
+        canonical_hash: event_ir_hash.clone(),
+        event_count: event_ir.events.len(),
+        first_event_kind: format!("{:?}", event_ir.events.first().map(|e| &e.kind).unwrap_or(&ParseEventKind::ParseStarted)),
+        last_event_kind: format!("{:?}", event_ir.events.last().map(|e| &e.kind).unwrap_or(&ParseEventKind::ParseStarted)),
+        schema_version: event_ir.schema_version.clone(),
+        contract_version: event_ir.contract_version.clone(),
+    };
+
+    let (parse_result, determinism_check) = match result {
+        Ok(tree) => {
+            let tree_hash = tree.canonical_hash();
+
+            let materialized = event_ir
+                .materialize_from_syntax_tree(&tree)
+                .expect("successful parse event IR should materialize");
+            let materialize_hash_match = materialized.syntax_tree.canonical_hash() == tree_hash;
+
+            // Determinism check - parse again
+            let (repeat_result, repeat_ir) = parser.parse_with_event_ir(source.as_str(), goal, &options);
+            let repeat_tree = repeat_result.expect("successful parse should be deterministic");
+            let repeat_tree_hash_matches = repeat_tree.canonical_hash() == tree_hash;
+            let repeat_event_ir_hash_matches = repeat_ir.canonical_hash() == event_ir_hash;
+
+            (
+                ParseResultSummary::Success {
+                    tree_hash,
+                    tree_goal: format!("{:?}", tree.goal),
+                    materialize_success: true,
+                    materialize_hash_match,
+                },
+                DeterminismCheckSummary {
+                    repeat_tree_hash_matches,
+                    repeat_event_ir_hash_matches,
+                },
+            )
+        }
+        Err(error) => {
+            let diagnostic = ParseDiagnosticEnvelope::from_parse_error(&error);
+            let diagnostic_hash = diagnostic.canonical_hash();
+            let parse_failed_event_present = event_ir
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, ParseEventKind::ParseFailed));
+
+            (
+                ParseResultSummary::Error {
+                    diagnostic_hash,
+                    parse_failed_event_present,
+                },
+                DeterminismCheckSummary {
+                    repeat_tree_hash_matches: false, // N/A for errors
+                    repeat_event_ir_hash_matches: false, // N/A for errors
+                },
+            )
+        }
+    };
+
+    ParserBoundaryOutput {
+        input_summary,
+        parse_result,
+        event_ir_summary,
+        determinism_check,
+    }
+}
+
+/// Golden test for successful parse case
+#[test]
+fn golden_parser_boundary_success_simple_script() {
+    // Simple script that should parse successfully
+    let data = [
+        0x00,  // Goal: Script (even number)
+        0x01,  // Synthetic source (byte(data, 0) % 4 == 1)
+        0x10,  // Max tokens: 16 + 0x10 = 32
+        0x08,  // Max depth: 8 + 0x08 = 16
+        0x00,  // Let statement (opcode % 14 == 0)
+        0x02,  // Expression: index + value = 0 + 2
+    ];
+
+    let output = capture_parser_boundary_output(&data);
+    assert_golden_parser_boundary("simple_script_success", &output);
+}
+
+/// Golden test for parse error case
+#[test]
+fn golden_parser_boundary_error_malformed_syntax() {
+    // Input designed to produce parse errors
+    let data = [
+        0x01,  // Goal: Module (odd number)
+        0x00,  // Use raw UTF-8 from data (byte(data, 0) % 4 == 0)
+        0xFF,  // Max tokens: 16 + 255 = 271
+        0x3F,  // Max depth: 8 + 63 = 71
+        // Rest is malformed UTF-8 / syntax
+        0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8,
+        0xF7, 0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1, 0xF0,
+    ];
+
+    let output = capture_parser_boundary_output(&data);
+    assert_golden_parser_boundary("malformed_syntax_error", &output);
+}
+
+/// Golden test for module with imports/exports
+#[test]
+fn golden_parser_boundary_module_with_exports() {
+    // Module goal with export statements
+    let data = [
+        0x01,  // Goal: Module (odd number)
+        0x01,  // Synthetic source
+        0x20,  // Max tokens: 16 + 32 = 48
+        0x10,  // Max depth: 8 + 16 = 24
+        0x06,  // Import statement trigger (byte(data, 3) is even)
+        0x0A,  // Export const statement (opcode % 14 == 10, goal == Module)
+        0x03,  // Value for export expression
+        0x0B,  // Export default statement (opcode % 14 == 11, goal == Module)
+        0x05,  // Value for default export
+    ];
+
+    let output = capture_parser_boundary_output(&data);
+    assert_golden_parser_boundary("module_with_exports", &output);
 }

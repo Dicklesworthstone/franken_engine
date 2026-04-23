@@ -642,11 +642,9 @@ pub fn validate_moonshot_contracts(
     // Compute budget spent as fraction of completed gates vs total expected gates
     let total_expected_gates = MoonshotGateId::all().len() as u64;
     let completed_gates = execution.gate_results.len() as u64;
-    let budget_spent = if total_expected_gates > 0 {
-        (completed_gates * 1_000_000) / total_expected_gates // millionths
-    } else {
-        0
-    };
+    let budget_spent = (completed_gates * 1_000_000)
+        .checked_div(total_expected_gates)
+        .unwrap_or(0); // millionths
 
     // Validate each contract's kill criteria are not triggered
     for contract in contracts {
@@ -1344,7 +1342,8 @@ mod tests {
             DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
 
         // Add some but not all gate results to test budget computation
-        for gate_id in MoonshotGateId::all().iter().take(3) { // 3 out of 10 gates
+        for gate_id in MoonshotGateId::all().iter().take(3) {
+            // 3 out of 10 gates
             let result = sample_gate_result(*gate_id, true);
             execution.record_gate_result(result);
         }
@@ -1360,7 +1359,8 @@ mod tests {
     #[test]
     fn validate_moonshot_contracts_triggered_kill_criteria_fails() {
         use crate::moonshot_contract::{
-            KillCriterion, KillCriterionId, KillCriterionMetric, KillCriterionOperator
+            ContractVersion, EvModel, Hypothesis, KillCriterion, KillTrigger, MoonshotContract,
+            MoonshotStage, RiskBudget, RollbackPlan,
         };
 
         let mut execution =
@@ -1376,17 +1376,45 @@ mod tests {
 
         // Create a contract with kill criterion that should trigger on fail
         let kill_criterion = KillCriterion {
-            criterion_id: KillCriterionId("test_kill_criterion".to_string()),
-            description: "Fail if any gate fails".to_string(),
-            metric: KillCriterionMetric::Custom("bd-1ze_status".to_string()),
-            operator: KillCriterionOperator::LessThan,
-            threshold: 1, // 0 = fail, 1 = pass, so < 1 means fail
+            criterion_id: "test_kill_criterion".to_string(),
+            trigger: KillTrigger::MetricRegression,
+            condition: "Fail if any gate fails".to_string(),
+            threshold_millionths: Some(1_000_000), // 1.0 threshold
+            max_duration_ns: None,
         };
 
         let contract = MoonshotContract {
             contract_id: "test-contract".to_string(),
-            description: "Test contract".to_string(),
+            version: ContractVersion {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            hypothesis: Hypothesis {
+                problem: "Test hypothesis".to_string(),
+                mechanism: "Test mechanism".to_string(),
+                expected_outcome: "Test outcome".to_string(),
+                falsification_criteria: vec!["Test criteria".to_string()],
+            },
+            target_metrics: vec![],
+            ev_model: EvModel {
+                expected_value_millionths: 1_000_000,
+                uncertainty_millionths: 500_000,
+                confidence_level_millionths: 950_000,
+                measurement_method: crate::moonshot_contract::MeasurementMethod::Benchmark,
+            },
+            risk_budget: RiskBudget {
+                risk_dimensions: vec![],
+            },
+            artifact_obligations: vec![],
             kill_criteria: vec![kill_criterion],
+            rollback_plan: RollbackPlan {
+                total_steps: 0,
+                steps: vec![],
+            },
+            current_stage: MoonshotStage::Research,
+            epoch: SecurityEpoch::from_raw(1),
+            governance_signature: None,
         };
 
         let result = validate_moonshot_contracts(&execution, &[contract]);

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Deterministic, redacted support-bundle export for bug reports and migration triage.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,11 +179,17 @@ pub fn export_support_bundle(
 pub fn is_sensitive(input: &str) -> bool {
     let lowered = input.to_ascii_lowercase();
     [
+        "access-key",
+        "access_key",
+        "accesskey",
+        "api-key",
         "api_key",
         "apikey",
         "auth",
         "bearer",
+        "cookie",
         "credential",
+        "jwt",
         "private_key",
         "secret",
         "session",
@@ -468,6 +476,59 @@ mod tests {
     }
 
     #[test]
+    fn hyphenated_api_key_config_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .config
+            .insert("x-api-key".to_string(), "api-key-value".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("x-api-key"));
+        assert!(!json.contains("api-key-value"));
+        assert!(json.contains("config_hash.redacted_key."));
+    }
+
+    #[test]
+    fn access_key_config_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .config
+            .insert("aws.access_key_id".to_string(), "AKIAEXAMPLE".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("aws_access_key_id"));
+        assert!(!json.contains("AKIAEXAMPLE"));
+        assert!(json.contains("config_hash.redacted_key."));
+    }
+
+    #[test]
+    fn cookie_diagnostic_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .diagnostics
+            .insert("http.cookie".to_string(), "sid=abc123".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("http.cookie"));
+        assert!(!json.contains("sid=abc123"));
+        assert!(json.contains("diagnostic.redacted_key."));
+        assert!(json.contains(REDACTION_MARKER));
+    }
+
+    #[test]
+    fn jwt_diagnostic_value_is_redacted() {
+        let mut input = sample_input();
+        input.diagnostics.insert(
+            "note".to_string(),
+            "jwt eyJhbGciOiJIUzI1NiJ9.payload.signature".to_string(),
+        );
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("eyJhbGciOiJIUzI1NiJ9"));
+        assert!(json.contains(REDACTION_MARKER));
+    }
+
+    #[test]
     fn support_bundle_export_is_deterministic() {
         let input = sample_input();
         let left = export_support_bundle(&input).expect("left");
@@ -596,6 +657,10 @@ mod tests {
     #[test]
     fn is_sensitive_matches_expected_terms() {
         assert!(is_sensitive("api_token"));
+        assert!(is_sensitive("x-api-key"));
+        assert!(is_sensitive("aws.access_key_id"));
+        assert!(is_sensitive("http.cookie"));
+        assert!(is_sensitive("jwt"));
         assert!(is_sensitive("PRIVATE_KEY"));
         assert!(is_sensitive("password"));
         assert!(!is_sensitive("panic_count"));

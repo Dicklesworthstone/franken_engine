@@ -765,7 +765,8 @@ impl HasErrorCode for BarrierError {
             | BarrierError::TransitionAlreadyInProgress { .. }
             | BarrierError::DrainTimeout { .. }
             | BarrierError::NoTransitionInProgress
-            | BarrierError::NonMonotonicTransition { .. } => {
+            | BarrierError::NonMonotonicTransition { .. }
+            | BarrierError::GuardIdExhausted { .. } => {
                 FrankenErrorCode::EpochBarrierTransitionError
             }
         }

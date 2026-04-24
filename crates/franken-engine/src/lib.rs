@@ -433,6 +433,7 @@ pub mod succinct_witness_compiler;
 pub mod superblock_formation;
 pub mod superoptimization_gate;
 pub mod supervision;
+pub mod support_bundle_export;
 pub mod supremacy_cell_matrix;
 pub mod supremacy_evidence_bundle;
 pub mod supremacy_verdict_engine;

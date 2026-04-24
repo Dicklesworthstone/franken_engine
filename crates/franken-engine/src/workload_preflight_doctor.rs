@@ -306,16 +306,16 @@ pub fn run_workload_preflight_doctor(
     missing_fields.sort();
     missing_fields.dedup();
 
-    let artifact_id = compute_artifact_id(
-        &workload_id,
-        &package_name,
-        &target_platforms,
+    let artifact_id = compute_artifact_id(&ArtifactMaterial {
+        workload_id: &workload_id,
+        package_name: &package_name,
+        target_platforms: &target_platforms,
         verdict,
-        &domain_scores,
-        &findings,
-        &missing_fields,
-        &reproducible_commands,
-    );
+        domain_scores: &domain_scores,
+        findings: &findings,
+        missing_fields: &missing_fields,
+        reproducible_commands: &reproducible_commands,
+    });
 
     WorkloadPreflightDoctorReport {
         schema_version: WORKLOAD_PREFLIGHT_DOCTOR_SCHEMA_VERSION.to_string(),
@@ -680,25 +680,27 @@ fn collect_reproducible_commands(
     commands.into_iter().collect()
 }
 
-fn compute_artifact_id(
-    workload_id: &str,
-    package_name: &str,
-    target_platforms: &[String],
+struct ArtifactMaterial<'a> {
+    workload_id: &'a str,
+    package_name: &'a str,
+    target_platforms: &'a [String],
     verdict: WorkloadPreflightVerdict,
-    domain_scores: &BTreeMap<String, WorkloadDomainScore>,
-    findings: &[WorkloadPreflightFinding],
-    missing_fields: &[String],
-    reproducible_commands: &[String],
-) -> String {
+    domain_scores: &'a BTreeMap<String, WorkloadDomainScore>,
+    findings: &'a [WorkloadPreflightFinding],
+    missing_fields: &'a [String],
+    reproducible_commands: &'a [String],
+}
+
+fn compute_artifact_id(material: &ArtifactMaterial<'_>) -> String {
     let mut hasher = Sha256::new();
     hash_str(&mut hasher, WORKLOAD_PREFLIGHT_DOCTOR_SCHEMA_VERSION);
     hash_str(&mut hasher, WORKLOAD_PREFLIGHT_DOCTOR_BEAD_ID);
     hash_str(&mut hasher, WORKLOAD_PREFLIGHT_DOCTOR_COMPONENT);
-    hash_str(&mut hasher, workload_id);
-    hash_str(&mut hasher, package_name);
-    hash_string_slice(&mut hasher, target_platforms);
-    hash_str(&mut hasher, verdict.as_str());
-    for (domain, score) in domain_scores {
+    hash_str(&mut hasher, material.workload_id);
+    hash_str(&mut hasher, material.package_name);
+    hash_string_slice(&mut hasher, material.target_platforms);
+    hash_str(&mut hasher, material.verdict.as_str());
+    for (domain, score) in material.domain_scores {
         hash_str(&mut hasher, domain);
         hash_str(&mut hasher, score.domain.as_str());
         hash_u64(&mut hasher, score.total_checks);
@@ -708,7 +710,7 @@ fn compute_artifact_id(
         hash_u64(&mut hasher, score.score_millionths);
         hash_str(&mut hasher, score.verdict.as_str());
     }
-    for finding in findings {
+    for finding in material.findings {
         hash_str(&mut hasher, &finding.finding_id);
         hash_str(&mut hasher, finding.domain.as_str());
         hash_str(&mut hasher, finding.severity.as_str());
@@ -718,8 +720,8 @@ fn compute_artifact_id(
         hash_string_slice(&mut hasher, &finding.evidence_links);
         hash_str(&mut hasher, &finding.reproducible_command);
     }
-    hash_string_slice(&mut hasher, missing_fields);
-    hash_string_slice(&mut hasher, reproducible_commands);
+    hash_string_slice(&mut hasher, material.missing_fields);
+    hash_string_slice(&mut hasher, material.reproducible_commands);
     let hex = hex::encode(hasher.finalize());
     format!(
         "workload-preflight-{}",

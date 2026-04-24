@@ -1481,7 +1481,7 @@ impl CutoverMigrationRunner {
             self.transition_windows.push(TransitionWindow {
                 migration_id: active.declaration.migration_id.clone(),
                 start_tick: self.current_tick,
-                end_tick: self.current_tick + 1000, // default window
+                end_tick: self.current_tick.saturating_add(1000), // default window
                 old_format_accepted: true,
             });
         }
@@ -3016,6 +3016,32 @@ mod tests {
         let window = &runner.transition_windows()[0];
         assert_eq!(window.migration_id, "mig-1");
         assert!(window.old_format_accepted);
+    }
+
+    #[test]
+    fn soft_migration_window_saturates_at_max_tick() {
+        let mut runner = CutoverMigrationRunner::new();
+        runner
+            .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "trace-1")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "trace-1")
+            .expect("test operation should succeed");
+        runner
+            .execute(100, "trace-1")
+            .expect("test operation should succeed");
+        runner
+            .verify(0, "trace-1")
+            .expect("test operation should succeed");
+        runner.set_tick(u64::MAX - 10);
+        runner
+            .commit("trace-1")
+            .expect("test operation should succeed");
+
+        assert_eq!(runner.transition_windows()[0].end_tick, u64::MAX);
     }
 
     #[test]

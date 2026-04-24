@@ -102,8 +102,15 @@ impl BenchmarkPublication {
         .expect("writing to String should not fail");
         writeln!(markdown, "|---|---|---:|---:|").expect("writing to String should not fail");
 
-        for (bench_id, result) in &self.results {
-            let bench_id = table_cell(bench_id);
+        let mut ordered_results = self.results.iter().collect::<Vec<_>>();
+        ordered_results.sort_by(|(left_key, left), (right_key, right)| {
+            left.bench_id
+                .cmp(&right.bench_id)
+                .then_with(|| left_key.cmp(right_key))
+        });
+
+        for (_storage_key, result) in ordered_results {
+            let bench_id = table_cell(&result.bench_id);
             let metric = &result.metric;
             let value_millionths = result.value_millionths;
             let samples = result.samples;
@@ -316,20 +323,40 @@ mod tests {
     }
 
     #[test]
-    fn render_markdown_uses_btree_key_for_benchmark_id() {
+    fn render_markdown_uses_result_benchmark_id() {
         let publication = BenchmarkPublication {
-            title: "Keyed".to_string(),
+            title: "Result IDs".to_string(),
             results: BTreeMap::from([(
-                "canonical-id".to_string(),
+                "storage-key".to_string(),
                 BenchmarkResult::new("internal-id", BenchmarkMetric::Memory, 100, 1),
             )]),
             commit_sha: "abc123".to_string(),
         };
-        assert!(
-            publication
-                .render_markdown()
-                .contains("| canonical-id | memory | 100 | 1 |")
-        );
+        let markdown = publication.render_markdown();
+        assert!(markdown.contains("| internal-id | memory | 100 | 1 |"));
+        assert!(!markdown.contains("| storage-key | memory | 100 | 1 |"));
+    }
+
+    #[test]
+    fn render_markdown_sorts_by_result_benchmark_id() {
+        let publication = BenchmarkPublication {
+            title: "Result ID order".to_string(),
+            results: BTreeMap::from([
+                (
+                    "a-storage-key".to_string(),
+                    BenchmarkResult::new("zeta", BenchmarkMetric::Throughput, 10, 1),
+                ),
+                (
+                    "z-storage-key".to_string(),
+                    BenchmarkResult::new("alpha", BenchmarkMetric::Latency, 20, 1),
+                ),
+            ]),
+            commit_sha: "abc123".to_string(),
+        };
+        let markdown = publication.render_markdown();
+        let alpha = markdown.find("| alpha |").expect("alpha row");
+        let zeta = markdown.find("| zeta |").expect("zeta row");
+        assert!(alpha < zeta);
     }
 
     #[test]

@@ -1161,12 +1161,8 @@ impl WorkloadGovernanceScorecard {
             return;
         }
 
-        self.successful_optimizations = if self.optimization_attempts == 0 {
-            0
-        } else {
-            ((self.success_rate_millionths * self.optimization_attempts) + (MILLIONTHS / 2))
-                / MILLIONTHS
-        };
+        self.successful_optimizations =
+            inferred_successes_from_rate(self.success_rate_millionths, self.optimization_attempts);
         self.rollback_latency_total_ticks = self
             .avg_rollback_latency_ticks
             .saturating_mul(self.optimization_attempts);
@@ -1176,28 +1172,56 @@ impl WorkloadGovernanceScorecard {
     /// Update the scorecard with new optimization outcome.
     pub fn record_optimization(&mut self, success: bool, rollback_latency_ticks: u64) {
         self.ensure_internal_counters();
-        self.optimization_attempts += 1;
+        self.optimization_attempts = self.optimization_attempts.saturating_add(1);
         if success {
-            self.successful_optimizations += 1;
+            self.successful_optimizations = self.successful_optimizations.saturating_add(1);
         }
+        self.successful_optimizations = self
+            .successful_optimizations
+            .min(self.optimization_attempts);
         self.rollback_latency_total_ticks = self
             .rollback_latency_total_ticks
             .saturating_add(rollback_latency_ticks);
 
-        self.success_rate_millionths = (self.successful_optimizations * MILLIONTHS)
-            .checked_div(self.optimization_attempts)
-            .unwrap_or(0);
+        self.success_rate_millionths =
+            ratio_millionths(self.successful_optimizations, self.optimization_attempts, 0);
         let failed_optimizations = self
             .optimization_attempts
             .saturating_sub(self.successful_optimizations);
-        self.risk_score_millionths = (failed_optimizations * MILLIONTHS)
-            .checked_div(self.optimization_attempts)
-            .unwrap_or(0);
+        self.risk_score_millionths =
+            ratio_millionths(failed_optimizations, self.optimization_attempts, 0);
         self.avg_rollback_latency_ticks = self
             .rollback_latency_total_ticks
             .checked_div(self.optimization_attempts)
             .unwrap_or(0);
     }
+}
+
+fn ratio_millionths(numerator: u64, denominator: u64, zero_denominator_default: u64) -> u64 {
+    if denominator == 0 {
+        return zero_denominator_default;
+    }
+    ((u128::from(numerator) * u128::from(MILLIONTHS)) / u128::from(denominator))
+        .min(u128::from(MILLIONTHS)) as u64
+}
+
+fn inferred_successes_from_rate(success_rate_millionths: u64, optimization_attempts: u64) -> u64 {
+    if optimization_attempts == 0 {
+        return 0;
+    }
+    let clamped_rate = success_rate_millionths.min(MILLIONTHS);
+    let rounded = u128::from(clamped_rate)
+        .saturating_mul(u128::from(optimization_attempts))
+        .saturating_add(u128::from(MILLIONTHS / 2))
+        / u128::from(MILLIONTHS);
+    rounded.min(u128::from(optimization_attempts)) as u64
+}
+
+fn average_ticks(total_ticks: u128, count: u64) -> u64 {
+    if count == 0 {
+        return 0;
+    }
+    (total_ticks / u128::from(count)).min(u128::from(u64::MAX)) as u64
 }
 
 /// Obligation check linking certified optimization to rollback chain and workload governance.
@@ -1348,26 +1372,25 @@ impl GovernanceState {
             .filter(|c| c.status_at(self.epoch) == CertificateStatus::Valid)
             .count() as u64;
 
-        let success_rate_millionths = (valid_certificates * MILLIONTHS)
-            .checked_div(total_attempts)
-            .unwrap_or(MILLIONTHS); // Default to 100% if no history
+        let success_rate_millionths =
+            ratio_millionths(valid_certificates, total_attempts, MILLIONTHS);
 
         let avg_rollback_latency_ticks = if !function_rollbacks.is_empty() {
-            function_rollbacks
-                .iter()
-                .map(|r| r.elapsed_steps)
-                .sum::<u64>()
-                .checked_div(function_rollbacks.len() as u64)
-                .unwrap_or(0)
+            let total_ticks = function_rollbacks.iter().fold(0_u128, |total, rollback| {
+                total.saturating_add(u128::from(rollback.elapsed_steps))
+            });
+            average_ticks(total_ticks, function_rollbacks.len() as u64)
         } else {
             0
         };
 
         let forensic_coverage_millionths = {
             let covered_attempts = function_forensics.len() as u64;
-            (covered_attempts.min(total_attempts) * MILLIONTHS)
-                .checked_div(total_attempts)
-                .unwrap_or(MILLIONTHS)
+            ratio_millionths(
+                covered_attempts.min(total_attempts),
+                total_attempts,
+                MILLIONTHS,
+            )
         };
 
         let scorecard = WorkloadGovernanceScorecard {
@@ -1375,16 +1398,17 @@ impl GovernanceState {
             success_rate_millionths,
             avg_rollback_latency_ticks,
             forensic_coverage_millionths,
-            risk_score_millionths: total_attempts
-                .saturating_sub(valid_certificates)
-                .saturating_mul(MILLIONTHS)
-                .checked_div(total_attempts)
-                .unwrap_or(0),
+            risk_score_millionths: ratio_millionths(
+                total_attempts.saturating_sub(valid_certificates),
+                total_attempts,
+                0,
+            ),
             successful_optimizations: valid_certificates,
             rollback_latency_total_ticks: function_rollbacks
                 .iter()
-                .map(|rollback| rollback.elapsed_steps)
-                .sum(),
+                .fold(0_u64, |total, rollback| {
+                    total.saturating_add(rollback.elapsed_steps)
+                }),
             internal_counters_initialized: true,
         };
 
@@ -2366,6 +2390,48 @@ mod tests {
         assert_eq!(scorecard.success_rate_millionths, MILLIONTHS / 2); // 50% success
         assert_eq!(scorecard.avg_rollback_latency_ticks, 55); // Average of 10,20,...,100
         assert_eq!(scorecard.risk_score_millionths, MILLIONTHS / 2); // 50% risk
+    }
+
+    #[test]
+    fn workload_governance_scorecard_saturates_attempt_counter() {
+        let mut scorecard = WorkloadGovernanceScorecard {
+            optimization_attempts: u64::MAX,
+            success_rate_millionths: MILLIONTHS,
+            avg_rollback_latency_ticks: u64::MAX,
+            forensic_coverage_millionths: MILLIONTHS,
+            risk_score_millionths: 0,
+            successful_optimizations: u64::MAX,
+            rollback_latency_total_ticks: u64::MAX,
+            internal_counters_initialized: true,
+        };
+
+        scorecard.record_optimization(true, u64::MAX);
+
+        assert_eq!(scorecard.optimization_attempts, u64::MAX);
+        assert_eq!(scorecard.successful_optimizations, u64::MAX);
+        assert_eq!(scorecard.success_rate_millionths, MILLIONTHS);
+        assert_eq!(scorecard.risk_score_millionths, 0);
+    }
+
+    #[test]
+    fn workload_governance_scorecard_clamps_deserialized_rate_inputs() {
+        let mut scorecard = WorkloadGovernanceScorecard {
+            optimization_attempts: u64::MAX,
+            success_rate_millionths: u64::MAX,
+            avg_rollback_latency_ticks: u64::MAX,
+            forensic_coverage_millionths: MILLIONTHS,
+            risk_score_millionths: 0,
+            successful_optimizations: 0,
+            rollback_latency_total_ticks: 0,
+            internal_counters_initialized: false,
+        };
+
+        scorecard.record_optimization(false, 1);
+
+        assert_eq!(scorecard.optimization_attempts, u64::MAX);
+        assert!(scorecard.successful_optimizations <= scorecard.optimization_attempts);
+        assert!(scorecard.success_rate_millionths <= MILLIONTHS);
+        assert!(scorecard.risk_score_millionths <= MILLIONTHS);
     }
 
     #[test]

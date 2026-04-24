@@ -1551,10 +1551,10 @@ mod tests {
             assert_eq!(diagnostic.diagnostic_code, site_id.diagnostic_code());
             assert_eq!(diagnostic.source_label, "test_source_with_open_placeholder");
             assert!(diagnostic.canonical_hash().len() > 20);
-            assert!(!diagnostic.message.is_empty());
+            assert!(!diagnostic.message_template.is_empty());
 
             // Verify the diagnostic contains the expected parser gap context
-            assert!(diagnostic.message.contains("unsupported"));
+            assert!(diagnostic.message_template.contains("not implemented"));
         }
     }
 
